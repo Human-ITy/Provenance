@@ -1,0 +1,35 @@
+---
+description: Esoterica ProvenanceClient spike — isolated lane, voxel-form gate
+alwaysApply: true
+---
+
+# Provenance Esoterica lane (isolated)
+
+**Workspace for this work:** `C:\Users\D-Day\ProvenanceEsoterica` only.
+
+## Isolation
+
+- Edit under `Code/Applications/ProvenanceClient/` (+ pin/spike docs, launcher).
+- Mygame / Unreal / fablescript = **read-only** reference (protocol, caps, digests).
+- Never commit Provenance files into Mygame git.
+- Never `git push` Provenance commits to Bobby’s Esoterica `origin` without an explicit user fork remote.
+- Local branch for client work: `provenance/client-spike`.
+
+## Authority
+
+Python `voxel_bridge` is world truth. This client is a projection.
+
+## Voxel-form gate (blocks “correct” dig/pick)
+
+Heightfield + DigScar cups are interim presentation.  
+Correct dig/pick requires forms from **authoritative voxel occupancy / D2**, with matter grams from receipts — not approximate grade bowls or sealed chips alone.
+
+See `SPIKE_CONTRACT.md`.
+
+## Keep (current bring-up look)
+
+Flat Phase 3 vista, live soft scoops where scoop law applies, no yellow dig tiles, scars do not rebuild vista on every dig.
+
+## Reject
+
+Client-owned matter law · heightfield tunnels as authority · contaminating Unreal lane · deepening DigScar as the dig model instead of occupancy→D2.

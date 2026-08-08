@@ -1,0 +1,5852 @@
+// Provenance Phase 4 client - Esoterica fork app.
+// Phase 2 far heightfield + Phase 3 6ft walk + Phase 4 interaction digests (handful scoop).
+// Handheld law: ~245 mL ~= 1 cup ~= 32/255 of a 12.5cm storage voxel (~8 scoops per voxel).
+// Protocol matches Unreal FFablescriptClient (newline JSON, version 1).
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <gl/GL.h>
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+
+#include "ProvenanceGeography.h"
+#include "VisualMaterial.h"
+#include "RockStructure.h"
+#include "HorizonToHand.h"
+
+#include <algorithm>
+#include <cmath>
+#include <climits>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#pragma comment( lib, "ws2_32.lib" )
+#pragma comment( lib, "user32.lib" )
+#pragma comment( lib, "gdi32.lib" )
+#pragma comment( lib, "shell32.lib" )
+#pragma comment( lib, "opengl32.lib" )
+
+namespace
+{
+    constexpr char const* kDefaultHost = "127.0.0.1";
+    constexpr int kDefaultPort = 8765;
+    constexpr int kProtocolVersion = 1;
+    constexpr UINT_PTR kTimerId = 1;
+
+    constexpr int kBlockCells = 16;          // surface_field tile (Unreal uses 24; 16 keeps Phase 2 snappy)
+    constexpr int kFarRadiusCells = 96;      // far ring reach (~vista underlay scale)
+    constexpr int kMaxBlocksPerTick = 1;     // one in-flight request (engine is single-client sequential)
+
+    // 6 ft scale reference (engine: 1 cell = 1 m)
+    constexpr float kCharHeightM = 1.8288f;  // 6 ft
+    constexpr float kEyeHeightM = 1.70f;     // eye line for a ~6 ft adult
+    constexpr float kCapsuleRadiusM = 0.35f;
+    constexpr float kWalkSpeedMps = 5.0f;    // brisk walk
+    constexpr float kSprintSpeedMps = 11.0f; // matches Unreal sprint ~cell/s order
+    constexpr float kFlySpeedMps = 24.f;
+    constexpr float kFlySprintMps = 48.f;
+    constexpr float kGravityMps2 = 20.f;
+    constexpr float kJumpSpeedMps = 7.5f;
+    constexpr float kMaxStepM = 0.55f;       // max climb per move without jump
+    // Steeper than ~48° is a wall — small per-frame steps used to skate up cliffs into the mesh.
+    constexpr float kMaxWalkSlope = 1.10f;   // rise/run ≈ tan(48°)
+    constexpr float kWallBodyClearM = 0.45f; // torso hits wall if grade beside feet exceeds this
+
+    // Handheld / manipulation volume (authoritative player scoop feel)
+    constexpr int kFillFull = 255;
+    constexpr int kHandfulFillUnits = 32;                    // deliberate scoop quantum
+    constexpr float kHandfulVoxelFrac = (float)kHandfulFillUnits / (float)kFillFull; // ~1/8 voxel
+    constexpr float kVoxelEdgeM = 0.125f;
+    constexpr float kVoxelVolumeM3 = kVoxelEdgeM * kVoxelEdgeM * kVoxelEdgeM; // ~1.953 L
+    constexpr float kHandfulVolumeM3 = kVoxelVolumeM3 * kHandfulVoxelFrac;    // ~245 mL
+    constexpr float kHandfulRadiusM = 0.0388225f; // (3*V_handful/(4pi))^(1/3) -- rounded bare-hand scoop
+    constexpr float kDirtVoxelG = 2500.f;    // display fallback; engine credits real grams
+    constexpr float kHandfulDirtG = kDirtVoxelG * kHandfulVoxelFrac; // ~314 g dirt
+    constexpr float kReachCells = 3.5f;
+
+    // Journal / hotbar UI
+    constexpr int kInvCols = 3;
+    constexpr int kInvRows = 4;
+    constexpr int kInvPageSize = kInvCols * kInvRows; // 12
+    constexpr int kCraftCols = 3;
+    constexpr int kCraftRows = 2;
+    constexpr int kCraftPageSize = kCraftCols * kCraftRows; // 6
+    constexpr int kHotbarSlots = 6;
+    constexpr int kMaxDeposit = 4;
+
+    struct BagSlot
+    {
+        std::string id;
+        int count = 0;
+    };
+
+    struct RecipeDef
+    {
+        char const* id;
+        char const* name;
+        char const* resultId;
+        int resultCount;
+        char const* reqId[kMaxDeposit];
+        int reqCount[kMaxDeposit];
+        int nReq;
+    };
+
+    RecipeDef const kRecipes[] = {
+        { "campfire", "CAMPFIRE", "campfire_kit", 1,
+          { "sticks_tinder", "flint", "bark", nullptr }, { 1, 1, 1, 0 }, 3 },
+        { "torch", "TORCH", "torch", 1,
+          { "sticks_tinder", "bark", nullptr, nullptr }, { 1, 1, 0, 0 }, 2 },
+        { "planks", "WOOD PLANKS", "wood_planks", 2,
+          { "wood_log", nullptr, nullptr, nullptr }, { 1, 0, 0, 0 }, 1 },
+        { "sword", "SWORD", "sword", 1,
+          { "iron", "wood_planks", "leather_hide", nullptr }, { 2, 1, 1, 0 }, 3 },
+        { "kettle", "KETTLE", "kettle", 1,
+          { "iron", "coal", nullptr, nullptr }, { 3, 1, 0, 0 }, 2 },
+        { "bucket", "BUCKET", "bucket", 1,
+          { "wood_planks", "iron", "rope", nullptr }, { 2, 1, 1, 0 }, 3 },
+        { "flask", "WATER FLASK", "water_flask", 1,
+          { "leather_hide", "rope", nullptr, nullptr }, { 2, 1, 0, 0 }, 2 },
+    };
+    constexpr int kRecipeCount = (int)( sizeof( kRecipes ) / sizeof( kRecipes[0] ) );
+
+    enum class LinkState
+    {
+        Disconnected,
+        Connecting,
+        Connected,
+        CapsOk,
+        CapsError,
+        SocketError,
+    };
+
+    enum class PendingKind
+    {
+        None,
+        Caps,
+        Player,
+        Surface,
+        Carve,
+        Place,
+        Column,
+    };
+
+    enum class IntentKind
+    {
+        None,
+        Dig,
+        PlaceHeld,
+    };
+
+    constexpr int kFillIso = 128; // half-full isosurface (engine FILL_ISO)
+
+    struct CellSample
+    {
+        float grade = 0.85f;
+        float fillZ = 0.f;          // occupancy-derived crest Z (when known)
+        bool hasFillZ = false;
+        bool edited = false;
+        uint8_t r = 90, g = 120, b = 70;
+        std::string cap;            // surface_field material id (sand/dirt/clay/...)
+        bool valid = false;
+        // Authoritative column occupancy (voxel_column) — D2 cavity source
+        std::vector<uint8_t> fill;
+        int fillW = 0, fillH = 0, fillK = 0;
+        GLuint cavityList = 0;
+        bool hasCavity = false;
+    };
+
+    enum class ScarKind : uint8_t
+    {
+        ScoopHemi = 0,     // isotropic handful cup — flat soft ground only
+        FoliationPlate,    // asymmetric schist/laminated pry notch
+        FacePuncture,      // sealed face chip — steep walls / pick punctures (NOT DigDep bowls)
+    };
+
+    struct DigScar
+    {
+        float wx = 0.f, wy = 0.f, wz = 0.f; // dig: scoop centre; place: contact
+        float radius = kHandfulRadiusM;     // footprint == green/amber selection sphere
+        float depth = kHandfulRadiusM;     // open-cup vertical amp (stacks on re-dig)
+        int cx = 0, cy = 0;                 // contact cell (for column refresh)
+        bool place = false;
+        // Cohesive buried bite: sphere cavity under an intact grade roof (sand never tunnels).
+        bool tunnel = false;
+        // First surface-break centre Z — deepen moves wz down but keeps this entrance open.
+        float entranceWz = 0.f;
+        // Mica-schist / foliated law — index alone is not enough.
+        ScarKind kind = ScarKind::ScoopHemi;
+        float strikeX = 1.f, strikeY = 0.f; // along foliation in XY
+        float plateAlong = 0.f;             // half-length along strike
+        float plateAcrossDeep = 0.f;        // pry recess (deep side)
+        float plateAcrossLip = 0.f;         // thin projecting lip (shallow side)
+        float support = 1.f;                // 1 connected … 0 free slab
+        RockStruct::FractureStage fracStage = RockStruct::FractureStage::Intact;
+        // Face frame for sealed chips — recess along -N at the true strike point (not grade-Z sink).
+        float faceNx = 0.f, faceNy = 0.f, faceNz = 1.f;
+    };
+
+    struct AppState
+    {
+        HWND hwnd = nullptr;
+        HDC hdc = nullptr;
+        HGLRC glrc = nullptr;
+        SOCKET sock = INVALID_SOCKET;
+        LinkState link = LinkState::Disconnected;
+        std::string statusLine = "Provenance Phase 4 - starting...";
+        std::string detail;
+        std::string digestLine = "Interaction digest idle - LMB dig into stock, RMB place one scoop, Tab unlock cursor";
+        std::string recvBuf;
+        int nextId = 1;
+        std::string host = kDefaultHost;
+        int port = kDefaultPort;
+        DWORD lastAttemptMs = 0;
+        int attempts = 0;
+
+        // terrain_caps
+        int wireVersion = 0;
+        std::string contract;
+        std::string generatorId;
+        int generatorVersion = 0;
+        std::string worldIdentityHash;
+        int terrainRev = -1;
+        std::string authorityMode;
+        int worldSize = -1;
+        bool envelopeOk = false;
+        std::string lastError;
+        float reliefVoxels = 64.f;
+        float gradeDatum = 0.5f;
+        float voxelEdgeM = 0.125f;
+        float cellDepthM = 0.5f;   // caps cell_depth_m — engine depth/radius units (1.0 = ~0.5 m)
+
+        // player / stream center
+        int playerX = 128;
+        int playerY = 128;
+        bool havePlayer = false;
+
+        // pending RPC
+        PendingKind pending = PendingKind::None;
+        int pendingId = 0;
+        int pendingBx = 0;
+        int pendingBy = 0;
+        IntentKind intent = IntentKind::None;
+
+        // far surface cache: key = ((int64)x << 32) ^ (uint32)y
+        std::unordered_map<uint64_t, CellSample> cells;
+        std::unordered_set<uint64_t> fetchedBlocks;
+        int cellsLoaded = 0;
+        int blocksLoaded = 0;
+        int blocksWanted = 0;
+        bool streamComplete = false;
+
+        // aim + held bite
+        bool aimHit = false;
+        int aimCx = 0, aimCy = 0;
+        float aimU = 0.5f, aimV = 0.5f, aimDepth = kHandfulRadiusM;
+        float aimX = 0.f, aimY = 0.f, aimZ = 0.f;
+        // Unreal FsDrawImmediateTerrainCue twin — brief rings/rays on dig/place press
+        float cueT = 0.f;
+        float cueX = 0.f, cueY = 0.f, cueZ = 0.f;
+        float cueNx = 0.f, cueNy = 0.f, cueNz = 1.f; // surface normal at click
+        bool cuePlace = false;
+        bool cueBusy = false;
+        std::unordered_map<std::string, int> heldBite; // material -> grams (mirrors engine carry accumulate)
+        int heldTotalG = 0;
+        std::string heldDominant;
+        std::unordered_map<std::string, int> pendingPlaceAsk; // scoop sent on last place
+        int pendingPlaceG = 0;
+        bool pendingPlaceIntoHole = false; // refill dig cup — no mound on top
+        // Optimistic scar edit (for refuse rollback without killing neighbour cups)
+        int pendingScarIndex = -1;
+        float pendingScarDepthBefore = 0.f;
+        bool pendingScarWasNew = false;
+        bool pendingScarIsPlace = false;
+        int pendingBiteCx = 0, pendingBiteCy = 0;
+        float pendingBiteU = 0.5f, pendingBiteV = 0.5f;
+        float pendingBiteWx = 0.f, pendingBiteWy = 0.f, pendingBiteWz = 0.f;
+        bool pendingBiteForward = false;
+        uint64_t grippedBodyId = 0; // H2H MatterBody currently carried
+        int pendingLocalScoopG = 0;
+        std::string pendingLocalScoopMat;
+        float pendingAffectRM = kHandfulRadiusM; // dig-volume sphere committed with the pending carve
+
+        int lastDigRev = -1;
+        float lastEngineMs = 0.f;
+        std::vector<DigScar> scars;
+        std::vector<std::pair<int, int>> columnQueue; // cells awaiting voxel_column truth
+        int pendingColX = 0, pendingColY = 0;
+
+        // body + camera (world meters; 1 cell = 1 m)
+        float feetX = 128.f;
+        float feetY = 128.f;
+        float feetZ = 0.f;
+        float velZ = 0.f;
+        bool grounded = false;
+        bool walkMode = true;   // default: 6ft standable walk; F = free camera
+        DWORD sessionStartMs = 0; // GetTickCount at launch — session clock
+        float camX = 128.f;
+        float camY = 128.f;
+        float camZ = 40.f;
+        float yaw = 0.f;     // radians, 0 = +Y
+        float pitch = -0.15f;
+        bool keys[256] = {};
+        bool keyToggleLatch[256] = {};
+        bool rmbDown = false;
+        bool mouseLook = true;   // FPS: cursor locked to camera
+        bool cursorCaptured = false;
+        int lastMouseX = 0;
+        int lastMouseY = 0;
+        DWORD lastFrameMs = 0;
+        float frameDt = 0.016f;
+
+        GLuint fontBase = 0;
+
+        // Cached terrain mesh — rebuild on dig/stream/move, never resample whole vista each frame
+        GLuint terrainList = 0;
+        bool terrainDirty = true;
+        int terrainAnchorX = INT_MIN;
+        int terrainAnchorY = INT_MIN;
+        size_t terrainScarGen = 0;
+        size_t scarGen = 0;
+
+        // Journal (J) + persistent hotbar
+        bool journalOpen = false;
+        bool journalWasMouseLook = true;
+        int invPage = 0;
+        int craftPage = 0;
+        int selectedRecipe = -1; // index into kRecipes, -1 = browser
+        BagSlot bag[64];
+        int bagCount = 0;
+        BagSlot deposit[kMaxDeposit];
+        std::string hotbar[kHotbarSlots];
+        int hotbarSel = 0;
+        float uiMouseX = 0.f; // ortho (y-up)
+        float uiMouseY = 0.f;
+        int uiWinW = 1;
+        int uiWinH = 1;
+        bool bagSeeded = false;
+        std::unordered_map<std::string, GLuint> iconTex;
+        std::string assetsRoot;
+        char const* journalNotes[6] = {
+            "Day 1 — awoke beside the river bank.",
+            "The earth remembers every scoop.",
+            "Seed map marks the known ridge.",
+            "Craft at the campfire when dry.",
+            "",
+            ""
+        };
+        char const* skillNames[5] = { "FORAGE", "DIG", "CRAFT", "COOK", "TRAVEL" };
+        float skillFrac[5] = { 0.35f, 0.55f, 0.20f, 0.10f, 0.40f };
+    };
+
+    AppState g;
+
+    void SetMouseLook( HWND hwnd, bool enabled ); // defined with camera/input
+    void LoadIconTextures();
+    void UnloadIconTextures();
+    void SeedStarterBag();
+    void DrawJournal();
+    void DrawHotbar();
+    void OpenJournal();
+    void CloseJournal();
+    void ToggleJournal();
+    void UpdateUiMouseFromWin( int winX, int winY );
+    bool TryHotbarClick( float mx, float my );
+    bool HandleJournalClick( float mx, float my, bool rightClick );
+
+    uint64_t CellKey( int x, int y )
+    {
+        return ( (uint64_t)(uint32_t)x << 32 ) | (uint32_t)y;
+    }
+
+    uint64_t BlockKey( int bx, int by )
+    {
+        return CellKey( bx, by );
+    }
+
+    char const* LinkLabel( LinkState s )
+    {
+        switch ( s )
+        {
+            case LinkState::Disconnected: return "DISCONNECTED";
+            case LinkState::Connecting: return "CONNECTING";
+            case LinkState::Connected: return "CONNECTED";
+            case LinkState::CapsOk: return "CAPS OK";
+            case LinkState::CapsError: return "CAPS ERROR";
+            case LinkState::SocketError: return "SOCKET ERROR";
+        }
+        return "?";
+    }
+
+    void CloseSock()
+    {
+        if ( g.sock != INVALID_SOCKET )
+        {
+            closesocket( g.sock );
+            g.sock = INVALID_SOCKET;
+        }
+        g.recvBuf.clear();
+        g.pending = PendingKind::None;
+    }
+
+    bool ExtractJsonString( std::string const& json, char const* key, std::string& out )
+    {
+        std::string needle = std::string( "\"" ) + key + "\":\"";
+        size_t p = json.find( needle );
+        if ( p == std::string::npos )
+        {
+            needle = std::string( "\"" ) + key + "\": \"";
+            p = json.find( needle );
+            if ( p == std::string::npos ) { return false; }
+        }
+        p += needle.size();
+        size_t e = json.find( '"', p );
+        if ( e == std::string::npos ) { return false; }
+        out.assign( json, p, e - p );
+        return true;
+    }
+
+    bool ExtractJsonInt( std::string const& json, char const* key, int& out )
+    {
+        std::string needle = std::string( "\"" ) + key + "\":";
+        size_t p = json.find( needle );
+        if ( p == std::string::npos ) { return false; }
+        p += needle.size();
+        while ( p < json.size() && ( json[p] == ' ' || json[p] == '\t' ) ) { ++p; }
+        if ( p >= json.size() ) { return false; }
+        char* end = nullptr;
+        long v = strtol( json.c_str() + p, &end, 10 );
+        if ( end == json.c_str() + p ) { return false; }
+        out = (int)v;
+        return true;
+    }
+
+    bool ExtractJsonFloat( std::string const& json, char const* key, float& out )
+    {
+        std::string needle = std::string( "\"" ) + key + "\":";
+        size_t p = json.find( needle );
+        if ( p == std::string::npos ) { return false; }
+        p += needle.size();
+        while ( p < json.size() && ( json[p] == ' ' || json[p] == '\t' ) ) { ++p; }
+        if ( p >= json.size() ) { return false; }
+        char* end = nullptr;
+        double v = strtod( json.c_str() + p, &end );
+        if ( end == json.c_str() + p ) { return false; }
+        out = (float)v;
+        return true;
+    }
+
+    bool ExtractJsonBool( std::string const& json, char const* key, bool& out )
+    {
+        std::string needle = std::string( "\"" ) + key + "\":";
+        size_t p = json.find( needle );
+        if ( p == std::string::npos ) { return false; }
+        p += needle.size();
+        while ( p < json.size() && ( json[p] == ' ' || json[p] == '\t' ) ) { ++p; }
+        if ( json.compare( p, 4, "true" ) == 0 ) { out = true; return true; }
+        if ( json.compare( p, 5, "false" ) == 0 ) { out = false; return true; }
+        return false;
+    }
+
+    bool ExtractPositionXY( std::string const& json, int& x, int& y )
+    {
+        size_t p = json.find( "\"position\":" );
+        if ( p == std::string::npos ) { return false; }
+        p = json.find( '[', p );
+        if ( p == std::string::npos ) { return false; }
+        char* end = nullptr;
+        long vx = strtol( json.c_str() + p + 1, &end, 10 );
+        if ( end == json.c_str() + p + 1 ) { return false; }
+        while ( *end == ' ' || *end == '\t' || *end == ',' ) { ++end; }
+        long vy = strtol( end, &end, 10 );
+        x = (int)vx;
+        y = (int)vy;
+        return true;
+    }
+
+    void CapColor( char const* cap, uint8_t& r, uint8_t& g, uint8_t& b )
+    {
+        // VisualMaterialDef palette — continuous body language, not painted index tiles.
+        VisualMat::CapColor( cap, r, g, b );
+    }
+
+    float GradeToZ( float grade )
+    {
+        // Same law as Unreal / terrain_caps: height_voxels = (grade - datum) * relief; meters = * voxel_edge
+        return ( grade - g.gradeDatum ) * g.reliefVoxels * g.voxelEdgeM;
+    }
+
+    bool SampleGroundZBase( float x, float y, float& outZ );
+    bool SampleGroundZ( float x, float y, float& outZ );
+    bool SampleAimSurfaceZ( float x, float y, float& outZ );
+    void SampleAimNormal( float x, float y, float& nx, float& ny, float& nz );
+    void CaptureFaceNormalAt( float x, float y, float& nx, float& ny, float& nz );
+    bool IsSteepFaceAt( float x, float y );
+    std::string CapAtWorld( float x, float y );
+    CellSample const* GetCell( int x, int y );
+
+    float ScarHemiAt( DigScar const& s, float x, float y )
+    {
+        float const dx = x - s.wx;
+        float const dy = y - s.wy;
+        if ( s.kind == ScarKind::FoliationPlate && !s.place )
+        {
+            // Asymmetric notch aligned with foliation strike:
+            // deep pry recess one side, thin projecting lip the other — not an ice-cream scoop.
+            float const sx = s.strikeX, sy = s.strikeY;
+            float const tx = -sy, ty = sx;
+            float const along = dx * sx + dy * sy;
+            float const across = dx * tx + dy * ty;
+            float const halfAlong = (std::max)( 0.02f, s.plateAlong );
+            if ( std::fabs( along ) > halfAlong ) { return 0.f; }
+            float const acrossMax = ( across >= 0.f )
+                ? (std::max)( 0.01f, s.plateAcrossDeep )
+                : (std::max)( 0.01f, s.plateAcrossLip );
+            if ( std::fabs( across ) > acrossMax ) { return 0.f; }
+            float const ua = 1.f - ( along / halfAlong ) * ( along / halfAlong );
+            float const uc = 1.f - ( across / acrossMax ) * ( across / acrossMax );
+            float const asym = ( across >= 0.f ) ? 1.f : 0.52f; // lip stays thin
+            // Visual chip only — never amplify into a through-wall sink.
+            float const amp = (std::min)( 0.055f, s.depth * 0.85f );
+            return amp * std::sqrt( (std::max)( 0.f, ua * uc ) ) * asym;
+        }
+        float const r2 = s.radius * s.radius;
+        float const d2 = dx * dx + dy * dy;
+        if ( d2 >= r2 || s.radius < 1e-6f ) { return 0.f; }
+        return s.depth * std::sqrt( 1.f - d2 / r2 );
+    }
+
+    bool ActiveToolIsPick()
+    {
+        if ( g.hotbarSel < 0 || g.hotbarSel >= kHotbarSlots ) { return false; }
+        return g.hotbar[g.hotbarSel] == "pick";
+    }
+
+    char const* ActiveToolId()
+    {
+        if ( g.hotbarSel < 0 || g.hotbarSel >= kHotbarSlots ) { return "hand"; }
+        std::string const& id = g.hotbar[g.hotbarSel];
+        if ( id.empty() || id == "torch" ) { return "hand"; }
+        return id.c_str();
+    }
+
+    H2H::ToolMatterProfile const& ActiveToolProfile()
+    {
+        return H2H::ToolById( ActiveToolId() );
+    }
+
+    float ActiveAimRadiusM()
+    {
+        // LIVE contact/query envelope (Index §2) — aiming feel only, NOT removed volume.
+        return ActiveToolProfile().contact_radius_m;
+    }
+
+    float TransferScarRadiusM()
+    {
+        // Tool transfer budget as equivalent sphere — base for soft scoop affect.
+        float const V = (std::max)( 1e-6f, ActiveToolProfile().transfer_volume_limit_m3 );
+        return std::cbrt( ( 3.f * V ) / ( 4.f * 3.14159265f ) );
+    }
+
+    float SoftScoopScarRadiusM()
+    {
+        // Fallback transfer sphere; dig path prefers AimDigAffect().radiusM (tool×material).
+        return TransferScarRadiusM();
+    }
+
+    float SphereVolumeM3( float radiusM )
+    {
+        float const r = (std::max)( 1e-6f, radiusM );
+        return ( 4.f / 3.f ) * 3.14159265f * r * r * r;
+    }
+
+    // One law: preview affect sphere == scar footprint == wire carve == matter-return volume.
+    enum class DigAffectMode : uint8_t { ScoopHemi = 0, FacePuncture, FoliationPlate };
+
+    struct DigAffectSpec
+    {
+        DigAffectMode mode = DigAffectMode::ScoopHemi;
+        float radiusM = kHandfulRadiusM;   // dig-volume sphere (primary indicator)
+        float depthM = kHandfulRadiusM;    // scar recess amp
+        float volumeM3 = 0.f;              // conserved matter budget for this strike
+        char const* feel = "scoop";        // HUD cue
+    };
+
+    DigAffectSpec ComputeDigAffect( H2H::ToolMatterProfile const& tool,
+        H2H::MaterialFormContract const& form, bool steepFace )
+    {
+        DigAffectSpec a;
+        float const transferR = std::cbrt(
+            ( 3.f * (std::max)( 1e-6f, tool.transfer_volume_limit_m3 ) ) / ( 4.f * 3.14159265f ) );
+
+        // Hard / foliated rock + pick → persistent fracture (plate), tip-scale pit.
+        bool const hardRock = form.hardness >= 3
+            || form.fabric == H2H::FabricKind::FoliatedAnisotropic
+            || form.fabric == H2H::FabricKind::BeddedFissile
+            || ( form.fabric == H2H::FabricKind::Massive && form.rigid_fracture_body );
+        if ( hardRock && tool.force == H2H::ForceClass::Pick )
+        {
+            a.mode = DigAffectMode::FoliationPlate;
+            // Tip pit = min(transfer sphere, influence) — concentrated strike, not shovel bowl.
+            a.radiusM = (std::min)( transferR, (std::max)( 0.02f, tool.influence_depth_m * 0.45f ) );
+            a.depthM = a.radiusM;
+            a.volumeM3 = (std::min)( SphereVolumeM3( a.radiusM ), tool.transfer_volume_limit_m3 );
+            a.feel = form.fabric == H2H::FabricKind::FoliatedAnisotropic ? "peel/plate" : "fracture";
+            return a;
+        }
+
+        // Soft matter: tool transfer sphere is the dig volume. Shape follows fabric + slope.
+        if ( tool.force == H2H::ForceClass::Pick )
+        {
+            // Pick on soft: tip puncture (secondary) — still one sphere, not shovel bowl.
+            a.mode = DigAffectMode::FacePuncture;
+            a.radiusM = (std::min)( transferR, (std::max)( 0.022f, tool.influence_depth_m * 0.40f ) );
+            a.depthM = a.radiusM;
+            a.volumeM3 = (std::min)( SphereVolumeM3( a.radiusM ), tool.transfer_volume_limit_m3 );
+            a.feel = ( form.fabric == H2H::FabricKind::Granular ) ? "crush/grains" : "tip puncture";
+            return a;
+        }
+
+        // Hand / shovel scoop — full transfer sphere.
+        a.radiusM = transferR;
+        a.depthM = transferR;
+        a.volumeM3 = tool.transfer_volume_limit_m3;
+        if ( steepFace )
+        {
+            a.mode = DigAffectMode::FacePuncture;
+            a.feel = "face scoop";
+        }
+        else if ( form.fabric == H2H::FabricKind::Granular )
+        {
+            a.mode = DigAffectMode::ScoopHemi;
+            a.feel = "slump scoop";
+        }
+        else
+        {
+            a.mode = steepFace ? DigAffectMode::FacePuncture : DigAffectMode::ScoopHemi;
+            a.feel = steepFace ? "face scoop" : "soft scoop";
+        }
+        return a;
+    }
+
+    DigAffectSpec AimDigAffect()
+    {
+        if ( !g.aimHit )
+        {
+            DigAffectSpec a;
+            a.radiusM = TransferScarRadiusM();
+            a.depthM = a.radiusM;
+            a.volumeM3 = ActiveToolProfile().transfer_volume_limit_m3;
+            return a;
+        }
+        std::string const cap = CapAtWorld( g.aimX, g.aimY );
+        H2H::MaterialFormContract const& form = H2H::FormOrDirt( cap.c_str() );
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        CaptureFaceNormalAt( g.aimX, g.aimY, nx, ny, nz );
+        bool const steep = nz < 0.58f || IsSteepFaceAt( g.aimX, g.aimY );
+        return ComputeDigAffect( ActiveToolProfile(), form, steep );
+    }
+
+    int AffectAcceptedGrams( H2H::MaterialFormContract const& form, DigAffectSpec const& affect )
+    {
+        // Matter return from the SAME sphere the player sees/affects — density from this material.
+        float const vol = (std::min)( affect.volumeM3, ActiveToolProfile().transfer_volume_limit_m3 );
+        return H2H::VolumeToGramsFloor( vol, form.density_kg_m3 );
+    }
+
+    void CaptureFaceNormalAt( float x, float y, float& nx, float& ny, float& nz )
+    {
+        SampleAimNormal( x, y, nx, ny, nz );
+        float const len = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( len > 1e-5f ) { nx /= len; ny /= len; nz /= len; }
+        else { nx = 0.f; ny = 0.f; nz = 1.f; }
+    }
+
+    void StrikeAxesFromLook( float nx, float ny, float nz,
+        float lookX, float lookY, float lookZ,
+        float& strikeX, float& strikeY )
+    {
+        // Crack elongates across the swing in the face plane: along = normalize(N × look).
+        float ax = ny * lookZ - nz * lookY;
+        float ay = nz * lookX - nx * lookZ;
+        float az = nx * lookY - ny * lookX;
+        float const alen = std::sqrt( ax * ax + ay * ay + az * az );
+        if ( alen < 1e-4f )
+        {
+            // Look ≈ face-on: fall back to world-up × N.
+            ax = -ny; ay = nx; az = 0.f;
+        }
+        float const inv = 1.f / (std::max)( 1e-5f, std::sqrt( ax * ax + ay * ay ) );
+        strikeX = ax * inv;
+        strikeY = ay * inv;
+    }
+
+    bool CapUsesFoliation( char const* cap )
+    {
+        if ( !cap || !cap[0] ) { return false; }
+        H2H::MaterialFormContract const& f = H2H::FormOrDirt( cap );
+        if ( f.fabric == H2H::FabricKind::FoliatedAnisotropic ) { return true; }
+        if ( f.fabric == H2H::FabricKind::BeddedFissile ) { return true; }
+        VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( cap );
+        return vd.fracture_character == VisualMat::FractureCharacter::FoliationSplit
+            || vd.fracture_character == VisualMat::FractureCharacter::SplitLayers
+            || std::strcmp( cap, "mica_schist" ) == 0;
+    }
+
+    std::string CapAtWorld( float x, float y )
+    {
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        CellSample const* c = GetCell( cx, cy );
+        if ( c && c->valid && !c->cap.empty() ) { return c->cap; }
+        ProvenanceGeo::EnsureReady();
+        return ProvenanceGeo::SampleSurface( x, y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM ).cap;
+    }
+
+    bool MaterialSlumpsOpen( std::string const& mat )
+    {
+        // Loose / granular — always an open crater (engine settle drops overhangs).
+        return mat == "sand" || mat == "gravel";
+    }
+
+    bool MaterialHoldsTunnel( std::string const& mat )
+    {
+        // Only loose granular materials keep the open-crater / slump read.
+        // Grass/wheat are cover over earth — digs into dirt/loam/clay should hold a roof.
+        if ( mat.empty() ) { return true; }
+        if ( MaterialSlumpsOpen( mat ) ) { return false; }
+        if ( mat == "water" || mat == "air" ) { return false; }
+        return true;
+    }
+
+    std::string CellCapName( int cx, int cy )
+    {
+        CellSample const* c = GetCell( cx, cy );
+        if ( !c || c->cap.empty() ) { return "dirt"; }
+        return c->cap;
+    }
+
+    float TunnelSurfaceBreakRadius( DigScar const& s, float gradeZ )
+    {
+        // Circle where the ENTRANCE sphere cuts grade — deepen must not shrink this away.
+        float const cz = s.tunnel ? s.entranceWz : s.wz;
+        float const dz = gradeZ - cz;
+        float const r = s.radius;
+        float const r2 = r * r;
+        float const d2 = dz * dz;
+        if ( d2 >= r2 ) { return 0.f; }
+        return std::sqrt( r2 - d2 );
+    }
+
+    float ScarTunnelDepAt( DigScar const& s, float x, float y, float gradeZ )
+    {
+        // Only sink the heightfield inside the entrance break; floor comes from the deep cavity.
+        float const breakR = TunnelSurfaceBreakRadius( s, gradeZ );
+        if ( breakR < 1e-5f ) { return 0.f; }
+        float const dx = x - s.wx;
+        float const dy = y - s.wy;
+        if ( ( dx * dx + dy * dy ) > breakR * breakR ) { return 0.f; }
+        float const r = s.radius;
+        float const r2 = r * r;
+        float const d2 = dx * dx + dy * dy;
+        if ( d2 >= r2 ) { return 0.f; }
+        float const h = std::sqrt( r2 - d2 );
+        float const sphereBot = s.wz - h;
+        return (std::max)( 0.f, gradeZ - sphereBot );
+    }
+
+    float DigDepAt( float x, float y )
+    {
+        float digDep = 0.f;
+        float gradeZ = 0.f;
+        bool haveGrade = SampleGroundZBase( x, y, gradeZ );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place ) { continue; }
+            // Foliation plates / face punctures are wall chips — never sink the heightfield
+            // (hemi DigDep on steep faces stretches into vertical "scoops").
+            if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
+            if ( s.tunnel )
+            {
+                if ( !haveGrade ) { continue; }
+                digDep = (std::max)( digDep, ScarTunnelDepAt( s, x, y, gradeZ ) );
+            }
+            else
+            {
+                digDep = (std::max)( digDep, ScarHemiAt( s, x, y ) );
+            }
+        }
+        return digDep;
+    }
+
+    float PlaceLiftAt( float x, float y )
+    {
+        float placeLift = 0.f;
+        for ( DigScar const& s : g.scars )
+        {
+            if ( !s.place ) { continue; }
+            placeLift = (std::max)( placeLift, ScarHemiAt( s, x, y ) );
+        }
+        return placeLift;
+    }
+
+    float ScarDeltaZ( float x, float y )
+    {
+        // Feet: mounds minus holes (place can partially refill a dig).
+        return PlaceLiftAt( x, y ) - DigDepAt( x, y );
+    }
+
+    void InvalidateTerrainMesh()
+    {
+        g.terrainDirty = true;
+    }
+
+    void EnsureGeoCell( int cx, int cy )
+    {
+        ProvenanceGeo::EnsureReady();
+        auto const sample = ProvenanceGeo::SampleSurface(
+            (double)cx + 0.5, (double)cy + 0.5,
+            g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+        auto const key = CellKey( cx, cy );
+        CellSample& dest = g.cells[key];
+        bool const keepFillZ = dest.valid && dest.hasFillZ;
+        float const keepFZ = dest.fillZ;
+        bool const keepEdited = dest.valid && dest.edited;
+        bool const keepOcc = dest.valid && !dest.fill.empty();
+        if ( !dest.valid ) { ++g.cellsLoaded; }
+        // Esoterica geography = baseline grade/cap authority (bridge optional).
+        dest.grade = sample.grade;
+        dest.cap = sample.cap;
+        CapColor( sample.cap, dest.r, dest.g, dest.b );
+        dest.valid = true;
+        if ( keepFillZ )
+        {
+            dest.hasFillZ = true;
+            dest.fillZ = keepFZ;
+            dest.edited = true;
+        }
+        else if ( keepEdited )
+        {
+            dest.edited = true;
+        }
+        if ( keepOcc || dest.hasCavity )
+        {
+            dest.edited = true;
+        }
+    }
+
+    void EnsureGeoDisk( int px, int py, int radCells )
+    {
+        bool any = false;
+        for ( int dy = -radCells; dy <= radCells; ++dy )
+        {
+            for ( int dx = -radCells; dx <= radCells; ++dx )
+            {
+                if ( dx * dx + dy * dy > radCells * radCells ) { continue; }
+                int const cx = px + dx, cy = py + dy;
+                if ( GetCell( cx, cy ) ) { continue; }
+                EnsureGeoCell( cx, cy );
+                any = true;
+            }
+        }
+        if ( any ) { InvalidateTerrainMesh(); }
+    }
+
+    void ClearPendingScarEdit()
+    {
+        g.pendingScarIndex = -1;
+        g.pendingScarDepthBefore = 0.f;
+        g.pendingScarWasNew = false;
+    }
+
+    void RollbackPendingScarEdit()
+    {
+        if ( g.pendingScarIndex < 0 || g.pendingScarIndex >= (int)g.scars.size() )
+        {
+            ClearPendingScarEdit();
+            return;
+        }
+        if ( g.pendingScarWasNew )
+        {
+            // Only pop if still the edited slot (usually back)
+            if ( g.pendingScarIndex == (int)g.scars.size() - 1
+              && g.scars.back().place == g.pendingScarIsPlace )
+            {
+                g.scars.pop_back();
+                ++g.scarGen;
+            }
+        }
+        else
+        {
+            DigScar& s = g.scars[(size_t)g.pendingScarIndex];
+            if ( s.place == g.pendingScarIsPlace )
+            {
+                s.depth = g.pendingScarDepthBefore;
+                if ( s.depth < 1e-4f )
+                {
+                    g.scars.erase( g.scars.begin() + g.pendingScarIndex );
+                }
+                ++g.scarGen;
+            }
+        }
+        ClearPendingScarEdit();
+    }
+
+    void RemoveLastOptimisticDigScar()
+    {
+        if ( g.pendingScarIndex >= 0 && !g.pendingScarIsPlace )
+        {
+            RollbackPendingScarEdit();
+            return;
+        }
+        if ( g.scars.empty() ) { return; }
+        DigScar const& s = g.scars.back();
+        if ( !s.place )
+        {
+            g.scars.pop_back();
+            ++g.scarGen;
+        }
+    }
+
+    void RemoveLastOptimisticPlaceScar()
+    {
+        if ( g.pendingScarIndex >= 0 && g.pendingScarIsPlace )
+        {
+            RollbackPendingScarEdit();
+            return;
+        }
+        if ( g.scars.empty() ) { return; }
+        DigScar const& s = g.scars.back();
+        if ( s.place )
+        {
+            g.scars.pop_back();
+            ++g.scarGen;
+        }
+    }
+
+    void CancelDigScarsUnderPlace( float wx, float wy, float radius )
+    {
+        // Place into a hole: shrink overlapping dig cups (slump fill) instead of deleting the well wholesale.
+        float const lim = radius * 0.85f;
+        float const lim2 = lim * lim;
+        size_t const before = g.scars.size();
+        for ( DigScar& s : g.scars )
+        {
+            if ( s.place ) { continue; }
+            float const dx = s.wx - wx;
+            float const dy = s.wy - wy;
+            if ( ( dx * dx + dy * dy ) > lim2 ) { continue; }
+            s.depth = (std::max)( 0.f, s.depth - kHandfulRadiusM );
+        }
+        g.scars.erase( std::remove_if( g.scars.begin(), g.scars.end(),
+            []( DigScar const& s ) { return !s.place && s.depth < 1e-4f; } ),
+            g.scars.end() );
+        if ( g.scars.size() != before ) { ++g.scarGen; }
+    }
+
+    void CancelPlaceScarsUnderDig( float wx, float wy, float radius )
+    {
+        // Dig into a mound: cut place cups so placed dirt can be scooped again.
+        float const lim = radius * 0.85f;
+        float const lim2 = lim * lim;
+        size_t const before = g.scars.size();
+        for ( DigScar& s : g.scars )
+        {
+            if ( !s.place ) { continue; }
+            float const dx = s.wx - wx;
+            float const dy = s.wy - wy;
+            if ( ( dx * dx + dy * dy ) > lim2 ) { continue; }
+            s.depth = (std::max)( 0.f, s.depth - kHandfulRadiusM );
+        }
+        g.scars.erase( std::remove_if( g.scars.begin(), g.scars.end(),
+            []( DigScar const& s ) { return s.place && s.depth < 1e-4f; } ),
+            g.scars.end() );
+        if ( g.scars.size() != before ) { ++g.scarGen; }
+    }
+
+    void RemoveDigScarsInCell( int cx, int cy )
+    {
+        size_t const before = g.scars.size();
+        g.scars.erase( std::remove_if( g.scars.begin(), g.scars.end(),
+            [&]( DigScar const& s ) { return !s.place && s.cx == cx && s.cy == cy; } ),
+            g.scars.end() );
+        if ( g.scars.size() != before ) { ++g.scarGen; }
+    }
+
+    void PruneScars()
+    {
+        // Prefer distance cull over FIFO — old nearby holes must not vanish when you dig elsewhere.
+        float const maxR = (float)kFarRadiusCells + 4.f;
+        float const maxR2 = maxR * maxR;
+        g.scars.erase( std::remove_if( g.scars.begin(), g.scars.end(),
+            [&]( DigScar const& s )
+            {
+                float const dx = s.wx - g.feetX;
+                float const dy = s.wy - g.feetY;
+                return ( dx * dx + dy * dy ) > maxR2;
+            } ),
+            g.scars.end() );
+        // Dense handful fields easily exceed a few hundred cups; keep nearby openings alive.
+        constexpr size_t kScarSoftCap = 8192;
+        while ( g.scars.size() > kScarSoftCap )
+        {
+            // Drop farthest from feet, never a random "first dug" near the player
+            size_t worst = 0;
+            float worstD2 = -1.f;
+            for ( size_t i = 0; i < g.scars.size(); ++i )
+            {
+                float const dx = g.scars[i].wx - g.feetX;
+                float const dy = g.scars[i].wy - g.feetY;
+                float const d2 = dx * dx + dy * dy;
+                if ( d2 > worstD2 ) { worstD2 = d2; worst = i; }
+            }
+            g.scars.erase( g.scars.begin() + (std::ptrdiff_t)worst );
+        }
+    }
+
+    void AddScar( float wx, float wy, float wz, int cx, int cy, bool place, bool tunnel )
+    {
+        // Place: tight merge. Dig: deepen only when reticle is near the SAME scoop centre.
+        // Wide dig-merge glued rim-overlap digs into the old hole (remaining solid never got a cup).
+        float const mergeR = kHandfulRadiusM * ( place ? 0.35f : 0.42f );
+        float const mergeR2 = mergeR * mergeR;
+        for ( size_t i = 0; i < g.scars.size(); ++i )
+        {
+            DigScar& s = g.scars[i];
+            if ( s.place != place ) { continue; }
+            if ( !place && s.tunnel != tunnel ) { continue; } // open shaft ≠ buried tunnel
+            float const dx = s.wx - wx;
+            float const dy = s.wy - wy;
+            if ( ( dx * dx + dy * dy ) > mergeR2 ) { continue; }
+            if ( !place )
+            {
+                // Near bowl centre only — rim / remaining-solid bites get their own cup.
+                if ( ScarHemiAt( s, wx, wy ) < kHandfulRadiusM * 0.55f ) { continue; }
+            }
+            g.pendingScarIndex = (int)i;
+            g.pendingScarDepthBefore = s.depth;
+            g.pendingScarWasNew = false;
+            g.pendingScarIsPlace = place;
+            s.depth += kHandfulRadiusM;
+            if ( place )
+            {
+                s.wz = wz;
+            }
+            else if ( s.tunnel )
+            {
+                s.wz = (std::min)( s.wz, wz ); // deepen cavity centre
+            }
+            else
+            {
+                s.wz = wz;
+            }
+            ++g.scarGen;
+            auto it = g.cells.find( CellKey( s.cx, s.cy ) );
+            if ( it != g.cells.end() && it->second.valid ) { it->second.edited = true; }
+            return;
+        }
+
+        DigScar s;
+        s.wx = wx; s.wy = wy; s.wz = wz;
+        s.cx = cx; s.cy = cy;
+        s.place = place;
+        s.tunnel = place ? false : tunnel;
+        s.entranceWz = wz;
+        s.radius = ( g.pendingAffectRM > 1e-5f ) ? g.pendingAffectRM : SoftScoopScarRadiusM();
+        s.depth = s.radius;
+        s.kind = ScarKind::ScoopHemi;
+        g.scars.push_back( s );
+        g.pendingScarIndex = (int)g.scars.size() - 1;
+        g.pendingScarDepthBefore = 0.f;
+        g.pendingScarWasNew = true;
+        g.pendingScarIsPlace = place;
+        ++g.scarGen;
+        PruneScars();
+        if ( g.pendingScarWasNew )
+        {
+            g.pendingScarIndex = (int)g.scars.size() - 1;
+        }
+        auto it = g.cells.find( CellKey( cx, cy ) );
+        if ( it != g.cells.end() && it->second.valid ) { it->second.edited = true; }
+    }
+
+    bool IsSteepFaceAt( float x, float y )
+    {
+        // Flat ground nz≈1; vertical cliff nz→0. Hemi DigDep on cliffs stretches into vertical scoops.
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        SampleAimNormal( x, y, nx, ny, nz );
+        return nz < 0.58f;
+    }
+
+    void AddFacePunctureScar( float wx, float wy, float wz, int cx, int cy,
+        float radius, float depthAmp, float nx, float ny, float nz )
+    {
+        float const mergeR = radius * 0.85f;
+        float const mergeR2 = mergeR * mergeR;
+        for ( size_t i = 0; i < g.scars.size(); ++i )
+        {
+            DigScar& s = g.scars[i];
+            if ( s.place || s.kind != ScarKind::FacePuncture ) { continue; }
+            float const dx = s.wx - wx, dy = s.wy - wy, dz = s.wz - wz;
+            if ( ( dx * dx + dy * dy + dz * dz ) > mergeR2 ) { continue; }
+            g.pendingScarIndex = (int)i;
+            g.pendingScarDepthBefore = s.depth;
+            g.pendingScarWasNew = false;
+            g.pendingScarIsPlace = false;
+            s.depth = (std::min)( 0.08f, s.depth + depthAmp * 0.35f );
+            s.radius = (std::max)( s.radius, radius );
+            s.wx = wx; s.wy = wy; s.wz = wz;
+            s.faceNx = nx; s.faceNy = ny; s.faceNz = nz;
+            ++g.scarGen;
+            return;
+        }
+        DigScar s;
+        s.wx = wx; s.wy = wy; s.wz = wz;
+        s.cx = cx; s.cy = cy;
+        s.place = false;
+        s.tunnel = false;
+        s.entranceWz = wz;
+        s.kind = ScarKind::FacePuncture;
+        s.radius = radius;
+        s.depth = depthAmp;
+        s.support = 1.f;
+        s.faceNx = nx; s.faceNy = ny; s.faceNz = nz;
+        g.scars.push_back( s );
+        g.pendingScarIndex = (int)g.scars.size() - 1;
+        g.pendingScarDepthBefore = 0.f;
+        g.pendingScarWasNew = true;
+        g.pendingScarIsPlace = false;
+        ++g.scarGen;
+        PruneScars();
+        if ( g.pendingScarWasNew )
+        {
+            g.pendingScarIndex = (int)g.scars.size() - 1;
+        }
+    }
+
+    // Foliation plate notch — merge extends the SAME seam (impact → crack → pry → plate).
+    void AddFoliationPlateScar( float wx, float wy, float wz, int cx, int cy,
+        float strikeX, float strikeY,
+        float along, float acrossDeep, float acrossLip, float depthAmp,
+        float support, RockStruct::FractureStage stage,
+        float faceNx, float faceNy, float faceNz )
+    {
+        float const inv = 1.f / (std::max)( 1e-5f, std::sqrt( strikeX * strikeX + strikeY * strikeY ) );
+        strikeX *= inv; strikeY *= inv;
+        float const mergeAlong = along + 0.06f;
+        for ( size_t i = 0; i < g.scars.size(); ++i )
+        {
+            DigScar& s = g.scars[i];
+            if ( s.place || s.kind != ScarKind::FoliationPlate ) { continue; }
+            float const dot = s.strikeX * strikeX + s.strikeY * strikeY;
+            if ( std::fabs( dot ) < 0.82f ) { continue; }
+            float const dx = s.wx - wx, dy = s.wy - wy, dz = s.wz - wz;
+            float const alongD = std::fabs( dx * s.strikeX + dy * s.strikeY );
+            float const acrossD = std::fabs( dx * ( -s.strikeY ) + dy * s.strikeX );
+            if ( alongD > mergeAlong || acrossD > acrossDeep + 0.05f ) { continue; }
+            if ( ( dx * dx + dy * dy + dz * dz ) > ( mergeAlong * mergeAlong ) ) { continue; }
+
+            g.pendingScarIndex = (int)i;
+            g.pendingScarDepthBefore = s.depth;
+            g.pendingScarWasNew = false;
+            g.pendingScarIsPlace = false;
+            s.plateAlong = (std::min)( RockStruct::kStructuralSlabM * 0.55f, s.plateAlong + along * 0.35f );
+            s.plateAcrossDeep = (std::max)( s.plateAcrossDeep, acrossDeep );
+            s.plateAcrossLip = (std::min)( s.plateAcrossLip, acrossLip );
+            s.depth = (std::max)( s.depth, depthAmp );
+            s.support = (std::min)( s.support, support );
+            s.fracStage = stage;
+            s.wx = wx; s.wy = wy; s.wz = wz; // extend from latest strike contact
+            s.faceNx = faceNx; s.faceNy = faceNy; s.faceNz = faceNz;
+            ++g.scarGen;
+            auto it = g.cells.find( CellKey( s.cx, s.cy ) );
+            if ( it != g.cells.end() && it->second.valid ) { it->second.edited = true; }
+            return;
+        }
+
+        DigScar s;
+        s.wx = wx; s.wy = wy; s.wz = wz;
+        s.cx = cx; s.cy = cy;
+        s.place = false;
+        s.tunnel = false;
+        s.entranceWz = wz;
+        s.kind = ScarKind::FoliationPlate;
+        s.strikeX = strikeX; s.strikeY = strikeY;
+        s.plateAlong = along;
+        s.plateAcrossDeep = acrossDeep;
+        s.plateAcrossLip = acrossLip;
+        s.depth = depthAmp;
+        s.radius = (std::max)( along, acrossDeep );
+        s.support = support;
+        s.fracStage = stage;
+        s.faceNx = faceNx; s.faceNy = faceNy; s.faceNz = faceNz;
+        g.scars.push_back( s );
+        g.pendingScarIndex = (int)g.scars.size() - 1;
+        g.pendingScarDepthBefore = 0.f;
+        g.pendingScarWasNew = true;
+        g.pendingScarIsPlace = false;
+        ++g.scarGen;
+        PruneScars();
+        if ( g.pendingScarWasNew )
+        {
+            g.pendingScarIndex = (int)g.scars.size() - 1;
+        }
+        auto it = g.cells.find( CellKey( cx, cy ) );
+        if ( it != g.cells.end() && it->second.valid ) { it->second.edited = true; }
+    }
+
+    bool DigShouldTunnel( float wx, float wy, float wz, int cx, int cy )
+    {
+        // Open lit scoops only — buried tunnel spheres draped grade into holes (rejected).
+        (void)wx; (void)wy; (void)wz; (void)cx; (void)cy;
+        return false;
+    }
+
+    float WorldToEngDepth( float meters )
+    {
+        // Engine carve/place depth+radius are cell-depths (Unreal: worldΔZ / (sublayers*voxelEdge)).
+        return meters / (std::max)( 0.05f, g.cellDepthM );
+    }
+
+    float HandfulRadiusEng()
+    {
+        // Wire carve/place radius = dig-volume / place-volume sphere (tool×material affect).
+        float r = g.aimHit ? AimDigAffect().radiusM : TransferScarRadiusM();
+        if ( g.pendingAffectRM > 1e-5f && g.pending != PendingKind::None )
+        {
+            r = g.pendingAffectRM;
+        }
+        return WorldToEngDepth( r );
+    }
+
+    // Dig stays under the reticle and cuts DEEPER; place keeps slump-into-hole / seat-on-mound.
+    // Out depth is WORLD meters below grade (caller converts to engine cell-depths for the wire).
+    void ResolveBiteFromAim( bool place,
+        float& bx, float& by, float& bz,
+        int& cx, int& cy, float& u, float& v, float& depthM )
+    {
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cyw * cp, fz = sp;
+
+        if ( place )
+        {
+            float const dig = DigDepAt( g.aimX, g.aimY );
+            float const lift = PlaceLiftAt( g.aimX, g.aimY );
+            float const netHole = dig - lift;
+            // Keep slump-into-hole: only bias depth when there is a real open pit under the aim.
+            if ( netHole > kHandfulRadiusM * 0.25f )
+            {
+                depthM = netHole;
+                float const bias = kHandfulRadiusM * 0.25f;
+                bx = g.aimX + fx * bias;
+                by = g.aimY + fy * bias;
+                bz = g.aimZ + fz * bias;
+            }
+            else
+            {
+                // Place on grade or on an existing mound — seat on contact (place-on-place).
+                depthM = 0.f;
+                bx = g.aimX;
+                by = g.aimY;
+                bz = g.aimZ;
+            }
+            cx = (int)std::floor( bx );
+            cy = (int)std::floor( by );
+            u = bx - (float)cx;
+            v = by - (float)cy;
+            return;
+        }
+
+        // DIG — continue along look through matter (into the face ahead of an open scoop).
+        // Straight-down only when looking steeply at virgin grade. Inside a dig with a shallow
+        // look, walk the bite centre FORWARD into remaining solid — never sky skin / vertical deepen.
+        float hitX = g.aimX, hitY = g.aimY, hitZ = g.aimZ;
+        float const R = g.aimHit ? AimDigAffect().radiusM : SoftScoopScarRadiusM();
+        float const lookDown = -fz; // pitch<0 → looking down
+
+        float crestAtAim = hitZ;
+        SampleGroundZBase( hitX, hitY, crestAtAim );
+        hitZ = g.aimZ;
+
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        CaptureFaceNormalAt( hitX, hitY, nx, ny, nz );
+        bool const steepFace = nz < 0.58f;
+
+        // Steep / wall contact: land ON the ray hit and press into the face along look.
+        // Grade-Z re-seat + XY walk is what made vertical strikes miss the strike point.
+        if ( steepFace )
+        {
+            float const into = R * 0.60f;
+            bx = hitX + fx * into;
+            by = hitY + fy * into;
+            bz = hitZ + fz * into;
+            cx = (int)std::floor( bx );
+            cy = (int)std::floor( by );
+            u = bx - (float)cx;
+            v = by - (float)cy;
+            depthM = R;
+            return;
+        }
+
+        float const digAim = DigDepAt( hitX, hitY );
+        bool const inScoop = digAim > R * 0.20f;
+        bool const lookForward = lookDown < 0.72f;
+
+        float bias = R * 0.60f;
+        if ( inScoop && lookForward ) { bias = R * 2.2f; }
+        else if ( lookForward ) { bias = R * 1.05f; }
+
+        bx = hitX + fx * bias;
+        by = hitY + fy * bias;
+        bz = hitZ + fz * bias;
+
+        // Walk along look until DigDep drops (solid wall ahead) — matter-true forward bite.
+        if ( inScoop && lookForward )
+        {
+            bool foundSolid = false;
+            float bestX = bx, bestY = by, bestZ = bz;
+            float const tMax = R * 5.5f;
+            float const tStep = R * 0.22f;
+            for ( float t = R * 0.35f; t <= tMax; t += tStep )
+            {
+                float const x = hitX + fx * t;
+                float const y = hitY + fy * t;
+                float const z = hitZ + fz * t;
+                float grade = 0.f;
+                if ( !SampleGroundZBase( x, y, grade ) ) { continue; }
+                float const dig = DigDepAt( x, y );
+                // Solid = little/no open cup under grade, and bite sits in the mass (not above sky skin).
+                if ( dig < R * 0.18f && z <= grade + R * 0.15f && z >= grade - R * 3.5f )
+                {
+                    bestX = x;
+                    bestY = y;
+                    // Seat just inside the face so the sphere intersects remaining solid.
+                    bestZ = (std::min)( z, grade - R * 0.35f );
+                    foundSolid = true;
+                    break;
+                }
+            }
+            if ( foundSolid )
+            {
+                bx = bestX;
+                by = bestY;
+                bz = bestZ;
+            }
+        }
+        else
+        {
+            // Only pull back if look-steer dove INTO a deeper empty cup than the aim.
+            float const digCentre = DigDepAt( bx, by );
+            if ( digCentre > digAim + R * 0.25f && digCentre > R * 0.40f )
+            {
+                bias = R * 0.20f;
+                bx = hitX + fx * bias;
+                by = hitY + fy * bias;
+                bz = hitZ + fz * bias;
+            }
+        }
+
+        // Grade-normal seat only for steep virgin scoops — +Z nudge kills forward tunneling.
+        if ( !inScoop && !lookForward && lookDown >= 0.72f )
+        {
+            float const pen = -( ( bx - hitX ) * nx + ( by - hitY ) * ny + ( bz - hitZ ) * nz );
+            float const want = R * 0.35f;
+            if ( pen < want )
+            {
+                float const d = want - pen;
+                bx -= nx * d;
+                by -= ny * d;
+                bz -= nz * d;
+            }
+        }
+
+        cx = (int)std::floor( bx );
+        cy = (int)std::floor( by );
+        u = bx - (float)cx;
+        v = by - (float)cy;
+
+        float crestZ = crestAtAim;
+        SampleGroundZBase( bx, by, crestZ );
+        depthM = (std::max)( R, crestZ - bz );
+
+        // Vertical deepen only when looking down into the same cup (not forward into a face).
+        if ( !lookForward && DigDepAt( bx, by ) > R * 0.70f )
+        {
+            float floorZ = bz;
+            SampleGroundZ( bx, by, floorZ );
+            float const floorDepthM = crestZ - floorZ;
+            depthM = (std::max)( depthM, floorDepthM + R * 0.5f );
+        }
+    }
+
+    void QueueColumn( int cx, int cy )
+    {
+        for ( auto const& p : g.columnQueue )
+        {
+            if ( p.first == cx && p.second == cy ) { return; }
+        }
+        g.columnQueue.push_back( { cx, cy } );
+    }
+
+    void QueueSettledFromReply( std::string const& line )
+    {
+        size_t p = line.find( "\"settled\"" );
+        if ( p == std::string::npos ) { return; }
+        size_t b = line.find( '[', p );
+        size_t e = line.find( ']', b );
+        if ( b == std::string::npos || e == std::string::npos ) { return; }
+        // settled entries are [x,y] pairs or objects — scan for integer pairs
+        std::string body = line.substr( b + 1, e - b - 1 );
+        char const* cur = body.c_str();
+        while ( *cur )
+        {
+            while ( *cur && ( *cur < '0' || *cur > '9' ) && *cur != '-' ) { ++cur; }
+            if ( !*cur ) { break; }
+            char* end = nullptr;
+            long x = strtol( cur, &end, 10 );
+            if ( end == cur ) { break; }
+            cur = end;
+            while ( *cur && ( *cur < '0' || *cur > '9' ) && *cur != '-' ) { ++cur; }
+            if ( !*cur ) { break; }
+            long y = strtol( cur, &end, 10 );
+            if ( end == cur ) { break; }
+            cur = end;
+            QueueColumn( (int)x, (int)y );
+        }
+    }
+
+    void SetMouseLook( HWND hwnd, bool enabled )
+    {
+        g.mouseLook = enabled;
+        if ( enabled )
+        {
+            RECT rc; GetClientRect( hwnd, &rc );
+            POINT pt = { ( rc.right - rc.left ) / 2, ( rc.bottom - rc.top ) / 2 };
+            ClientToScreen( hwnd, &pt );
+            SetCursorPos( pt.x, pt.y );
+            g.lastMouseX = ( rc.right - rc.left ) / 2;
+            g.lastMouseY = ( rc.bottom - rc.top ) / 2;
+            SetCapture( hwnd );
+            while ( ShowCursor( FALSE ) >= 0 ) {}
+            g.cursorCaptured = true;
+        }
+        else
+        {
+            if ( g.cursorCaptured )
+            {
+                ReleaseCapture();
+                while ( ShowCursor( TRUE ) < 0 ) {}
+                g.cursorCaptured = false;
+            }
+        }
+    }
+
+    void DrawWireSphere( float cx, float cy, float cz, float radius, float cr, float cg, float cb, int seg = 20 )
+    {
+        glColor3f( cr, cg, cb );
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < seg; ++i )
+        {
+            float a = (float)i / (float)seg * 6.2831853f;
+            glVertex3f( cx + std::cos( a ) * radius, cy + std::sin( a ) * radius, cz );
+        }
+        glEnd();
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < seg; ++i )
+        {
+            float a = (float)i / (float)seg * 6.2831853f;
+            glVertex3f( cx + std::cos( a ) * radius, cy, cz + std::sin( a ) * radius );
+        }
+        glEnd();
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < seg; ++i )
+        {
+            float a = (float)i / (float)seg * 6.2831853f;
+            glVertex3f( cx, cy + std::cos( a ) * radius, cz + std::sin( a ) * radius );
+        }
+        glEnd();
+    }
+
+    void FireActionCue( bool place, bool busy );
+    void DrawActionCue( float dt );
+    void DrawSurfaceRing( float ox, float oy, float oz,
+                          float tx, float ty, float tz,
+                          float bx, float by, float bz,
+                          float radius, float cr, float cg, float cb, int seg );
+    void DrawHorizontalRing( float cx, float cy, float cz, float radius, float cr, float cg, float cb, int seg );
+
+    bool SendLine( std::string const& line )
+    {
+        if ( g.sock == INVALID_SOCKET ) { return false; }
+        size_t sent = 0;
+        while ( sent < line.size() )
+        {
+            int n = send( g.sock, line.data() + sent, (int)( line.size() - sent ), 0 );
+            if ( n <= 0 ) { return false; }
+            sent += (size_t)n;
+        }
+        return true;
+    }
+
+    bool RequestMethod( char const* method, char const* paramsJson, PendingKind kind, int bx = 0, int by = 0 )
+    {
+        char buf[384];
+        int id = g.nextId++;
+        std::snprintf( buf, sizeof( buf ),
+            "{\"version\":%d,\"id\":\"%d\",\"type\":\"request\",\"method\":\"%s\",\"params\":%s}\n",
+            kProtocolVersion, id, method, paramsJson );
+        if ( !SendLine( buf ) ) { return false; }
+        g.pending = kind;
+        g.pendingId = id;
+        g.pendingBx = bx;
+        g.pendingBy = by;
+        return true;
+    }
+
+    void UpdateStreamHud()
+    {
+        char d[960];
+        char heldBuf[128] = "empty";
+        if ( g.heldTotalG > 0 )
+        {
+            std::snprintf( heldBuf, sizeof( heldBuf ), "%s %dg (%.2f handfuls)",
+                g.heldDominant.empty() ? "?" : g.heldDominant.c_str(),
+                g.heldTotalG,
+                g.heldTotalG / kHandfulDirtG );
+        }
+        std::snprintf( d, sizeof( d ),
+            "wire v%d | contract=%s | gen=%s v%d | terrain_rev=%d | auth=%s | world=%d\n"
+            "hash=%s\n"
+            "relief=%.0f datum=%.2f | far cells=%d blocks=%d/%d %s\n"
+            "mode=%s grounded=%d | feet (%.1f,%.1f,%.2f) eyeZ=%.2f | 6ft=%.2fm eye=%.2fm\n"
+            "H2H tool=%s | affect r=%.3fm (%.0f mL %s) | contact r=%.2fm | hand ref %.0f mL\n"
+            "held: %s | aim %s cell(%d,%d) uv(%.2f,%.2f)\n"
+            "%s",
+            g.wireVersion,
+            g.contract.empty() ? "?" : g.contract.c_str(),
+            g.generatorId.empty() ? "?" : g.generatorId.c_str(),
+            g.generatorVersion,
+            g.terrainRev,
+            g.authorityMode.empty() ? "?" : g.authorityMode.c_str(),
+            g.worldSize,
+            g.worldIdentityHash.empty() ? "?" : g.worldIdentityHash.c_str(),
+            g.reliefVoxels, g.gradeDatum,
+            g.cellsLoaded, g.blocksLoaded, g.blocksWanted,
+            g.streamComplete ? "STREAM COMPLETE" : "streaming...",
+            g.walkMode ? "WALK 6ft" : "FREE CAM",
+            g.grounded ? 1 : 0,
+            g.feetX, g.feetY, g.feetZ, g.camZ,
+            kCharHeightM, kEyeHeightM,
+            ActiveToolProfile().id,
+            AimDigAffect().radiusM,
+            AimDigAffect().volumeM3 * 1e6f,
+            AimDigAffect().feel,
+            ActiveAimRadiusM(),
+            kHandfulVolumeM3 * 1e6f,
+            heldBuf,
+            g.aimHit ? "HIT" : "---",
+            g.aimCx, g.aimCy, g.aimU, g.aimV,
+            g.digestLine.c_str() );
+        g.detail = d;
+    }
+
+    void ParseCapsReply( std::string const& line )
+    {
+        g.wireVersion = 0;
+        ExtractJsonInt( line, "version", g.wireVersion );
+        ExtractJsonBool( line, "ok", g.envelopeOk );
+
+        std::string errMsg;
+        if ( ExtractJsonString( line, "code", errMsg ) || line.find( "\"error\":{" ) != std::string::npos )
+        {
+            ExtractJsonString( line, "message", errMsg );
+            g.link = LinkState::CapsError;
+            g.lastError = errMsg.empty() ? "engine returned error" : errMsg;
+            g.statusLine = "terrain_caps failed";
+            g.detail = g.lastError;
+            return;
+        }
+        if ( !g.envelopeOk )
+        {
+            g.link = LinkState::CapsError;
+            g.statusLine = "envelope ok=false";
+            return;
+        }
+
+        ExtractJsonString( line, "contract", g.contract );
+        ExtractJsonString( line, "generator_id", g.generatorId );
+        ExtractJsonInt( line, "generator_version", g.generatorVersion );
+        ExtractJsonString( line, "world_identity_hash", g.worldIdentityHash );
+        ExtractJsonInt( line, "terrain_rev", g.terrainRev );
+        ExtractJsonString( line, "authority_mode", g.authorityMode );
+        ExtractJsonInt( line, "world_size", g.worldSize );
+        ExtractJsonFloat( line, "relief_voxels", g.reliefVoxels );
+        ExtractJsonFloat( line, "grade_datum", g.gradeDatum );
+        ExtractJsonFloat( line, "voxel_edge_m", g.voxelEdgeM );
+        if ( !ExtractJsonFloat( line, "cell_depth_m", g.cellDepthM ) )
+        {
+            // terrain_caps may nest scale — keep Phase 64 default (0.5 m per cell-depth)
+            g.cellDepthM = 0.5f;
+        }
+        if ( g.cellDepthM < 0.05f ) { g.cellDepthM = 0.5f; }
+
+        // Seed Esoterica geography from world identity (deterministic planet causes).
+        ProvenanceGeo::SetSeedFromIdentity( g.worldIdentityHash, g.generatorId, g.generatorVersion );
+
+        g.link = LinkState::CapsOk;
+        g.statusLine = "Phase 4 - caps ok, locating player";
+        UpdateStreamHud();
+
+        if ( !RequestMethod( "player_state", "{}", PendingKind::Player ) )
+        {
+            g.statusLine = "failed to request player_state";
+        }
+    }
+
+    void ParsePlayerReply( std::string const& line )
+    {
+        int x = g.playerX, y = g.playerY;
+        if ( ExtractPositionXY( line, x, y ) )
+        {
+            g.playerX = x;
+            g.playerY = y;
+            g.havePlayer = true;
+            g.feetX = (float)x + 0.5f;
+            g.feetY = (float)y + 0.5f;
+            g.feetZ = 0.f;
+            g.velZ = 0.f;
+            g.grounded = false;
+            g.walkMode = true;
+            g.camX = g.feetX;
+            g.camY = g.feetY;
+            g.camZ = g.feetZ + kEyeHeightM;
+            g.pitch = -0.12f;
+        }
+        else
+        {
+            g.havePlayer = true; // fall back to defaults
+        }
+
+        // Count wanted blocks (equidistant disk of block rings)
+        int const maxRing = ( kFarRadiusCells + kBlockCells - 1 ) / kBlockCells;
+        g.blocksWanted = 0;
+        for ( int ring = 0; ring <= maxRing; ++ring )
+        {
+            for ( int dy = -ring; dy <= ring; ++dy )
+            {
+                for ( int dx = -ring; dx <= ring; ++dx )
+                {
+                    if ( (std::max)( std::abs( dx ), std::abs( dy ) ) != ring ) { continue; }
+                    ++g.blocksWanted;
+                }
+            }
+        }
+
+        // Analytic Esoterica planet residency — concentric disk; bridge surface_field optional.
+        ProvenanceGeo::EnsureReady();
+        EnsureGeoDisk( (int)std::floor( g.feetX ), (int)std::floor( g.feetY ),
+            (std::min)( kFarRadiusCells, 64 ) );
+        g.streamComplete = true;
+        g.blocksLoaded = g.blocksWanted;
+        g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
+        UpdateStreamHud();
+    }
+
+    void ParseSurfaceReply( std::string const& line )
+    {
+        g.fetchedBlocks.insert( BlockKey( g.pendingBx, g.pendingBy ) );
+        ++g.blocksLoaded;
+
+        size_t cellsPos = line.find( "\"cells\"" );
+        if ( cellsPos == std::string::npos )
+        {
+            UpdateStreamHud();
+            return;
+        }
+        size_t i = line.find( '[', cellsPos );
+        if ( i == std::string::npos ) { UpdateStreamHud(); return; }
+        ++i;
+
+        while ( i < line.size() )
+        {
+            while ( i < line.size() && ( line[i] == ' ' || line[i] == '\t' || line[i] == ',' || line[i] == '\r' || line[i] == '\n' ) ) { ++i; }
+            if ( i >= line.size() || line[i] == ']' ) { break; }
+            if ( line[i] != '{' ) { break; }
+            size_t start = i;
+            int depth = 0;
+            for ( ; i < line.size(); ++i )
+            {
+                if ( line[i] == '{' ) { ++depth; }
+                else if ( line[i] == '}' )
+                {
+                    --depth;
+                    if ( depth == 0 ) { ++i; break; }
+                }
+            }
+            std::string obj = line.substr( start, i - start );
+            int cx = 0, cy = 0;
+            float grade = 0.85f;
+            std::string cap;
+            if ( !ExtractJsonInt( obj, "x", cx ) || !ExtractJsonInt( obj, "y", cy ) ) { continue; }
+            ExtractJsonFloat( obj, "grade", grade );
+            ExtractJsonString( obj, "cap", cap );
+            (void)grade;
+            (void)cap;
+            // Bridge cells only mark residency; Esoterica geography owns baseline grade/cap.
+            EnsureGeoCell( cx, cy );
+        }
+
+        if ( g.blocksLoaded >= g.blocksWanted ) { g.streamComplete = true; }
+        g.statusLine = g.streamComplete
+            ? "Phase 4 - standable + interaction digests"
+            : "Phase 4 - streaming standable surface (equidistant rings)";
+        InvalidateTerrainMesh();
+        UpdateStreamHud();
+    }
+
+    bool FindNextMissingBlock( int& outBx, int& outBy )
+    {
+        int const maxRing = ( kFarRadiusCells + kBlockCells - 1 ) / kBlockCells;
+        int const pbx = (int)std::floor( (double)g.playerX / kBlockCells );
+        int const pby = (int)std::floor( (double)g.playerY / kBlockCells );
+        for ( int ring = 0; ring <= maxRing; ++ring )
+        {
+            for ( int dy = -ring; dy <= ring; ++dy )
+            {
+                for ( int dx = -ring; dx <= ring; ++dx )
+                {
+                    if ( (std::max)( std::abs( dx ), std::abs( dy ) ) != ring ) { continue; }
+                    int const bx = ( pbx + dx ) * kBlockCells;
+                    int const by = ( pby + dy ) * kBlockCells;
+                    if ( g.fetchedBlocks.count( BlockKey( bx, by ) ) ) { continue; }
+                    outBx = bx;
+                    outBy = by;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void TickStreamRequests()
+    {
+        if ( g.link != LinkState::CapsOk ) { return; }
+        if ( g.pending != PendingKind::None ) { return; }
+        if ( !g.havePlayer ) { return; }
+
+        // Interaction columns optional — dig/place cups don't wait on voxel_column.
+        // Prefer keeping the wire free for the next carve/place.
+        if ( !g.columnQueue.empty() && g.streamComplete )
+        {
+            int cx = g.columnQueue.front().first;
+            int cy = g.columnQueue.front().second;
+            g.columnQueue.erase( g.columnQueue.begin() );
+            char params[64];
+            std::snprintf( params, sizeof( params ), "{\"x\":%d,\"y\":%d}", cx, cy );
+            g.pendingColX = cx;
+            g.pendingColY = cy;
+            if ( !RequestMethod( "voxel_column", params, PendingKind::Column ) )
+            {
+                g.link = LinkState::SocketError;
+                g.statusLine = "failed to send voxel_column";
+            }
+            return;
+        }
+
+        if ( g.streamComplete ) { return; }
+
+        int bx = 0, by = 0;
+        if ( !FindNextMissingBlock( bx, by ) )
+        {
+            g.streamComplete = true;
+            g.statusLine = "Phase 4 - standable + interaction digests";
+            UpdateStreamHud();
+            return;
+        }
+
+        char params[128];
+        std::snprintf( params, sizeof( params ), "{\"x0\":%d,\"y0\":%d,\"w\":%d,\"h\":%d}", bx, by, kBlockCells, kBlockCells );
+        if ( !RequestMethod( "surface_field", params, PendingKind::Surface, bx, by ) )
+        {
+            g.link = LinkState::SocketError;
+            g.statusLine = "failed to send surface_field";
+        }
+    }
+
+    void InvalidateBlockContaining( int cx, int cy )
+    {
+        int const bx = (int)std::floor( (double)cx / kBlockCells ) * kBlockCells;
+        int const by = (int)std::floor( (double)cy / kBlockCells ) * kBlockCells;
+        g.fetchedBlocks.erase( BlockKey( bx, by ) );
+        for ( int y = by; y < by + kBlockCells; ++y )
+        {
+            for ( int x = bx; x < bx + kBlockCells; ++x )
+            {
+                auto it = g.cells.find( CellKey( x, y ) );
+                if ( it != g.cells.end() )
+                {
+                    if ( it->second.valid ) { --g.cellsLoaded; }
+                    g.cells.erase( it );
+                }
+            }
+        }
+        if ( g.blocksLoaded > 0 ) { --g.blocksLoaded; }
+        g.streamComplete = false;
+        g.statusLine = "Phase 4 - refreshing dug block";
+    }
+
+    void RecomputeHeldFromBite()
+    {
+        g.heldTotalG = 0;
+        g.heldDominant.clear();
+        int best = 0;
+        for ( auto const& kv : g.heldBite )
+        {
+            if ( kv.second <= 0 ) { continue; }
+            g.heldTotalG += kv.second;
+            if ( kv.second > best )
+            {
+                best = kv.second;
+                g.heldDominant = kv.first;
+            }
+        }
+        // Drop zeroed slots
+        for ( auto it = g.heldBite.begin(); it != g.heldBite.end(); )
+        {
+            if ( it->second <= 0 ) { it = g.heldBite.erase( it ); }
+            else { ++it; }
+        }
+    }
+
+    void CreditHeld( std::unordered_map<std::string, int> const& added )
+    {
+        // Match engine carried.credit — digs stack; do not replace the hand.
+        for ( auto const& kv : added )
+        {
+            if ( kv.second > 0 ) { g.heldBite[kv.first] += kv.second; }
+        }
+        RecomputeHeldFromBite();
+    }
+
+    void DebitHeldBy( std::unordered_map<std::string, int> const& removed )
+    {
+        for ( auto const& kv : removed )
+        {
+            if ( kv.second <= 0 ) { continue; }
+            auto it = g.heldBite.find( kv.first );
+            if ( it == g.heldBite.end() ) { continue; }
+            it->second -= kv.second;
+            if ( it->second < 0 ) { it->second = 0; }
+        }
+        RecomputeHeldFromBite();
+    }
+
+    void DebitHeldTotal( int grams )
+    {
+        if ( grams <= 0 || g.heldBite.empty() ) { return; }
+        int left = grams;
+        // Dominant first, then remaining slots — same spirit as engine bite lay order.
+        if ( !g.heldDominant.empty() )
+        {
+            auto it = g.heldBite.find( g.heldDominant );
+            if ( it != g.heldBite.end() && it->second > 0 )
+            {
+                int take = (std::min)( left, it->second );
+                it->second -= take;
+                left -= take;
+            }
+        }
+        for ( auto& kv : g.heldBite )
+        {
+            if ( left <= 0 ) { break; }
+            if ( kv.second <= 0 ) { continue; }
+            int take = (std::min)( left, kv.second );
+            kv.second -= take;
+            left -= take;
+        }
+        RecomputeHeldFromBite();
+    }
+
+    int HandfulScoopGrams()
+    {
+        return (std::max)( 1, (int)std::lround( kHandfulDirtG ) );
+    }
+
+    // Pull one deliberate scoop from stock for a place ask (does not mutate held until digest).
+    bool BuildPlaceScoopAsk( std::unordered_map<std::string, int>& ask, int& totalG, std::string& dominant )
+    {
+        ask.clear();
+        totalG = 0;
+        dominant.clear();
+        if ( g.heldTotalG <= 0 || g.heldBite.empty() ) { return false; }
+        int left = (std::min)( g.heldTotalG, HandfulScoopGrams() );
+        if ( !g.heldDominant.empty() )
+        {
+            auto it = g.heldBite.find( g.heldDominant );
+            if ( it != g.heldBite.end() && it->second > 0 )
+            {
+                int take = (std::min)( left, it->second );
+                ask[it->first] = take;
+                left -= take;
+                totalG += take;
+                dominant = it->first;
+            }
+        }
+        for ( auto const& kv : g.heldBite )
+        {
+            if ( left <= 0 ) { break; }
+            if ( kv.second <= 0 ) { continue; }
+            if ( ask.count( kv.first ) ) { continue; }
+            int take = (std::min)( left, kv.second );
+            ask[kv.first] = take;
+            left -= take;
+            totalG += take;
+            if ( dominant.empty() ) { dominant = kv.first; }
+        }
+        return totalG > 0 && !dominant.empty();
+    }
+
+    void ParseGramsMapAfterKey( std::string const& line, char const* key,
+        std::unordered_map<std::string, int>& out, int& totalG, std::string& dominant )
+    {
+        out.clear();
+        totalG = 0;
+        dominant.clear();
+        size_t p = line.find( key );
+        if ( p == std::string::npos ) { return; }
+        p = line.find( '{', p );
+        if ( p == std::string::npos ) { return; }
+        size_t end = line.find( '}', p );
+        if ( end == std::string::npos ) { return; }
+        std::string body = line.substr( p + 1, end - p - 1 );
+        size_t i = 0;
+        while ( i < body.size() )
+        {
+            size_t q0 = body.find( '"', i );
+            if ( q0 == std::string::npos ) { break; }
+            size_t q1 = body.find( '"', q0 + 1 );
+            if ( q1 == std::string::npos ) { break; }
+            std::string mat = body.substr( q0 + 1, q1 - q0 - 1 );
+            size_t colon = body.find( ':', q1 );
+            if ( colon == std::string::npos ) { break; }
+            char* e = nullptr;
+            long grams = strtol( body.c_str() + colon + 1, &e, 10 );
+            if ( e == body.c_str() + colon + 1 ) { i = q1 + 1; continue; }
+            if ( grams > 0 )
+            {
+                out[mat] = (int)grams;
+                totalG += (int)grams;
+            }
+            i = (size_t)( e - body.c_str() );
+        }
+        int best = 0;
+        for ( auto const& kv : out )
+        {
+            if ( kv.second > best ) { best = kv.second; dominant = kv.first; }
+        }
+    }
+
+    void ParseRemovedMap( std::string const& line, std::unordered_map<std::string, int>& out, int& totalG, std::string& dominant )
+    {
+        ParseGramsMapAfterKey( line, "\"removed\"", out, totalG, dominant );
+    }
+
+    void ParseCarveReply( std::string const& line )
+    {
+        ExtractJsonFloat( line, "engine_ms", g.lastEngineMs );
+        int rev = g.terrainRev;
+        ExtractJsonInt( line, "rev", rev );
+        if ( rev > g.terrainRev ) { g.terrainRev = rev; g.lastDigRev = rev; }
+
+        std::string reason, msg;
+        ExtractJsonString( line, "reason", reason );
+        ExtractJsonString( line, "message", msg );
+        if ( msg.empty() ) { ExtractJsonString( line, "msg", msg ); }
+
+        // Envelope ok can be true while result.ok is false — detect refusal by reason/msg/empty removed
+        std::unordered_map<std::string, int> removed;
+        int totalG = 0;
+        std::string dominant;
+        ParseRemovedMap( line, removed, totalG, dominant );
+
+        if ( totalG <= 0 && ( !reason.empty() || line.find( "\"ok\":false" ) != std::string::npos || line.find( "\"ok\": false" ) != std::string::npos ) )
+        {
+            bool const emptyDig = ( reason == "nothing_to_dig" )
+                || ( msg.find( "Nothing to dig" ) != std::string::npos )
+                || ( msg.find( "nothing to dig" ) != std::string::npos );
+            if ( emptyDig )
+            {
+                // Soft scoop / forward bite: credit Index transfer grams when bridge column empty.
+                int creditG = g.pendingLocalScoopG > 0
+                    ? g.pendingLocalScoopG
+                    : (int)std::lround( kHandfulDirtG );
+                std::string mat = g.pendingLocalScoopMat.empty()
+                    ? CellCapName( g.pendingBiteCx, g.pendingBiteCy )
+                    : g.pendingLocalScoopMat;
+                if ( g.pendingBiteForward || g.pendingLocalScoopG > 0 )
+                {
+                    std::unordered_map<std::string, int> localRem;
+                    localRem[mat.empty() ? "dirt" : mat] = creditG;
+                    CreditHeld( localRem );
+                    ClearPendingScarEdit();
+                    CancelPlaceScarsUnderDig( g.pendingBiteWx, g.pendingBiteWy, kHandfulRadiusM );
+                    float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
+                    char d[384];
+                    std::snprintf( d, sizeof( d ),
+                        "H2H scoop @(%d,%d): +%dg %s (index transfer) | hand %dg ~%.2f | eng empty %.1fms",
+                        g.pendingBiteCx, g.pendingBiteCy,
+                        creditG, mat.empty() ? "dirt" : mat.c_str(),
+                        g.heldTotalG, handfuls, g.lastEngineMs );
+                    g.digestLine = d;
+                    g.statusLine = "Horizon-to-Hand - scoop credited";
+                    g.pendingBiteForward = false;
+                    g.pendingLocalScoopG = 0;
+                    g.pendingLocalScoopMat.clear();
+                    g.pendingAffectRM = 0.f;
+                    UpdateStreamHud();
+                    return;
+                }
+                // Steep/virgin: engine matter gone, grade skin can still float — keep optimistic cup.
+                ClearPendingScarEdit();
+                CancelPlaceScarsUnderDig( (float)g.pendingBiteCx + g.pendingBiteU,
+                    (float)g.pendingBiteCy + g.pendingBiteV, kHandfulRadiusM );
+                char d[320];
+                std::snprintf( d, sizeof( d ),
+                    "DIG skin clear @(%d,%d): leftover surface cut (engine already empty) | engine %.1fms",
+                    g.pendingBiteCx, g.pendingBiteCy, g.lastEngineMs );
+                g.digestLine = d;
+                g.statusLine = "Phase 4 - cleared leftover skin";
+                g.pendingBiteForward = false;
+                g.pendingLocalScoopG = 0;
+                g.pendingLocalScoopMat.clear();
+                g.pendingAffectRM = 0.f;
+                UpdateStreamHud();
+                return;
+            }
+            RemoveLastOptimisticDigScar();
+            char const* why = msg.empty()
+                ? ( reason.empty() ? "nothing" : reason.c_str() )
+                : msg.c_str();
+            char d[320];
+            std::snprintf( d, sizeof( d ), "DIG refused @(%d,%d): %s (engine %.1fms)",
+                g.pendingBiteCx, g.pendingBiteCy, why, g.lastEngineMs );
+            g.digestLine = d;
+            g.statusLine = "Phase 4 - dig refused";
+            g.pendingAffectRM = 0.f;
+            UpdateStreamHud();
+            return;
+        }
+
+        // Empty removed without explicit refuse (sub-unit graze etc.) — keep scar, no hand credit
+        if ( totalG <= 0 && reason.empty() && line.find( "\"ok\":false" ) == std::string::npos )
+        {
+            g.digestLine = "DIG grazed - no whole grams yet; scoop again or aim denser dirt";
+            g.statusLine = "Phase 4 - dig grazed (no credit)";
+            UpdateStreamHud();
+            return;
+        }
+
+        // Credit held bite — accumulate like engine carry (stockpile scoops for later places)
+        CreditHeld( removed );
+
+        float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
+        float mlApprox = ( totalG / kDirtVoxelG ) * ( kVoxelVolumeM3 * 1e6f );
+        (void)mlApprox;
+        char d[384];
+        std::snprintf( d, sizeof( d ),
+            "DIG digest: +%dg %s @(%d,%d)%s | hand now %dg ~%.2f handfuls | rev=%d | engine %.1fms",
+            totalG, dominant.empty() ? "?" : dominant.c_str(),
+            g.pendingBiteCx, g.pendingBiteCy,
+            g.pendingBiteForward ? " forward" : "",
+            g.heldTotalG, handfuls, g.terrainRev, g.lastEngineMs );
+        g.digestLine = d;
+        g.statusLine = "Phase 4 - scoop credited (handful)";
+        g.pendingBiteForward = false;
+        ClearPendingScarEdit();
+        // Dig cuts mounds — placed dirt can be scooped again.
+        CancelPlaceScarsUnderDig( g.pendingBiteWx, g.pendingBiteWy, kHandfulRadiusM );
+        // No voxel_column fan-out — cups are DigScar presentation; column pulls stalled the next dig.
+        UpdateStreamHud();
+    }
+
+    void ParsePlaceReply( std::string const& line )
+    {
+        ExtractJsonFloat( line, "engine_ms", g.lastEngineMs );
+        int rev = g.terrainRev;
+        ExtractJsonInt( line, "rev", rev );
+        if ( rev > g.terrainRev ) { g.terrainRev = rev; }
+
+        std::string msg, reason;
+        ExtractJsonString( line, "msg", msg );
+        ExtractJsonString( line, "reason", reason );
+        int placed = 0;
+        bool const havePlaced = ExtractJsonInt( line, "placed", placed );
+
+        bool const hardRefuse = ( line.find( "\"ok\":false" ) != std::string::npos
+                               || line.find( "\"ok\": false" ) != std::string::npos );
+        bool const nothingLanded = havePlaced && placed <= 0;
+        if ( hardRefuse || nothingLanded )
+        {
+            // Hole-fill places never added a mound scar — only grade/mound places roll back.
+            if ( !g.pendingPlaceIntoHole ) { RemoveLastOptimisticPlaceScar(); }
+            g.pendingPlaceIntoHole = false;
+            g.pendingPlaceAsk.clear();
+            g.pendingPlaceG = 0;
+            if ( msg.find( "aren't carrying" ) != std::string::npos
+              || msg.find( "Nothing in hand" ) != std::string::npos )
+            {
+                g.heldBite.clear();
+                g.heldTotalG = 0;
+                g.heldDominant.clear();
+            }
+            if ( msg.find( "Nowhere to place" ) != std::string::npos && g.heldTotalG > 0 && g.heldTotalG < 80 )
+            {
+                // Sub-quantum scraps often can't land a body — say so clearly.
+                char d[320];
+                std::snprintf( d, sizeof( d ),
+                    "PLACE refused @(%d,%d): only %dg left (need a fuller scoop) (engine %.1fms)",
+                    g.pendingBiteCx, g.pendingBiteCy, g.heldTotalG, g.lastEngineMs );
+                g.digestLine = d;
+                g.statusLine = "Phase 4 - place refused (scrap)";
+                UpdateStreamHud();
+                return;
+            }
+            char d[320];
+            std::snprintf( d, sizeof( d ), "PLACE refused @(%d,%d): %s (engine %.1fms)",
+                g.pendingBiteCx, g.pendingBiteCy,
+                msg.empty()
+                    ? ( reason.empty()
+                        ? ( nothingLanded ? "nowhere to place / nothing landed" : "failed" )
+                        : reason.c_str() )
+                    : msg.c_str(),
+                g.lastEngineMs );
+            g.digestLine = d;
+            g.statusLine = "Phase 4 - place refused";
+            UpdateStreamHud();
+            return;
+        }
+
+        std::unordered_map<std::string, int> placedBy;
+        int placedByTotal = 0;
+        std::string placedDom;
+        ParseGramsMapAfterKey( line, "\"placed_by\"", placedBy, placedByTotal, placedDom );
+        if ( placedByTotal > 0 )
+        {
+            DebitHeldBy( placedBy );
+            placed = placedByTotal;
+        }
+        else
+        {
+            int debit = havePlaced && placed > 0 ? placed : g.pendingPlaceG;
+            if ( debit <= 0 ) { debit = g.pendingPlaceG; }
+            if ( debit <= 0 ) { debit = HandfulScoopGrams(); }
+            DebitHeldTotal( debit );
+            if ( !havePlaced || placed <= 0 ) { placed = debit; }
+        }
+        g.pendingPlaceAsk.clear();
+        g.pendingPlaceG = 0;
+
+        char d[320];
+        std::snprintf( d, sizeof( d ),
+            "PLACE digest: -%dg %s @(%d,%d) | hand now %dg ~%.2f handfuls | rev=%d | engine %.1fms",
+            placed, placedDom.empty() ? ( g.heldDominant.empty() ? "?" : g.heldDominant.c_str() ) : placedDom.c_str(),
+            g.pendingBiteCx, g.pendingBiteCy, g.heldTotalG, g.heldTotalG / kHandfulDirtG,
+            g.terrainRev, g.lastEngineMs );
+        g.digestLine = d;
+        g.statusLine = g.heldTotalG > 0 ? "Phase 4 - placed scoop (still holding)" : "Phase 4 - placed scoop (hand empty)";
+        ClearPendingScarEdit();
+        // Slump fill: one scoop into the hole shrinks the dig cup. Hole-fill never added a mound.
+        CancelDigScarsUnderPlace( (float)g.pendingBiteCx + g.pendingBiteU,
+            (float)g.pendingBiteCy + g.pendingBiteV, kHandfulRadiusM );
+        g.pendingPlaceIntoHole = false;
+        // No column fan-out after place — same stall as dig.
+        UpdateStreamHud();
+    }
+
+    float FillTopToWorldZ( float grade, int kz, float meanTopLayers )
+    {
+        // Occupancy crest proxy: virgin columns full to kz; digs lower meanTop below kz.
+        float const gradeZ = GradeToZ( grade );
+        float const deltaLayers = (float)kz - meanTopLayers;
+        return gradeZ - deltaLayers * g.voxelEdgeM;
+    }
+
+    int FillAt( CellSample const& cell, int c, int r, int k )
+    {
+        if ( cell.fill.empty() || cell.fillW <= 0 ) { return 0; }
+        if ( c < 0 || r < 0 || k < 0 || c >= cell.fillW || r >= cell.fillH || k >= cell.fillK ) { return 0; }
+        return (int)cell.fill[(size_t)k * cell.fillW * cell.fillH + r * cell.fillW + c];
+    }
+
+    bool SampleOccupancyZ( float x, float y, float& outZ )
+    {
+        // Occupancy-derived surface from voxel_column fill (k=0 bottom … k=kz-1 top).
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        CellSample const* cell = GetCell( cx, cy );
+        if ( !cell || cell->fill.empty() || cell->fillW <= 0 ) { return false; }
+        int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+        int const col = (std::min)( w - 1, (std::max)( 0, (int)( ( x - (float)cx ) * (float)w ) ) );
+        int const row = (std::min)( h - 1, (std::max)( 0, (int)( ( y - (float)cy ) * (float)h ) ) );
+        int top = -1;
+        for ( int k = kz - 1; k >= 0; --k )
+        {
+            if ( FillAt( *cell, col, row, k ) >= kFillIso ) { top = k; break; }
+        }
+        float const crest = GradeToZ( cell->grade );
+        if ( top < 0 )
+        {
+            outZ = crest - (float)kz * g.voxelEdgeM;
+            return true;
+        }
+        // Top solid voxel centre ≈ crest when top == kz-1.
+        outZ = crest - (float)( kz - 1 - top ) * g.voxelEdgeM;
+        return true;
+    }
+
+    void DestroyCavityList( CellSample& cell )
+    {
+        if ( cell.cavityList )
+        {
+            glDeleteLists( cell.cavityList, 1 );
+            cell.cavityList = 0;
+        }
+        cell.hasCavity = false;
+    }
+
+    void RebuildCavityMesh( int cx, int cy )
+    {
+        // REJECTED: whole-cell solid|air voxel quads turned digs into Minecraft slabs.
+        // Keep fill stored for a future boundary-only remesh; never punch grade or draw cubes.
+        auto it = g.cells.find( CellKey( cx, cy ) );
+        if ( it == g.cells.end() ) { return; }
+        DestroyCavityList( it->second );
+        (void)cx; (void)cy;
+    }
+
+    void DrawCavityMeshes()
+    {
+        // Disabled — presentation is DigScar scoop cups only.
+    }
+
+    void ParseColumnReply( std::string const& line )
+    {
+        int cx = g.pendingColX, cy = g.pendingColY;
+        ExtractJsonInt( line, "x", cx );
+        ExtractJsonInt( line, "y", cy );
+
+        size_t fillPos = line.find( "\"fill\"" );
+        size_t resPos = line.find( "\"resolution\"" );
+        float grade = 0.85f;
+        ExtractJsonFloat( line, "grade", grade );
+
+        int bw = 8, bh = 8, kz = 32;
+        if ( resPos != std::string::npos )
+        {
+            size_t b = line.find( '[', resPos );
+            if ( b != std::string::npos )
+            {
+                char* e = nullptr;
+                bw = (int)strtol( line.c_str() + b + 1, &e, 10 );
+                if ( e )
+                {
+                    while ( *e == ' ' || *e == ',' ) { ++e; }
+                    bh = (int)strtol( e, &e, 10 );
+                    while ( e && ( *e == ' ' || *e == ',' ) ) { ++e; }
+                    kz = (int)strtol( e, &e, 10 );
+                }
+            }
+        }
+
+        std::vector<uint8_t> fillBytes;
+        float meanTop = (float)kz;
+        if ( fillPos != std::string::npos )
+        {
+            size_t b = line.find( '[', fillPos );
+            size_t e = line.find( ']', b );
+            if ( b != std::string::npos && e != std::string::npos && e > b )
+            {
+                std::string arr = line.substr( b + 1, e - b - 1 );
+                std::vector<int> fill;
+                fill.reserve( (size_t)bw * bh * kz );
+                char const* p = arr.c_str();
+                while ( *p )
+                {
+                    while ( *p == ' ' || *p == ',' ) { ++p; }
+                    if ( !*p ) { break; }
+                    char* end = nullptr;
+                    long v = strtol( p, &end, 10 );
+                    if ( end == p ) { break; }
+                    fill.push_back( (int)v );
+                    p = end;
+                }
+                int const n = bw * bh;
+                if ( (int)fill.size() >= n * kz && n > 0 )
+                {
+                    double sum = 0.0;
+                    fillBytes.resize( (size_t)n * kz );
+                    for ( int i = 0; i < n; ++i )
+                    {
+                        float h = 0.f;
+                        for ( int k = 0; k < kz; ++k )
+                        {
+                            int f = fill[(size_t)k * n + i];
+                            fillBytes[(size_t)k * n + i] = (uint8_t)(std::max)( 0, (std::min)( 255, f ) );
+                            if ( f > 0 ) { h = (float)k + (float)f / (float)kFillFull; }
+                        }
+                        sum += h;
+                    }
+                    meanTop = (float)( sum / n );
+                }
+            }
+        }
+
+        CellSample& cell = g.cells[CellKey( cx, cy )];
+        if ( !cell.valid )
+        {
+            cell.valid = true;
+            cell.grade = grade;
+            CapColor( "dirt", cell.r, cell.g, cell.b );
+            ++g.cellsLoaded;
+        }
+        cell.grade = grade;
+        DestroyCavityList( cell ); // never present fill as Minecraft slabs
+        if ( !fillBytes.empty() )
+        {
+            cell.fill = std::move( fillBytes );
+            cell.fillW = bw;
+            cell.fillH = bh;
+            cell.fillK = kz;
+        }
+        float const newFillZ = FillTopToWorldZ( grade, kz, meanTop );
+        if ( cell.hasFillZ )
+        {
+            // meanTop is 8x8 averaged — never raise and visually heal a scar cup.
+            cell.fillZ = (std::min)( cell.fillZ, newFillZ );
+        }
+        else
+        {
+            cell.fillZ = newFillZ;
+        }
+        cell.hasFillZ = true;
+        cell.edited = true;
+
+        char d[240];
+        std::snprintf( d, sizeof( d ),
+            "COLUMN truth (%d,%d): fillZ=%.2f gradeZ=%.2f meanTop=%.2f/%d (cups present; no D2 slabs)",
+            cx, cy, cell.fillZ, GradeToZ( grade ), meanTop, kz );
+        if ( g.digestLine.find( "DIG digest" ) == std::string::npos &&
+             g.digestLine.find( "PLACE digest" ) == std::string::npos )
+        {
+            g.digestLine = d;
+        }
+        // DigScar cups stay the dig presentation — do not punch grade / draw voxel slabs.
+        UpdateStreamHud();
+    }
+
+    void HandleReply( std::string const& line )
+    {
+        PendingKind kind = g.pending;
+        g.pending = PendingKind::None;
+
+        bool ok = true;
+        ExtractJsonBool( line, "ok", ok );
+        if ( !ok && kind != PendingKind::Caps && kind != PendingKind::Carve && kind != PendingKind::Place )
+        {
+            std::string msg;
+            ExtractJsonString( line, "message", msg );
+            g.statusLine = "request failed";
+            g.digestLine = msg.empty() ? "request failed" : msg;
+            UpdateStreamHud();
+            return;
+        }
+
+        switch ( kind )
+        {
+            case PendingKind::Caps: ParseCapsReply( line ); break;
+            case PendingKind::Player: ParsePlayerReply( line ); break;
+            case PendingKind::Surface: ParseSurfaceReply( line ); break;
+            case PendingKind::Carve: ParseCarveReply( line ); break;
+            case PendingKind::Place: ParsePlaceReply( line ); break;
+            case PendingKind::Column: ParseColumnReply( line ); break;
+            default: break;
+        }
+    }
+
+    void PollSocket()
+    {
+        if ( g.sock == INVALID_SOCKET ) { return; }
+
+        for ( ;; )
+        {
+            char chunk[65536];
+            int n = recv( g.sock, chunk, sizeof( chunk ), 0 );
+            if ( n > 0 )
+            {
+                g.recvBuf.append( chunk, chunk + n );
+                continue;
+            }
+            if ( n == 0 )
+            {
+                CloseSock();
+                g.link = LinkState::Disconnected;
+                g.statusLine = "engine closed connection";
+                return;
+            }
+            int err = WSAGetLastError();
+            if ( err == WSAEWOULDBLOCK ) { break; }
+            CloseSock();
+            g.link = LinkState::SocketError;
+            g.statusLine = "recv failed";
+            char e[64]; std::snprintf( e, sizeof( e ), "WSA %d", err );
+            g.detail = e;
+            return;
+        }
+
+        while ( true )
+        {
+            size_t nl = g.recvBuf.find( '\n' );
+            if ( nl == std::string::npos ) { break; }
+            std::string line = g.recvBuf.substr( 0, nl );
+            g.recvBuf.erase( 0, nl + 1 );
+            HandleReply( line );
+        }
+    }
+
+    void ResetWorldCache()
+    {
+        g.cells.clear();
+        g.fetchedBlocks.clear();
+        g.cellsLoaded = 0;
+        g.blocksLoaded = 0;
+        g.blocksWanted = 0;
+        g.streamComplete = false;
+        g.havePlayer = false;
+        g.pending = PendingKind::None;
+        g.heldBite.clear();
+        g.heldTotalG = 0;
+        g.heldDominant.clear();
+        g.pendingPlaceAsk.clear();
+        g.pendingPlaceG = 0;
+        ClearPendingScarEdit();
+        g.digestLine = "Interaction digest idle - LMB dig into stock, RMB place one scoop, Tab unlock cursor";
+        g.scars.clear();
+        ++g.scarGen;
+        g.columnQueue.clear();
+        InvalidateTerrainMesh();
+    }
+
+    void TryConnect()
+    {
+        CloseSock();
+        ResetWorldCache();
+        g.link = LinkState::Connecting;
+        g.statusLine = "connecting...";
+        g.detail.clear();
+        g.attempts++;
+
+        addrinfo hints = {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        char portStr[16];
+        std::snprintf( portStr, sizeof( portStr ), "%d", g.port );
+        addrinfo* res = nullptr;
+        if ( getaddrinfo( g.host.c_str(), portStr, &hints, &res ) != 0 || !res )
+        {
+            g.link = LinkState::SocketError;
+            g.statusLine = "getaddrinfo failed";
+            return;
+        }
+
+        SOCKET s = socket( res->ai_family, res->ai_socktype, res->ai_protocol );
+        if ( s == INVALID_SOCKET )
+        {
+            freeaddrinfo( res );
+            g.link = LinkState::SocketError;
+            g.statusLine = "socket() failed";
+            return;
+        }
+
+        if ( connect( s, res->ai_addr, (int)res->ai_addrlen ) != 0 )
+        {
+            closesocket( s );
+            freeaddrinfo( res );
+            g.link = LinkState::Disconnected;
+            g.statusLine = "connect failed - is voxel_bridge listening?";
+            char d[128];
+            std::snprintf( d, sizeof( d ), "target %s:%d  (WSA %d)  attempt #%d",
+                g.host.c_str(), g.port, WSAGetLastError(), g.attempts );
+            g.detail = d;
+            return;
+        }
+        freeaddrinfo( res );
+
+        u_long nonBlock = 1;
+        ioctlsocket( s, FIONBIO, &nonBlock );
+        g.sock = s;
+        g.link = LinkState::Connected;
+        g.statusLine = "TCP up - requesting terrain_caps";
+        if ( !RequestMethod( "terrain_caps", "{}", PendingKind::Caps ) )
+        {
+            CloseSock();
+            g.link = LinkState::SocketError;
+            g.statusLine = "failed to send terrain_caps";
+        }
+    }
+
+    bool InitGL( HWND hwnd )
+    {
+        g.hdc = GetDC( hwnd );
+        PIXELFORMATDESCRIPTOR pfd = {};
+        pfd.nSize = sizeof( pfd );
+        pfd.nVersion = 1;
+        pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+        pfd.iPixelType = PFD_TYPE_RGBA;
+        pfd.cColorBits = 32;
+        pfd.cDepthBits = 24;
+        pfd.cStencilBits = 8;
+        int pf = ChoosePixelFormat( g.hdc, &pfd );
+        if ( !pf || !SetPixelFormat( g.hdc, pf, &pfd ) ) { return false; }
+        g.glrc = wglCreateContext( g.hdc );
+        if ( !g.glrc || !wglMakeCurrent( g.hdc, g.glrc ) ) { return false; }
+
+        glEnable( GL_DEPTH_TEST );
+        glEnable( GL_CULL_FACE );
+        glCullFace( GL_BACK );
+        glShadeModel( GL_FLAT );
+
+        // Bitmap font for HUD
+        g.fontBase = glGenLists( 96 );
+        HFONT font = CreateFontW( -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            ANSI_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+            FF_DONTCARE | FIXED_PITCH, L"Consolas" );
+        HFONT old = (HFONT)SelectObject( g.hdc, font );
+        wglUseFontBitmapsW( g.hdc, 32, 96, g.fontBase );
+        SelectObject( g.hdc, old );
+        DeleteObject( font );
+        LoadIconTextures();
+        SeedStarterBag();
+        return true;
+    }
+
+    void ShutdownGL()
+    {
+        if ( g.terrainList ) { glDeleteLists( g.terrainList, 1 ); g.terrainList = 0; }
+        if ( g.fontBase ) { glDeleteLists( g.fontBase, 96 ); g.fontBase = 0; }
+        UnloadIconTextures();
+        wglMakeCurrent( nullptr, nullptr );
+        if ( g.glrc ) { wglDeleteContext( g.glrc ); g.glrc = nullptr; }
+        if ( g.hdc && g.hwnd ) { ReleaseDC( g.hwnd, g.hdc ); g.hdc = nullptr; }
+    }
+
+    void DrawHudText( float x, float y, char const* text )
+    {
+        // Call ONLY font glyph lists (fontBase .. fontBase+94).
+        // Never use glListBase+glCallLists — if terrainList ever lands in that byte range,
+        // HUD text would execute the world heightfield in ortho (floating "minimap" pane).
+        if ( !text || !g.fontBase ) { return; }
+        glRasterPos2f( x, y );
+        for ( char const* p = text; *p; ++p )
+        {
+            unsigned char const c = (unsigned char)*p;
+            if ( c < 32 || c > 126 ) { continue; }
+            glCallList( g.fontBase + ( c - 32 ) );
+        }
+    }
+
+    GLuint AllocDisplayListOutsideFonts()
+    {
+        // Keep world geometry lists out of the bitmap-font ID range.
+        GLuint const fontLo = g.fontBase;
+        GLuint const fontHi = g.fontBase ? ( g.fontBase + 95 ) : 0;
+        for ( int attempt = 0; attempt < 8; ++attempt )
+        {
+            GLuint id = glGenLists( 1 );
+            if ( !id ) { return 0; }
+            if ( !g.fontBase || id < fontLo || id > fontHi ) { return id; }
+            glDeleteLists( id, 1 );
+            // Burn a gap past the font block, then retry.
+            GLuint burn = glGenLists( 96 );
+            if ( burn ) { glDeleteLists( burn, 96 ); }
+        }
+        return glGenLists( 1 );
+    }
+
+    // ---------------- Journal / hotbar UI ----------------
+
+    bool FileExistsA( char const* path )
+    {
+        DWORD a = GetFileAttributesA( path );
+        return a != INVALID_FILE_ATTRIBUTES && !( a & FILE_ATTRIBUTE_DIRECTORY );
+    }
+
+    std::string JoinPath( std::string const& a, char const* b )
+    {
+        if ( a.empty() ) { return b; }
+        if ( a.back() == '\\' || a.back() == '/' ) { return a + b; }
+        return a + "\\" + b;
+    }
+
+    void ResolveAssetsRoot()
+    {
+        if ( !g.assetsRoot.empty() ) { return; }
+        char mod[MAX_PATH] = {};
+        GetModuleFileNameA( nullptr, mod, MAX_PATH );
+        std::string dir( mod );
+        size_t slash = dir.find_last_of( "\\/" );
+        if ( slash != std::string::npos ) { dir.resize( slash ); }
+        for ( int up = 0; up < 6; ++up )
+        {
+            std::string probe = JoinPath( dir, "Assets\\Icons\\Materials\\dirt.png" );
+            if ( FileExistsA( probe.c_str() ) )
+            {
+                g.assetsRoot = JoinPath( dir, "Assets" );
+                return;
+            }
+            slash = dir.find_last_of( "\\/" );
+            if ( slash == std::string::npos ) { break; }
+            dir.resize( slash );
+        }
+        // Fallback: common checkout layout beside Build\
+        g.assetsRoot = "C:\\Users\\D-Day\\ProvenanceEsoterica\\Assets";
+    }
+
+    GLuint LoadIconTextureFile( char const* path )
+    {
+        int w = 0, h = 0, n = 0;
+        stbi_set_flip_vertically_on_load( 1 );
+        unsigned char* data = stbi_load( path, &w, &h, &n, 4 );
+        if ( !data || w <= 0 || h <= 0 ) { return 0; }
+        GLuint tex = 0;
+        glGenTextures( 1, &tex );
+        glBindTexture( GL_TEXTURE_2D, tex );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
+        glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
+        stbi_image_free( data );
+        glBindTexture( GL_TEXTURE_2D, 0 );
+        return tex;
+    }
+
+    void LoadIconTextures()
+    {
+        ResolveAssetsRoot();
+        char const* folders[] = { "Icons\\Tools", "Icons\\Materials" };
+        for ( char const* folder : folders )
+        {
+            std::string dir = JoinPath( g.assetsRoot, folder );
+            std::string pattern = JoinPath( dir, "*.png" );
+            WIN32_FIND_DATAA fd = {};
+            HANDLE h = FindFirstFileA( pattern.c_str(), &fd );
+            if ( h == INVALID_HANDLE_VALUE ) { continue; }
+            do
+            {
+                if ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) { continue; }
+                std::string name = fd.cFileName;
+                if ( name.size() < 5 || name[0] == '_' ) { continue; }
+                if ( name.size() < 4 || name.substr( name.size() - 4 ) != ".png" ) { continue; }
+                std::string id = name.substr( 0, name.size() - 4 );
+                if ( g.iconTex.count( id ) ) { continue; }
+                std::string path = JoinPath( dir, name.c_str() );
+                GLuint tex = LoadIconTextureFile( path.c_str() );
+                if ( tex ) { g.iconTex[id] = tex; }
+            } while ( FindNextFileA( h, &fd ) );
+            FindClose( h );
+        }
+    }
+
+    void UnloadIconTextures()
+    {
+        for ( auto& kv : g.iconTex )
+        {
+            if ( kv.second ) { glDeleteTextures( 1, &kv.second ); }
+        }
+        g.iconTex.clear();
+    }
+
+    int BagFind( std::string const& id )
+    {
+        for ( int i = 0; i < g.bagCount; ++i )
+        {
+            if ( g.bag[i].id == id ) { return i; }
+        }
+        return -1;
+    }
+
+    void BagAdd( std::string const& id, int count )
+    {
+        if ( id.empty() || count <= 0 ) { return; }
+        int i = BagFind( id );
+        if ( i >= 0 ) { g.bag[i].count += count; return; }
+        if ( g.bagCount >= (int)( sizeof( g.bag ) / sizeof( g.bag[0] ) ) ) { return; }
+        g.bag[g.bagCount].id = id;
+        g.bag[g.bagCount].count = count;
+        ++g.bagCount;
+    }
+
+    bool BagTake( std::string const& id, int count )
+    {
+        int i = BagFind( id );
+        if ( i < 0 || g.bag[i].count < count ) { return false; }
+        g.bag[i].count -= count;
+        if ( g.bag[i].count <= 0 )
+        {
+            g.bag[i] = g.bag[g.bagCount - 1];
+            --g.bagCount;
+        }
+        return true;
+    }
+
+    void SeedStarterBag()
+    {
+        if ( g.bagSeeded ) { return; }
+        g.bagSeeded = true;
+        BagAdd( "axe", 1 );
+        BagAdd( "pick", 1 );
+        BagAdd( "shovel", 1 );
+        BagAdd( "knife", 1 );
+        BagAdd( "wood_log", 4 );
+        BagAdd( "sticks_tinder", 6 );
+        BagAdd( "flint", 3 );
+        BagAdd( "bark", 4 );
+        BagAdd( "iron", 4 );
+        BagAdd( "coal", 2 );
+        BagAdd( "leather_hide", 2 );
+        BagAdd( "rope", 2 );
+        BagAdd( "dirt", 8 );
+        g.hotbar[0] = "shovel";
+        g.hotbar[1] = "axe";
+        g.hotbar[2] = "pick";
+        g.hotbar[3] = "torch";
+        g.hotbar[4] = "";
+        g.hotbar[5] = "";
+    }
+
+    void SyncBagFromHeldBite()
+    {
+        SeedStarterBag();
+        // Mirror carry into bag for journal visibility — do not wipe engine heldBite.
+        for ( auto const& kv : g.heldBite )
+        {
+            if ( kv.second <= 0 ) { continue; }
+            int units = (std::max)( 1, kv.second / (int)kHandfulDirtG );
+            std::string id = kv.first;
+            if ( id == "loam" || id == "soil" ) { id = "dirt"; }
+            int existing = BagFind( id );
+            if ( existing < 0 ) { BagAdd( id, units ); }
+            else if ( g.bag[existing].count < units ) { g.bag[existing].count = units; }
+        }
+    }
+
+    void ClearDeposit()
+    {
+        for ( int i = 0; i < kMaxDeposit; ++i )
+        {
+            g.deposit[i].id.clear();
+            g.deposit[i].count = 0;
+        }
+    }
+
+    void OpenJournal()
+    {
+        if ( g.journalOpen ) { return; }
+        SyncBagFromHeldBite();
+        g.journalWasMouseLook = g.mouseLook;
+        g.journalOpen = true;
+        SetMouseLook( g.hwnd, false );
+        g.digestLine = "Journal open - [J]/Esc] close   arrows page inventory/craft   1-6 hotbar";
+    }
+
+    void CloseJournal()
+    {
+        if ( !g.journalOpen ) { return; }
+        g.journalOpen = false;
+        g.selectedRecipe = -1;
+        ClearDeposit();
+        SetMouseLook( g.hwnd, g.journalWasMouseLook );
+        g.digestLine = "Journal closed - hotbar stays   [J] journal";
+    }
+
+    void ToggleJournal()
+    {
+        if ( g.journalOpen ) { CloseJournal(); }
+        else { OpenJournal(); }
+    }
+
+    struct UiRect { float x0, y0, x1, y1; };
+    bool UiHit( UiRect const& r, float x, float y )
+    {
+        return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
+    }
+
+    void FillRect( float x0, float y0, float x1, float y1, float r, float gcol, float b, float a = 1.f )
+    {
+        if ( a < 0.999f )
+        {
+            glEnable( GL_BLEND );
+            glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+        }
+        glColor4f( r, gcol, b, a );
+        glBegin( GL_QUADS );
+        glVertex2f( x0, y0 ); glVertex2f( x1, y0 ); glVertex2f( x1, y1 ); glVertex2f( x0, y1 );
+        glEnd();
+        if ( a < 0.999f ) { glDisable( GL_BLEND ); }
+    }
+
+    void StrokeRect( float x0, float y0, float x1, float y1, float r, float gcol, float b )
+    {
+        glColor3f( r, gcol, b );
+        glBegin( GL_LINE_LOOP );
+        glVertex2f( x0, y0 ); glVertex2f( x1, y0 ); glVertex2f( x1, y1 ); glVertex2f( x0, y1 );
+        glEnd();
+    }
+
+    void DrawIconInRect( std::string const& id, float x0, float y0, float x1, float y1 )
+    {
+        auto it = g.iconTex.find( id );
+        if ( it == g.iconTex.end() || !it->second )
+        {
+            FillRect( x0 + 2, y0 + 2, x1 - 2, y1 - 2, 0.35f, 0.28f, 0.18f );
+            return;
+        }
+        glEnable( GL_TEXTURE_2D );
+        glEnable( GL_BLEND );
+        glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+        glBindTexture( GL_TEXTURE_2D, it->second );
+        glColor4f( 1.f, 1.f, 1.f, 1.f );
+        glBegin( GL_QUADS );
+        glTexCoord2f( 0.f, 0.f ); glVertex2f( x0, y0 );
+        glTexCoord2f( 1.f, 0.f ); glVertex2f( x1, y0 );
+        glTexCoord2f( 1.f, 1.f ); glVertex2f( x1, y1 );
+        glTexCoord2f( 0.f, 1.f ); glVertex2f( x0, y1 );
+        glEnd();
+        glBindTexture( GL_TEXTURE_2D, 0 );
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_BLEND );
+    }
+
+    uint32_t HashMix( uint32_t x )
+    {
+        x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+        return x;
+    }
+
+    float SeedNoise( int x, int y, uint32_t seed )
+    {
+        uint32_t h = HashMix( (uint32_t)x * 374761393u ^ (uint32_t)y * 668265263u ^ seed );
+        return ( h & 0xFFFF ) / 65535.f;
+    }
+
+    uint32_t MapSeedFromWorld()
+    {
+        uint32_t s = 0xA5A5A5A5u;
+        for ( char c : g.worldIdentityHash ) { s = HashMix( s ^ (uint8_t)c ); }
+        for ( char c : g.generatorId ) { s = HashMix( s ^ (uint8_t)c ); }
+        s ^= (uint32_t)g.generatorVersion * 0x9E3779B9u;
+        if ( s == 0 ) { s = 0xC0FFEEu; }
+        return s;
+    }
+
+    void DrawSeedMap( float x0, float y0, float x1, float y1 )
+    {
+        FillRect( x0, y0, x1, y1, 0.78f, 0.70f, 0.52f );
+        uint32_t seed = MapSeedFromWorld();
+        int const nx = 48, ny = 48;
+        float const dx = ( x1 - x0 ) / (float)nx;
+        float const dy = ( y1 - y0 ) / (float)ny;
+        int const pcx = (int)std::floor( g.feetX );
+        int const pcy = (int)std::floor( g.feetY );
+        glBegin( GL_QUADS );
+        for ( int j = 0; j < ny; ++j )
+        {
+            for ( int i = 0; i < nx; ++i )
+            {
+                int wx = pcx + i - nx / 2;
+                int wy = pcy + j - ny / 2;
+                float n = SeedNoise( wx, wy, seed );
+                float n2 = SeedNoise( wx / 4, wy / 4, seed ^ 0x1111u );
+                float hgt = 0.55f * n + 0.45f * n2;
+                float r = 0.25f + 0.35f * hgt;
+                float gg = 0.40f + 0.35f * ( 1.f - hgt );
+                float b = 0.22f + 0.15f * n;
+                if ( hgt < 0.28f ) { r = 0.30f; gg = 0.45f; b = 0.70f; } // water-ish
+                glColor3f( r, gg, b );
+                float px0 = x0 + i * dx, py0 = y0 + j * dy;
+                glVertex2f( px0, py0 ); glVertex2f( px0 + dx, py0 );
+                glVertex2f( px0 + dx, py0 + dy ); glVertex2f( px0, py0 + dy );
+            }
+        }
+        glEnd();
+        // Player marker
+        float mx = x0 + ( nx * 0.5f ) * dx;
+        float my = y0 + ( ny * 0.5f ) * dy;
+        FillRect( mx - 3, my - 3, mx + 3, my + 3, 0.85f, 0.15f, 0.12f );
+        StrokeRect( x0, y0, x1, y1, 0.35f, 0.25f, 0.12f );
+    }
+
+    // Layout helpers (ortho y-up). Hotbar always at bottom-center.
+    void HotbarLayout( float& x0, float& y0, float& slot, float& gap )
+    {
+        float const w = (float)g.uiWinW;
+        slot = 52.f;
+        gap = 8.f;
+        float total = kHotbarSlots * slot + ( kHotbarSlots - 1 ) * gap;
+        x0 = ( w - total ) * 0.5f;
+        y0 = 18.f;
+    }
+
+    void DrawHotbar()
+    {
+        float x0, y0, slot, gap;
+        HotbarLayout( x0, y0, slot, gap );
+        for ( int i = 0; i < kHotbarSlots; ++i )
+        {
+            float sx = x0 + i * ( slot + gap );
+            float sy = y0;
+            FillRect( sx - 3, sy - 3, sx + slot + 3, sy + slot + 3, 0.28f, 0.18f, 0.10f, 0.92f );
+            FillRect( sx, sy, sx + slot, sy + slot, 0.45f, 0.34f, 0.22f, 0.95f );
+            if ( !g.hotbar[i].empty() )
+            {
+                DrawIconInRect( g.hotbar[i], sx + 4, sy + 4, sx + slot - 4, sy + slot - 4 );
+            }
+            if ( i == g.hotbarSel )
+            {
+                StrokeRect( sx - 2, sy - 2, sx + slot + 2, sy + slot + 2, 0.95f, 0.85f, 0.35f );
+            }
+            else
+            {
+                StrokeRect( sx, sy, sx + slot, sy + slot, 0.15f, 0.10f, 0.05f );
+            }
+            char lab[4];
+            std::snprintf( lab, sizeof( lab ), "%d", i + 1 );
+            glColor3f( 0.95f, 0.90f, 0.75f );
+            DrawHudText( sx + 4, sy + slot - 14, lab );
+        }
+    }
+
+    bool TryHotbarClick( float mx, float my )
+    {
+        float x0, y0, slot, gap;
+        HotbarLayout( x0, y0, slot, gap );
+        for ( int i = 0; i < kHotbarSlots; ++i )
+        {
+            float sx = x0 + i * ( slot + gap );
+            if ( UiHit( { sx, y0, sx + slot, y0 + slot }, mx, my ) )
+            {
+                g.hotbarSel = i;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool RecipeDepositSatisfied( int ri )
+    {
+        if ( ri < 0 || ri >= kRecipeCount ) { return false; }
+        RecipeDef const& r = kRecipes[ri];
+        for ( int i = 0; i < r.nReq; ++i )
+        {
+            if ( g.deposit[i].id != r.reqId[i] || g.deposit[i].count < r.reqCount[i] )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool TryCraftSelected()
+    {
+        if ( g.selectedRecipe < 0 || !RecipeDepositSatisfied( g.selectedRecipe ) ) { return false; }
+        RecipeDef const& r = kRecipes[g.selectedRecipe];
+        for ( int i = 0; i < r.nReq; ++i )
+        {
+            // mats already in deposit — clear them
+            g.deposit[i].id.clear();
+            g.deposit[i].count = 0;
+        }
+        BagAdd( r.resultId, r.resultCount );
+        g.digestLine = std::string( "Crafted " ) + r.name;
+        return true;
+    }
+
+    bool TryDepositFromBag( int bagIndex )
+    {
+        if ( g.selectedRecipe < 0 || bagIndex < 0 || bagIndex >= g.bagCount ) { return false; }
+        RecipeDef const& r = kRecipes[g.selectedRecipe];
+        std::string const& id = g.bag[bagIndex].id;
+        for ( int i = 0; i < r.nReq; ++i )
+        {
+            if ( r.reqId[i] != id ) { continue; }
+            int need = r.reqCount[i] - g.deposit[i].count;
+            if ( need <= 0 ) { continue; }
+            int take = (std::min)( need, g.bag[bagIndex].count );
+            if ( !BagTake( id, take ) ) { return false; }
+            g.deposit[i].id = id;
+            g.deposit[i].count += take;
+            return true;
+        }
+        return false;
+    }
+
+    void DrawJournal()
+    {
+        float const W = (float)g.uiWinW;
+        float const H = (float)g.uiWinH;
+        // Dim world
+        FillRect( 0, 0, W, H, 0.02f, 0.02f, 0.02f, 0.45f );
+
+        float const margin = 28.f;
+        float const frameX0 = margin;
+        float const frameY0 = 90.f;
+        float const frameX1 = W - margin;
+        float const frameY1 = H - 36.f;
+        FillRect( frameX0, frameY0, frameX1, frameY1, 0.22f, 0.12f, 0.07f, 0.97f ); // leather
+        StrokeRect( frameX0, frameY0, frameX1, frameY1, 0.10f, 0.05f, 0.02f );
+
+        float const colGap = 14.f;
+        float const inner = 16.f;
+        float const usableW = frameX1 - frameX0 - inner * 2;
+        float const leftW = usableW * 0.28f;
+        float const midW = usableW * 0.44f;
+        float const rightW = usableW - leftW - midW - colGap * 2;
+        float const leftX0 = frameX0 + inner;
+        float const midX0 = leftX0 + leftW + colGap;
+        float const rightX0 = midX0 + midW + colGap;
+        float const topY1 = frameY1 - inner;
+        float const botY0 = frameY0 + inner + 70.f; // leave room above hotbar tabs visually
+
+        // --- LEFT: inventory + crafting ---
+        float invTop = topY1;
+        float invBot = frameY0 + ( frameY1 - frameY0 ) * 0.48f;
+        FillRect( leftX0, invBot, leftX0 + leftW, invTop, 0.82f, 0.74f, 0.55f );
+        glColor3f( 0.20f, 0.12f, 0.06f );
+        DrawHudText( leftX0 + 10, invTop - 18, "INVENTORY" );
+        // arrows
+        UiRect invL = { leftX0 + leftW - 52, invTop - 24, leftX0 + leftW - 30, invTop - 6 };
+        UiRect invR = { leftX0 + leftW - 28, invTop - 24, leftX0 + leftW - 6, invTop - 6 };
+        FillRect( invL.x0, invL.y0, invL.x1, invL.y1, 0.35f, 0.22f, 0.12f );
+        FillRect( invR.x0, invR.y0, invR.x1, invR.y1, 0.35f, 0.22f, 0.12f );
+        glColor3f( 0.95f, 0.90f, 0.75f );
+        DrawHudText( invL.x0 + 5, invL.y0 + 4, "<" );
+        DrawHudText( invR.x0 + 5, invR.y0 + 4, ">" );
+
+        float slot = (std::min)( 48.f, ( leftW - 24 ) / kInvCols - 4 );
+        float gridX = leftX0 + 12;
+        float gridY1 = invTop - 36;
+        int invPages = (std::max)( 1, ( g.bagCount + kInvPageSize - 1 ) / kInvPageSize );
+        if ( g.invPage >= invPages ) { g.invPage = invPages - 1; }
+        if ( g.invPage < 0 ) { g.invPage = 0; }
+        int invBase = g.invPage * kInvPageSize;
+        for ( int row = 0; row < kInvRows; ++row )
+        {
+            for ( int col = 0; col < kInvCols; ++col )
+            {
+                int si = invBase + row * kInvCols + col;
+                float sx = gridX + col * ( slot + 6 );
+                float sy = gridY1 - ( row + 1 ) * ( slot + 6 );
+                FillRect( sx, sy, sx + slot, sy + slot, 0.18f, 0.12f, 0.08f );
+                StrokeRect( sx, sy, sx + slot, sy + slot, 0.08f, 0.05f, 0.03f );
+                if ( si < g.bagCount )
+                {
+                    DrawIconInRect( g.bag[si].id, sx + 3, sy + 3, sx + slot - 3, sy + slot - 3 );
+                    if ( g.bag[si].count > 1 )
+                    {
+                        char nbuf[16];
+                        std::snprintf( nbuf, sizeof( nbuf ), "%d", g.bag[si].count );
+                        glColor3f( 1.f, 1.f, 0.85f );
+                        DrawHudText( sx + 4, sy + 4, nbuf );
+                    }
+                }
+            }
+        }
+
+        // Crafting panel
+        float craftTop = invBot - 10;
+        float craftBot = botY0;
+        FillRect( leftX0, craftBot, leftX0 + leftW, craftTop, 0.80f, 0.72f, 0.52f );
+        glColor3f( 0.20f, 0.12f, 0.06f );
+        DrawHudText( leftX0 + 10, craftTop - 18, "CRAFTING" );
+        UiRect craftBtn = { leftX0 + leftW - 70, craftTop - 24, leftX0 + leftW - 6, craftTop - 6 };
+        bool canCraft = RecipeDepositSatisfied( g.selectedRecipe );
+        FillRect( craftBtn.x0, craftBtn.y0, craftBtn.x1, craftBtn.y1,
+            canCraft ? 0.45f : 0.30f, canCraft ? 0.32f : 0.20f, canCraft ? 0.14f : 0.10f );
+        glColor3f( 0.95f, 0.90f, 0.75f );
+        DrawHudText( craftBtn.x0 + 8, craftBtn.y0 + 4, "Craft" );
+
+        UiRect craftL = { leftX0 + 8, craftTop - 48, leftX0 + 28, craftTop - 30 };
+        UiRect craftR = { leftX0 + 30, craftTop - 48, leftX0 + 50, craftTop - 30 };
+        FillRect( craftL.x0, craftL.y0, craftL.x1, craftL.y1, 0.35f, 0.22f, 0.12f );
+        FillRect( craftR.x0, craftR.y0, craftR.x1, craftR.y1, 0.35f, 0.22f, 0.12f );
+        glColor3f( 0.95f, 0.90f, 0.75f );
+        DrawHudText( craftL.x0 + 5, craftL.y0 + 4, "<" );
+        DrawHudText( craftR.x0 + 5, craftR.y0 + 4, ">" );
+
+        if ( g.selectedRecipe < 0 )
+        {
+            glColor3f( 0.25f, 0.15f, 0.08f );
+            DrawHudText( leftX0 + 56, craftTop - 44, "select a recipe" );
+            int pages = (std::max)( 1, ( kRecipeCount + kCraftPageSize - 1 ) / kCraftPageSize );
+            if ( g.craftPage >= pages ) { g.craftPage = pages - 1; }
+            int base = g.craftPage * kCraftPageSize;
+            float cslot = (std::min)( 44.f, ( leftW - 24 ) / kCraftCols - 4 );
+            for ( int row = 0; row < kCraftRows; ++row )
+            {
+                for ( int col = 0; col < kCraftCols; ++col )
+                {
+                    int ri = base + row * kCraftCols + col;
+                    float sx = leftX0 + 12 + col * ( cslot + 6 );
+                    float sy = craftTop - 60 - ( row + 1 ) * ( cslot + 8 );
+                    FillRect( sx, sy, sx + cslot, sy + cslot, 0.18f, 0.12f, 0.08f );
+                    if ( ri < kRecipeCount )
+                    {
+                        DrawIconInRect( kRecipes[ri].resultId, sx + 3, sy + 3, sx + cslot - 3, sy + cslot - 3 );
+                    }
+                }
+            }
+        }
+        else
+        {
+            RecipeDef const& r = kRecipes[g.selectedRecipe];
+            glColor3f( 0.20f, 0.12f, 0.06f );
+            DrawHudText( leftX0 + 56, craftTop - 44, r.name );
+            // result icon
+            float rx = leftX0 + leftW * 0.5f - 28;
+            float ry = craftTop - 120;
+            FillRect( rx, ry, rx + 56, ry + 56, 0.18f, 0.12f, 0.08f );
+            DrawIconInRect( r.resultId, rx + 4, ry + 4, rx + 52, ry + 52 );
+            glColor3f( 0.25f, 0.15f, 0.08f );
+            DrawHudText( leftX0 + 12, ry - 18, "REQUIRED" );
+            float reqY = ry - 70;
+            for ( int i = 0; i < r.nReq; ++i )
+            {
+                float sx = leftX0 + 12 + i * 48;
+                FillRect( sx, reqY, sx + 42, reqY + 42, 0.18f, 0.12f, 0.08f );
+                DrawIconInRect( r.reqId[i], sx + 3, reqY + 3, sx + 39, reqY + 39 );
+                char nb[8];
+                std::snprintf( nb, sizeof( nb ), "x%d", r.reqCount[i] );
+                glColor3f( 1.f, 1.f, 0.85f );
+                DrawHudText( sx + 4, reqY + 2, nb );
+            }
+            glColor3f( 0.25f, 0.15f, 0.08f );
+            DrawHudText( leftX0 + 12, reqY - 16, "put mats below" );
+            float depY = craftBot + 16;
+            for ( int i = 0; i < r.nReq; ++i )
+            {
+                float sx = leftX0 + 12 + i * 48;
+                FillRect( sx, depY, sx + 42, depY + 42, 0.12f, 0.18f, 0.10f );
+                StrokeRect( sx, depY, sx + 42, depY + 42, 0.40f, 0.55f, 0.30f );
+                if ( !g.deposit[i].id.empty() )
+                {
+                    DrawIconInRect( g.deposit[i].id, sx + 3, depY + 3, sx + 39, depY + 39 );
+                    char nb[8];
+                    std::snprintf( nb, sizeof( nb ), "%d", g.deposit[i].count );
+                    glColor3f( 1.f, 1.f, 0.85f );
+                    DrawHudText( sx + 4, depY + 2, nb );
+                }
+            }
+            // back hint
+            glColor3f( 0.35f, 0.22f, 0.12f );
+            DrawHudText( leftX0 + 12, craftTop - 64, "[RMB] back to list" );
+        }
+
+        // --- CENTER: map ---
+        FillRect( midX0, botY0, midX0 + midW, topY1, 0.75f, 0.68f, 0.50f );
+        DrawSeedMap( midX0 + 8, botY0 + 8, midX0 + midW - 8, topY1 - 28 );
+        glColor3f( 0.20f, 0.12f, 0.06f );
+        DrawHudText( midX0 + 12, topY1 - 18, "WORLD MAP" );
+        char seedLine[96];
+        std::snprintf( seedLine, sizeof( seedLine ), "seed %08X", MapSeedFromWorld() );
+        DrawHudText( midX0 + 12, botY0 + 12, seedLine );
+
+        // --- RIGHT: skills + journal ---
+        float skillsBot = frameY0 + ( frameY1 - frameY0 ) * 0.52f;
+        FillRect( rightX0, skillsBot, rightX0 + rightW, topY1, 0.82f, 0.74f, 0.55f );
+        glColor3f( 0.20f, 0.12f, 0.06f );
+        DrawHudText( rightX0 + 10, topY1 - 18, "SKILLS" );
+        for ( int i = 0; i < 5; ++i )
+        {
+            float yy = topY1 - 48 - i * 36;
+            // diamond
+            float cx = rightX0 + 22, cy = yy + 10;
+            glColor3f( 0.45f, 0.32f, 0.18f );
+            glBegin( GL_QUADS );
+            glVertex2f( cx, cy + 10 ); glVertex2f( cx + 10, cy );
+            glVertex2f( cx, cy - 10 ); glVertex2f( cx - 10, cy );
+            glEnd();
+            DrawHudText( rightX0 + 40, yy + 4, g.skillNames[i] );
+            float barX0 = rightX0 + 40, barX1 = rightX0 + rightW - 12;
+            FillRect( barX0, yy - 8, barX1, yy - 2, 0.25f, 0.18f, 0.10f );
+            FillRect( barX0, yy - 8, barX0 + ( barX1 - barX0 ) * g.skillFrac[i], yy - 2, 0.55f, 0.40f, 0.18f );
+        }
+
+        FillRect( rightX0, botY0, rightX0 + rightW, skillsBot - 8, 0.80f, 0.72f, 0.52f );
+        glColor3f( 0.20f, 0.12f, 0.06f );
+        DrawHudText( rightX0 + 10, skillsBot - 26, "JOURNAL" );
+        for ( int i = 0; i < 6; ++i )
+        {
+            float yy = skillsBot - 50 - i * 22;
+            StrokeRect( rightX0 + 10, yy, rightX0 + rightW - 10, yy + 1, 0.45f, 0.35f, 0.22f );
+            if ( g.journalNotes[i] && g.journalNotes[i][0] )
+            {
+                DrawHudText( rightX0 + 12, yy + 4, g.journalNotes[i] );
+            }
+        }
+
+        glColor3f( 0.90f, 0.85f, 0.70f );
+        DrawHudText( frameX0 + 12, frameY0 + 8, "[J]/Esc] close journal   click bag to deposit mats   Craft when ready" );
+    }
+
+    bool HandleJournalClick( float mx, float my, bool rightClick )
+    {
+        float const W = (float)g.uiWinW;
+        float const H = (float)g.uiWinH;
+        float const margin = 28.f;
+        float const frameX0 = margin;
+        float const frameY0 = 90.f;
+        float const frameX1 = W - margin;
+        float const frameY1 = H - 36.f;
+        float const colGap = 14.f;
+        float const inner = 16.f;
+        float const usableW = frameX1 - frameX0 - inner * 2;
+        float const leftW = usableW * 0.28f;
+        float const leftX0 = frameX0 + inner;
+        float const topY1 = frameY1 - inner;
+        float const invBot = frameY0 + ( frameY1 - frameY0 ) * 0.48f;
+        float const craftTop = invBot - 10;
+        float const botY0 = frameY0 + inner + 70.f;
+
+        if ( rightClick && g.selectedRecipe >= 0 )
+        {
+            g.selectedRecipe = -1;
+            ClearDeposit();
+            return true;
+        }
+
+        // Inventory arrows
+        UiRect invL = { leftX0 + leftW - 52, topY1 - 24, leftX0 + leftW - 30, topY1 - 6 };
+        UiRect invR = { leftX0 + leftW - 28, topY1 - 24, leftX0 + leftW - 6, topY1 - 6 };
+        if ( UiHit( invL, mx, my ) ) { g.invPage = (std::max)( 0, g.invPage - 1 ); return true; }
+        if ( UiHit( invR, mx, my ) )
+        {
+            int pages = (std::max)( 1, ( g.bagCount + kInvPageSize - 1 ) / kInvPageSize );
+            g.invPage = (std::min)( pages - 1, g.invPage + 1 );
+            return true;
+        }
+
+        // Inventory slots -> deposit or assign to hotbar if shift... simple: deposit when recipe selected
+        float slot = (std::min)( 48.f, ( leftW - 24 ) / kInvCols - 4 );
+        float gridX = leftX0 + 12;
+        float gridY1 = topY1 - 36;
+        int invBase = g.invPage * kInvPageSize;
+        for ( int row = 0; row < kInvRows; ++row )
+        {
+            for ( int col = 0; col < kInvCols; ++col )
+            {
+                int si = invBase + row * kInvCols + col;
+                float sx = gridX + col * ( slot + 6 );
+                float sy = gridY1 - ( row + 1 ) * ( slot + 6 );
+                if ( !UiHit( { sx, sy, sx + slot, sy + slot }, mx, my ) ) { continue; }
+                if ( si >= g.bagCount ) { return true; }
+                if ( g.selectedRecipe >= 0 )
+                {
+                    TryDepositFromBag( si );
+                }
+                else
+                {
+                    // equip to selected hotbar
+                    g.hotbar[g.hotbarSel] = g.bag[si].id;
+                    g.digestLine = std::string( "Hotbar " ) + std::to_string( g.hotbarSel + 1 )
+                        + " = " + g.bag[si].id;
+                }
+                return true;
+            }
+        }
+
+        // Craft button
+        UiRect craftBtn = { leftX0 + leftW - 70, craftTop - 24, leftX0 + leftW - 6, craftTop - 6 };
+        if ( UiHit( craftBtn, mx, my ) ) { TryCraftSelected(); return true; }
+
+        UiRect craftL = { leftX0 + 8, craftTop - 48, leftX0 + 28, craftTop - 30 };
+        UiRect craftR = { leftX0 + 30, craftTop - 48, leftX0 + 50, craftTop - 30 };
+        if ( g.selectedRecipe < 0 )
+        {
+            if ( UiHit( craftL, mx, my ) ) { g.craftPage = (std::max)( 0, g.craftPage - 1 ); return true; }
+            if ( UiHit( craftR, mx, my ) )
+            {
+                int pages = (std::max)( 1, ( kRecipeCount + kCraftPageSize - 1 ) / kCraftPageSize );
+                g.craftPage = (std::min)( pages - 1, g.craftPage + 1 );
+                return true;
+            }
+            float cslot = (std::min)( 44.f, ( leftW - 24 ) / kCraftCols - 4 );
+            int base = g.craftPage * kCraftPageSize;
+            for ( int row = 0; row < kCraftRows; ++row )
+            {
+                for ( int col = 0; col < kCraftCols; ++col )
+                {
+                    int ri = base + row * kCraftCols + col;
+                    float sx = leftX0 + 12 + col * ( cslot + 6 );
+                    float sy = craftTop - 60 - ( row + 1 ) * ( cslot + 8 );
+                    if ( UiHit( { sx, sy, sx + cslot, sy + cslot }, mx, my ) && ri < kRecipeCount )
+                    {
+                        g.selectedRecipe = ri;
+                        ClearDeposit();
+                        return true;
+                    }
+                }
+            }
+        }
+
+        (void)botY0;
+        return false;
+    }
+
+    void UpdateUiMouseFromWin( int winX, int winY )
+    {
+        g.uiMouseX = (float)winX;
+        g.uiMouseY = (float)g.uiWinH - (float)winY;
+    }
+
+    CellSample const* GetCell( int x, int y )
+    {
+        auto it = g.cells.find( CellKey( x, y ) );
+        if ( it == g.cells.end() || !it->second.valid ) { return nullptr; }
+        return &it->second;
+    }
+
+    bool SampleGroundZBase( float x, float y, float& outZ )
+    {
+        // Grade continuum: resident cells, else analytic Esoterica geography (absolute coords).
+        // Dig/place are live cups — never sink whole cell plates via fillZ.
+        int const x0 = (int)std::floor( x );
+        int const y0 = (int)std::floor( y );
+        float const tx = x - (float)x0;
+        float const ty = y - (float)y0;
+        CellSample const* c00 = GetCell( x0, y0 );
+        CellSample const* c10 = GetCell( x0 + 1, y0 );
+        CellSample const* c01 = GetCell( x0, y0 + 1 );
+        CellSample const* c11 = GetCell( x0 + 1, y0 + 1 );
+        auto zAtCell = [&]( int cx, int cy, CellSample const* c ) -> float
+        {
+            if ( c ) { return GradeToZ( c->grade ); }
+            ProvenanceGeo::EnsureReady();
+            auto s = ProvenanceGeo::SampleSurface(
+                (double)cx + 0.5, (double)cy + 0.5,
+                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            return GradeToZ( s.grade );
+        };
+        float const z00 = zAtCell( x0, y0, c00 );
+        float const z10 = zAtCell( x0 + 1, y0, c10 );
+        float const z01 = zAtCell( x0, y0 + 1, c01 );
+        float const z11 = zAtCell( x0 + 1, y0 + 1, c11 );
+        float const z0 = z00 * ( 1.f - tx ) + z10 * tx;
+        float const z1 = z01 * ( 1.f - tx ) + z11 * tx;
+        outZ = z0 * ( 1.f - ty ) + z1 * ty;
+        return true;
+    }
+
+    bool SampleAimSurfaceZ( float x, float y, float& outZ )
+    {
+        // Visible targetable skin: virgin grade + place mounds only.
+        // Do NOT sink into DigScar cups — that left the reticle under the roof, misaligned the
+        // grade punch, and made floating grade islands un-aimable once neighbours were dug out.
+        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
+        outZ += PlaceLiftAt( x, y );
+        return true;
+    }
+
+    bool SampleGroundZ( float x, float y, float& outZ )
+    {
+        // Feet / walk: grade + cups (mounds minus holes).
+        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
+        outZ += ScarDeltaZ( x, y );
+        return true;
+    }
+
+    bool SampleCupSurfaceZ( float x, float y, bool placeCup, float& outZ )
+    {
+        // Dig cups: grade − dig. Place cups sit on the dug floor: grade − dig + place.
+        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
+        float const digDep = DigDepAt( x, y );
+        if ( placeCup )
+        {
+            outZ += -digDep + PlaceLiftAt( x, y );
+        }
+        else
+        {
+            outZ -= digDep;
+        }
+        return true;
+    }
+
+    bool RayHitTunnelSphere( float ox, float oy, float oz,
+                             float fx, float fy, float fz,
+                             float& outT, float& outX, float& outY, float& outZ )
+    {
+        // Nearest hit against cohesive buried scoop spheres (inner surface).
+        bool hit = false;
+        float bestT = 1e9f;
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place || !s.tunnel ) { continue; }
+            float const r = s.radius;
+            if ( r < 1e-5f ) { continue; }
+            float const lx = ox - s.wx, ly = oy - s.wy, lz = oz - s.wz;
+            float const b = lx * fx + ly * fy + lz * fz;
+            float const c = lx * lx + ly * ly + lz * lz - r * r;
+            float const disc = b * b - c;
+            if ( disc < 0.f ) { continue; }
+            float const sd = std::sqrt( disc );
+            float t0 = -b - sd;
+            float t1 = -b + sd;
+            float t = ( t0 > 0.05f ) ? t0 : t1;
+            if ( t < 0.05f || t >= bestT ) { continue; }
+            bestT = t;
+            outT = t;
+            outX = ox + fx * t;
+            outY = oy + fy * t;
+            outZ = oz + fz * t;
+            hit = true;
+        }
+        return hit;
+    }
+
+    bool RayHitTriangle( float ox, float oy, float oz,
+                         float dx, float dy, float dz,
+                         float x0, float y0, float z0,
+                         float x1, float y1, float z1,
+                         float x2, float y2, float z2,
+                         float& outT )
+    {
+        // Möller–Trumbore — same planar faces the vista draws (not bilinear height march).
+        constexpr float eps = 1e-7f;
+        float e1x = x1 - x0, e1y = y1 - y0, e1z = z1 - z0;
+        float e2x = x2 - x0, e2y = y2 - y0, e2z = z2 - z0;
+        float px = dy * e2z - dz * e2y;
+        float py = dz * e2x - dx * e2z;
+        float pz = dx * e2y - dy * e2x;
+        float det = e1x * px + e1y * py + e1z * pz;
+        if ( det > -eps && det < eps ) { return false; }
+        float inv = 1.f / det;
+        float tx = ox - x0, ty = oy - y0, tz = oz - z0;
+        float u = ( tx * px + ty * py + tz * pz ) * inv;
+        if ( u < 0.f || u > 1.f ) { return false; }
+        float qx = ty * e1z - tz * e1y;
+        float qy = tz * e1x - tx * e1z;
+        float qz = tx * e1y - ty * e1x;
+        float v = ( dx * qx + dy * qy + dz * qz ) * inv;
+        if ( v < 0.f || u + v > 1.f ) { return false; }
+        float t = ( e2x * qx + e2y * qy + e2z * qz ) * inv;
+        if ( t < 0.05f ) { return false; }
+        outT = t;
+        return true;
+    }
+
+    bool RayHitDrawnSkin( float ox, float oy, float oz,
+                          float fx, float fy, float fz,
+                          float maxT,
+                          float& outT, float& outX, float& outY, float& outZ )
+    {
+        // Ray vs MeshDiv=2 tris — identical sampling to RebuildTerrainMesh / what you see.
+        int const div = 2;
+        float bestT = maxT;
+        bool hit = false;
+        // Corridor along the ray (not full AABB — free-cam reach would be huge).
+        for ( float ts = 0.25f; ts <= maxT + 0.25f; ts += 0.5f )
+        {
+            int const cx = (int)std::floor( ox + fx * ts );
+            int const cy = (int)std::floor( oy + fy * ts );
+            for ( int y = cy - 1; y <= cy + 1; ++y )
+            {
+                for ( int x = cx - 1; x <= cx + 1; ++x )
+                {
+                    if ( !GetCell( x, y ) || !GetCell( x + 1, y ) || !GetCell( x, y + 1 ) || !GetCell( x + 1, y + 1 ) )
+                    {
+                        continue;
+                    }
+                    for ( int j = 0; j < div; ++j )
+                    {
+                        for ( int i = 0; i < div; ++i )
+                        {
+                            float const u0 = (float)i / (float)div;
+                            float const v0 = (float)j / (float)div;
+                            float const u1 = (float)( i + 1 ) / (float)div;
+                            float const v1 = (float)( j + 1 ) / (float)div;
+                            float const px00 = (float)x + u0, py00 = (float)y + v0;
+                            float const px10 = (float)x + u1, py10 = (float)y + v0;
+                            float const px01 = (float)x + u0, py01 = (float)y + v1;
+                            float const px11 = (float)x + u1, py11 = (float)y + v1;
+                            float z00, z10, z01, z11;
+                            if ( !SampleAimSurfaceZ( px00, py00, z00 ) ) { continue; }
+                            if ( !SampleAimSurfaceZ( px10, py10, z10 ) ) { continue; }
+                            if ( !SampleAimSurfaceZ( px01, py01, z01 ) ) { continue; }
+                            if ( !SampleAimSurfaceZ( px11, py11, z11 ) ) { continue; }
+                            float t = 0.f;
+                            if ( RayHitTriangle( ox, oy, oz, fx, fy, fz,
+                                                 px00, py00, z00, px10, py10, z10, px01, py01, z01, t )
+                              && t < bestT )
+                            {
+                                bestT = t; hit = true;
+                            }
+                            if ( RayHitTriangle( ox, oy, oz, fx, fy, fz,
+                                                 px10, py10, z10, px11, py11, z11, px01, py01, z01, t )
+                              && t < bestT )
+                            {
+                                bestT = t; hit = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if ( hit && bestT < ts - 0.5f ) { break; } // already found a nearer face
+        }
+        if ( !hit ) { return false; }
+        outT = bestT;
+        outX = ox + fx * bestT;
+        outY = oy + fy * bestT;
+        outZ = oz + fz * bestT;
+        // Keep hit on the look ray (under the crosshair). Heightfield Z-snap pulled the scoop off-ray.
+        return true;
+    }
+
+    void UpdateAim()
+    {
+        g.aimHit = false;
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cy * cp, fz = sp;
+        float ox = g.camX, oy = g.camY, oz = g.camZ;
+
+        float const maxT = g.walkMode ? ( kReachCells + 2.f ) : 80.f;
+        float hitT = -1.f;
+        float hitX = 0.f, hitY = 0.f, hitZ = 0.f;
+        if ( !RayHitDrawnSkin( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ ) )
+        {
+            // Fallback: coarse height march if triangle walk misses (sparse cells).
+            constexpr float kStep = 0.06f;
+            for ( int step = 0; step < 240; ++step )
+            {
+                float t = 0.12f + step * kStep;
+                if ( t > maxT ) { break; }
+                float x = ox + fx * t;
+                float y = oy + fy * t;
+                float z = oz + fz * t;
+                float ground = 0.f;
+                if ( !SampleAimSurfaceZ( x, y, ground ) ) { continue; }
+                if ( z <= ground + 0.04f )
+                {
+                    float t0 = (std::max)( 0.05f, t - kStep );
+                    float t1 = t;
+                    for ( int i = 0; i < 8; ++i )
+                    {
+                        float tm = 0.5f * ( t0 + t1 );
+                        float xm = ox + fx * tm;
+                        float ym = oy + fy * tm;
+                        float zm = oz + fz * tm;
+                        float gm = 0.f;
+                        if ( !SampleAimSurfaceZ( xm, ym, gm ) || zm <= gm + 0.04f ) { t1 = tm; }
+                        else { t0 = tm; }
+                    }
+                    hitT = t1;
+                    hitX = ox + fx * hitT;
+                    hitY = oy + fy * hitT;
+                    hitZ = oz + fz * hitT;
+                    break;
+                }
+            }
+        }
+        if ( hitT < 0.f ) { return; }
+
+        // Only when firmly INSIDE a dig, slide deeper along the look ray.
+        // Rim overlap (partial DigDep) must stay on solid so remaining dirt can still be carved.
+        {
+            float const R = kHandfulRadiusM;
+            if ( DigDepAt( hitX, hitY ) > R * 0.70f )
+            {
+                float const kStep = 0.03f;
+                float bestT = hitT;
+                float const endT = (std::min)( maxT, hitT + R * 3.f );
+                for ( float t = hitT; t <= endT; t += kStep )
+                {
+                    float const x = ox + fx * t;
+                    float const y = oy + fy * t;
+                    float const z = oz + fz * t;
+                    if ( DigDepAt( x, y ) < R * 0.12f ) { break; }
+                    float ground = 0.f;
+                    if ( !SampleGroundZ( x, y, ground ) ) { break; }
+                    if ( z <= ground + 0.04f ) { bestT = t; }
+                }
+                hitT = bestT;
+                hitX = ox + fx * hitT;
+                hitY = oy + fy * hitT;
+                hitZ = oz + fz * hitT;
+            }
+        }
+
+        g.aimHit = true;
+        g.aimX = hitX;
+        g.aimY = hitY;
+        g.aimZ = hitZ;
+        g.aimCx = (int)std::floor( hitX );
+        g.aimCy = (int)std::floor( hitY );
+        g.aimU = hitX - (float)g.aimCx;
+        g.aimV = hitY - (float)g.aimCy;
+        g.aimDepth = AimDigAffect().radiusM;
+    }
+
+    bool TryPickFoliatedStrike()
+    {
+        // Horizon-to-Hand: pick strike → persistent fracture patch → optional MatterBody plate.
+        UpdateAim();
+        if ( !g.aimHit )
+        {
+            g.digestLine = "PICK miss - no face in aim";
+            UpdateStreamHud();
+            return false;
+        }
+        float dx = g.aimX - g.feetX;
+        float dy = g.aimY - g.feetY;
+        if ( std::sqrt( dx * dx + dy * dy ) > kReachCells )
+        {
+            g.digestLine = "PICK too far - step closer";
+            UpdateStreamHud();
+            return false;
+        }
+
+        std::string const cap = CapAtWorld( g.aimX, g.aimY );
+        H2H::MaterialFormContract const& form = H2H::FormOrDirt( cap.c_str() );
+        bool const foliated = form.fabric == H2H::FabricKind::FoliatedAnisotropic
+            || form.fabric == H2H::FabricKind::BeddedFissile
+            || CapUsesFoliation( cap.c_str() );
+        if ( !foliated && form.rigid_fracture_body == false && form.fabric != H2H::FabricKind::Granular )
+        {
+            g.digestLine = "PICK — use shovel (1) for soft scoop matter";
+            UpdateStreamHud();
+            return false;
+        }
+
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cyw * cp, fz = sp;
+
+        H2H::SeparationResult const sep = H2H::StrikePick(
+            g.aimX, g.aimY, g.aimZ, fx, fy, fz, form.material_id );
+
+        // Presentation chip from fracture patch (sealed — no DigDep / stencil punch-through).
+        H2H::FracturePatch const* patch = nullptr;
+        for ( H2H::FracturePatch const& p : H2H::State().patches )
+        {
+            if ( p.patch_id == sep.patch_id ) { patch = &p; break; }
+        }
+        if ( patch )
+        {
+            float fnx = 0.f, fny = 0.f, fnz = 1.f;
+            CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
+            // Player-driven crack elongation in the face plane (look × N), not grade-XY scoop.
+            float strikeX = 1.f, strikeY = 0.f;
+            StrikeAxesFromLook( fnx, fny, fnz, fx, fy, fz, strikeX, strikeY );
+            // Soft blend toward fabric when nearly aligned (material still matters).
+            float const fdot = std::fabs( strikeX * patch->strikeX + strikeY * patch->strikeY );
+            if ( fdot > 0.55f )
+            {
+                strikeX = 0.55f * strikeX + 0.45f * patch->strikeX;
+                strikeY = 0.55f * strikeY + 0.45f * patch->strikeY;
+                float const inv = 1.f / (std::max)( 1e-5f, std::sqrt( strikeX * strikeX + strikeY * strikeY ) );
+                strikeX *= inv; strikeY *= inv;
+            }
+            float const into = AimDigAffect().radiusM * 0.55f;
+            float bx = g.aimX + fx * into;
+            float by = g.aimY + fy * into;
+            float bz = g.aimZ + fz * into;
+            DigAffectSpec const affect = AimDigAffect();
+            float along = (std::max)( affect.radiusM * 1.6f, patch->crackAlongM * 0.55f );
+            float deep = (std::max)( affect.radiusM * 0.95f, patch->crackDepthM * 0.75f );
+            float lip = deep * 0.45f;
+            float depthAmp = (std::max)( affect.depthM * 1.25f, 0.035f );
+            RockStruct::FractureStage st = RockStruct::FractureStage::SeamOpened;
+            if ( sep.detached ) { st = RockStruct::FractureStage::PlateReleased; }
+            else if ( std::strcmp( sep.act, "plate_held" ) == 0 ) { st = RockStruct::FractureStage::SeamOpened; }
+            else if ( std::strcmp( sep.act, "face_flakes" ) == 0 ) { st = RockStruct::FractureStage::SurfaceFlakes; }
+            AddFoliationPlateScar( bx, by, bz, (int)std::floor( bx ), (int)std::floor( by ),
+                strikeX, strikeY, along, deep, lip, depthAmp, patch->attachment, st,
+                fnx, fny, fnz );
+            ClearPendingScarEdit();
+            FireActionCue( false, false );
+            // Detached plate: push out along look + into free space so it isn't glued to the wall skin.
+            if ( sep.detached )
+            {
+                for ( H2H::MatterBody& body : H2H::State().bodies )
+                {
+                    if ( body.body_id != sep.body_id ) { continue; }
+                    body.nx = fnx; body.ny = fny; body.nz = fnz;
+                    body.strikeX = strikeX; body.strikeY = strikeY;
+                    body.x = g.aimX + fx * 0.08f - fnx * 0.04f;
+                    body.y = g.aimY + fy * 0.08f - fny * 0.04f;
+                    body.z = g.aimZ + fz * 0.08f - fnz * 0.04f;
+                    body.vx = fx * 0.55f - fnx * 0.25f;
+                    body.vy = fy * 0.55f - fny * 0.25f;
+                    body.vz = fz * 0.55f - fnz * 0.25f - 0.2f;
+                    break;
+                }
+            }
+        }
+
+        // Fines → held aggregate grams (same matter identity). Plate stays a MatterBody.
+        if ( sep.fines_g > 0 )
+        {
+            std::unordered_map<std::string, int> rem;
+            rem[sep.material_id] = sep.fines_g;
+            CreditHeld( rem );
+        }
+
+        char d[480];
+        if ( sep.detached )
+        {
+            std::snprintf( d, sizeof( d ),
+                "H2H %s %s sep=%llu body=%llu | plate %dg + fines %dg | parent %dg→%dg | reconciling %s | [G] grip plate",
+                sep.act, sep.material_id.c_str(),
+                (unsigned long long)sep.separation_id, (unsigned long long)sep.body_id,
+                sep.plate_g, sep.fines_g, sep.parent_before_g, sep.parent_after_g,
+                H2H::ReconcileOk( sep ) ? "OK" : "FAIL" );
+            g.statusLine = "Horizon-to-Hand - plate released (falls; G to grip)";
+        }
+        else
+        {
+            float attach = patch ? patch->attachment : 1.f;
+            std::snprintf( d, sizeof( d ),
+                "H2H %s %s patch=%llu | cracks persist attach=%.2f | fines +%dg | parent %dg→%dg | hand %dg",
+                sep.act, sep.material_id.c_str(),
+                (unsigned long long)sep.patch_id, attach, sep.fines_g,
+                sep.parent_before_g, sep.parent_after_g, g.heldTotalG );
+            g.statusLine = ( std::strcmp( sep.act, "plate_held" ) == 0 )
+                ? "Horizon-to-Hand - plate candidate held (strike again to release)"
+                : "Horizon-to-Hand - fracture patch updated";
+        }
+        g.digestLine = d;
+        FireActionCue( false, false );
+        UpdateStreamHud();
+        return true;
+    }
+
+    bool TryGripMatterBody()
+    {
+        // Grip at actual contact on a loose / settled plate — not a central socket.
+        if ( g.grippedBodyId != 0 )
+        {
+            // Drop gripped body at feet.
+            for ( H2H::MatterBody& b : H2H::State().bodies )
+            {
+                if ( b.body_id != g.grippedBodyId ) { continue; }
+                b.gripped = false;
+                b.settled = false;
+                b.x = g.feetX + std::sin( g.yaw ) * 0.6f;
+                b.y = g.feetY + std::cos( g.yaw ) * 0.6f;
+                b.z = g.feetZ + 0.4f;
+                b.vx = b.vy = 0.f;
+                b.vz = 0.f;
+                g.grippedBodyId = 0;
+                g.digestLine = "H2H drop plate body";
+                UpdateStreamHud();
+                return true;
+            }
+            g.grippedBodyId = 0;
+        }
+
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cyw * cp, fz = sp;
+        float t = 0.f, hx = 0.f, hy = 0.f, hz = 0.f;
+        H2H::MatterBody* body = H2H::RayHitBody(
+            g.camX, g.camY, g.camZ, fx, fy, fz, 3.2f, t, hx, hy, hz );
+        if ( !body )
+        {
+            g.digestLine = "H2H grip miss - aim a loose plate";
+            UpdateStreamHud();
+            return false;
+        }
+        // Burden from contact-to-COM distance (edge grip harder than center).
+        float const comDx = hx - body->x, comDy = hy - body->y, comDz = hz - body->z;
+        float const lever = std::sqrt( comDx * comDx + comDy * comDy + comDz * comDz );
+        bool const twoHand = body->materials_g > 8000 || lever > 0.12f;
+        if ( body->materials_g > 18000 )
+        {
+            char d[200];
+            std::snprintf( d, sizeof( d ),
+                "H2H grip refuse body=%llu %dg — too heavy (need lever/team)",
+                (unsigned long long)body->body_id, body->materials_g );
+            g.digestLine = d;
+            UpdateStreamHud();
+            return false;
+        }
+        body->gripped = true;
+        body->settled = true;
+        body->vx = body->vy = body->vz = 0.f;
+        g.grippedBodyId = body->body_id;
+        char d[240];
+        std::snprintf( d, sizeof( d ),
+            "H2H grip body=%llu %s %dg @ contact lever=%.2fm %s | G again to drop",
+            (unsigned long long)body->body_id, body->material_id.c_str(), body->materials_g,
+            lever, twoHand ? "two-hand burden" : "one-hand" );
+        g.digestLine = d;
+        UpdateStreamHud();
+        return true;
+    }
+
+    bool TryDigHandful()
+    {
+        if ( g.link != LinkState::CapsOk ) { return false; }
+        UpdateAim();
+        if ( !g.aimHit )
+        {
+            g.digestLine = "DIG miss - no surface in aim";
+            UpdateStreamHud();
+            return false;
+        }
+
+        std::string const cap = CapAtWorld( g.aimX, g.aimY );
+        H2H::MaterialFormContract const& form = H2H::FormOrDirt( cap.c_str() );
+        H2H::ToolMatterProfile const& tool = ActiveToolProfile();
+        H2H::ToolRole const role = H2H::RoleForAttached( tool, form );
+
+        if ( tool.cuts_wood && form.fabric != H2H::FabricKind::FibrousWood )
+        {
+            g.digestLine = "AXE — wood only (not terrain dig)";
+            UpdateStreamHud();
+            return false;
+        }
+        if ( !H2H::CanExcavateAttached( tool, form ) )
+        {
+            if ( role == H2H::ToolRole::CollectLoose )
+            {
+                g.digestLine = "H2H gate: collect loose only — pick frees intact rock (hands/shovel cannot mine it)";
+            }
+            else if ( role == H2H::ToolRole::Indirect )
+            {
+                g.digestLine = "H2H gate: tool only opens terrain capacity for water — use bucket to transfer fluid";
+            }
+            else
+            {
+                char d[200];
+                std::snprintf( d, sizeof( d ), "H2H gate: %s cannot cut attached %s",
+                    tool.id, form.material_id );
+                g.digestLine = d;
+            }
+            FireActionCue( false, true );
+            UpdateStreamHud();
+            return false;
+        }
+
+        // Hard / foliated / bedded / massive rock → Horizon-to-Hand fracture (pick primary).
+        if ( form.hardness >= 3 || form.fabric == H2H::FabricKind::FoliatedAnisotropic
+          || form.fabric == H2H::FabricKind::BeddedFissile
+          || ( form.fabric == H2H::FabricKind::Massive && form.rigid_fracture_body ) )
+        {
+            if ( tool.force != H2H::ForceClass::Pick )
+            {
+                g.digestLine = "H2H: switch to pick (3) for hard/foliated rock";
+                UpdateStreamHud();
+                return false;
+            }
+            return TryPickFoliatedStrike();
+        }
+
+        if ( g.pending != PendingKind::None )
+        {
+            g.digestLine = "DIG busy - wait for engine digest";
+            if ( g.aimHit ) { FireActionCue( false, true ); }
+            UpdateStreamHud();
+            return false;
+        }
+
+        // Soft soil — dig-volume sphere from tool×material; preview/scar/carve/grams share one R.
+        float bx, by, bz, bu, bv, bdepthM;
+        int bcx, bcy;
+        ResolveBiteFromAim( false, bx, by, bz, bcx, bcy, bu, bv, bdepthM );
+        float dx = (float)bcx + 0.5f - g.feetX;
+        float dy = (float)bcy + 0.5f - g.feetY;
+        if ( std::sqrt( dx * dx + dy * dy ) > kReachCells )
+        {
+            g.digestLine = "DIG too far - step closer (reach ~3.5 m)";
+            UpdateStreamHud();
+            return false;
+        }
+
+        // Recompute steep at bite + final affect (slope may differ from aim cell).
+        float fnx = 0.f, fny = 0.f, fnz = 1.f;
+        CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
+        bool const steepFace = IsSteepFaceAt( bx, by ) || fnz < 0.58f;
+        DigAffectSpec const hitAffect = ComputeDigAffect( tool, form, steepFace );
+        int const acceptG = AffectAcceptedGrams( form, hitAffect );
+        g.pendingLocalScoopG = acceptG;
+        g.pendingLocalScoopMat = form.material_id;
+        g.pendingAffectRM = hitAffect.radiusM;
+
+        float const radEng = WorldToEngDepth( hitAffect.radiusM );
+        float const depthEng = WorldToEngDepth( (std::max)( bdepthM, hitAffect.depthM ) );
+        int px = (int)std::floor( g.feetX );
+        int py = (int)std::floor( g.feetY );
+        char params[288];
+        std::snprintf( params, sizeof( params ),
+            "{\"x\":%d,\"y\":%d,\"u\":%.5f,\"v\":%.5f,\"depth\":%.5f,\"radius\":%.5f,\"shape\":\"sphere\",\"px\":%d,\"py\":%d}",
+            bcx, bcy, bu, bv, depthEng, radEng, px, py );
+        g.intent = IntentKind::Dig;
+        if ( !RequestMethod( "carve", params, PendingKind::Carve ) )
+        {
+            g.digestLine = "DIG send failed";
+            g.pendingAffectRM = 0.f;
+            UpdateStreamHud();
+            return false;
+        }
+        g.pendingBiteCx = bcx;
+        g.pendingBiteCy = bcy;
+        g.pendingBiteU = bu;
+        g.pendingBiteV = bv;
+        g.pendingBiteWx = bx;
+        g.pendingBiteWy = by;
+        g.pendingBiteWz = bz;
+        g.pendingBiteForward = ( DigDepAt( g.aimX, g.aimY ) > hitAffect.radiusM * 0.20f )
+            && ( -std::sin( g.pitch ) < 0.72f );
+        g.columnQueue.clear();
+
+        if ( hitAffect.mode == DigAffectMode::ScoopHemi )
+        {
+            float scarZ = bz;
+            float gradeAtBite = bz;
+            if ( SampleGroundZBase( bx, by, gradeAtBite ) )
+            {
+                scarZ = (std::min)( bz, gradeAtBite - hitAffect.radiusM * 0.15f );
+            }
+            AddScar( bx, by, scarZ, bcx, bcy, false, false );
+            if ( g.pendingScarIndex >= 0 && g.pendingScarIndex < (int)g.scars.size() )
+            {
+                DigScar& s = g.scars[(size_t)g.pendingScarIndex];
+                s.radius = hitAffect.radiusM;
+                s.depth = hitAffect.depthM;
+            }
+        }
+        else
+        {
+            // Face puncture / tip — same R as dig-volume sphere, recess along face normal.
+            float const rad = hitAffect.radiusM;
+            float const depthAmp = hitAffect.depthM;
+            float const cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+            float const cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            float const lx = sy * cp, ly = cyw * cp, lz = sp;
+            AddFacePunctureScar( g.aimX + lx * rad * 0.35f,
+                g.aimY + ly * rad * 0.35f,
+                g.aimZ + lz * rad * 0.35f,
+                bcx, bcy, rad, depthAmp, fnx, fny, fnz );
+        }
+        FireActionCue( false, false );
+        char sent[280];
+        std::snprintf( sent, sizeof( sent ),
+            "H2H %s %s via %s — affect r=%.3fm (%.0f mL) → ~%dg (await digest)",
+            hitAffect.feel, form.material_id, tool.id,
+            hitAffect.radiusM, hitAffect.volumeM3 * 1e6f, acceptG );
+        g.digestLine = sent;
+        g.statusLine = "Phase 4 - affect sphere = scar = carve = matter return";
+        UpdateStreamHud();
+        return true;
+    }
+
+    bool TryPlaceHandful()
+    {
+        if ( g.link != LinkState::CapsOk ) { return false; }
+        if ( g.pending != PendingKind::None )
+        {
+            g.digestLine = "PLACE busy - wait for engine digest";
+            if ( g.aimHit ) { FireActionCue( true, true ); }
+            UpdateStreamHud();
+            return false;
+        }
+        if ( g.heldTotalG <= 0 || g.heldDominant.empty() )
+        {
+            g.digestLine = "PLACE empty hand - LMB scoops into stock, RMB places one scoop";
+            UpdateStreamHud();
+            return false;
+        }
+        UpdateAim();
+        if ( !g.aimHit )
+        {
+            g.digestLine = "PLACE miss - no surface in aim";
+            UpdateStreamHud();
+            return false;
+        }
+        float bx, by, bz, bu, bv, bdepthM;
+        int bcx, bcy;
+        ResolveBiteFromAim( true, bx, by, bz, bcx, bcy, bu, bv, bdepthM );
+        float dx = (float)bcx + 0.5f - g.feetX;
+        float dy = (float)bcy + 0.5f - g.feetY;
+        if ( std::sqrt( dx * dx + dy * dy ) > kReachCells )
+        {
+            g.digestLine = "PLACE too far - step closer";
+            UpdateStreamHud();
+            return false;
+        }
+
+        std::unordered_map<std::string, int> ask;
+        int askG = 0;
+        std::string askDom;
+        if ( !BuildPlaceScoopAsk( ask, askG, askDom ) )
+        {
+            g.digestLine = "PLACE empty hand - LMB scoops into stock, RMB places one scoop";
+            UpdateStreamHud();
+            return false;
+        }
+
+        float const radEng = HandfulRadiusEng();
+        float const depthEng = WorldToEngDepth( bdepthM );
+        int px = (int)std::floor( g.feetX );
+        int py = (int)std::floor( g.feetY );
+        char params[512];
+        if ( ask.size() > 1 )
+        {
+            std::string amounts = "{";
+            bool first = true;
+            for ( auto const& kv : ask )
+            {
+                if ( !first ) { amounts += ","; }
+                first = false;
+                char one[64];
+                std::snprintf( one, sizeof( one ), "\"%s\":%d", kv.first.c_str(), kv.second );
+                amounts += one;
+            }
+            amounts += "}";
+            std::snprintf( params, sizeof( params ),
+                "{\"x\":%d,\"y\":%d,\"u\":%.5f,\"v\":%.5f,\"depth\":%.5f,\"radius\":%.5f,\"amounts\":%s,\"px\":%d,\"py\":%d}",
+                bcx, bcy, bu, bv, depthEng, radEng, amounts.c_str(), px, py );
+        }
+        else
+        {
+            std::snprintf( params, sizeof( params ),
+                "{\"x\":%d,\"y\":%d,\"u\":%.5f,\"v\":%.5f,\"depth\":%.5f,\"radius\":%.5f,\"material\":\"%s\",\"amount\":%d,\"px\":%d,\"py\":%d}",
+                bcx, bcy, bu, bv, depthEng, radEng,
+                askDom.c_str(), askG, px, py );
+        }
+        g.intent = IntentKind::PlaceHeld;
+        if ( !RequestMethod( "place", params, PendingKind::Place ) )
+        {
+            g.digestLine = "PLACE send failed";
+            return false;
+        }
+        g.pendingPlaceAsk = ask;
+        g.pendingPlaceG = askG;
+        g.pendingBiteCx = bcx;
+        g.pendingBiteCy = bcy;
+        g.pendingBiteU = bu;
+        g.pendingBiteV = bv;
+        g.columnQueue.clear();
+        // One scoop into an open hole fills it — shrink dig on success, never leave a mound on top.
+        g.pendingPlaceIntoHole = ( bdepthM > kHandfulRadiusM * 0.25f );
+        if ( g.pendingPlaceIntoHole )
+        {
+            ClearPendingScarEdit();
+        }
+        else
+        {
+            float openZ = g.aimZ;
+            SampleGroundZ( bx, by, openZ );
+            AddScar( bx, by, openZ, bcx, bcy, true, false );
+        }
+        FireActionCue( true, false );
+        g.statusLine = "Phase 4 - placing scoop...";
+        char sent[160];
+        std::snprintf( sent, sizeof( sent ), "PLACE sent %dg (hand stock %dg) - awaiting digest",
+            askG, g.heldTotalG );
+        g.digestLine = sent;
+        UpdateStreamHud();
+        return true;
+    }
+
+    void RecomputeBlocksWanted()
+    {
+        int const maxRing = ( kFarRadiusCells + kBlockCells - 1 ) / kBlockCells;
+        g.blocksWanted = 0;
+        for ( int ring = 0; ring <= maxRing; ++ring )
+        {
+            for ( int dy = -ring; dy <= ring; ++dy )
+            {
+                for ( int dx = -ring; dx <= ring; ++dx )
+                {
+                    if ( (std::max)( std::abs( dx ), std::abs( dy ) ) != ring ) { continue; }
+                    ++g.blocksWanted;
+                }
+            }
+        }
+    }
+
+    void FollowStreamCenter()
+    {
+        int const cx = (int)std::floor( g.feetX );
+        int const cy = (int)std::floor( g.feetY );
+        if ( cx == g.playerX && cy == g.playerY ) { return; }
+        g.playerX = cx;
+        g.playerY = cy;
+        // Expand analytic residency with the player (isotropic disk).
+        EnsureGeoDisk( cx, cy, (std::min)( kFarRadiusCells, 64 ) );
+        g.streamComplete = true;
+        g.blocksLoaded = g.blocksWanted;
+        g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
+        InvalidateTerrainMesh();
+    }
+
+    // Phase 3 terrain draw: uniform heightfield from grades (+ scoop scars as height only).
+    // Dig/place tools stay; digs must NOT change cell LOD, punch tiles, cup overlays, or grain dither.
+
+    void SampleCapColor( float x, float y, float& outR, float& outG, float& outB )
+    {
+        int const x0 = (int)std::floor( x );
+        int const y0 = (int)std::floor( y );
+        float const tx = x - (float)x0;
+        float const ty = y - (float)y0;
+        auto at = [&]( int cx, int cy, float& r, float& gcol, float& b )
+        {
+            CellSample const* c = GetCell( cx, cy );
+            if ( c )
+            {
+                r = (float)c->r; gcol = (float)c->g; b = (float)c->b;
+                return;
+            }
+            ProvenanceGeo::EnsureReady();
+            auto s = ProvenanceGeo::SampleSurface(
+                (double)cx + 0.5, (double)cy + 0.5,
+                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            uint8_t ur, ug, ub;
+            VisualMat::CapColor( s.cap, ur, ug, ub );
+            r = (float)ur; gcol = (float)ug; b = (float)ub;
+        };
+        float r00, g00, b00, r10, g10, b10, r01, g01, b01, r11, g11, b11;
+        at( x0, y0, r00, g00, b00 );
+        at( x0 + 1, y0, r10, g10, b10 );
+        at( x0, y0 + 1, r01, g01, b01 );
+        at( x0 + 1, y0 + 1, r11, g11, b11 );
+        float const r0 = r00 * ( 1.f - tx ) + r10 * tx;
+        float const r1 = r01 * ( 1.f - tx ) + r11 * tx;
+        float const g0 = g00 * ( 1.f - tx ) + g10 * tx;
+        float const g1 = g01 * ( 1.f - tx ) + g11 * tx;
+        float const b0 = b00 * ( 1.f - tx ) + b10 * tx;
+        float const b1 = b01 * ( 1.f - tx ) + b11 * tx;
+        outR = r0 * ( 1.f - ty ) + r1 * ty;
+        outG = g0 * ( 1.f - ty ) + g1 * ty;
+        outB = b0 * ( 1.f - ty ) + b1 * ty;
+    }
+
+    int MeshDivForCell( int x, int y, float feetX, float feetY )
+    {
+        // Uniform near-field subdiv — mixed 3/2/1 LOD bands cracked into dark T-junction seams.
+        (void)x; (void)y; (void)feetX; (void)feetY;
+        return 2;
+    }
+
+    void EmitPhase3Tri( float x0, float y0, float z0,
+                        float x1, float y1, float z1,
+                        float x2, float y2, float z2,
+                        float cavity )
+    {
+        // Flat face lighting — per-vertex smooth normals were melting landform + scoops.
+        constexpr float lx = 0.35f, ly = 0.18f, lz = 0.92f;
+        float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+        float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        float const nl = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( nl > 1e-6f ) { nx /= nl; ny /= nl; nz /= nl; }
+        float light = 0.50f + 0.50f * (std::max)( 0.f, nx * lx + ny * ly + nz * lz );
+        // cavity > 0 dig darken; cavity < 0 place brighten (mound must read vs flat skin)
+        // Keep dig cups lit (dirt-coloured bowls) — 0.40 crushed them to flat black from above.
+        if ( cavity > 0.f ) { light *= ( 1.f - 0.22f * (std::min)( 1.f, cavity ) ); }
+        else if ( cavity < 0.f ) { light *= ( 1.f - 0.35f * cavity ); }
+
+        float const mx = ( x0 + x1 + x2 ) * ( 1.f / 3.f );
+        float const my = ( y0 + y1 + y2 ) * ( 1.f / 3.f );
+        float cr, cg, cb;
+        SampleCapColor( mx, my, cr, cg, cb );
+        // VisualMaterialDef edge cue — rocks read harder/cooler; soils slightly warmer (not tile paint).
+        {
+            int const cx = (int)std::floor( mx );
+            int const cy = (int)std::floor( my );
+            char const* cap = "dirt";
+            if ( CellSample const* c = GetCell( cx, cy ) )
+            {
+                if ( !c->cap.empty() ) { cap = c->cap.c_str(); }
+            }
+            else
+            {
+                ProvenanceGeo::EnsureReady();
+                cap = ProvenanceGeo::SampleSurface(
+                    (double)cx + 0.5, (double)cy + 0.5,
+                    g.gradeDatum, g.reliefVoxels, g.voxelEdgeM ).cap;
+            }
+            VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( cap );
+            light *= VisualMat::EdgeShadeBias( vd );
+        }
+        glColor3f( ( cr / 255.f ) * light, ( cg / 255.f ) * light, ( cb / 255.f ) * light );
+        glVertex3f( x0, y0, z0 );
+        glVertex3f( x1, y1, z1 );
+        glVertex3f( x2, y2, z2 );
+    }
+
+    void DrawLiveScoopCups( bool digOnly )
+    {
+        // Open lit scoop bowls — polar rings for a round rim; winding faces sky (cull-safe).
+        if ( g.scars.empty() ) { return; }
+
+        constexpr int kRad = 14;
+        constexpr int kSeg = 32;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( digOnly && s.place ) { continue; }
+            if ( !digOnly && !s.place ) { continue; }
+            if ( !s.place && s.tunnel ) { continue; }
+            // Plates / face punctures use sealed overlays — round scoop bowls tear steep walls.
+            if ( !s.place && ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) )
+            {
+                continue;
+            }
+            float const rad = s.radius;
+            if ( rad < 1e-4f ) { continue; }
+            float const cav = s.place ? -1.f : 1.f; // place brighten / dig darken
+            float zCenter = 0.f;
+            if ( !SampleCupSurfaceZ( s.wx, s.wy, s.place, zCenter ) ) { continue; }
+            for ( int j = 0; j < kRad; ++j )
+            {
+                float const r0 = rad * (float)j / (float)kRad;
+                float const r1 = rad * (float)( j + 1 ) / (float)kRad;
+                for ( int i = 0; i < kSeg; ++i )
+                {
+                    float const a0 = (float)i / (float)kSeg * 6.2831853f;
+                    float const a1 = (float)( i + 1 ) / (float)kSeg * 6.2831853f;
+                    float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
+                    float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
+                    float const px00 = s.wx + c0 * r0, py00 = s.wy + s0 * r0;
+                    float const px10 = s.wx + c1 * r0, py10 = s.wy + s1 * r0;
+                    float const px01 = s.wx + c0 * r1, py01 = s.wy + s0 * r1;
+                    float const px11 = s.wx + c1 * r1, py11 = s.wy + s1 * r1;
+
+                    float z00, z10, z01, z11;
+                    if ( j == 0 )
+                    {
+                        z00 = zCenter;
+                        z10 = zCenter;
+                    }
+                    else
+                    {
+                        if ( !SampleCupSurfaceZ( px00, py00, s.place, z00 ) ) { continue; }
+                        if ( !SampleCupSurfaceZ( px10, py10, s.place, z10 ) ) { continue; }
+                    }
+                    if ( !SampleCupSurfaceZ( px01, py01, s.place, z01 ) ) { continue; }
+                    if ( !SampleCupSurfaceZ( px11, py11, s.place, z11 ) ) { continue; }
+
+                    // Sky-facing winding: inner → outer → next (was flipped → flat black under cull).
+                    if ( j == 0 )
+                    {
+                        EmitPhase3Tri( s.wx, s.wy, zCenter, px01, py01, z01, px11, py11, z11, cav );
+                    }
+                    else
+                    {
+                        EmitPhase3Tri( px00, py00, z00, px01, py01, z01, px10, py10, z10, cav );
+                        EmitPhase3Tri( px10, py10, z10, px01, py01, z01, px11, py11, z11, cav );
+                    }
+                }
+            }
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void RebuildTerrainMesh()
+    {
+        // Phase 3 vista only — virgin grades/fill. Scoops are live cups (DrawLiveScoopCups).
+        constexpr int kDrawRadius = 64;
+        int const ax = g.terrainAnchorX;
+        int const ay = g.terrainAnchorY;
+        int const x0 = ax - kDrawRadius;
+        int const y0 = ay - kDrawRadius;
+        int const x1 = ax + kDrawRadius;
+        int const y1 = ay + kDrawRadius;
+        float const feetX = g.feetX;
+        float const feetY = g.feetY;
+
+        if ( g.terrainList )
+        {
+            glDeleteLists( g.terrainList, 1 );
+            g.terrainList = 0;
+        }
+        g.terrainList = AllocDisplayListOutsideFonts();
+        if ( !g.terrainList ) { return; }
+        glNewList( g.terrainList, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+
+        for ( int y = y0; y < y1; ++y )
+        {
+            for ( int x = x0; x < x1; ++x )
+            {
+                if ( !GetCell( x, y ) || !GetCell( x + 1, y ) || !GetCell( x, y + 1 ) || !GetCell( x + 1, y + 1 ) )
+                {
+                    continue;
+                }
+
+                int const div = MeshDivForCell( x, y, feetX, feetY );
+                for ( int j = 0; j < div; ++j )
+                {
+                    for ( int i = 0; i < div; ++i )
+                    {
+                        float const u0 = (float)i / (float)div;
+                        float const v0 = (float)j / (float)div;
+                        float const u1 = (float)( i + 1 ) / (float)div;
+                        float const v1 = (float)( j + 1 ) / (float)div;
+                        float const px00 = (float)x + u0, py00 = (float)y + v0;
+                        float const px10 = (float)x + u1, py10 = (float)y + v0;
+                        float const px01 = (float)x + u0, py01 = (float)y + v1;
+                        float const px11 = (float)x + u1, py11 = (float)y + v1;
+
+                        float z00, z10, z01, z11;
+                        // Virgin grade vista only — dig/place are live high-res cups (no coarse diamond spikes).
+                        if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
+                        if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
+                        if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
+                        if ( !SampleGroundZBase( px11, py11, z11 ) ) { continue; }
+
+                        EmitPhase3Tri( px00, py00, z00, px10, py10, z10, px01, py01, z01, 0.f );
+                        EmitPhase3Tri( px10, py10, z10, px11, py11, z11, px01, py01, z01, 0.f );
+                    }
+                }
+            }
+        }
+        glEnd();
+        glEndList();
+        g.terrainDirty = false;
+        // Ensure next launch/session after fillZ law change rebuilds virgin grade skin
+    }
+
+    void DrawDigGradeFootprints()
+    {
+        // Invisible stencil seal — must match scoop footprint exactly.
+        // Oversized / heavy offset punched a feathered grade roof around the cup; reject that.
+        if ( g.scars.empty() ) { return; }
+        constexpr int kRing = 16;
+        constexpr float kZBias = 0.003f;
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place ) { continue; }
+            // Never stencil-punch foliation plates or face punctures — opens sky void on cliffs.
+            if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
+            float gradeC = 0.f;
+            if ( !SampleGroundZBase( s.wx, s.wy, gradeC ) ) { continue; }
+            float rad = s.radius; // same radius as the dig cup — no halo seal
+            if ( s.tunnel )
+            {
+                rad = TunnelSurfaceBreakRadius( s, gradeC );
+                if ( rad < 1e-4f ) { continue; }
+            }
+            if ( rad < 1e-4f ) { continue; }
+            float const step = ( 2.f * rad ) / (float)kRing;
+            float const ox = s.wx - rad;
+            float const oy = s.wy - rad;
+            for ( int j = 0; j < kRing; ++j )
+            {
+                for ( int i = 0; i < kRing; ++i )
+                {
+                    float const px00 = ox + (float)i * step;
+                    float const py00 = oy + (float)j * step;
+                    float const px10 = px00 + step, py10 = py00;
+                    float const px01 = px00, py01 = py00 + step;
+                    float const px11 = px00 + step, py11 = py00 + step;
+                    float const mx = ( px00 + px11 ) * 0.5f;
+                    float const my = ( py00 + py11 ) * 0.5f;
+                    float const mdx = mx - s.wx;
+                    float const mdy = my - s.wy;
+                    if ( ( mdx * mdx + mdy * mdy ) > ( rad * rad ) ) { continue; }
+                    // Only punch where the scoop hemi actually cuts (no disc halo past the cup).
+                    if ( !s.tunnel )
+                    {
+                        if ( ScarHemiAt( s, mx, my ) < 1e-5f ) { continue; }
+                    }
+                    else
+                    {
+                        float gMid = gradeC;
+                        SampleGroundZBase( mx, my, gMid );
+                        if ( ScarTunnelDepAt( s, mx, my, gMid ) < 1e-5f ) { continue; }
+                    }
+                    float z00, z10, z01, z11;
+                    if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
+                    if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
+                    if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
+                    if ( !SampleGroundZBase( px11, py11, z11 ) ) { continue; }
+                    z00 += kZBias; z10 += kZBias; z01 += kZBias; z11 += kZBias;
+                    glVertex3f( px00, py00, z00 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px01, py01, z01 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px11, py11, z11 );
+                    glVertex3f( px01, py01, z01 );
+                }
+            }
+        }
+        glEnd();
+    }
+
+    void DrawTunnelCavities()
+    {
+        // Look-steered buried scoops — sphere at carve centre (not a grade-roof bowl from the sky).
+        if ( g.scars.empty() ) { return; }
+        constexpr int kLat = 12;
+        constexpr int kLon = 16;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place || !s.tunnel ) { continue; }
+            float const rad = s.radius;
+            if ( rad < 1e-4f ) { continue; }
+            for ( int j = 0; j < kLat; ++j )
+            {
+                float const v0 = (float)j / (float)kLat;
+                float const v1 = (float)( j + 1 ) / (float)kLat;
+                float const a0 = ( v0 - 0.5f ) * 3.14159265f;
+                float const a1 = ( v1 - 0.5f ) * 3.14159265f;
+                float const y0 = std::sin( a0 ), y1 = std::sin( a1 );
+                float const c0 = std::cos( a0 ), c1 = std::cos( a1 );
+                for ( int i = 0; i < kLon; ++i )
+                {
+                    float const u0 = (float)i / (float)kLon * 6.2831853f;
+                    float const u1 = (float)( i + 1 ) / (float)kLon * 6.2831853f;
+                    float const x00 = s.wx + rad * c0 * std::cos( u0 );
+                    float const y00 = s.wy + rad * c0 * std::sin( u0 );
+                    float const z00 = s.wz + rad * y0;
+                    float const x10 = s.wx + rad * c0 * std::cos( u1 );
+                    float const y10 = s.wy + rad * c0 * std::sin( u1 );
+                    float const z10 = s.wz + rad * y0;
+                    float const x01 = s.wx + rad * c1 * std::cos( u0 );
+                    float const y01 = s.wy + rad * c1 * std::sin( u0 );
+                    float const z01 = s.wz + rad * y1;
+                    float const x11 = s.wx + rad * c1 * std::cos( u1 );
+                    float const y11 = s.wy + rad * c1 * std::sin( u1 );
+                    float const z11 = s.wz + rad * y1;
+                    // Inward-facing cavity; lit like open cups (not flat black).
+                    EmitPhase3Tri( x00, y00, z00, x01, y01, z01, x10, y10, z10, 1.f );
+                    EmitPhase3Tri( x10, y10, z10, x01, y01, z01, x11, y11, z11, 1.f );
+                }
+            }
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawDigFloorPlugs()
+    {
+        // Soft floor under punched openings — lit like the cup (not a flat black disc).
+        if ( g.scars.empty() ) { return; }
+        constexpr int kSeg = 28;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place || s.tunnel ) { continue; }
+            if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
+            float const rad = s.radius;
+            if ( rad < 1e-4f ) { continue; }
+            float zc = 0.f;
+            if ( !SampleCupSurfaceZ( s.wx, s.wy, false, zc ) ) { continue; }
+            for ( int i = 0; i < kSeg; ++i )
+            {
+                float const a0 = (float)i / (float)kSeg * 6.2831853f;
+                float const a1 = (float)( i + 1 ) / (float)kSeg * 6.2831853f;
+                float const x0 = s.wx + std::cos( a0 ) * rad;
+                float const y0 = s.wy + std::sin( a0 ) * rad;
+                float const x1 = s.wx + std::cos( a1 ) * rad;
+                float const y1 = s.wy + std::sin( a1 ) * rad;
+                float z0 = zc, z1 = zc;
+                SampleCupSurfaceZ( x0, y0, false, z0 );
+                SampleCupSurfaceZ( x1, y1, false, z1 );
+                EmitPhase3Tri( s.wx, s.wy, zc, x0, y0, z0, x1, y1, z1, 1.f );
+            }
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawFoliationPlateNotches()
+    {
+        // Sealed face chips for mica-schist pick strikes — overlay only in the FACE plane.
+        // Must NOT DigDep or stencil-punch: that tears steep heightfield walls into sky void.
+        // Recess along stored face normal at the true strike point (not grade-Z sink).
+        if ( g.scars.empty() ) { return; }
+        constexpr int kAlong = 10;
+        constexpr int kAcross = 8;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( -2.5f, -4.f );
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place || s.kind != ScarKind::FoliationPlate ) { continue; }
+            float const halfAlong = (std::max)( 0.025f, (std::min)( 0.22f, s.plateAlong ) );
+            float const halfDeep = (std::max)( 0.02f, (std::min)( 0.12f, s.plateAcrossDeep ) );
+            float const halfLip = (std::max)( 0.012f, (std::min)( 0.06f, s.plateAcrossLip ) );
+            // Deep enough to read as a matching cavity, not a flat chip glued on the skin.
+            float const chipMax = (std::max)( 0.028f, (std::min)( 0.10f, s.depth * 1.35f ) );
+
+            float nx = s.faceNx, ny = s.faceNy, nz = s.faceNz;
+            float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+            if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+            else { nx = 0.f; ny = 0.f; nz = 1.f; }
+
+            // Strike along face; pry across = N × strike (into/out of seam on the wall).
+            float sx = s.strikeX, sy = s.strikeY, sz = 0.f;
+            // Project strike into face tangent plane.
+            float const sN = sx * nx + sy * ny + sz * nz;
+            sx -= nx * sN; sy -= ny * sN; sz -= nz * sN;
+            float slen = std::sqrt( sx * sx + sy * sy + sz * sz );
+            if ( slen < 1e-4f ) { sx = -ny; sy = nx; sz = 0.f; slen = std::sqrt( sx * sx + sy * sy ); }
+            if ( slen > 1e-5f ) { sx /= slen; sy /= slen; sz /= slen; }
+            float tx = ny * sz - nz * sy;
+            float ty = nz * sx - nx * sz;
+            float tz = nx * sy - ny * sx;
+
+            float const ax = s.wx, ay = s.wy, az = s.wz;
+
+            auto sample = [&]( float along, float across, float& ox, float& oy, float& oz, float& chip )
+            {
+                float const acrossMax = ( across >= 0.f ) ? halfDeep : halfLip;
+                float const ua = 1.f - ( along / halfAlong ) * ( along / halfAlong );
+                float const uc = 1.f - ( across / acrossMax ) * ( across / acrossMax );
+                float const asym = ( across >= 0.f ) ? 1.f : 0.45f;
+                chip = chipMax * std::sqrt( (std::max)( 0.f, ua * uc ) ) * asym;
+                ox = ax + sx * along + tx * across - nx * chip;
+                oy = ay + sy * along + ty * across - ny * chip;
+                oz = az + sz * along + tz * across - nz * chip;
+            };
+
+            for ( int j = 0; j < kAcross; ++j )
+            {
+                float const v0 = -1.f + 2.f * (float)j / (float)kAcross;
+                float const v1 = -1.f + 2.f * (float)( j + 1 ) / (float)kAcross;
+                for ( int i = 0; i < kAlong; ++i )
+                {
+                    float const u0 = -1.f + 2.f * (float)i / (float)kAlong;
+                    float const u1 = -1.f + 2.f * (float)( i + 1 ) / (float)kAlong;
+                    auto acrossOf = [&]( float v ) -> float
+                    {
+                        return ( v >= 0.f ) ? ( v * halfDeep ) : ( v * halfLip );
+                    };
+                    float x00, y00, z00, c00, x10, y10, z10, c10, x01, y01, z01, c01, x11, y11, z11, c11;
+                    sample( u0 * halfAlong, acrossOf( v0 ), x00, y00, z00, c00 );
+                    sample( u1 * halfAlong, acrossOf( v0 ), x10, y10, z10, c10 );
+                    sample( u0 * halfAlong, acrossOf( v1 ), x01, y01, z01, c01 );
+                    sample( u1 * halfAlong, acrossOf( v1 ), x11, y11, z11, c11 );
+                    // Dark cavity interior — occludes virgin terrain skin at the strike.
+                    float const cav = 0.42f;
+                    EmitPhase3Tri( x00, y00, z00, x10, y10, z10, x01, y01, z01, cav );
+                    EmitPhase3Tri( x10, y10, z10, x11, y11, z11, x01, y01, z01, cav );
+                }
+            }
+
+            // Rim seal: face plane → recess so glancing views don't flash sky / virgin roof.
+            for ( int i = 0; i < kAlong; ++i )
+            {
+                float const u0 = -1.f + 2.f * (float)i / (float)kAlong;
+                float const u1 = -1.f + 2.f * (float)( i + 1 ) / (float)kAlong;
+                for ( int edge = 0; edge < 2; ++edge )
+                {
+                    float const v = ( edge == 0 ) ? -1.f : 1.f;
+                    float const across = ( v >= 0.f ) ? ( v * halfDeep ) : ( v * halfLip );
+                    float x0, y0, z0, c0, x1, y1, z1, c1;
+                    sample( u0 * halfAlong, across, x0, y0, z0, c0 );
+                    sample( u1 * halfAlong, across, x1, y1, z1, c1 );
+                    float const gx0 = ax + sx * ( u0 * halfAlong ) + tx * across;
+                    float const gy0 = ay + sy * ( u0 * halfAlong ) + ty * across;
+                    float const gz0 = az + sz * ( u0 * halfAlong ) + tz * across;
+                    float const gx1 = ax + sx * ( u1 * halfAlong ) + tx * across;
+                    float const gy1 = ay + sy * ( u1 * halfAlong ) + ty * across;
+                    float const gz1 = az + sz * ( u1 * halfAlong ) + tz * across;
+                    EmitPhase3Tri( gx0, gy0, gz0, gx1, gy1, gz1, x0, y0, z0, 0.62f );
+                    EmitPhase3Tri( gx1, gy1, gz1, x1, y1, z1, x0, y0, z0, 0.62f );
+                }
+            }
+        }
+        glEnd();
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawFacePunctures()
+    {
+        // Compact sealed chips recess INTO the face (along stored surface normal) at strike point.
+        // Must not DigDep an XY hemi — that stretches into vertical scoops on cliffs.
+        if ( g.scars.empty() ) { return; }
+        constexpr int kRing = 10;
+        constexpr int kRad = 6;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( -2.5f, -4.f );
+        glBegin( GL_TRIANGLES );
+        for ( DigScar const& s : g.scars )
+        {
+            if ( s.place || s.kind != ScarKind::FacePuncture ) { continue; }
+            float const rad = (std::max)( 0.012f, s.radius );
+            float const chipMax = (std::max)( 0.012f, (std::min)( s.radius * 1.05f, s.depth ) );
+
+            float nx = s.faceNx, ny = s.faceNy, nz = s.faceNz;
+            float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+            if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+            else { CaptureFaceNormalAt( s.wx, s.wy, nx, ny, nz ); }
+
+            float t1x = -ny, t1y = nx, t1z = 0.f;
+            float t1len = std::sqrt( t1x * t1x + t1y * t1y + t1z * t1z );
+            if ( t1len < 1e-4f )
+            {
+                t1x = 0.f; t1y = -nz; t1z = ny;
+                t1len = std::sqrt( t1x * t1x + t1y * t1y + t1z * t1z );
+            }
+            if ( t1len > 1e-5f ) { t1x /= t1len; t1y /= t1len; t1z /= t1len; }
+            float t2x = ny * t1z - nz * t1y;
+            float t2y = nz * t1x - nx * t1z;
+            float t2z = nx * t1y - ny * t1x;
+
+            // Anchor at stored strike — never re-snap to grade (that left virgin skin at wrong Z).
+            float const ax = s.wx, ay = s.wy, az = s.wz;
+
+            auto sample = [&]( float ru, float rv, float& ox, float& oy, float& oz, float& chip )
+            {
+                float const r2 = ru * ru + rv * rv;
+                chip = chipMax * std::sqrt( (std::max)( 0.f, 1.f - r2 ) );
+                ox = ax + t1x * ( ru * rad ) + t2x * ( rv * rad ) - nx * chip;
+                oy = ay + t1y * ( ru * rad ) + t2y * ( rv * rad ) - ny * chip;
+                oz = az + t1z * ( ru * rad ) + t2z * ( rv * rad ) - nz * chip;
+            };
+
+            for ( int j = 0; j < kRad; ++j )
+            {
+                float const r0 = (float)j / (float)kRad;
+                float const r1 = (float)( j + 1 ) / (float)kRad;
+                for ( int i = 0; i < kRing; ++i )
+                {
+                    float const a0 = (float)i / (float)kRing * 6.2831853f;
+                    float const a1 = (float)( i + 1 ) / (float)kRing * 6.2831853f;
+                    float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
+                    float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
+                    float x00, y00, z00, c00, x10, y10, z10, c10, x01, y01, z01, c01, x11, y11, z11, c11;
+                    sample( r0 * c0, r0 * s0, x00, y00, z00, c00 );
+                    sample( r0 * c1, r0 * s1, x10, y10, z10, c10 );
+                    sample( r1 * c0, r1 * s0, x01, y01, z01, c01 );
+                    sample( r1 * c1, r1 * s1, x11, y11, z11, c11 );
+                    float const cav = 0.52f;
+                    EmitPhase3Tri( x00, y00, z00, x10, y10, z10, x01, y01, z01, cav );
+                    EmitPhase3Tri( x10, y10, z10, x11, y11, z11, x01, y01, z01, cav );
+                }
+            }
+
+            for ( int i = 0; i < kRing; ++i )
+            {
+                float const a0 = (float)i / (float)kRing * 6.2831853f;
+                float const a1 = (float)( i + 1 ) / (float)kRing * 6.2831853f;
+                float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
+                float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
+                float x0, y0, z0, ch0, x1, y1, z1, ch1;
+                sample( c0, s0, x0, y0, z0, ch0 );
+                sample( c1, s1, x1, y1, z1, ch1 );
+                float const gx0 = ax + t1x * ( c0 * rad ) + t2x * ( s0 * rad );
+                float const gy0 = ay + t1y * ( c0 * rad ) + t2y * ( s0 * rad );
+                float const gz0 = az + t1z * ( c0 * rad ) + t2z * ( s0 * rad );
+                float const gx1 = ax + t1x * ( c1 * rad ) + t2x * ( s1 * rad );
+                float const gy1 = ay + t1y * ( c1 * rad ) + t2y * ( s1 * rad );
+                float const gz1 = az + t1z * ( c1 * rad ) + t2z * ( s1 * rad );
+                EmitPhase3Tri( gx0, gy0, gz0, gx1, gy1, gz1, x0, y0, z0, 0.60f );
+                EmitPhase3Tri( gx1, gy1, gz1, x1, y1, z1, x0, y0, z0, 0.60f );
+            }
+        }
+        glEnd();
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawFoliationPlateNotches();
+    void DrawFacePunctures();
+    void DrawMatterBodies();
+    void DrawHeightfield()
+    {
+        int const ax = (int)std::floor( g.feetX );
+        int const ay = (int)std::floor( g.feetY );
+        if ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 )
+        {
+            g.terrainDirty = true;
+        }
+
+        if ( g.terrainDirty || !g.terrainList )
+        {
+            g.terrainAnchorX = ax;
+            g.terrainAnchorY = ay;
+            RebuildTerrainMesh();
+        }
+
+        // Terrain → open-cup stencil punch → place cups.
+        if ( g.terrainList ) { glCallList( g.terrainList ); }
+
+        glClear( GL_STENCIL_BUFFER_BIT );
+        glEnable( GL_STENCIL_TEST );
+        glStencilMask( 0xFF );
+        glStencilFunc( GL_ALWAYS, 1, 0xFF );
+        glStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
+        glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+        glDepthMask( GL_FALSE );
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        // Modest coplanar bias only — heavy offset feathered a roof overhang past the cup.
+        glPolygonOffset( -1.5f, -2.f );
+        DrawDigGradeFootprints();
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glDepthMask( GL_TRUE );
+
+        glStencilFunc( GL_EQUAL, 1, 0xFF );
+        glStencilMask( 0x00 );
+        glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        glDepthFunc( GL_ALWAYS );
+        DrawDigFloorPlugs();
+        DrawLiveScoopCups( true );
+
+        glStencilMask( 0xFF );
+        glDisable( GL_STENCIL_TEST );
+        glDepthFunc( GL_LEQUAL );
+        DrawLiveScoopCups( false );
+        DrawFoliationPlateNotches(); // sealed schist chips — no stencil hole through cliffs
+        DrawFacePunctures();         // sealed steep/pick soft chips — into face, not DigDep bowls
+        DrawMatterBodies();
+        glDepthFunc( GL_LESS );
+    }
+
+    void DrawMatterBodies()
+    {
+        // Explicit H2H plates — conserved geometry, not scoop cups / not inventory cubes.
+        if ( H2H::State().bodies.empty() ) { return; }
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( H2H::MatterBody const& b : H2H::State().bodies )
+        {
+            if ( b.gripped ) { continue; } // carried body drawn at hand below
+            float const ha = b.alongM * 0.5f;
+            float const hc = b.acrossM * 0.5f;
+            float const ht = b.thickM * 0.5f;
+            float nx = b.nx, ny = b.ny, nz = b.nz;
+            float nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+            if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+            else { nx = 0.f; ny = 0.f; nz = 1.f; }
+            // Orthonormal tangent frame on the plate (works on vertical walls).
+            float sx = b.strikeX, sy = b.strikeY, sz = 0.f;
+            float sN = sx * nx + sy * ny + sz * nz;
+            sx -= nx * sN; sy -= ny * sN; sz -= nz * sN;
+            float slen = std::sqrt( sx * sx + sy * sy + sz * sz );
+            if ( slen < 1e-4f )
+            {
+                sx = -ny; sy = nx; sz = 0.f;
+                slen = std::sqrt( sx * sx + sy * sy );
+            }
+            if ( slen > 1e-5f ) { sx /= slen; sy /= slen; sz /= slen; }
+            float tx = ny * sz - nz * sy;
+            float ty = nz * sx - nx * sz;
+            float tz = nx * sy - ny * sx;
+            auto corner = [&]( float a, float c, float t, float& ox, float& oy, float& oz )
+            {
+                ox = b.x + sx * a + tx * c + nx * t;
+                oy = b.y + sy * a + ty * c + ny * t;
+                oz = b.z + sz * a + tz * c + nz * t;
+            };
+            float x000, y000, z000, x100, y100, z100, x010, y010, z010, x110, y110, z110;
+            float x001, y001, z001, x101, y101, z101, x011, y011, z011, x111, y111, z111;
+            corner( -ha, -hc, -ht, x000, y000, z000 );
+            corner( +ha, -hc, -ht, x100, y100, z100 );
+            corner( -ha, +hc, -ht, x010, y010, z010 );
+            corner( +ha, +hc, -ht, x110, y110, z110 );
+            corner( -ha, -hc, +ht, x001, y001, z001 );
+            corner( +ha, -hc, +ht, x101, y101, z101 );
+            corner( -ha, +hc, +ht, x011, y011, z011 );
+            corner( +ha, +hc, +ht, x111, y111, z111 );
+            float cav = b.settled ? 0.35f : 0.55f;
+            // Broad faces (foliation planes) + thin edges.
+            EmitPhase3Tri( x001, y001, z001, x101, y101, z101, x011, y011, z011, cav );
+            EmitPhase3Tri( x101, y101, z101, x111, y111, z111, x011, y011, z011, cav );
+            EmitPhase3Tri( x000, y000, z000, x010, y010, z010, x100, y100, z100, cav + 0.15f );
+            EmitPhase3Tri( x100, y100, z100, x010, y010, z010, x110, y110, z110, cav + 0.15f );
+            EmitPhase3Tri( x000, y000, z000, x100, y100, z100, x001, y001, z001, 0.7f );
+            EmitPhase3Tri( x100, y100, z100, x101, y101, z101, x001, y001, z001, 0.7f );
+            EmitPhase3Tri( x010, y010, z010, x011, y011, z011, x110, y110, z110, 0.7f );
+            EmitPhase3Tri( x110, y110, z110, x011, y011, z011, x111, y111, z111, 0.7f );
+        }
+        glEnd();
+        // Gripped plate at hand (contact-carry, not socket snap — offset from camera).
+        if ( g.grippedBodyId != 0 )
+        {
+            for ( H2H::MatterBody const& b : H2H::State().bodies )
+            {
+                if ( b.body_id != g.grippedBodyId ) { continue; }
+                float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+                float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+                float fx = sy * cp, fy = cyw * cp, fz = sp;
+                float hx = g.camX + fx * 0.55f + cyw * 0.22f;
+                float hy = g.camY + fy * 0.55f - sy * 0.22f;
+                float hz = g.camZ + fz * 0.55f - 0.15f;
+                H2H::MatterBody draw = b;
+                draw.x = hx; draw.y = hy; draw.z = hz;
+                draw.gripped = false;
+                // Re-enter single-body draw via temporary push (simple: wire box).
+                glLineWidth( 2.f );
+                glColor3f( 0.85f, 0.88f, 0.70f );
+                float const ha = draw.alongM * 0.5f, hc = draw.acrossM * 0.5f, ht = draw.thickM * 0.5f;
+                glBegin( GL_LINE_LOOP );
+                glVertex3f( hx - ha, hy - hc, hz + ht );
+                glVertex3f( hx + ha, hy - hc, hz + ht );
+                glVertex3f( hx + ha, hy + hc, hz + ht );
+                glVertex3f( hx - ha, hy + hc, hz + ht );
+                glEnd();
+                glBegin( GL_LINE_LOOP );
+                glVertex3f( hx - ha, hy - hc, hz - ht );
+                glVertex3f( hx + ha, hy - hc, hz - ht );
+                glVertex3f( hx + ha, hy + hc, hz - ht );
+                glVertex3f( hx - ha, hy + hc, hz - ht );
+                glEnd();
+                glLineWidth( 1.f );
+                break;
+            }
+        }
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawScaleReference()
+    {
+        // Quiet 6ft marker — muted so it is never read as the dig/pick volume sphere.
+        float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy, fy = cy;
+        float rx = cy, ry = -sy;
+        float bx = g.feetX + fx * 5.5f + rx * 2.2f;
+        float by = g.feetY + fy * 5.5f + ry * 2.2f;
+        float gz = g.feetZ;
+        SampleGroundZ( bx, by, gz );
+
+        float const h = kCharHeightM;
+        float const rad = kCapsuleRadiusM * 0.65f;
+        glDisable( GL_CULL_FACE );
+        glColor3f( 0.35f, 0.38f, 0.42f );
+        glLineWidth( 1.f );
+        // vertical body (line strip cylinder proxy)
+        glBegin( GL_LINES );
+        glVertex3f( bx, by, gz );
+        glVertex3f( bx, by, gz + h );
+        // height ticks every 1 ft (~0.3048 m)
+        for ( int i = 1; i <= 6; ++i )
+        {
+            float z = gz + (float)i * 0.3048f;
+            glVertex3f( bx - rad, by, z );
+            glVertex3f( bx + rad, by, z );
+        }
+        // head ring
+        for ( int i = 0; i < 12; ++i )
+        {
+            float a0 = (float)i / 12.f * 6.2831853f;
+            float a1 = (float)( i + 1 ) / 12.f * 6.2831853f;
+            glVertex3f( bx + std::cos( a0 ) * rad, by + std::sin( a0 ) * rad, gz + h );
+            glVertex3f( bx + std::cos( a1 ) * rad, by + std::sin( a1 ) * rad, gz + h );
+        }
+        // foot ring
+        for ( int i = 0; i < 12; ++i )
+        {
+            float a0 = (float)i / 12.f * 6.2831853f;
+            float a1 = (float)( i + 1 ) / 12.f * 6.2831853f;
+            glVertex3f( bx + std::cos( a0 ) * rad, by + std::sin( a0 ) * rad, gz + 0.02f );
+            glVertex3f( bx + std::cos( a1 ) * rad, by + std::sin( a1 ) * rad, gz + 0.02f );
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void SampleAimNormal( float x, float y, float& nx, float& ny, float& nz )
+    {
+        // Heightfield normal at the click — cue rings lie in this plane (Unreal ImpactNormal).
+        constexpr float e = 0.08f;
+        float zxm = 0.f, zxp = 0.f, zym = 0.f, zyp = 0.f, zc = 0.f;
+        if ( !SampleAimSurfaceZ( x, y, zc ) ) { nx = 0.f; ny = 0.f; nz = 1.f; return; }
+        if ( !SampleAimSurfaceZ( x - e, y, zxm ) ) { zxm = zc; }
+        if ( !SampleAimSurfaceZ( x + e, y, zxp ) ) { zxp = zc; }
+        if ( !SampleAimSurfaceZ( x, y - e, zym ) ) { zym = zc; }
+        if ( !SampleAimSurfaceZ( x, y + e, zyp ) ) { zyp = zc; }
+        nx = -( zxp - zxm ) / ( 2.f * e );
+        ny = -( zyp - zym ) / ( 2.f * e );
+        nz = 1.f;
+        float const len = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( len > 1e-6f ) { nx /= len; ny /= len; nz /= len; }
+        else { nx = 0.f; ny = 0.f; nz = 1.f; }
+    }
+
+    void BasisFromNormal( float nx, float ny, float nz,
+                          float& tx, float& ty, float& tz,
+                          float& bx, float& by, float& bz )
+    {
+        // Twin of Unreal FindBestAxisVectors — orthonormal tangent frame on the hit plane.
+        float ax = 1.f, ay = 0.f, az = 0.f;
+        if ( std::fabs( nx ) > 0.9f ) { ax = 0.f; ay = 1.f; az = 0.f; }
+        tx = ay * nz - az * ny;
+        ty = az * nx - ax * nz;
+        tz = ax * ny - ay * nx;
+        float tl = std::sqrt( tx * tx + ty * ty + tz * tz );
+        if ( tl > 1e-6f ) { tx /= tl; ty /= tl; tz /= tl; }
+        else { tx = 0.f; ty = 1.f; tz = 0.f; }
+        bx = ny * tz - nz * ty;
+        by = nz * tx - nx * tz;
+        bz = nx * ty - ny * tx;
+    }
+
+    void FireActionCue( bool place, bool busy )
+    {
+        if ( !g.aimHit ) { return; }
+        g.cueT = busy ? 0.22f : 0.20f;
+        g.cueX = g.aimX;
+        g.cueY = g.aimY;
+        g.cueZ = g.aimZ;
+        SampleAimNormal( g.aimX, g.aimY, g.cueNx, g.cueNy, g.cueNz );
+        g.cuePlace = place;
+        g.cueBusy = busy;
+    }
+
+    void DrawSurfaceRing( float ox, float oy, float oz,
+                          float tx, float ty, float tz,
+                          float bx, float by, float bz,
+                          float radius, float cr, float cg, float cb, int seg )
+    {
+        glColor3f( cr, cg, cb );
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < seg; ++i )
+        {
+            float const a = (float)i / (float)seg * 6.2831853f;
+            float const ca = std::cos( a ), sa = std::sin( a );
+            glVertex3f( ox + ( tx * ca + bx * sa ) * radius,
+                        oy + ( ty * ca + by * sa ) * radius,
+                        oz + ( tz * ca + bz * sa ) * radius );
+        }
+        glEnd();
+    }
+
+    void DrawHorizontalRing( float cx, float cy, float cz, float radius, float cr, float cg, float cb, int seg )
+    {
+        DrawSurfaceRing( cx, cy, cz, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, radius, cr, cg, cb, seg );
+    }
+
+    void DrawActionCue( float dt )
+    {
+        // Twin of Unreal FsDrawImmediateTerrainCue: rings in the hit tangent plane + radial dashes.
+        if ( g.cueT <= 0.f ) { return; }
+        g.cueT = (std::max)( 0.f, g.cueT - dt );
+        float const life = g.cueBusy ? 0.22f : 0.20f;
+        float const u = (std::max)( 0.f, g.cueT / life ); // 1 → 0
+        float const fade = u * u;
+        float cr, cg, cb;
+        if ( g.cueBusy ) { cr = 1.f; cg = 0.67f; cb = 0.18f; }
+        else if ( g.cuePlace ) { cr = 0.31f; cg = 0.86f; cb = 1.f; }
+        else { cr = 0.35f; cg = 1.f; cb = 0.53f; }
+        cr *= fade; cg *= fade; cb *= fade;
+
+        float const cueR = AimDigAffect().radiusM;
+        float nx = g.cueNx, ny = g.cueNy, nz = g.cueNz;
+        float tx, ty, tz, bx, by, bz;
+        BasisFromNormal( nx, ny, nz, tx, ty, tz, bx, by, bz );
+        // Lift along normal so the splash sits on the clicked face (Unreal: ImpactPoint + N*1.5cm).
+        float const lift = 0.015f;
+        float const ox = g.cueX + nx * lift;
+        float const oy = g.cueY + ny * lift;
+        float const oz = g.cueZ + nz * lift;
+        float const expand = 1.f + ( 1.f - u ) * 0.35f;
+
+        glDisable( GL_CULL_FACE );
+        glLineWidth( 2.2f );
+        DrawSurfaceRing( ox, oy, oz, tx, ty, tz, bx, by, bz, cueR * expand, cr, cg, cb, 28 );
+        DrawSurfaceRing( ox + nx * 0.005f, oy + ny * 0.005f, oz + nz * 0.005f,
+                         tx, ty, tz, bx, by, bz, cueR * 0.52f * expand, cr, cg, cb, 20 );
+        DrawWireSphere( ox, oy, oz, 0.012f, fade, fade, fade, 8 );
+
+        // Dig radiates outward; place gathers inward — in the surface plane.
+        glBegin( GL_LINES );
+        glColor3f( cr, cg, cb );
+        for ( int i = 0; i < 6; ++i )
+        {
+            float const a = ( 6.2831853f * (float)i / 6.f ) + 0.24f;
+            float const ca = std::cos( a ), sa = std::sin( a );
+            float const dx = tx * ca + bx * sa;
+            float const dy = ty * ca + by * sa;
+            float const dz = tz * ca + bz * sa;
+            float const r0 = cueR * ( g.cuePlace ? 1.18f : 0.68f ) * expand;
+            float const r1 = cueR * ( g.cuePlace ? 0.68f : 1.18f ) * expand;
+            float const n0 = g.cuePlace ? 0.035f : 0.005f;
+            float const n1 = g.cuePlace ? 0.005f : 0.035f;
+            glVertex3f( ox + dx * r0 + nx * n0, oy + dy * r0 + ny * n0, oz + dz * r0 + nz * n0 );
+            glVertex3f( ox + dx * r1 + nx * n1, oy + dy * r1 + ny * n1, oz + dz * r1 + nz * n1 );
+        }
+        glEnd();
+        glLineWidth( 1.f );
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawAimScoop()
+    {
+        if ( !g.aimHit ) { return; }
+        glDisable( GL_CULL_FACE );
+        DigAffectSpec const affect = AimDigAffect();
+        float const affectR = affect.radiusM;
+        // Dig-volume ONLY — never draw the large contact envelope as a second sphere
+        // (players read contact r=0.18–0.28m as the pick/shovel dig volume).
+        if ( g.heldTotalG > 0 )
+        {
+            DrawWireSphere( g.aimX, g.aimY, g.aimZ, affectR, 0.95f, 0.72f, 0.28f, 24 );
+        }
+        else if ( affect.mode == DigAffectMode::FoliationPlate )
+        {
+            float fnx = 0.f, fny = 0.f, fnz = 1.f;
+            CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
+            float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+            float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            float fx = sy * cp, fy = cyw * cp, fz = sp;
+            float strikeX = 1.f, strikeY = 0.f;
+            StrikeAxesFromLook( fnx, fny, fnz, fx, fy, fz, strikeX, strikeY );
+            float const along = (std::max)( affectR * 1.8f, RockStruct::kPickOpenAlongM * 0.45f );
+            float const across = affectR;
+            glLineWidth( 2.f );
+            glColor3f( 0.75f, 0.92f, 1.f );
+            // Seam ellipse in the FACE plane (not XY flat on grade).
+            float t1x = strikeX, t1y = strikeY, t1z = 0.f;
+            float t1n = t1x * fnx + t1y * fny + t1z * fnz;
+            t1x -= fnx * t1n; t1y -= fny * t1n; t1z -= fnz * t1n;
+            float t1len = std::sqrt( t1x * t1x + t1y * t1y + t1z * t1z );
+            if ( t1len > 1e-5f ) { t1x /= t1len; t1y /= t1len; t1z /= t1len; }
+            float t2x = fny * t1z - fnz * t1y;
+            float t2y = fnz * t1x - fnx * t1z;
+            float t2z = fnx * t1y - fny * t1x;
+            float const lift = 0.008f;
+            float const ox = g.aimX + fnx * lift, oy = g.aimY + fny * lift, oz = g.aimZ + fnz * lift;
+            glBegin( GL_LINE_LOOP );
+            for ( int i = 0; i < 24; ++i )
+            {
+                float const a = (float)i * 6.2831853f / 24.f;
+                float const ca = std::cos( a ), sa = std::sin( a );
+                glVertex3f(
+                    ox + t1x * ( along * ca ) + t2x * ( across * sa ),
+                    oy + t1y * ( along * ca ) + t2y * ( across * sa ),
+                    oz + t1z * ( along * ca ) + t2z * ( across * sa ) );
+            }
+            glEnd();
+            DrawWireSphere( ox, oy, oz, affectR, 0.45f, 0.90f, 1.f, 20 );
+            glLineWidth( 1.f );
+        }
+        else
+        {
+            DrawWireSphere( g.aimX, g.aimY, g.aimZ, affectR, 0.25f, 0.95f, 0.45f, 26 );
+        }
+        glEnable( GL_CULL_FACE );
+    }
+
+    // Heightfield is a sheet: solid is "below grade". Steep cliffs need horizontal capsule tests
+    // or the camera walks through the wall (per-frame climb < maxStep skates into the mesh).
+    bool CapsuleHitsWall( float x, float y, float feetZ )
+    {
+        constexpr int kProbes = 12;
+        float const r = kCapsuleRadiusM;
+        float const bodyTop = feetZ + kEyeHeightM; // refuse walls into the POV
+        for ( int i = 0; i < kProbes; ++i )
+        {
+            float const a = ( 6.2831853f * (float)i ) / (float)kProbes;
+            float const px = x + std::cos( a ) * r;
+            float const py = y + std::sin( a ) * r;
+            float gz = feetZ;
+            if ( !SampleGroundZ( px, py, gz ) ) { continue; }
+            // Wall beside feet: grade rises into the body / eyes.
+            if ( gz > feetZ + kWallBodyClearM && gz > feetZ + 0.15f )
+            {
+                return true;
+            }
+            // Camera buried in cliff sheet.
+            if ( gz > bodyTop - 0.12f )
+            {
+                return true;
+            }
+        }
+        // Center column: eye must stay above grade (never inside the sheet).
+        float gCenter = feetZ;
+        if ( SampleGroundZ( x, y, gCenter ) && gCenter > bodyTop - 0.08f )
+        {
+            return true;
+        }
+        return false;
+    }
+
+    bool WalkStepAllowed( float fromX, float fromY, float fromZ, float toX, float toY, float& outGroundZ )
+    {
+        if ( !SampleGroundZ( toX, toY, outGroundZ ) ) { return false; }
+        float const climb = outGroundZ - fromZ;
+        float const dx = toX - fromX;
+        float const dy = toY - fromY;
+        float const horiz = std::sqrt( dx * dx + dy * dy );
+        // Up only — walking off cliffs is a downward (or airborne) step and must stay allowed.
+        if ( climb > kMaxStepM ) { return false; }
+        if ( horiz > 1e-5f && climb > 0.f && ( climb / horiz ) > kMaxWalkSlope ) { return false; }
+
+        // Capsule vs walls: test at current height when stepping down / off a ledge.
+        // Using the *lower* standZ false-positives against the cliff you just left (blocks run-off).
+        float const capsuleZ = ( climb > 0.05f ) ? outGroundZ : fromZ;
+        if ( CapsuleHitsWall( toX, toY, capsuleZ ) ) { return false; }
+        return true;
+    }
+
+    void ResolveWalkOutOfWall()
+    {
+        // If already clipped into a cliff, nudge feet toward free space (down-slope / away from high probes).
+        for ( int iter = 0; iter < 6; ++iter )
+        {
+            if ( !CapsuleHitsWall( g.feetX, g.feetY, g.feetZ ) )
+            {
+                float eyeG = g.feetZ;
+                if ( SampleGroundZ( g.feetX, g.feetY, eyeG )
+                  && eyeG <= g.feetZ + kEyeHeightM - 0.08f )
+                {
+                    return;
+                }
+            }
+            float pushX = 0.f, pushY = 0.f;
+            constexpr int kProbes = 12;
+            for ( int i = 0; i < kProbes; ++i )
+            {
+                float const a = ( 6.2831853f * (float)i ) / (float)kProbes;
+                float const cx = std::cos( a ), cy = std::sin( a );
+                float const px = g.feetX + cx * kCapsuleRadiusM;
+                float const py = g.feetY + cy * kCapsuleRadiusM;
+                float gz = g.feetZ;
+                if ( !SampleGroundZ( px, py, gz ) ) { continue; }
+                float const pen = gz - ( g.feetZ + kWallBodyClearM );
+                if ( pen > 0.f )
+                {
+                    pushX -= cx * pen;
+                    pushY -= cy * pen;
+                }
+            }
+            float eyeG = g.feetZ;
+            if ( SampleGroundZ( g.feetX, g.feetY, eyeG ) )
+            {
+                float const eyePen = eyeG - ( g.feetZ + kEyeHeightM - 0.1f );
+                if ( eyePen > 0.f )
+                {
+                    // Push opposite look-forward horizontal (back out of the face).
+                    float const ly = std::cos( g.yaw ), lx = std::sin( g.yaw );
+                    pushX -= lx * eyePen;
+                    pushY -= ly * eyePen;
+                }
+            }
+            float plen = std::sqrt( pushX * pushX + pushY * pushY );
+            if ( plen < 1e-5f ) { break; }
+            pushX /= plen; pushY /= plen;
+            g.feetX += pushX * 0.08f;
+            g.feetY += pushY * 0.08f;
+            float ground = g.feetZ;
+            if ( SampleGroundZ( g.feetX, g.feetY, ground ) )
+            {
+                g.feetZ = ground;
+                g.velZ = 0.f;
+                g.grounded = true;
+            }
+        }
+    }
+
+    void UpdateCamera( float dt )
+    {
+        // F toggles walk / free-fly
+        if ( g.keys['F'] && !g.keyToggleLatch['F'] )
+        {
+            g.walkMode = !g.walkMode;
+            g.keyToggleLatch['F'] = true;
+            if ( g.walkMode )
+            {
+                g.velZ = 0.f;
+                float ground = g.feetZ;
+                if ( SampleGroundZ( g.feetX, g.feetY, ground ) )
+                {
+                    g.feetZ = ground;
+                    g.grounded = true;
+                }
+                g.statusLine = "Phase 4 - walk (6ft)";
+            }
+            else
+            {
+                g.statusLine = "FREE CAMERA — WASD move  Q/Ctrl down  E/Space up  F walk";
+            }
+            UpdateStreamHud();
+        }
+        if ( !g.keys['F'] ) { g.keyToggleLatch['F'] = false; }
+
+        float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy, fy = cy;
+        float rx = cy, ry = -sy;
+
+        if ( g.walkMode )
+        {
+            float const speed = g.keys[VK_SHIFT] ? kSprintSpeedMps : kWalkSpeedMps;
+            float wishX = 0.f, wishY = 0.f;
+            if ( g.keys['W'] ) { wishX += fx; wishY += fy; }
+            if ( g.keys['S'] ) { wishX -= fx; wishY -= fy; }
+            if ( g.keys['A'] ) { wishX -= rx; wishY -= ry; }
+            if ( g.keys['D'] ) { wishX += rx; wishY += ry; }
+            float wlen = std::sqrt( wishX * wishX + wishY * wishY );
+            if ( wlen > 1e-5f )
+            {
+                wishX = ( wishX / wlen ) * speed * dt;
+                wishY = ( wishY / wlen ) * speed * dt;
+            }
+
+            float const fromX = g.feetX, fromY = g.feetY, fromZ = g.feetZ;
+            auto tryMove = [&]( float dx, float dy ) -> bool
+            {
+                float tx = fromX + dx, ty = fromY + dy, gz = fromZ;
+                if ( !WalkStepAllowed( fromX, fromY, fromZ, tx, ty, gz ) ) { return false; }
+                g.feetX = tx;
+                g.feetY = ty;
+                return true;
+            };
+            if ( wlen > 1e-5f )
+            {
+                // Full wish, then axis slides along walls.
+                if ( !tryMove( wishX, wishY ) )
+                {
+                    if ( !tryMove( wishX, 0.f ) )
+                    {
+                        tryMove( 0.f, wishY );
+                    }
+                }
+            }
+
+            if ( g.keys[VK_SPACE] && g.grounded )
+            {
+                g.velZ = kJumpSpeedMps;
+                g.grounded = false;
+            }
+
+            g.velZ -= kGravityMps2 * dt;
+            g.feetZ += g.velZ * dt;
+
+            float ground = g.feetZ;
+            if ( SampleGroundZ( g.feetX, g.feetY, ground ) )
+            {
+                if ( g.feetZ <= ground )
+                {
+                    g.feetZ = ground;
+                    g.velZ = 0.f;
+                    g.grounded = true;
+                }
+                else
+                {
+                    g.grounded = false;
+                }
+            }
+
+            ResolveWalkOutOfWall();
+
+            // Horizon-to-Hand loose plates.
+            H2H::StepBodies( dt, []( float x, float y, float& z ) -> bool {
+                return SampleGroundZ( x, y, z );
+            } );
+            // Carry gripped plate with the hand (contact follow).
+            if ( g.grippedBodyId != 0 )
+            {
+                float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+                float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+                float fx = sy * cp, fy = cyw * cp, fz = sp;
+                for ( H2H::MatterBody& b : H2H::State().bodies )
+                {
+                    if ( b.body_id != g.grippedBodyId ) { continue; }
+                    b.x = g.camX + fx * 0.55f + cyw * 0.22f;
+                    b.y = g.camY + fy * 0.55f - sy * 0.22f;
+                    b.z = g.camZ + fz * 0.55f - 0.15f;
+                    b.vx = b.vy = b.vz = 0.f;
+                    break;
+                }
+            }
+
+            // Camera is eyes on the 6ft body — always follows terrain while walking
+            g.camX = g.feetX;
+            g.camY = g.feetY;
+            g.camZ = g.feetZ + kEyeHeightM;
+            // Final POV clamp — never leave the eye inside the heightfield sheet.
+            {
+                float gEye = g.camZ;
+                if ( SampleGroundZ( g.camX, g.camY, gEye ) && gEye > g.camZ - 0.05f )
+                {
+                    ResolveWalkOutOfWall();
+                    g.camX = g.feetX;
+                    g.camY = g.feetY;
+                    g.camZ = g.feetZ + kEyeHeightM;
+                }
+            }
+            FollowStreamCenter();
+        }
+        else
+        {
+            // Free-fly (debug / aerial). Ctrl/Q down, E/Space up — no auto terrain stick.
+            float const speed = g.keys[VK_SHIFT] ? kFlySprintMps : kFlySpeedMps;
+            if ( g.keys['W'] ) { g.camX += fx * speed * dt; g.camY += fy * speed * dt; }
+            if ( g.keys['S'] ) { g.camX -= fx * speed * dt; g.camY -= fy * speed * dt; }
+            if ( g.keys['A'] ) { g.camX -= rx * speed * dt; g.camY -= ry * speed * dt; }
+            if ( g.keys['D'] ) { g.camX += rx * speed * dt; g.camY += ry * speed * dt; }
+            if ( g.keys['Q'] || g.keys[VK_CONTROL] ) { g.camZ -= speed * dt; }
+            if ( g.keys['E'] || g.keys[VK_SPACE] ) { g.camZ += speed * dt; }
+            g.feetX = g.camX;
+            g.feetY = g.camY;
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.grounded = false;
+            FollowStreamCenter();
+        }
+    }
+
+    void DrawCompass( float cx, float cy )
+    {
+        // Easy-read heading: yaw 0 = +Y (North). Clockwise to East (+X).
+        float deg = g.yaw * ( 180.f / 3.14159265f );
+        while ( deg < 0.f ) { deg += 360.f; }
+        while ( deg >= 360.f ) { deg -= 360.f; }
+        char const* card = "N";
+        if ( deg >= 337.5f || deg < 22.5f ) { card = "N"; }
+        else if ( deg < 67.5f ) { card = "NE"; }
+        else if ( deg < 112.5f ) { card = "E"; }
+        else if ( deg < 157.5f ) { card = "SE"; }
+        else if ( deg < 202.5f ) { card = "S"; }
+        else if ( deg < 247.5f ) { card = "SW"; }
+        else if ( deg < 292.5f ) { card = "W"; }
+        else { card = "NW"; }
+
+        float const R = 36.f;
+        glColor3f( 0.12f, 0.14f, 0.18f );
+        glBegin( GL_TRIANGLE_FAN );
+        glVertex2f( cx, cy );
+        for ( int i = 0; i <= 24; ++i )
+        {
+            float a = (float)i / 24.f * 6.2831853f;
+            glVertex2f( cx + std::cos( a ) * R, cy + std::sin( a ) * R );
+        }
+        glEnd();
+        glColor3f( 0.85f, 0.88f, 0.92f );
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < 32; ++i )
+        {
+            float a = (float)i / 32.f * 6.2831853f;
+            glVertex2f( cx + std::cos( a ) * R, cy + std::sin( a ) * R );
+        }
+        glEnd();
+
+        // Needle: tip points the way you face (screen-up = look). Fixed N mark at top of dial.
+        float rad = g.yaw; // face direction in world; dial keeps N up, needle rotates
+        // With N fixed at screen-up, needle angle from +screenY: world yaw measured from +Y,
+        // screen needle: rotate by -yaw so when yaw=0 needle points up (N).
+        float nx = std::sin( rad );
+        float ny = std::cos( rad );
+        glColor3f( 0.95f, 0.35f, 0.28f );
+        glBegin( GL_TRIANGLES );
+        glVertex2f( cx + nx * ( R - 6.f ), cy + ny * ( R - 6.f ) );
+        glVertex2f( cx - ny * 5.f - nx * 4.f, cy + nx * 5.f - ny * 4.f );
+        glVertex2f( cx + ny * 5.f - nx * 4.f, cy - nx * 5.f - ny * 4.f );
+        glEnd();
+
+        glColor3f( 1.f, 1.f, 1.f );
+        DrawHudText( cx - 4.f, cy + R + 4.f, "N" );
+        DrawHudText( cx + R + 2.f, cy - 6.f, "E" );
+        DrawHudText( cx - 4.f, cy - R - 16.f, "S" );
+        DrawHudText( cx - R - 14.f, cy - 6.f, "W" );
+
+        char hub[48];
+        std::snprintf( hub, sizeof( hub ), "%s  %.0f", card, deg );
+        DrawHudText( cx - 28.f, cy - R - 34.f, hub );
+    }
+
+    void DrawSessionClock( float x, float y )
+    {
+        DWORD now = GetTickCount();
+        if ( g.sessionStartMs == 0 ) { g.sessionStartMs = now; }
+        DWORD elapsed = now - g.sessionStartMs;
+        unsigned secs = ( elapsed / 1000u ) % 60u;
+        unsigned mins = ( elapsed / 60000u ) % 60u;
+        unsigned hours = elapsed / 3600000u;
+        char buf[64];
+        if ( hours > 0 )
+        {
+            std::snprintf( buf, sizeof( buf ), "TIME  %u:%02u:%02u", hours, mins, secs );
+        }
+        else
+        {
+            std::snprintf( buf, sizeof( buf ), "TIME  %u:%02u", mins, secs );
+        }
+        glColor3f( 0.95f, 0.97f, 0.75f );
+        DrawHudText( x, y, buf );
+    }
+
+    void Render()
+    {
+        if ( !g.glrc ) { return; }
+
+        RECT rc; GetClientRect( g.hwnd, &rc );
+        int w = (std::max)( 1, (int)rc.right );
+        int h = (std::max)( 1, (int)rc.bottom );
+        glViewport( 0, 0, w, h );
+
+        // Sky clear (gradient via clear + large back quad)
+        glClearColor( 0.45f, 0.62f, 0.88f, 1.f );
+        glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT );
+
+        glMatrixMode( GL_PROJECTION );
+        glLoadIdentity();
+        float aspect = (float)w / (float)h;
+        float fov = 60.f * 3.14159265f / 180.f;
+        float nearZ = 0.5f, farZ = 600.f;
+        float f = 1.f / std::tan( fov * 0.5f );
+        float m[16] = {
+            f / aspect, 0, 0, 0,
+            0, f, 0, 0,
+            0, 0, ( farZ + nearZ ) / ( nearZ - farZ ), -1,
+            0, 0, ( 2 * farZ * nearZ ) / ( nearZ - farZ ), 0
+        };
+        glLoadMatrixf( m );
+
+        glMatrixMode( GL_MODELVIEW );
+        glLoadIdentity();
+
+        // Camera look
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cy * cp, fz = sp;
+        // Build look-at manually (eye at cam, target = cam + forward). World Z-up.
+        float tx = g.camX + fx, ty = g.camY + fy, tz = g.camZ + fz;
+        float upx = 0, upy = 0, upz = 1;
+        float zx = g.camX - tx, zy = g.camY - ty, zz = g.camZ - tz;
+        float zl = std::sqrt( zx * zx + zy * zy + zz * zz );
+        if ( zl > 1e-6f ) { zx /= zl; zy /= zl; zz /= zl; }
+        float xx = upy * zz - upz * zy;
+        float xy = upz * zx - upx * zz;
+        float xz = upx * zy - upy * zx;
+        float xl = std::sqrt( xx * xx + xy * xy + xz * xz );
+        if ( xl > 1e-6f ) { xx /= xl; xy /= xl; xz /= xl; }
+        float yx = zy * xz - zz * xy;
+        float yy = zz * xx - zx * xz;
+        float yz = zx * xy - zy * xx;
+        float mv[16] = {
+            xx, yx, zx, 0,
+            xy, yy, zy, 0,
+            xz, yz, zz, 0,
+            -( xx * g.camX + xy * g.camY + xz * g.camZ ),
+            -( yx * g.camX + yy * g.camY + yz * g.camZ ),
+            -( zx * g.camX + zy * g.camY + zz * g.camZ ),
+            1
+        };
+        glLoadMatrixf( mv );
+
+        // Sky dome-ish backdrop (large inverted hemisphere proxy: far color quad behind)
+        glDisable( GL_DEPTH_TEST );
+        glBegin( GL_QUADS );
+        glColor3f( 0.55f, 0.72f, 0.95f );
+        float sky = 400.f;
+        glVertex3f( g.camX - sky, g.camY - sky, 120.f );
+        glVertex3f( g.camX + sky, g.camY - sky, 120.f );
+        glVertex3f( g.camX + sky, g.camY + sky, 120.f );
+        glVertex3f( g.camX - sky, g.camY + sky, 120.f );
+        glColor3f( 0.70f, 0.80f, 0.55f );
+        glVertex3f( g.camX - sky, g.camY - sky, -30.f );
+        glVertex3f( g.camX + sky, g.camY - sky, -30.f );
+        glVertex3f( g.camX + sky, g.camY + sky, -30.f );
+        glVertex3f( g.camX - sky, g.camY + sky, -30.f );
+        glEnd();
+        glEnable( GL_DEPTH_TEST );
+
+        DrawHeightfield();
+        DrawScaleReference();
+        DrawAimScoop();
+        DrawActionCue( g.frameDt );
+
+        // HUD orthographic overlay
+        glDisable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_STENCIL_TEST );
+        glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        glMatrixMode( GL_PROJECTION );
+        glLoadIdentity();
+        glOrtho( 0, w, 0, h, -1, 1 );
+        glMatrixMode( GL_MODELVIEW );
+        glLoadIdentity();
+        glColor3f( 0.95f, 0.97f, 1.f );
+
+        char line[256];
+        DrawHudText( 16, (float)h - 24, "PROVENANCE" );
+        DrawHudText( 16, (float)h - 44, "Phase 4 - Horizon-to-Hand + geography + 6ft walk" );
+        {
+            char geoLine[320];
+            H2H::EnsureReady();
+            ProvenanceGeo::EnsureReady();
+            auto surf = ProvenanceGeo::SampleSurface(
+                (double)g.feetX, (double)g.feetY,
+                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( surf.cap );
+            RockStruct::Foliation const fol = RockStruct::FoliationAt( g.feetX, g.feetY );
+            std::snprintf( geoLine, sizeof( geoLine ),
+                "%s | geo %s | cap=%s form=%s | dip=%.0f° | bodies=%d patches=%d | [G] grip",
+                H2H::kCapability,
+                ProvenanceGeo::kGeneratorId, vd.id,
+                H2H::FormOrDirt( surf.cap ).material_id,
+                fol.dipDeg,
+                (int)H2H::State().bodies.size(),
+                (int)H2H::State().patches.size() );
+            DrawHudText( 16, (float)h - 56, geoLine );
+        }
+        std::snprintf( line, sizeof( line ), "Link: %s   Engine: %s:%d", LinkLabel( g.link ), g.host.c_str(), g.port );
+        DrawHudText( 16, (float)h - 68, line );
+        DrawHudText( 16, (float)h - 88, g.statusLine.c_str() );
+        DrawSessionClock( 16, (float)h - 108 );
+
+        int yHud = h - 132;
+        size_t start = 0;
+        while ( start < g.detail.size() && yHud > 56 )
+        {
+            size_t end = g.detail.find( '\n', start );
+            if ( end == std::string::npos ) { end = g.detail.size(); }
+            std::string row = g.detail.substr( start, end - start );
+            DrawHudText( 16, (float)yHud, row.c_str() );
+            yHud -= 18;
+            start = end + 1;
+        }
+
+        // Crosshair
+        glColor3f( 1.f, 1.f, 1.f );
+        float hx = w * 0.5f, hy = h * 0.5f;
+        glBegin( GL_LINES );
+        glVertex2f( hx - 8, hy ); glVertex2f( hx - 2, hy );
+        glVertex2f( hx + 2, hy ); glVertex2f( hx + 8, hy );
+        glVertex2f( hx, hy - 8 ); glVertex2f( hx, hy - 2 );
+        glVertex2f( hx, hy + 2 ); glVertex2f( hx, hy + 8 );
+        glEnd();
+
+        DrawCompass( (float)w - 56.f, (float)h - 70.f );
+
+        glColor3f( 0.95f, 0.97f, 1.f );
+        if ( !g.walkMode )
+        {
+            glColor3f( 1.f, 0.85f, 0.35f );
+            DrawHudText( 16, 64, "FREE CAMERA  [F] back to walk" );
+            glColor3f( 0.95f, 0.97f, 1.f );
+        }
+        DrawHudText( 16, 46, "LMB dig/pick   RMB place   [G] grip/drop plate   WASD Shift Space  [F] fly  [J] journal  Tab  Esc" );
+        DrawHudText( 16, 28, "Green aim = dig   Amber aim = place (while holding)   mounds/holes = cups" );
+        DrawHudText( 16, 10, g.digestLine.c_str() );
+
+        g.uiWinW = w;
+        g.uiWinH = h;
+        if ( g.journalOpen )
+        {
+            DrawJournal();
+        }
+        DrawHotbar(); // always on — pinned tabs remain when journal is closed
+
+        glEnable( GL_DEPTH_TEST );
+
+        SwapBuffers( g.hdc );
+    }
+
+    void TickFrame()
+    {
+        DWORD now = GetTickCount();
+        float dt = 0.016f;
+        if ( g.lastFrameMs != 0 )
+        {
+            dt = (std::min)( 0.05f, ( now - g.lastFrameMs ) * 0.001f );
+        }
+        g.lastFrameMs = now;
+        g.frameDt = dt;
+
+        if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
+        {
+            PollSocket();
+        }
+        else if ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError )
+        {
+            if ( now - g.lastAttemptMs > 2000 )
+            {
+                g.lastAttemptMs = now;
+                TryConnect();
+            }
+        }
+
+        TickStreamRequests();
+        UpdateCamera( dt );
+        UpdateAim();
+        if ( ( now / 250 ) != ( ( now - (DWORD)( dt * 1000 ) ) / 250 ) )
+        {
+            UpdateStreamHud();
+        }
+        // Status receipt for smoke cert (overwritten each second)
+        static DWORD lastStatusMs = 0;
+        if ( now - lastStatusMs > 1000 )
+        {
+            lastStatusMs = now;
+            char path[MAX_PATH];
+            if ( GetTempPathA( MAX_PATH, path ) == 0 ) { /* skip */ }
+            else if ( strcat_s( path, MAX_PATH, "provenance_phase4_status.txt" ) != 0 ) { /* skip */ }
+            else
+            {
+                FILE* f = nullptr;
+                if ( fopen_s( &f, path, "w" ) == 0 && f )
+                {
+                    std::fprintf( f,
+                        "link=%s\nmode=%s\ngrounded=%d\ncells=%d\nblocks=%d/%d\ncomplete=%d\n"
+                        "feet=%.2f,%.2f,%.2f\neye=%.2f\nheld_g=%d\nheld=%s\n"
+                        "digest=%s\nplayer=%d,%d\nstatus=%s\n",
+                        LinkLabel( g.link ), g.walkMode ? "walk" : "fly", g.grounded ? 1 : 0,
+                        g.cellsLoaded, g.blocksLoaded, g.blocksWanted,
+                        g.streamComplete ? 1 : 0, g.feetX, g.feetY, g.feetZ, g.camZ,
+                        g.heldTotalG, g.heldDominant.c_str(),
+                        g.digestLine.c_str(),
+                        g.playerX, g.playerY, g.statusLine.c_str() );
+                    std::fclose( f );
+                }
+            }
+        }
+        Render();
+    }
+
+    LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
+    {
+        switch ( msg )
+        {
+            case WM_CREATE:
+                g.hwnd = hwnd;
+                if ( !InitGL( hwnd ) )
+                {
+                    MessageBoxW( hwnd, L"OpenGL init failed", L"Provenance Client", MB_ICONERROR );
+                    PostQuitMessage( 1 );
+                    return 0;
+                }
+                SetTimer( hwnd, kTimerId, 16, nullptr );
+                g.lastAttemptMs = GetTickCount();
+                g.lastFrameMs = GetTickCount();
+                TryConnect();
+                SetMouseLook( hwnd, true );
+                return 0;
+            case WM_ACTIVATE:
+                if ( LOWORD( wParam ) != WA_INACTIVE && g.mouseLook )
+                {
+                    SetMouseLook( hwnd, true );
+                }
+                return 0;
+            case WM_TIMER:
+                if ( wParam == kTimerId ) { TickFrame(); }
+                return 0;
+            case WM_SIZE:
+                return 0;
+            case WM_PAINT:
+            {
+                PAINTSTRUCT ps;
+                BeginPaint( hwnd, &ps );
+                EndPaint( hwnd, &ps );
+                Render();
+                return 0;
+            }
+            case WM_KEYDOWN:
+                if ( wParam < 256 ) { g.keys[wParam] = true; }
+                if ( wParam == VK_ESCAPE )
+                {
+                    if ( g.journalOpen )
+                    {
+                        CloseJournal();
+                        return 0;
+                    }
+                    if ( g.mouseLook )
+                    {
+                        SetMouseLook( hwnd, false );
+                    }
+                    else
+                    {
+                        PostQuitMessage( 0 );
+                    }
+                }
+                else if ( wParam == 'J' || wParam == 'j' )
+                {
+                    ToggleJournal();
+                    return 0;
+                }
+                else if ( wParam >= '1' && wParam <= '6' )
+                {
+                    g.hotbarSel = (int)( wParam - '1' );
+                    return 0;
+                }
+                else if ( wParam == VK_TAB )
+                {
+                    if ( g.journalOpen ) { return 0; }
+                    SetMouseLook( hwnd, !g.mouseLook );
+                    return 0;
+                }
+                else if ( wParam == 'G' || wParam == 'g' )
+                {
+                    TryGripMatterBody();
+                    return 0;
+                }
+                else if ( wParam == 'R' )
+                {
+                    g.lastAttemptMs = GetTickCount();
+                    TryConnect();
+                }
+                return 0;
+            case WM_KEYUP:
+                if ( wParam < 256 ) { g.keys[wParam] = false; }
+                return 0;
+            case WM_LBUTTONDOWN:
+            {
+                int mx = (int)(short)LOWORD( lParam );
+                int my = (int)(short)HIWORD( lParam );
+                RECT rc; GetClientRect( hwnd, &rc );
+                g.uiWinW = (std::max)( 1, (int)rc.right );
+                g.uiWinH = (std::max)( 1, (int)rc.bottom );
+                UpdateUiMouseFromWin( mx, my );
+                if ( TryHotbarClick( g.uiMouseX, g.uiMouseY ) ) { return 0; }
+                if ( g.journalOpen )
+                {
+                    HandleJournalClick( g.uiMouseX, g.uiMouseY, false );
+                    return 0;
+                }
+                if ( !g.mouseLook ) { SetMouseLook( hwnd, true ); }
+                TryDigHandful();
+                return 0;
+            }
+            case WM_RBUTTONDOWN:
+            {
+                int mx = (int)(short)LOWORD( lParam );
+                int my = (int)(short)HIWORD( lParam );
+                RECT rc; GetClientRect( hwnd, &rc );
+                g.uiWinW = (std::max)( 1, (int)rc.right );
+                g.uiWinH = (std::max)( 1, (int)rc.bottom );
+                UpdateUiMouseFromWin( mx, my );
+                if ( g.journalOpen )
+                {
+                    HandleJournalClick( g.uiMouseX, g.uiMouseY, true );
+                    return 0;
+                }
+                if ( !g.mouseLook ) { SetMouseLook( hwnd, true ); }
+                // Always run place path — empty hand / busy get an explicit digest (no silent no-op)
+                TryPlaceHandful();
+                return 0;
+            }
+            case WM_RBUTTONUP:
+                return 0;
+            case WM_MOUSEMOVE:
+            {
+                int mx = (int)(short)LOWORD( lParam );
+                int my = (int)(short)HIWORD( lParam );
+                RECT rc; GetClientRect( hwnd, &rc );
+                g.uiWinW = (std::max)( 1, (int)rc.right );
+                g.uiWinH = (std::max)( 1, (int)rc.bottom );
+                UpdateUiMouseFromWin( mx, my );
+                if ( g.journalOpen || !g.mouseLook )
+                {
+                    return 0;
+                }
+                {
+                    int const cx = ( rc.right - rc.left ) / 2;
+                    int const cy = ( rc.bottom - rc.top ) / 2;
+                    int dx = mx - cx;
+                    int dy = my - cy;
+                    if ( dx != 0 || dy != 0 )
+                    {
+                        g.yaw += dx * 0.005f;
+                        g.pitch -= dy * 0.005f;
+                        if ( g.pitch < -1.4f ) { g.pitch = -1.4f; }
+                        if ( g.pitch > 1.4f ) { g.pitch = 1.4f; }
+                        POINT pt = { cx, cy };
+                        ClientToScreen( hwnd, &pt );
+                        SetCursorPos( pt.x, pt.y );
+                    }
+                }
+                return 0;
+            }
+            case WM_DESTROY:
+                KillTimer( hwnd, kTimerId );
+                CloseSock();
+                ShutdownGL();
+                PostQuitMessage( 0 );
+                return 0;
+        }
+        return DefWindowProcW( hwnd, msg, wParam, lParam );
+    }
+}
+
+int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
+{
+    WSADATA wsa;
+    if ( WSAStartup( MAKEWORD( 2, 2 ), &wsa ) != 0 )
+    {
+        MessageBoxW( nullptr, L"WSAStartup failed", L"Provenance Client", MB_ICONERROR );
+        return 1;
+    }
+    g.sessionStartMs = GetTickCount();
+    InvalidateTerrainMesh(); // rebuild with seam-safe uniform subdiv
+
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW( GetCommandLineW(), &argc );
+        if ( argv )
+        {
+            if ( argc >= 2 )
+            {
+                char host[128];
+                WideCharToMultiByte( CP_UTF8, 0, argv[1], -1, host, sizeof( host ), nullptr, nullptr );
+                g.host = host;
+            }
+            if ( argc >= 3 ) { g.port = _wtoi( argv[2] ); }
+            LocalFree( argv );
+        }
+    }
+
+    WNDCLASSW wc = {};
+    wc.style = CS_OWNDC;
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = L"ProvenancePhase4Client";
+    wc.hCursor = LoadCursor( nullptr, IDC_ARROW );
+    wc.hbrBackground = (HBRUSH)GetStockObject( BLACK_BRUSH );
+    RegisterClassW( &wc );
+
+    HWND hwnd = CreateWindowExW( 0, wc.lpszClassName, L"Provenance Client - Phase 4",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800,
+        nullptr, nullptr, hInst, nullptr );
+    if ( !hwnd )
+    {
+        WSACleanup();
+        return 1;
+    }
+    ShowWindow( hwnd, nShow );
+
+    MSG msg;
+    while ( GetMessageW( &msg, nullptr, 0, 0 ) > 0 )
+    {
+        TranslateMessage( &msg );
+        DispatchMessageW( &msg );
+    }
+
+    WSACleanup();
+    return (int)msg.wParam;
+}
