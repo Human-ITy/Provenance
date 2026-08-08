@@ -29,8 +29,8 @@ Branches:
 
 - **P0–P2** done: stock build, handshake, far/streamed heightfield walk.
 - **P3** partial: standable + wall capsule; not occupancy collision.
-- **P3b voxel-form gate — open:** dig/pick cannot be “correct” until forms come from authoritative voxel occupancy / D2. Heightfield DigScar cups are interim projection only.
-- **P4 parity digests** blocked on P3b.
+- **P3b voxel-form gate — client land:** dig/pick subtract affect sphere from occupancy → D2 matter-face cavity (VisualMaterial interior); heightfield opens where matter is gone; DigScar cups/chips are flash-only. Authoritative grams still from carve digest + column reconcile.
+- **P4 parity digests** next (headless = Unreal = Esoterica receipts).
 - **P5 water** deferred.
 
 ## Dig / tunnel ruling (locked)
@@ -39,8 +39,8 @@ Branches:
 Owned mesh = projection of authoritative matter face for targeting — never authority.  
 End state: engine sphere subtract → settle → **D2 reconstructs boundary**.
 
-### Interim
-Phase 4 `Main.cpp` still uses heightfield + live scoop / face chips for bring-up. New dig work must move toward occupancy→D2 cavities, not deepen DigScar as the dig model.
+### Interim → P3b
+`Main.cpp` carves local/synthetic fill at affect radius, rebuilds interior D2 shell, retires DigScar when cavity owns the hole, demands `voxel_column` reconcile. Heightfield remains far/targeting underlay and opens pads via `SurfaceOpenedByOccupancy`.
 
 ## Launch
 

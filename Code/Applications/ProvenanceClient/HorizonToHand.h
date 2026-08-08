@@ -218,9 +218,153 @@ namespace H2H
             { 2, "wood", FabricKind::FibrousWood, 2, 0.60f, 0.40f, 0.20f, 0.30f, 0.25f,
               dens( 1800 ), 1800, LooseFamily::Branch, SupportClass::HingeWood, true, true,
               "grain_split", "stick / branch / log" },
+            // Deposit / ore — host-backed mineral bodies (not palette gems).
+            { 2, "hematite", FabricKind::Massive, 3, 0.92f, 0.90f, 0.28f, 0.48f, 0.16f,
+              dens( 7422 ), 7422, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "ore_seam_break", "dense host fragment cut by rusty ore seam" },
+            { 2, "azurite", FabricKind::Massive, 3, 0.85f, 0.78f, 0.35f, 0.42f, 0.18f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "vein_break", "host-backed blue/teal mineral vein body" },
+            { 2, "gold", FabricKind::Massive, 3, 0.88f, 0.82f, 0.22f, 0.40f, 0.12f,
+              dens( 6250 ), 6250, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "soft_metal_seam", "host fragment with irregular metallic gold seam" },
+            // Crystal / pigment — morphology + host relationship.
+            { 2, "quartz", FabricKind::Massive, 3, 0.90f, 0.86f, 0.30f, 0.45f, 0.14f,
+              dens( 5078 ), 5078, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "crystal_cleave", "point / cluster with broken matrix base" },
+            { 2, "ruby", FabricKind::Massive, 3, 0.95f, 0.94f, 0.20f, 0.50f, 0.10f,
+              dens( 5859 ), 5859, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "matrix_release", "corundum crystal embedded in basalt matrix" },
+            { 2, "amethyst", FabricKind::Massive, 3, 0.88f, 0.84f, 0.32f, 0.42f, 0.14f,
+              dens( 5078 ), 5078, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "geode_break", "rind shell + crystalline interior points" },
+            { 2, "lapis", FabricKind::Massive, 3, 0.86f, 0.80f, 0.28f, 0.45f, 0.16f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "massive_break", "opaque pigment stone, not translucent gem" },
+            { 2, "emerald", FabricKind::Massive, 3, 0.92f, 0.88f, 0.25f, 0.48f, 0.12f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::JointAttachment, true, true,
+              "matrix_release", "green crystal body seam-backed in host" },
+            // Free / detached mineral bodies — size from mineral identity, not host voxel.
+            { 2, "hematite_free", FabricKind::Massive, 3, 0.92f, 0.90f, 0.28f, 0.48f, 0.16f,
+              dens( 7422 ), 7422, LooseFamily::Block, SupportClass::None, true, true,
+              "nodule_break", "dense hematite nodule (free)" },
+            { 2, "azurite_free", FabricKind::Massive, 3, 0.85f, 0.78f, 0.35f, 0.42f, 0.18f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::None, true, true,
+              "mass_break", "azurite mineral mass (free)" },
+            { 2, "gold_free", FabricKind::Massive, 3, 0.88f, 0.70f, 0.15f, 0.35f, 0.08f,
+              dens( 9800 ), 9800, LooseFamily::Block, SupportClass::None, true, true,
+              "malleable_tear", "lobate gold nugget (free)" },
+            { 2, "quartz_free", FabricKind::Massive, 3, 0.90f, 0.86f, 0.30f, 0.45f, 0.14f,
+              dens( 5078 ), 5078, LooseFamily::Block, SupportClass::None, true, true,
+              "crystal_cleave", "free quartz crystal / cluster" },
+            { 2, "ruby_free", FabricKind::Massive, 3, 0.95f, 0.94f, 0.20f, 0.50f, 0.10f,
+              dens( 5859 ), 5859, LooseFamily::Block, SupportClass::None, true, true,
+              "crystal_break", "free corundum crystal" },
+            { 2, "amethyst_free", FabricKind::Massive, 3, 0.88f, 0.84f, 0.32f, 0.42f, 0.14f,
+              dens( 5078 ), 5078, LooseFamily::Block, SupportClass::None, true, true,
+              "crystal_cleave", "free amethyst crystal cluster" },
+            { 2, "lapis_free", FabricKind::Massive, 3, 0.86f, 0.80f, 0.28f, 0.45f, 0.16f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::None, true, true,
+              "massive_break", "free lapis massive chunk" },
+            { 2, "emerald_free", FabricKind::Massive, 3, 0.92f, 0.88f, 0.25f, 0.48f, 0.12f,
+              dens( 5469 ), 5469, LooseFamily::Block, SupportClass::None, true, true,
+              "crystal_break", "free emerald crystal" },
         };
         n = (int)( sizeof( k ) / sizeof( k[0] ) );
         return k;
+    }
+
+    // Law: deposit defines occurrence, not pickup shape. Once detached, the mineral is a free
+    // MatterBody whose geometry may span any number of voxels; size/form follow structural
+    // identity + deterministic seed — never cell boundaries or host AABB.
+    enum class FreeShapeFamily : uint8_t
+    {
+        LobateMass = 0,      // gold nugget
+        PrismaticCluster,    // quartz / amethyst points
+        StoutPrism,          // ruby / emerald corundum
+        MassiveIrregular,    // lapis / pigment stone
+        OreNodule,           // hematite
+        VeinMass,            // azurite free mass
+        Count
+    };
+
+    struct MaterialOccurrenceContract
+    {
+        char const* material_id;       // host-backed id (gallery / deposit)
+        char const* free_material_id;  // detached free body id
+        char const* host_expression;
+        char const* free_expression;
+        FreeShapeFamily free_family;
+        float free_size_min_m;
+        float free_size_max_m;         // may exceed one voxel
+        float rounding;                // 0 planar/faceted .. 1 lobate
+        float faceting;                // 0 soft .. 1 crystal faces
+        char const* seed_namespace;
+    };
+
+    inline MaterialOccurrenceContract const* OccurrenceTable( int& n )
+    {
+        static MaterialOccurrenceContract const k[] = {
+            { "hematite", "hematite_free",
+              "dense host fragment / rusty ore seam / nodule in rock",
+              "compact hematite nodule or irregular ore mass",
+              FreeShapeFamily::OreNodule, 0.06f, 0.28f, 0.45f, 0.25f, "occ.hematite" },
+            { "azurite", "azurite_free",
+              "vein-backed blue/teal mineral body on dark host",
+              "irregular azurite mineral mass",
+              FreeShapeFamily::VeinMass, 0.05f, 0.22f, 0.40f, 0.30f, "occ.azurite" },
+            { "gold", "gold_free",
+              "thin vein / bleb / seam / disseminated inclusions in host",
+              "rounded nugget / lobate metallic lump (not crystal)",
+              FreeShapeFamily::LobateMass, 0.03f, 0.35f, 0.85f, 0.05f, "occ.gold" },
+            { "quartz", "quartz_free",
+              "vein / geode lining / cluster emerging from matrix",
+              "single point / cluster / intergrown crystal mass",
+              FreeShapeFamily::PrismaticCluster, 0.05f, 0.40f, 0.05f, 0.95f, "occ.quartz" },
+            { "ruby", "ruby_free",
+              "embedded corundum in basalt / matrix inclusion",
+              "stout prism / barrel crystal / broken crystal mass",
+              FreeShapeFamily::StoutPrism, 0.04f, 0.22f, 0.15f, 0.85f, "occ.ruby" },
+            { "amethyst", "amethyst_free",
+              "geode / cavity lined with purple quartz points",
+              "free purple crystal cluster (no rind required)",
+              FreeShapeFamily::PrismaticCluster, 0.06f, 0.35f, 0.05f, 0.95f, "occ.amethyst" },
+            { "lapis", "lapis_free",
+              "massive blue body within host / contact zone",
+              "rounded massive chunk / irregular dense lump",
+              FreeShapeFamily::MassiveIrregular, 0.08f, 0.40f, 0.55f, 0.20f, "occ.lapis" },
+            { "emerald", "emerald_free",
+              "seam-backed crystal in host rock",
+              "free emerald crystal / small cluster",
+              FreeShapeFamily::StoutPrism, 0.04f, 0.20f, 0.12f, 0.88f, "occ.emerald" },
+        };
+        n = (int)( sizeof( k ) / sizeof( k[0] ) );
+        return k;
+    }
+
+    inline MaterialOccurrenceContract const* FindOccurrence( char const* id )
+    {
+        if ( !id || !id[0] ) { return nullptr; }
+        int n = 0;
+        MaterialOccurrenceContract const* t = OccurrenceTable( n );
+        for ( int i = 0; i < n; ++i )
+        {
+            if ( std::strcmp( t[i].material_id, id ) == 0 ) { return &t[i]; }
+            if ( std::strcmp( t[i].free_material_id, id ) == 0 ) { return &t[i]; }
+        }
+        return nullptr;
+    }
+
+    inline bool IsFreeBodyId( char const* id )
+    {
+        if ( !id ) { return false; }
+        int n = 0;
+        MaterialOccurrenceContract const* t = OccurrenceTable( n );
+        for ( int i = 0; i < n; ++i )
+        {
+            if ( std::strcmp( t[i].free_material_id, id ) == 0 ) { return true; }
+        }
+        return false;
     }
 
     inline MaterialFormContract const& FormOrDirt( char const* id )

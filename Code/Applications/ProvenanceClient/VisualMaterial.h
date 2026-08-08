@@ -1,6 +1,11 @@
 // ProvenanceClient — renderer visual appearance contract (not full geology doctrine).
 // Hand the client: body form, edges, fracture, merge, microrelief, wetness, texture.
 // Storage lattice / material-index tiles must never define visible shape.
+//
+// Global shape doctrine (presentation):
+//   primary body form | curvature profile | edge character |
+//   fracture grammar  | surface character | pile/detached behavior
+// Same voxel accounting underneath; each material keeps its own shape language.
 #pragma once
 
 #include <cstdint>
@@ -239,6 +244,102 @@ namespace VisualMat
               { 78, 118, 58, 108, 148, 78 },
               "vegetated soil mantle",
               "cover over dirt/loam body" },
+            { "wood", Family::Soil, BodyForm::SoftMantle, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::EarthySoft, WetnessResponse::DarkenTacky,
+              { 96, 68, 42, 128, 92, 58 },
+              "fibrous branch / stick body",
+              "linear growth fragment; not rock fracture" },
+            // Deposit / ore — CapColor for host-ish midtones; gallery paints mineral overlays.
+            { "hematite", Family::Igneous, BodyForm::DenseFlow, EdgeBehavior::DenseBlocky,
+              FractureCharacter::SharpBlocks, MergeBehavior::MassiveBody, Microrelief::HardVolcanic,
+              SurfaceTexture::DenseStony, WetnessResponse::DeepSlick,
+              { 88, 52, 44, 128, 72, 52 },
+              "ore-host fragment with rusty mineralization",
+              "dense host body; mineral seam, not a red gem" },
+            { "azurite", Family::Sedimentary, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::WeatheredPits,
+              SurfaceTexture::CoarseRocky, WetnessResponse::PatchySparkle,
+              { 48, 78, 118, 72, 112, 148 },
+              "vein-backed copper mineral body",
+              "blue/teal mineral on dark host, not generic blue rock" },
+            { "gold", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 168, 142, 58, 210, 178, 72 },
+              "soft-metal seam / bleb in host",
+              "metallic vein fragment; never crystal points" },
+            { "quartz", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 210, 208, 200, 236, 234, 228 },
+              "crystal point / cluster morphology",
+              "faceted growth from matrix base" },
+            { "ruby", Family::Igneous, BodyForm::DenseFlow, EdgeBehavior::DenseBlocky,
+              FractureCharacter::SharpBlocks, MergeBehavior::MassiveBody, Microrelief::HardVolcanic,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 168, 42, 48, 210, 68, 72 },
+              "corundum in basalt matrix",
+              "hard crystal inclusion; matrix relationship required" },
+            { "amethyst", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 118, 72, 158, 158, 98, 198 },
+              "geode rind + purple crystal interior",
+              "hollow growth fragment; shell outside, points inside" },
+            { "lapis", Family::Metamorphic, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::WeatheredPits,
+              SurfaceTexture::ChalkyStone, WetnessResponse::DampStreak,
+              { 42, 62, 132, 68, 92, 168 },
+              "opaque massive pigment stone",
+              "not translucent; host-backed pigment body" },
+            { "emerald", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 48, 138, 78, 72, 178, 98 },
+              "seam-backed green crystal body",
+              "crystal protruding from host, not freestanding gem" },
+            // Free-body aliases — same visual family, CapColor still works via exact id.
+            { "hematite_free", Family::Igneous, BodyForm::DenseFlow, EdgeBehavior::DenseBlocky,
+              FractureCharacter::SharpBlocks, MergeBehavior::MassiveBody, Microrelief::HardVolcanic,
+              SurfaceTexture::DenseStony, WetnessResponse::DeepSlick,
+              { 98, 48, 40, 138, 68, 48 },
+              "free hematite nodule", "detached ore mass" },
+            { "azurite_free", Family::Sedimentary, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::WeatheredPits,
+              SurfaceTexture::CoarseRocky, WetnessResponse::PatchySparkle,
+              { 40, 88, 148, 68, 120, 168 },
+              "free azurite mass", "detached copper mineral body" },
+            { "gold_free", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::WeatheredPits,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 198, 168, 48, 228, 198, 72 },
+              "free gold nugget", "lobate metallic body; not crystal" },
+            { "quartz_free", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 210, 208, 200, 236, 234, 228 },
+              "free quartz crystal", "prismatic cluster without required host" },
+            { "ruby_free", Family::Igneous, BodyForm::DenseFlow, EdgeBehavior::DenseBlocky,
+              FractureCharacter::SharpBlocks, MergeBehavior::MassiveBody, Microrelief::HardVolcanic,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 178, 38, 48, 220, 68, 72 },
+              "free corundum", "stout prism / barrel crystal" },
+            { "amethyst_free", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::IrregularBroken,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 118, 72, 158, 158, 98, 198 },
+              "free amethyst cluster", "purple quartz points without geode rind" },
+            { "lapis_free", Family::Metamorphic, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::WeatheredPits,
+              SurfaceTexture::ChalkyStone, WetnessResponse::DampStreak,
+              { 42, 62, 132, 68, 92, 168 },
+              "free lapis chunk", "opaque massive pigment stone" },
+            { "emerald_free", Family::Igneous, BodyForm::MassiveBlock, EdgeBehavior::BlockyJointed,
+              FractureCharacter::AngularBlocks, MergeBehavior::MassiveBody, Microrelief::CrystallineRough,
+              SurfaceTexture::HardCrystalline, WetnessResponse::CrackSpecular,
+              { 48, 138, 78, 72, 178, 98 },
+              "free emerald crystal", "detached green crystal body" },
         };
         outCount = (int)( sizeof( kDefs ) / sizeof( kDefs[0] ) );
         return kDefs;
@@ -278,7 +379,46 @@ namespace VisualMat
         b = (uint8_t)( ( (int)d.color_range.b0 + (int)d.color_range.b1 ) / 2 );
     }
 
+    // Intrinsic reflectance response — not baked directional paint.
+    // Relative + coherent for the first lit-material cut (gallery cert).
+    inline float RoughnessOf( VisualMaterialDef const& d )
+    {
+        char const* id = d.id ? d.id : "dirt";
+        if ( std::strstr( id, "gold" ) ) { return 0.22f; }
+        if ( std::strcmp( id, "quartz" ) == 0 || std::strstr( id, "quartz_" ) ) { return 0.18f; }
+        if ( std::strcmp( id, "ruby" ) == 0 || std::strstr( id, "ruby" )
+          || std::strcmp( id, "emerald" ) == 0 || std::strstr( id, "emerald" )
+          || std::strcmp( id, "amethyst" ) == 0 || std::strstr( id, "amethyst" ) )
+        {
+            return 0.16f;
+        }
+        if ( std::strcmp( id, "lapis" ) == 0 || std::strstr( id, "lapis" ) ) { return 0.55f; }
+        if ( std::strcmp( id, "mica_schist" ) == 0 ) { return 0.42f; }
+        switch ( d.surface_texture )
+        {
+        case SurfaceTexture::EarthySoft:
+        case SurfaceTexture::FineGranular: return 0.92f;
+        case SurfaceTexture::DenseSmeared: return 0.70f;
+        case SurfaceTexture::CoarseRocky:
+        case SurfaceTexture::WeatheredLayered: return 0.78f;
+        case SurfaceTexture::FinePlaty: return 0.62f;
+        case SurfaceTexture::ChalkyStone: return 0.72f;
+        case SurfaceTexture::HardCrystalline: return 0.38f;
+        case SurfaceTexture::DenseStony: return 0.55f;
+        case SurfaceTexture::MicaceousDirectional: return 0.40f;
+        default: return 0.75f;
+        }
+    }
+
+    inline float MetallicOf( VisualMaterialDef const& d )
+    {
+        char const* id = d.id ? d.id : "";
+        if ( std::strstr( id, "gold" ) ) { return 1.f; }
+        return 0.f;
+    }
+
     // Cheap face shade cue from edge/body — rocks read slightly cooler/harder; soils warmer.
+    // Prefer world lighting for brightness; keep only mild intrinsic bias if needed.
     inline float EdgeShadeBias( VisualMaterialDef const& d )
     {
         switch ( d.edge_behavior )

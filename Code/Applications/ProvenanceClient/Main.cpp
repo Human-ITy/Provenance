@@ -164,6 +164,7 @@ namespace
         int fillW = 0, fillH = 0, fillK = 0;
         GLuint cavityList = 0;
         bool hasCavity = false;
+        bool carved = false; // true only after local affect-sphere dig — never from prefetch/look/walk
     };
 
     enum class ScarKind : uint8_t
@@ -276,6 +277,21 @@ namespace
         float pendingBiteWx = 0.f, pendingBiteWy = 0.f, pendingBiteWz = 0.f;
         bool pendingBiteForward = false;
         uint64_t grippedBodyId = 0; // H2H MatterBody currently carried
+        // Gallery sample in hand (E pickup) — separate from scoop heldBite / plate grip.
+        std::string heldGalleryId;
+        int heldGallerySrc = -1; // gallery index restored on E-drop
+        float heldYaw = 0.f;     // Shift+scroll: spin about world up
+        float heldTumble = 0.f;  // Scroll: tip/roll over about hand-right (inspect faces)
+        static constexpr int kGalleryMax = 40;
+        struct GallerySample
+        {
+            char const* id = nullptr;
+            float x = 0.f, y = 0.f, z = 0.f;
+            bool present = false;
+        };
+        GallerySample gallery[kGalleryMax] = {};
+        int galleryCount = 0;
+        bool gallerySpawned = false;
         int pendingLocalScoopG = 0;
         std::string pendingLocalScoopMat;
         float pendingAffectRM = kHandfulRadiusM; // dig-volume sphere committed with the pending carve
@@ -299,6 +315,16 @@ namespace
         float camZ = 40.f;
         float yaw = 0.f;     // radians, 0 = +Y
         float pitch = -0.15f;
+
+        // Authoritative outdoor directional sun + sky ambient (world-space).
+        // Materials own base_color/roughness/metallic; sun owns brightness right now.
+        float sunAzimuth = 0.85f;     // radians from +Y toward +X
+        float sunElevation = 0.95f;   // radians above horizon (~54°)
+        float sunDirX = 0.35f, sunDirY = 0.18f, sunDirZ = 0.92f; // toward sun
+        float sunColorR = 1.f, sunColorG = 0.96f, sunColorB = 0.88f;
+        float sunIntensity = 1.05f;
+        float skyColorR = 0.55f, skyColorG = 0.62f, skyColorB = 0.78f;
+        float skyIntensity = 0.32f;
         bool keys[256] = {};
         bool keyToggleLatch[256] = {};
         bool rmbDown = false;
@@ -355,6 +381,7 @@ namespace
     void LoadIconTextures();
     void UnloadIconTextures();
     void SeedStarterBag();
+    void BagAdd( std::string const& id, int count );
     void DrawJournal();
     void DrawHotbar();
     void OpenJournal();
@@ -363,6 +390,12 @@ namespace
     void UpdateUiMouseFromWin( int winX, int winY );
     bool TryHotbarClick( float mx, float my );
     bool HandleJournalClick( float mx, float my, bool rightClick );
+    void UpdateStreamHud();
+    void UpdateAim();
+    bool TryPickupGallerySample();
+    bool DropHeldGalleryToGround();
+    void DrawHeldGallerySample();
+    void EnsureGallerySpawned();
 
     uint64_t CellKey( int x, int y )
     {
@@ -489,11 +522,25 @@ namespace
     bool SampleGroundZBase( float x, float y, float& outZ );
     bool SampleGroundZ( float x, float y, float& outZ );
     bool SampleAimSurfaceZ( float x, float y, float& outZ );
+    bool SampleOccupancyZ( float x, float y, float& outZ );
+    void PrefetchOccupancyCell( int cx, int cy );
+    void EnsureOccupancyLattice( int cx, int cy );
+    bool CarveOccupancySphere( float wx, float wy, float wz, float radiusM );
+    void RetirePresentationScarsNear( float wx, float wy, float radiusM );
+    void RebuildCavityMesh( int cx, int cy );
+    void DrawCavityMeshes();
+    bool SurfaceOpenedByOccupancy( float x, float y );
+    GLuint AllocDisplayListOutsideFonts();
+    void EmitPhase3Tri( float x0, float y0, float z0,
+        float x1, float y1, float z1,
+        float x2, float y2, float z2,
+        float cavityHint );
     void SampleAimNormal( float x, float y, float& nx, float& ny, float& nz );
     void CaptureFaceNormalAt( float x, float y, float& nx, float& ny, float& nz );
     bool IsSteepFaceAt( float x, float y );
     std::string CapAtWorld( float x, float y );
     CellSample const* GetCell( int x, int y );
+    CellSample* GetCellMutable( int x, int y );
 
     float ScarHemiAt( DigScar const& s, float x, float y )
     {
@@ -767,14 +814,13 @@ namespace
 
     float DigDepAt( float x, float y )
     {
+        // Tool scars only — occupancy must never depress the skin from walk/look/prefetch.
         float digDep = 0.f;
         float gradeZ = 0.f;
         bool haveGrade = SampleGroundZBase( x, y, gradeZ );
         for ( DigScar const& s : g.scars )
         {
             if ( s.place ) { continue; }
-            // Foliation plates / face punctures are wall chips — never sink the heightfield
-            // (hemi DigDep on steep faces stretches into vertical "scoops").
             if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
             if ( s.tunnel )
             {
@@ -822,26 +868,27 @@ namespace
         bool const keepFillZ = dest.valid && dest.hasFillZ;
         float const keepFZ = dest.fillZ;
         bool const keepEdited = dest.valid && dest.edited;
-        bool const keepOcc = dest.valid && !dest.fill.empty();
+        bool const keepCarved = dest.valid && dest.carved;
+        bool const keepCavity = dest.valid && dest.hasCavity;
+        GLuint const keepCavityList = dest.valid ? dest.cavityList : 0;
         if ( !dest.valid ) { ++g.cellsLoaded; }
         // Esoterica geography = baseline grade/cap authority (bridge optional).
         dest.grade = sample.grade;
         dest.cap = sample.cap;
         CapColor( sample.cap, dest.r, dest.g, dest.b );
         dest.valid = true;
+        // Preserve dig flags — never promote resident fill into "edited/carved" on stream refresh.
         if ( keepFillZ )
         {
             dest.hasFillZ = true;
             dest.fillZ = keepFZ;
-            dest.edited = true;
         }
-        else if ( keepEdited )
+        if ( keepEdited ) { dest.edited = true; }
+        if ( keepCarved )
         {
-            dest.edited = true;
-        }
-        if ( keepOcc || dest.hasCavity )
-        {
-            dest.edited = true;
+            dest.carved = true;
+            dest.hasCavity = keepCavity;
+            dest.cavityList = keepCavityList;
         }
     }
 
@@ -1518,7 +1565,11 @@ namespace
     {
         char d[960];
         char heldBuf[128] = "empty";
-        if ( g.heldTotalG > 0 )
+        if ( !g.heldGalleryId.empty() )
+        {
+            std::snprintf( heldBuf, sizeof( heldBuf ), "sample:%s", g.heldGalleryId.c_str() );
+        }
+        else if ( g.heldTotalG > 0 )
         {
             std::snprintf( heldBuf, sizeof( heldBuf ), "%s %dg (%.2f handfuls)",
                 g.heldDominant.empty() ? "?" : g.heldDominant.c_str(),
@@ -1703,8 +1754,12 @@ namespace
             ExtractJsonString( obj, "cap", cap );
             (void)grade;
             (void)cap;
-            // Bridge cells only mark residency; Esoterica geography owns baseline grade/cap.
-            EnsureGeoCell( cx, cy );
+            // Bridge cells only mark residency. Do NOT refresh grade on already-valid cells —
+            // that rewrote Z underfoot while walking and looked like raise/carve.
+            if ( !GetCell( cx, cy ) )
+            {
+                EnsureGeoCell( cx, cy );
+            }
         }
 
         if ( g.blocksLoaded >= g.blocksWanted ) { g.streamComplete = true; }
@@ -2076,7 +2131,12 @@ namespace
         ClearPendingScarEdit();
         // Dig cuts mounds — placed dirt can be scooped again.
         CancelPlaceScarsUnderDig( g.pendingBiteWx, g.pendingBiteWy, kHandfulRadiusM );
-        // No voxel_column fan-out — cups are DigScar presentation; column pulls stalled the next dig.
+        // P3b: demand occupancy for the bite cell so D2 cavity can replace DigScar cups.
+        PrefetchOccupancyCell( g.pendingBiteCx, g.pendingBiteCy );
+        PrefetchOccupancyCell( g.pendingBiteCx + 1, g.pendingBiteCy );
+        PrefetchOccupancyCell( g.pendingBiteCx - 1, g.pendingBiteCy );
+        PrefetchOccupancyCell( g.pendingBiteCx, g.pendingBiteCy + 1 );
+        PrefetchOccupancyCell( g.pendingBiteCx, g.pendingBiteCy - 1 );
         UpdateStreamHud();
     }
 
@@ -2225,19 +2285,1602 @@ namespace
         cell.hasCavity = false;
     }
 
+    // World → fill indices. Returns false if cell has no occupancy lattice yet.
+    bool WorldToFillIndex( float x, float y, float z, CellSample const*& cell,
+        int& c, int& r, int& k, float& crestZ )
+    {
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        cell = GetCell( cx, cy );
+        if ( !cell || cell->fill.empty() || cell->fillW <= 0 || cell->fillK <= 0 ) { return false; }
+        int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+        float const u = x - (float)cx, v = y - (float)cy;
+        c = (std::min)( w - 1, (std::max)( 0, (int)( u * (float)w ) ) );
+        r = (std::min)( h - 1, (std::max)( 0, (int)( v * (float)h ) ) );
+        crestZ = GradeToZ( cell->grade );
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const t = ( crestZ - z ) / edge; // 0 at crest, +down
+        if ( t < -0.05f ) { k = kz; return true; } // above crest = air sentinel
+        if ( t >= (float)kz ) { k = -1; return true; } // below column
+        k = kz - 1 - (int)std::floor( t );
+        if ( k < 0 ) { k = 0; }
+        if ( k >= kz ) { k = kz - 1; }
+        return true;
+    }
+
+    bool OccupancySolidAt( float x, float y, float z )
+    {
+        CellSample const* cell = nullptr;
+        int c = 0, r = 0, k = 0;
+        float crest = 0.f;
+        if ( !WorldToFillIndex( x, y, z, cell, c, r, k, crest ) ) { return false; }
+        if ( k < 0 || k >= cell->fillK ) { return false; } // air above / below
+        return FillAt( *cell, c, r, k ) >= kFillIso;
+    }
+
+    bool CellHasOccupancy( int cx, int cy )
+    {
+        CellSample const* cell = GetCell( cx, cy );
+        return cell && !cell->fill.empty() && cell->fillW > 0;
+    }
+
+    bool RayHitOccupancy( float ox, float oy, float oz,
+        float fx, float fy, float fz, float maxT,
+        float& outT, float& outX, float& outY, float& outZ )
+    {
+        // March the look ray through resident fill lattices — air → solid is the matter face.
+        float const step = (std::max)( 0.04f, g.voxelEdgeM * 0.45f );
+        bool havePrev = false;
+        bool prevSolid = false;
+        float prevT = 0.f;
+        for ( float t = 0.08f; t <= maxT; t += step )
+        {
+            float const x = ox + fx * t;
+            float const y = oy + fy * t;
+            float const z = oz + fz * t;
+            int const cx = (int)std::floor( x );
+            int const cy = (int)std::floor( y );
+            if ( !CellHasOccupancy( cx, cy ) )
+            {
+                havePrev = false;
+                continue;
+            }
+            bool const solid = OccupancySolidAt( x, y, z );
+            if ( havePrev && !prevSolid && solid )
+            {
+                // Refine air→solid crossing.
+                float t0 = prevT, t1 = t;
+                for ( int i = 0; i < 10; ++i )
+                {
+                    float const tm = 0.5f * ( t0 + t1 );
+                    if ( OccupancySolidAt( ox + fx * tm, oy + fy * tm, oz + fz * tm ) ) { t1 = tm; }
+                    else { t0 = tm; }
+                }
+                outT = t1;
+                outX = ox + fx * outT;
+                outY = oy + fy * outT;
+                outZ = oz + fz * outT;
+                return true;
+            }
+            havePrev = true;
+            prevSolid = solid;
+            prevT = t;
+        }
+        return false;
+    }
+
+    void PrefetchOccupancyCell( int cx, int cy )
+    {
+        if ( CellHasOccupancy( cx, cy ) ) { return; }
+        QueueColumn( cx, cy );
+    }
+
+    void EnsureOccupancyLattice( int cx, int cy )
+    {
+        // Local solid until voxel_column arrives — enough to carve a D2 bite immediately.
+        EnsureGeoCell( cx, cy );
+        CellSample* cell = GetCellMutable( cx, cy );
+        if ( !cell ) { return; }
+        if ( !cell->fill.empty() && cell->fillW > 0 && cell->fillK > 0 ) { return; }
+        constexpr int kW = 8, kH = 8, kZ = 32;
+        cell->fill.assign( (size_t)kW * kH * kZ, (uint8_t)kFillFull );
+        cell->fillW = kW;
+        cell->fillH = kH;
+        cell->fillK = kZ;
+        cell->hasFillZ = true;
+        cell->fillZ = GradeToZ( cell->grade );
+    }
+
+    void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v )
+    {
+        if ( cell.fill.empty() || cell.fillW <= 0 ) { return; }
+        if ( c < 0 || r < 0 || k < 0 || c >= cell.fillW || r >= cell.fillH || k >= cell.fillK ) { return; }
+        cell.fill[(size_t)k * cell.fillW * cell.fillH + r * cell.fillW + c] = v;
+    }
+
+    void RetirePresentationScarsNear( float wx, float wy, float radiusM )
+    {
+        // D2 cavity owns the hole — DigScar cups/chips are flash only.
+        float const lim = (std::max)( 0.05f, radiusM * 1.35f );
+        float const lim2 = lim * lim;
+        size_t const before = g.scars.size();
+        g.scars.erase( std::remove_if( g.scars.begin(), g.scars.end(),
+            [&]( DigScar const& s )
+            {
+                if ( s.place ) { return false; }
+                float const dx = s.wx - wx, dy = s.wy - wy;
+                return ( dx * dx + dy * dy ) <= lim2;
+            } ), g.scars.end() );
+        if ( g.scars.size() != before ) { ++g.scarGen; }
+    }
+
+    bool CarveOccupancySphere( float wx, float wy, float wz, float radiusM )
+    {
+        // P3b: subtract affect sphere from resident/synthetic fill → D2 shell = removed volume.
+        float const R = (std::max)( 0.02f, radiusM );
+        float const R2 = R * R;
+        int const x0 = (int)std::floor( wx - R - 0.05f );
+        int const x1 = (int)std::floor( wx + R + 0.05f );
+        int const y0 = (int)std::floor( wy - R - 0.05f );
+        int const y1 = (int)std::floor( wy + R + 0.05f );
+        bool any = false;
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                EnsureOccupancyLattice( cx, cy );
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+                float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+                float const crest = GradeToZ( cell->grade );
+                float const du = 1.f / (float)w, dv = 1.f / (float)h;
+                bool touched = false;
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    for ( int r = 0; r < h; ++r )
+                    {
+                        float const yc = (float)cy + ( (float)r + 0.5f ) * dv;
+                        for ( int c = 0; c < w; ++c )
+                        {
+                            float const xc = (float)cx + ( (float)c + 0.5f ) * du;
+                            float const dx = xc - wx, dy = yc - wy, dz = zc - wz;
+                            if ( dx * dx + dy * dy + dz * dz > R2 ) { continue; }
+                            if ( FillAt( *cell, c, r, k ) < kFillIso ) { continue; }
+                            SetFillAt( *cell, c, r, k, 0 );
+                            touched = true;
+                        }
+                    }
+                }
+                if ( touched )
+                {
+                    cell->edited = true;
+                    cell->carved = true;
+                    float occZ = crest;
+                    SampleOccupancyZ( (float)cx + 0.5f, (float)cy + 0.5f, occZ );
+                    cell->fillZ = (std::min)( cell->hasFillZ ? cell->fillZ : crest, occZ );
+                    cell->hasFillZ = true;
+                    RebuildCavityMesh( cx, cy );
+                    any = true;
+                }
+            }
+        }
+        if ( any )
+        {
+            RetirePresentationScarsNear( wx, wy, R );
+            InvalidateTerrainMesh();
+            int const bx = (int)std::floor( wx );
+            int const by = (int)std::floor( wy );
+            for ( int dy = -1; dy <= 1; ++dy )
+            {
+                for ( int dx = -1; dx <= 1; ++dx )
+                {
+                    QueueColumn( bx + dx, by + dy );
+                }
+            }
+        }
+        return any;
+    }
+
+    bool SurfaceOpenedByOccupancy( float x, float y )
+    {
+        // Open heightfield only where WE carved — virgin column air must not punch walk/look paths.
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        CellSample const* cell = GetCell( cx, cy );
+        if ( !cell || !cell->carved || !cell->hasCavity || cell->fill.empty() ) { return false; }
+        float const crest = GradeToZ( cell->grade );
+        float occZ = crest;
+        if ( !SampleOccupancyZ( x, y, occZ ) ) { return false; }
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        return ( crest - occZ ) > edge * 0.35f;
+    }
+
     void RebuildCavityMesh( int cx, int cy )
     {
-        // REJECTED: whole-cell solid|air voxel quads turned digs into Minecraft slabs.
-        // Keep fill stored for a future boundary-only remesh; never punch grade or draw cubes.
+        // P3b: interior solid|air faces only — exterior lattice faces read as Minecraft cubes.
         auto it = g.cells.find( CellKey( cx, cy ) );
         if ( it == g.cells.end() ) { return; }
-        DestroyCavityList( it->second );
-        (void)cx; (void)cy;
+        CellSample& cell = it->second;
+        DestroyCavityList( cell );
+        if ( !cell.carved || cell.fill.empty() || cell.fillW <= 0 || cell.fillK <= 0 ) { return; }
+
+        int const w = cell.fillW, h = cell.fillH, kz = cell.fillK;
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const crest = GradeToZ( cell.grade );
+        float const x0 = (float)cx, y0 = (float)cy;
+        float const du = 1.f / (float)w, dv = 1.f / (float)h;
+
+        auto solid = [&]( int c, int r, int k ) -> bool
+        {
+            if ( c < 0 || r < 0 || k < 0 || c >= w || r >= h || k >= kz ) { return false; }
+            return FillAt( cell, c, r, k ) >= kFillIso;
+        };
+        auto airInside = [&]( int nc, int nr, int nk ) -> bool
+        {
+            if ( nc < 0 || nr < 0 || nk < 0 || nc >= w || nr >= h || nk >= kz ) { return false; }
+            return !solid( nc, nr, nk );
+        };
+        auto cornerZ = [&]( int k, bool topFace ) -> float
+        {
+            return topFace ? ( crest - (float)( kz - 1 - k ) * edge )
+                           : ( crest - (float)( kz - k ) * edge );
+        };
+
+        GLuint list = AllocDisplayListOutsideFonts();
+        if ( !list ) { return; }
+        cell.cavityList = list;
+        glNewList( list, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+        int faces = 0;
+        for ( int k = 0; k < kz; ++k )
+        {
+            for ( int r = 0; r < h; ++r )
+            {
+                for ( int c = 0; c < w; ++c )
+                {
+                    if ( !solid( c, r, k ) ) { continue; }
+                    float const px0 = x0 + (float)c * du;
+                    float const px1 = x0 + (float)( c + 1 ) * du;
+                    float const py0 = y0 + (float)r * dv;
+                    float const py1 = y0 + (float)( r + 1 ) * dv;
+                    float const zLo = cornerZ( k, false );
+                    float const zHi = cornerZ( k, true );
+                    auto emit = [&]( float ax, float ay, float az, float bx, float by, float bz,
+                        float cx2, float cy2, float cz2 )
+                    {
+                        EmitPhase3Tri( ax, ay, az, bx, by, bz, cx2, cy2, cz2, 0.62f );
+                        ++faces;
+                    };
+                    if ( airInside( c - 1, r, k ) )
+                    {
+                        emit( px0, py0, zLo, px0, py1, zLo, px0, py0, zHi );
+                        emit( px0, py1, zLo, px0, py1, zHi, px0, py0, zHi );
+                    }
+                    if ( airInside( c + 1, r, k ) )
+                    {
+                        emit( px1, py0, zLo, px1, py0, zHi, px1, py1, zLo );
+                        emit( px1, py1, zLo, px1, py0, zHi, px1, py1, zHi );
+                    }
+                    if ( airInside( c, r - 1, k ) )
+                    {
+                        emit( px0, py0, zLo, px0, py0, zHi, px1, py0, zLo );
+                        emit( px1, py0, zLo, px0, py0, zHi, px1, py0, zHi );
+                    }
+                    if ( airInside( c, r + 1, k ) )
+                    {
+                        emit( px0, py1, zLo, px1, py1, zLo, px0, py1, zHi );
+                        emit( px1, py1, zLo, px1, py1, zHi, px0, py1, zHi );
+                    }
+                    if ( airInside( c, r, k - 1 ) )
+                    {
+                        emit( px0, py0, zLo, px1, py0, zLo, px0, py1, zLo );
+                        emit( px1, py0, zLo, px1, py1, zLo, px0, py1, zLo );
+                    }
+                    if ( airInside( c, r, k + 1 ) )
+                    {
+                        emit( px0, py0, zHi, px0, py1, zHi, px1, py0, zHi );
+                        emit( px1, py0, zHi, px0, py1, zHi, px1, py1, zHi );
+                    }
+                }
+            }
+        }
+        glEnd();
+        glEndList();
+        cell.hasCavity = faces > 0;
+        if ( !cell.hasCavity )
+        {
+            DestroyCavityList( cell );
+        }
+        else
+        {
+            RetirePresentationScarsNear( (float)cx + 0.5f, (float)cy + 0.5f, 0.85f );
+        }
     }
 
     void DrawCavityMeshes()
     {
-        // Disabled — presentation is DigScar scoop cups only.
+        // Occupancy boundary shells — carved digs only (never virgin look/walk prefetch).
+        static bool sClearedBogus = false;
+        bool clearedBogus = false;
+        for ( auto& kv : g.cells )
+        {
+            CellSample& cell = kv.second;
+            if ( !cell.carved )
+            {
+                if ( cell.hasCavity || cell.cavityList )
+                {
+                    DestroyCavityList( cell );
+                    clearedBogus = true;
+                }
+                continue;
+            }
+            if ( cell.hasCavity && cell.cavityList )
+            {
+                glCallList( cell.cavityList );
+            }
+        }
+        if ( clearedBogus && !sClearedBogus )
+        {
+            sClearedBogus = true;
+            InvalidateTerrainMesh();
+        }
+    }
+
+    // ---- World sun + lit-material path (gallery, held, terrain share one frame) ----
+    // Material = base color / roughness / metallic. Lighting = sun + sky on world normals.
+    float gLitM[12] = { // local→world: 3 columns + translation
+        1.f, 0.f, 0.f,
+        0.f, 1.f, 0.f,
+        0.f, 0.f, 1.f,
+        0.f, 0.f, 0.f
+    };
+    float gLitRough = 0.75f;
+    float gLitMetal = 0.f;
+
+    void LitSetIdentity()
+    {
+        gLitM[0] = 1.f; gLitM[1] = 0.f; gLitM[2] = 0.f;
+        gLitM[3] = 0.f; gLitM[4] = 1.f; gLitM[5] = 0.f;
+        gLitM[6] = 0.f; gLitM[7] = 0.f; gLitM[8] = 1.f;
+        gLitM[9] = 0.f; gLitM[10] = 0.f; gLitM[11] = 0.f;
+    }
+
+    void LitSetFromMatrix( float const M[16] )
+    {
+        gLitM[0] = M[0]; gLitM[1] = M[1]; gLitM[2] = M[2];
+        gLitM[3] = M[4]; gLitM[4] = M[5]; gLitM[5] = M[6];
+        gLitM[6] = M[8]; gLitM[7] = M[9]; gLitM[8] = M[10];
+        gLitM[9] = M[12]; gLitM[10] = M[13]; gLitM[11] = M[14];
+    }
+
+    void LitBindMaterial( char const* id )
+    {
+        VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( id );
+        gLitRough = VisualMat::RoughnessOf( vd );
+        gLitMetal = VisualMat::MetallicOf( vd );
+    }
+
+    void UpdateWorldSun()
+    {
+        float const ce = std::cos( g.sunElevation );
+        float const se = std::sin( g.sunElevation );
+        float const ca = std::cos( g.sunAzimuth );
+        float const sa = std::sin( g.sunAzimuth );
+        g.sunDirX = sa * ce;
+        g.sunDirY = ca * ce;
+        g.sunDirZ = se;
+        float const len = std::sqrt( g.sunDirX * g.sunDirX + g.sunDirY * g.sunDirY + g.sunDirZ * g.sunDirZ );
+        if ( len > 1e-6f ) { g.sunDirX /= len; g.sunDirY /= len; g.sunDirZ /= len; }
+        // Soft warm sun when low; cooler when high.
+        float const day = (std::max)( 0.15f, se );
+        g.sunColorR = 1.f;
+        g.sunColorG = 0.92f + 0.06f * day;
+        g.sunColorB = 0.78f + 0.18f * day;
+        g.sunIntensity = 0.55f + 0.70f * day;
+        g.skyIntensity = 0.22f + 0.16f * day;
+    }
+
+    void ShadeLitFace( float nx, float ny, float nz,
+        float px, float py, float pz,
+        float br, float bg, float bb,
+        float& outR, float& outG, float& outB )
+    {
+        // Local → world normal / position (held samples use tumble matrix).
+        float wx = gLitM[0] * nx + gLitM[3] * ny + gLitM[6] * nz;
+        float wy = gLitM[1] * nx + gLitM[4] * ny + gLitM[7] * nz;
+        float wz = gLitM[2] * nx + gLitM[5] * ny + gLitM[8] * nz;
+        float nl = std::sqrt( wx * wx + wy * wy + wz * wz );
+        if ( nl > 1e-6f ) { wx /= nl; wy /= nl; wz /= nl; }
+
+        float ox = gLitM[0] * px + gLitM[3] * py + gLitM[6] * pz + gLitM[9];
+        float oy = gLitM[1] * px + gLitM[4] * py + gLitM[7] * pz + gLitM[10];
+        float oz = gLitM[2] * px + gLitM[5] * py + gLitM[8] * pz + gLitM[11];
+
+        float vx = g.camX - ox, vy = g.camY - oy, vz = g.camZ - oz;
+        float vl = std::sqrt( vx * vx + vy * vy + vz * vz );
+        if ( vl > 1e-6f ) { vx /= vl; vy /= vl; vz /= vl; }
+
+        float const ndotl = (std::max)( 0.f, wx * g.sunDirX + wy * g.sunDirY + wz * g.sunDirZ );
+        float hx = g.sunDirX + vx, hy = g.sunDirY + vy, hz = g.sunDirZ + vz;
+        float hl = std::sqrt( hx * hx + hy * hy + hz * hz );
+        if ( hl > 1e-6f ) { hx /= hl; hy /= hl; hz /= hl; }
+        float const ndoth = (std::max)( 0.f, wx * hx + wy * hy + wz * hz );
+
+        float const rough = (std::min)( 1.f, (std::max)( 0.04f, gLitRough ) );
+        float const metal = (std::min)( 1.f, (std::max)( 0.f, gLitMetal ) );
+        float const shin = std::pow( 2.f, ( 1.f - rough ) * 8.f ); // ~2..256
+        float const specAmp = ( 0.04f + ( 1.f - rough ) * 0.55f ) * ( 0.25f + metal * 1.1f );
+        float const spec = std::pow( ndoth, shin ) * specAmp * g.sunIntensity;
+
+        float const ambR = g.skyColorR * g.skyIntensity;
+        float const ambG = g.skyColorG * g.skyIntensity;
+        float const ambB = g.skyColorB * g.skyIntensity;
+        float const difScale = ( 1.f - metal * 0.82f ) * g.sunIntensity * ndotl;
+        float const difR = g.sunColorR * difScale;
+        float const difG = g.sunColorG * difScale;
+        float const difB = g.sunColorB * difScale;
+
+        // Metals: specular tinted by base; dielectrics: white-ish specular.
+        float const sr = ( 1.f - metal ) + br * metal;
+        float const sg = ( 1.f - metal ) + bg * metal;
+        float const sb = ( 1.f - metal ) + bb * metal;
+
+        outR = br * ( ambR + difR ) + sr * spec * g.sunColorR;
+        outG = bg * ( ambG + difG ) + sg * spec * g.sunColorG;
+        outB = bb * ( ambB + difB ) + sb * spec * g.sunColorB;
+        outR = (std::min)( 1.15f, (std::max)( 0.f, outR ) );
+        outG = (std::min)( 1.15f, (std::max)( 0.f, outG ) );
+        outB = (std::min)( 1.15f, (std::max)( 0.f, outB ) );
+    }
+
+    void EmitGalleryTri( float x0, float y0, float z0,
+        float x1, float y1, float z1,
+        float x2, float y2, float z2,
+        float cr, float cg, float cb )
+    {
+        float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+        float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        float const nl = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( nl > 1e-6f ) { nx /= nl; ny /= nl; nz /= nl; }
+        float const px = ( x0 + x1 + x2 ) * ( 1.f / 3.f );
+        float const py = ( y0 + y1 + y2 ) * ( 1.f / 3.f );
+        float const pz = ( z0 + z1 + z2 ) * ( 1.f / 3.f );
+        float outR = 0.f, outG = 0.f, outB = 0.f;
+        ShadeLitFace( nx, ny, nz, px, py, pz,
+            cr / 255.f, cg / 255.f, cb / 255.f, outR, outG, outB );
+        glColor3f( outR, outG, outB );
+        glVertex3f( x0, y0, z0 );
+        glVertex3f( x1, y1, z1 );
+        glVertex3f( x2, y2, z2 );
+    }
+
+    void EmitGalleryBox( float cx, float cy, float cz,
+        float hx, float hy, float hz, float cr, float cg, float cb )
+    {
+        float const x0 = cx - hx, x1 = cx + hx;
+        float const y0 = cy - hy, y1 = cy + hy;
+        float const z0 = cz - hz, z1 = cz + hz;
+        EmitGalleryTri( x0, y0, z1, x1, y0, z1, x0, y1, z1, cr, cg, cb );
+        EmitGalleryTri( x1, y0, z1, x1, y1, z1, x0, y1, z1, cr, cg, cb );
+        EmitGalleryTri( x0, y0, z0, x0, y1, z0, x1, y0, z0, cr, cg, cb );
+        EmitGalleryTri( x1, y0, z0, x0, y1, z0, x1, y1, z0, cr, cg, cb );
+        EmitGalleryTri( x0, y1, z0, x0, y1, z1, x1, y1, z0, cr, cg, cb );
+        EmitGalleryTri( x1, y1, z0, x0, y1, z1, x1, y1, z1, cr, cg, cb );
+        EmitGalleryTri( x0, y0, z0, x1, y0, z0, x0, y0, z1, cr, cg, cb );
+        EmitGalleryTri( x1, y0, z0, x1, y0, z1, x0, y0, z1, cr, cg, cb );
+        EmitGalleryTri( x1, y0, z0, x1, y1, z0, x1, y0, z1, cr, cg, cb );
+        EmitGalleryTri( x1, y1, z0, x1, y1, z1, x1, y0, z1, cr, cg, cb );
+        EmitGalleryTri( x0, y0, z0, x0, y0, z1, x0, y1, z0, cr, cg, cb );
+        EmitGalleryTri( x0, y1, z0, x0, y0, z1, x0, y1, z1, cr, cg, cb );
+    }
+
+    // Forward decls — shape helpers used by all EmitForm* (defined below).
+    void EmitEllipsoidPatch( float cx, float cy, float cz,
+        float rx, float ry, float rz,
+        float phi0, float phi1, int slices, int stacks,
+        float wobbleAmp, float cr, float cg, float cb );
+    void EmitSolidLump( float cx, float cy, float cz,
+        float rx, float ry, float rz, float wobbleAmp,
+        float cr, float cg, float cb );
+    void EmitIrregularHostMass( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb );
+    void EmitTaperedBranch( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb );
+
+    // --- Hand-scale material bodies (gallery + future carve chips) ---
+    // Doctrine: same voxel accounting; each material has its own shape language
+    // (body / curvature / edge / fracture / surface / detached behavior).
+    // Solids must be CLOSED (no open ellipsoid poles → no holes / sheared tops).
+
+    void EmitFormWoodBranch( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitTaperedBranch( cx, cy, cz, S, cr, cg, cb );
+    }
+
+    void EmitFormBasaltShard( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        // Dense compact angular mass — heavy silhouette, sharp-to-chipped edges.
+        EmitIrregularHostMass( cx, cy, cz, S, cr, cg, cb );
+        EmitGalleryTri(
+            cx - S * 0.05f, cy - S * 0.20f, cz + S * 0.10f,
+            cx + S * 0.28f, cy - S * 0.02f, cz + S * 0.22f,
+            cx + S * 0.02f, cy + S * 0.18f, cz + S * 0.18f,
+            cr * 0.7f, cg * 0.7f, cb * 0.75f );
+    }
+
+    void EmitFormSchistPlate( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        // Warped solid foliation plates (closed lentils) — layered, not open rings.
+        for ( int L = 0; L < 4; ++L )
+        {
+            float const z = cz - S * 0.06f + (float)L * S * 0.04f;
+            float const warp = S * ( 0.04f + 0.02f * (float)( L % 2 ) );
+            float const shrink = 1.f - (float)L * 0.05f;
+            EmitSolidLump( cx + warp, cy, z,
+                S * 0.50f * shrink, S * 0.36f * shrink, S * 0.028f, 0.10f,
+                cr * ( 0.85f + 0.04f * L ), cg * ( 0.85f + 0.04f * L ), cb * ( 0.8f + 0.04f * L ) );
+        }
+        EmitSolidLump( cx + S * 0.30f, cy - S * 0.12f, cz + S * 0.05f,
+            S * 0.12f, S * 0.09f, S * 0.018f, 0.08f, cr * 0.95f, cg * 0.95f, cb * 0.9f );
+    }
+
+    void EmitFormGraniteChunk( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitIrregularHostMass( cx, cy, cz, S * 1.05f, cr, cg, cb );
+        EmitGalleryTri(
+            cx - S * 0.12f, cy - S * 0.18f, cz + S * 0.14f,
+            cx + S * 0.24f, cy - S * 0.04f, cz + S * 0.22f,
+            cx + S * 0.04f, cy + S * 0.16f, cz + S * 0.20f,
+            cr * 0.75f, cg * 0.75f, cb * 0.78f );
+        EmitSolidLump( cx + S * 0.08f, cy + S * 0.10f, cz + S * 0.14f,
+            S * 0.12f, S * 0.10f, S * 0.08f, 0.12f, cr * 1.05f, cg * 1.02f, cb * 1.0f );
+    }
+
+    void EmitFormLimestoneBlock( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.40f, S * 0.38f, S * 0.34f, 0.10f, cr, cg, cb );
+        EmitGalleryTri(
+            cx - S * 0.22f, cy - S * 0.20f, cz + S * 0.08f,
+            cx + S * 0.24f, cy - S * 0.18f, cz + S * 0.10f,
+            cx + S * 0.20f, cy + S * 0.22f, cz + S * 0.12f,
+            cr * 0.88f, cg * 0.88f, cb * 0.85f );
+        EmitSolidLump( cx + S * 0.16f, cy + S * 0.08f, cz + S * 0.10f,
+            S * 0.08f, S * 0.07f, S * 0.05f, 0.15f, cr * 0.8f, cg * 0.8f, cb * 0.78f );
+        EmitSolidLump( cx - S * 0.28f, cy - S * 0.22f, cz - S * 0.08f,
+            S * 0.10f, S * 0.09f, S * 0.08f, 0.12f, cr * 0.75f, cg * 0.75f, cb * 0.72f );
+    }
+
+    void EmitFormShaleFlake( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        for ( int L = 0; L < 3; ++L )
+        {
+            float const z = cz + (float)L * S * 0.022f;
+            float const w = S * ( 0.03f * (float)( ( L % 2 ) * 2 - 1 ) );
+            EmitSolidLump( cx + w, cy, z, S * 0.48f, S * 0.32f, S * 0.016f, 0.06f,
+                cr * ( 0.9f - 0.05f * L ), cg * ( 0.9f - 0.05f * L ), cb * ( 0.88f - 0.05f * L ) );
+        }
+        EmitSolidLump( cx - S * 0.26f, cy + S * 0.12f, cz + S * 0.02f,
+            S * 0.10f, S * 0.07f, S * 0.012f, 0.08f, cr * 0.7f, cg * 0.7f, cb * 0.68f );
+    }
+
+    void EmitFormSandstoneSlab( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.48f, S * 0.34f, S * 0.11f, 0.06f, cr, cg, cb );
+        EmitSolidLump( cx, cy, cz + S * 0.07f, S * 0.44f, S * 0.31f, S * 0.03f, 0.04f,
+            cr * 0.9f, cg * 0.88f, cb * 0.82f );
+        EmitSolidLump( cx + S * 0.26f, cy - S * 0.06f, cz - S * 0.02f,
+            S * 0.11f, S * 0.12f, S * 0.07f, 0.10f, cr * 0.85f, cg * 0.82f, cb * 0.78f );
+    }
+
+    void EmitFormStoneChip( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitIrregularHostMass( cx, cy, cz, S * 0.85f, cr, cg, cb );
+        EmitGalleryTri(
+            cx - S * 0.10f, cy - S * 0.16f, cz + S * 0.08f,
+            cx + S * 0.20f, cy - S * 0.02f, cz + S * 0.16f,
+            cx - S * 0.02f, cy + S * 0.14f, cz + S * 0.14f,
+            cr * 0.8f, cg * 0.8f, cb * 0.8f );
+    }
+
+    void EmitFormClayLump( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.40f, S * 0.34f, S * 0.26f, 0.08f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.12f, cy + S * 0.06f, cz + S * 0.06f,
+            S * 0.26f, S * 0.22f, S * 0.14f, 0.06f, cr * 0.95f, cg * 0.9f, cb * 0.88f );
+        EmitSolidLump( cx - S * 0.16f, cy - S * 0.04f, cz + S * 0.02f,
+            S * 0.16f, S * 0.20f, S * 0.10f, 0.12f, cr * 0.88f, cg * 0.82f, cb * 0.78f );
+    }
+
+    void EmitFormGravelPile( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        float const z0 = cz - S * 0.10f;
+        struct P { float x, y, z, r; float shade; };
+        P pebs[] = {
+            { -0.18f, -0.12f, 0.00f, 0.14f, 1.00f }, { 0.16f, -0.08f, 0.02f, 0.12f, 0.90f },
+            { -0.02f,  0.16f, 0.04f, 0.13f, 0.85f }, { 0.08f,  0.02f, 0.14f, 0.14f, 1.05f },
+            { -0.22f,  0.05f, 0.10f, 0.10f, 0.75f }, { 0.22f,  0.14f, 0.08f, 0.10f, 0.95f },
+            {  0.04f, -0.18f, 0.08f, 0.09f, 0.88f },
+        };
+        for ( P const& p : pebs )
+        {
+            EmitSolidLump( cx + p.x * S, cy + p.y * S, z0 + p.z * S,
+                p.r * S, p.r * S * 0.9f, p.r * S * 0.85f, 0.14f,
+                cr * p.shade, cg * p.shade, cb * p.shade );
+        }
+    }
+
+    void EmitFormSandMound( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz - S * 0.02f, S * 0.46f, S * 0.46f, S * 0.20f, 0.04f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.04f, cy - S * 0.02f, cz + S * 0.10f,
+            S * 0.26f, S * 0.26f, S * 0.12f, 0.03f, cr * 1.02f, cg * 1.0f, cb * 0.98f );
+        EmitSolidLump( cx - S * 0.04f, cy + S * 0.03f, cz + S * 0.18f,
+            S * 0.12f, S * 0.12f, S * 0.06f, 0.03f, cr * 1.05f, cg * 1.02f, cb * 1.0f );
+    }
+
+    void EmitFormLoamClod( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.32f, S * 0.30f, S * 0.28f, 0.18f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.14f, cy - S * 0.08f, cz + S * 0.05f,
+            S * 0.16f, S * 0.14f, S * 0.13f, 0.16f, cr * 0.95f, cg * 0.95f, cb * 0.92f );
+        EmitSolidLump( cx - S * 0.12f, cy + S * 0.10f, cz - S * 0.03f,
+            S * 0.13f, S * 0.12f, S * 0.11f, 0.14f, cr * 0.9f, cg * 0.9f, cb * 0.88f );
+    }
+
+    void EmitFormDirtClod( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.28f, S * 0.26f, S * 0.24f, 0.22f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.16f, cy + S * 0.06f, cz - S * 0.02f,
+            S * 0.11f, S * 0.12f, S * 0.09f, 0.20f, cr * 0.85f, cg * 0.85f, cb * 0.8f );
+        EmitSolidLump( cx - S * 0.14f, cy - S * 0.10f, cz + S * 0.06f,
+            S * 0.09f, S * 0.08f, S * 0.08f, 0.18f, cr * 0.9f, cg * 0.88f, cb * 0.82f );
+        EmitSolidLump( cx - S * 0.02f, cy + S * 0.14f, cz + S * 0.10f,
+            S * 0.06f, S * 0.06f, S * 0.05f, 0.16f, cr * 0.75f, cg * 0.72f, cb * 0.68f );
+    }
+
+    void EmitFormGrassSod( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        // Solid dirt body + solid grass skin — no open poles / no doughnut hole.
+        float const dirtR = 95.f, dirtG = 78.f, dirtB = 52.f;
+        EmitSolidLump( cx, cy, cz - S * 0.02f, S * 0.40f, S * 0.36f, S * 0.16f, 0.12f,
+            dirtR, dirtG, dirtB );
+        EmitSolidLump( cx, cy, cz + S * 0.10f, S * 0.38f, S * 0.34f, S * 0.10f, 0.14f,
+            cr, cg, cb );
+        EmitSolidLump( cx - S * 0.10f, cy + S * 0.08f, cz + S * 0.16f,
+            S * 0.09f, S * 0.08f, S * 0.07f, 0.12f, cr * 0.85f, cg * 1.05f, cb * 0.7f );
+        EmitSolidLump( cx + S * 0.12f, cy - S * 0.06f, cz + S * 0.17f,
+            S * 0.08f, S * 0.09f, S * 0.06f, 0.12f, cr * 0.9f, cg * 1.08f, cb * 0.75f );
+    }
+
+    // ---- Shape grammar helpers: planes where crystal habit makes planes; curves elsewhere ----
+
+    void EmitEllipsoidPatch( float cx, float cy, float cz,
+        float rx, float ry, float rz,
+        float phi0, float phi1, int slices, int stacks,
+        float wobbleAmp, float cr, float cg, float cb )
+    {
+        // Low-poly curved body. Radial wobble breaks the perfect egg into a natural lump.
+        // NOTE: open phi ranges leave polar holes — prefer EmitSolidLump for closed masses.
+        constexpr float kPi = 3.14159265f;
+        for ( int i = 0; i < stacks; ++i )
+        {
+            float const t0 = (float)i / (float)stacks;
+            float const t1 = (float)( i + 1 ) / (float)stacks;
+            float const p0 = phi0 + ( phi1 - phi0 ) * t0;
+            float const p1 = phi0 + ( phi1 - phi0 ) * t1;
+            float const sp0 = std::sin( p0 ), cp0 = std::cos( p0 );
+            float const sp1 = std::sin( p1 ), cp1 = std::cos( p1 );
+            for ( int j = 0; j < slices; ++j )
+            {
+                float const u0 = (float)j / (float)slices;
+                float const u1 = (float)( j + 1 ) / (float)slices;
+                float const th0 = u0 * kPi * 2.f;
+                float const th1 = u1 * kPi * 2.f;
+                auto sample = [&]( float phiS, float phiC, float th, float& ox, float& oy, float& oz )
+                {
+                    float wob = 1.f + wobbleAmp * ( 0.55f * std::sin( 3.f * th + 1.2f )
+                        + 0.35f * std::cos( 5.f * th - 0.7f )
+                        + 0.25f * std::sin( 2.f * phiS * 3.f ) );
+                    ox = cx + rx * wob * phiS * std::cos( th );
+                    oy = cy + ry * wob * phiS * std::sin( th );
+                    oz = cz + rz * wob * phiC;
+                };
+                float ax, ay, az, bx, by, bz, dx, dy, dz, ex, ey, ez;
+                sample( sp0, cp0, th0, ax, ay, az );
+                sample( sp0, cp0, th1, bx, by, bz );
+                sample( sp1, cp1, th0, dx, dy, dz );
+                sample( sp1, cp1, th1, ex, ey, ez );
+                // Outward winding: (a,d,b)/(b,d,e) — old (a,b,d) inverted normals (upside-down lit).
+                EmitGalleryTri( ax, ay, az, dx, dy, dz, bx, by, bz, cr, cg, cb );
+                EmitGalleryTri( bx, by, bz, dx, dy, dz, ex, ey, ez, cr, cg, cb );
+            }
+        }
+    }
+
+    void EmitSolidLump( float cx, float cy, float cz,
+        float rx, float ry, float rz, float wobbleAmp,
+        float cr, float cg, float cb )
+    {
+        // Closed solid — full sphere latitude range so tops/bottoms are not sheared open.
+        constexpr float kPi = 3.14159265f;
+        int const slices = 10;
+        int const stacks = 7;
+        EmitEllipsoidPatch( cx, cy, cz, rx, ry, rz, 0.f, kPi, slices, stacks, wobbleAmp, cr, cg, cb );
+    }
+
+    void EmitIrregularHostMass( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb )
+    {
+        // Naturally broken / chipped rock lump — CLOSED convex body + local chips.
+        EmitSolidLump( cx, cy, cz, S * 0.38f, S * 0.34f, S * 0.30f, 0.16f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.16f, cy - S * 0.08f, cz + S * 0.02f,
+            S * 0.16f, S * 0.14f, S * 0.13f, 0.18f, cr * 0.88f, cg * 0.88f, cb * 0.9f );
+        EmitSolidLump( cx - S * 0.12f, cy + S * 0.10f, cz - S * 0.05f,
+            S * 0.14f, S * 0.12f, S * 0.11f, 0.16f, cr * 0.78f, cg * 0.78f, cb * 0.82f );
+        EmitGalleryTri(
+            cx - S * 0.08f, cy - S * 0.22f, cz + S * 0.12f,
+            cx + S * 0.20f, cy - S * 0.10f, cz + S * 0.18f,
+            cx + S * 0.02f, cy + S * 0.08f, cz + S * 0.22f,
+            cr * 0.7f, cg * 0.7f, cb * 0.75f );
+    }
+
+    void EmitTaperedBranch( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb )
+    {
+        // Continuous tapered oval tube along +Y — connected rings, not floating beads.
+        constexpr float kPi = 3.14159265f;
+        constexpr int kSeg = 8;
+        constexpr int kRad = 8;
+        float const L = S * 1.55f;
+        float ring[kSeg + 1][kRad][3];
+        for ( int i = 0; i <= kSeg; ++i )
+        {
+            float const t = (float)i / (float)kSeg;
+            float const y = cy - L * 0.5f + t * L;
+            float const radX = S * ( 0.20f - t * 0.09f );
+            float const radZ = radX * 0.82f;
+            float const bend = S * 0.07f * std::sin( t * 3.1f );
+            for ( int j = 0; j < kRad; ++j )
+            {
+                float const a = (float)j * ( kPi * 2.f / (float)kRad );
+                ring[i][j][0] = cx + bend + std::cos( a ) * radX;
+                ring[i][j][1] = y;
+                ring[i][j][2] = cz + bend * 0.35f + std::sin( a ) * radZ;
+            }
+        }
+        for ( int i = 0; i < kSeg; ++i )
+        {
+            for ( int j = 0; j < kRad; ++j )
+            {
+                int const j1 = ( j + 1 ) % kRad;
+                EmitGalleryTri(
+                    ring[i][j][0], ring[i][j][1], ring[i][j][2],
+                    ring[i][j1][0], ring[i][j1][1], ring[i][j1][2],
+                    ring[i + 1][j][0], ring[i + 1][j][1], ring[i + 1][j][2],
+                    cr, cg, cb );
+                EmitGalleryTri(
+                    ring[i][j1][0], ring[i][j1][1], ring[i][j1][2],
+                    ring[i + 1][j1][0], ring[i + 1][j1][1], ring[i + 1][j1][2],
+                    ring[i + 1][j][0], ring[i + 1][j][1], ring[i + 1][j][2],
+                    cr * 0.95f, cg * 0.95f, cb * 0.95f );
+            }
+        }
+        // End caps (closed solid)
+        float const y0 = ring[0][0][1];
+        float const y1 = ring[kSeg][0][1];
+        float cx0 = 0.f, cz0 = 0.f, cx1 = 0.f, cz1 = 0.f;
+        for ( int j = 0; j < kRad; ++j )
+        {
+            cx0 += ring[0][j][0]; cz0 += ring[0][j][2];
+            cx1 += ring[kSeg][j][0]; cz1 += ring[kSeg][j][2];
+        }
+        cx0 /= (float)kRad; cz0 /= (float)kRad;
+        cx1 /= (float)kRad; cz1 /= (float)kRad;
+        for ( int j = 0; j < kRad; ++j )
+        {
+            int const j1 = ( j + 1 ) % kRad;
+            EmitGalleryTri( cx0, y0, cz0,
+                ring[0][j1][0], ring[0][j1][1], ring[0][j1][2],
+                ring[0][j][0], ring[0][j][1], ring[0][j][2],
+                cr * 0.7f, cg * 0.65f, cb * 0.55f );
+            EmitGalleryTri( cx1, y1, cz1,
+                ring[kSeg][j][0], ring[kSeg][j][1], ring[kSeg][j][2],
+                ring[kSeg][j1][0], ring[kSeg][j1][1], ring[kSeg][j1][2],
+                cr * 0.75f, cg * 0.7f, cb * 0.6f );
+        }
+        // Splinter chip near fat end
+        EmitSolidLump( cx - S * 0.06f, cy - L * 0.42f, cz + S * 0.04f,
+            S * 0.08f, S * 0.06f, S * 0.10f, 0.1f, cr * 0.65f, cg * 0.6f, cb * 0.5f );
+    }
+
+    void EmitCrystalHexPoint( float bx, float by, float bz,
+        float dx, float dy, float dz,
+        float radius, float prismLen, float tipLen,
+        float cr, float cg, float cb, bool brokenTip )
+    {
+        // Hexagonal prism + pyramidal termination (quartz habit). Tiltable growth axis.
+        float len = std::sqrt( dx * dx + dy * dy + dz * dz );
+        if ( len < 1e-5f ) { dx = 0.f; dy = 0.f; dz = 1.f; len = 1.f; }
+        dx /= len; dy /= len; dz /= len;
+
+        float ax = 0.f, ay = 0.f, az = 0.f;
+        if ( std::fabs( dz ) < 0.9f ) { ax = dy; ay = -dx; az = 0.f; }
+        else { ax = 1.f; ay = 0.f; az = 0.f; }
+        float al = std::sqrt( ax * ax + ay * ay + az * az );
+        ax /= al; ay /= al; az /= al;
+        float ux = dy * az - dz * ay;
+        float uy = dz * ax - dx * az;
+        float uz = dx * ay - dy * ax;
+        // (ux,uy,uz) x (dx,dy,dz) should recover (ax..) — use ax,ay,az and ux,uy,uz as ring basis
+        float vx = ay * dz - az * dy;
+        float vy = az * dx - ax * dz;
+        float vz = ax * dy - ay * dx;
+        // Prefer orthonormal: u = ax, v = cross(d, u)
+        ux = ax; uy = ay; uz = az;
+        vx = dy * uz - dz * uy;
+        vy = dz * ux - dx * uz;
+        vz = dx * uy - dy * ux;
+        float vl = std::sqrt( vx * vx + vy * vy + vz * vz );
+        if ( vl > 1e-6f ) { vx /= vl; vy /= vl; vz /= vl; }
+
+        constexpr float kPi = 3.14159265f;
+        float base[6][3], mid[6][3];
+        for ( int i = 0; i < 6; ++i )
+        {
+            float const ang = (float)i * ( kPi / 3.f ) + 0.15f;
+            float const c = std::cos( ang ), s = std::sin( ang );
+            float const rx = ( ux * c + vx * s ) * radius;
+            float const ry = ( uy * c + vy * s ) * radius;
+            float const rz = ( uz * c + vz * s ) * radius;
+            base[i][0] = bx + rx;
+            base[i][1] = by + ry;
+            base[i][2] = bz + rz;
+            mid[i][0] = bx + dx * prismLen + rx * 0.92f;
+            mid[i][1] = by + dy * prismLen + ry * 0.92f;
+            mid[i][2] = bz + dz * prismLen + rz * 0.92f;
+        }
+        // Prism sides
+        for ( int i = 0; i < 6; ++i )
+        {
+            int const j = ( i + 1 ) % 6;
+            EmitGalleryTri( base[i][0], base[i][1], base[i][2],
+                base[j][0], base[j][1], base[j][2],
+                mid[i][0], mid[i][1], mid[i][2], cr, cg, cb );
+            EmitGalleryTri( base[j][0], base[j][1], base[j][2],
+                mid[j][0], mid[j][1], mid[j][2],
+                mid[i][0], mid[i][1], mid[i][2], cr * 0.95f, cg * 0.95f, cb * 0.95f );
+        }
+        // Base cap (broken attachment to matrix)
+        float const bcx = bx - dx * radius * 0.15f;
+        float const bcy = by - dy * radius * 0.15f;
+        float const bcz = bz - dz * radius * 0.15f;
+        for ( int i = 0; i < 6; ++i )
+        {
+            int const j = ( i + 1 ) % 6;
+            EmitGalleryTri( bcx, bcy, bcz,
+                base[j][0], base[j][1], base[j][2],
+                base[i][0], base[i][1], base[i][2],
+                cr * 0.55f, cg * 0.55f, cb * 0.55f );
+        }
+        if ( brokenTip )
+        {
+            // Truncated tip — flat cleavage face
+            float tipR = radius * 0.45f;
+            float const tx = bx + dx * ( prismLen + tipLen * 0.45f );
+            float const ty = by + dy * ( prismLen + tipLen * 0.45f );
+            float const tz = bz + dz * ( prismLen + tipLen * 0.45f );
+            float tip[6][3];
+            for ( int i = 0; i < 6; ++i )
+            {
+                float const ang = (float)i * ( kPi / 3.f ) + 0.15f;
+                float const c = std::cos( ang ), s = std::sin( ang );
+                tip[i][0] = tx + ( ux * c + vx * s ) * tipR;
+                tip[i][1] = ty + ( uy * c + vy * s ) * tipR;
+                tip[i][2] = tz + ( uz * c + vz * s ) * tipR;
+                EmitGalleryTri( mid[i][0], mid[i][1], mid[i][2],
+                    mid[( i + 1 ) % 6][0], mid[( i + 1 ) % 6][1], mid[( i + 1 ) % 6][2],
+                    tip[i][0], tip[i][1], tip[i][2], cr * 1.05f, cg * 1.05f, cb * 1.05f );
+            }
+            for ( int i = 0; i < 6; ++i )
+            {
+                int const j = ( i + 1 ) % 6;
+                EmitGalleryTri( tx, ty, tz, tip[j][0], tip[j][1], tip[j][2], tip[i][0], tip[i][1], tip[i][2],
+                    cr * 1.1f, cg * 1.1f, cb * 1.1f );
+            }
+        }
+        else
+        {
+            float const axp = bx + dx * ( prismLen + tipLen );
+            float const ayp = by + dy * ( prismLen + tipLen );
+            float const azp = bz + dz * ( prismLen + tipLen );
+            for ( int i = 0; i < 6; ++i )
+            {
+                int const j = ( i + 1 ) % 6;
+                EmitGalleryTri( mid[i][0], mid[i][1], mid[i][2],
+                    mid[j][0], mid[j][1], mid[j][2],
+                    axp, ayp, azp, cr * 1.12f, cg * 1.12f, cb * 1.12f );
+            }
+        }
+    }
+
+    void EmitCorundumBarrel( float bx, float by, float bz,
+        float dx, float dy, float dz,
+        float radius, float height,
+        float cr, float cg, float cb )
+    {
+        // Stout hex barrel with beveled tip — chunky embedded corundum, not a thin spire.
+        EmitCrystalHexPoint( bx, by, bz, dx, dy, dz,
+            radius, height * 0.62f, height * 0.28f, cr, cg, cb, false );
+        // Mid bulge ring (barrel read)
+        float len = std::sqrt( dx * dx + dy * dy + dz * dz );
+        if ( len < 1e-5f ) { return; }
+        dx /= len; dy /= len; dz /= len;
+        float const mx = bx + dx * height * 0.32f;
+        float const my = by + dy * height * 0.32f;
+        float const mz = bz + dz * height * 0.32f;
+        EmitEllipsoidPatch( mx, my, mz, radius * 1.15f, radius * 1.15f, height * 0.18f,
+            0.f, 3.14159265f, 6, 4, 0.05f, cr * 0.95f, cg * 0.9f, cb * 0.9f );
+    }
+
+    void EmitFormHematiteOre( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        // Dense host fragment cut by rusty ore seam / nodule — not a red cube.
+        float const hR = 58.f, hG = 56.f, hB = 60.f;
+        float const oR = 148.f, oG = 62.f, oB = 42.f;
+        EmitIrregularHostMass( cx, cy, cz, S, hR, hG, hB );
+        EmitSolidLump( cx - S * 0.02f, cy + S * 0.04f, cz + S * 0.08f,
+            S * 0.30f, S * 0.08f, S * 0.09f, 0.06f, oR, oG, oB );
+        EmitSolidLump( cx + S * 0.10f, cy - S * 0.12f, cz + S * 0.14f,
+            S * 0.11f, S * 0.10f, S * 0.10f, 0.08f, oR * 1.1f, oG * 0.9f, oB * 0.85f );
+    }
+
+    void EmitFormAzuriteVein( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const hR = 62.f, hG = 60.f, hB = 58.f;
+        float const aR = 42.f, aG = 92.f, aB = 168.f;
+        float const tR = 38.f, tG = 138.f, tB = 132.f;
+        EmitIrregularHostMass( cx - S * 0.06f, cy, cz, S * 0.95f, hR, hG, hB );
+        EmitSolidLump( cx + S * 0.16f, cy - S * 0.02f, cz + S * 0.08f,
+            S * 0.13f, S * 0.20f, S * 0.11f, 0.10f, aR, aG, aB );
+        EmitSolidLump( cx + S * 0.08f, cy + S * 0.14f, cz + S * 0.14f,
+            S * 0.11f, S * 0.09f, S * 0.09f, 0.08f, tR, tG, tB );
+    }
+
+    void EmitFormGoldSeam( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const hR = 72.f, hG = 70.f, hB = 68.f;
+        float const gR = 212.f, gG = 178.f, gB = 58.f;
+        EmitIrregularHostMass( cx, cy, cz, S, hR, hG, hB );
+        EmitSolidLump( cx + S * 0.02f, cy + S * 0.04f, cz + S * 0.06f,
+            S * 0.28f, S * 0.06f, S * 0.07f, 0.06f, gR, gG, gB );
+        EmitSolidLump( cx + S * 0.14f, cy - S * 0.08f, cz + S * 0.12f,
+            S * 0.09f, S * 0.07f, S * 0.07f, 0.08f, gR * 1.05f, gG * 1.02f, gB * 0.9f );
+    }
+
+    void EmitFormQuartzCluster( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb )
+    {
+        // Shape law: clustered prismatic points on irregular matrix — not stacked cubes.
+        float const mR = 92.f, mG = 86.f, mB = 78.f;
+        EmitSolidLump( cx, cy, cz - S * 0.06f, S * 0.30f, S * 0.26f, S * 0.14f, 0.16f, mR, mG, mB );
+        EmitSolidLump( cx + S * 0.12f, cy - S * 0.06f, cz - S * 0.04f,
+            S * 0.13f, S * 0.11f, S * 0.09f, 0.14f, mR * 0.85f, mG * 0.85f, mB * 0.88f );
+
+        // 1 dominant + companions, tilted, uneven heights; one broken tip
+        EmitCrystalHexPoint( cx - S * 0.02f, cy - S * 0.02f, cz + S * 0.02f,
+            0.08f, -0.05f, 1.f, S * 0.085f, S * 0.42f, S * 0.22f, cr, cg, cb, false );
+        EmitCrystalHexPoint( cx - S * 0.14f, cy + S * 0.08f, cz + S * 0.00f,
+            -0.25f, 0.18f, 0.95f, S * 0.055f, S * 0.28f, S * 0.16f,
+            cr * 0.95f, cg * 0.95f, cb * 0.98f, false );
+        EmitCrystalHexPoint( cx + S * 0.12f, cy + S * 0.06f, cz + S * 0.01f,
+            0.28f, 0.12f, 0.92f, S * 0.05f, S * 0.24f, S * 0.14f,
+            cr * 1.02f, cg * 1.02f, cb * 1.0f, true );
+        EmitCrystalHexPoint( cx + S * 0.06f, cy - S * 0.14f, cz - S * 0.01f,
+            0.12f, -0.32f, 0.9f, S * 0.045f, S * 0.20f, S * 0.12f,
+            cr * 0.9f, cg * 0.9f, cb * 0.95f, false );
+        EmitCrystalHexPoint( cx - S * 0.08f, cy - S * 0.12f, cz + S * 0.00f,
+            -0.1f, -0.2f, 0.95f, S * 0.038f, S * 0.16f, S * 0.10f,
+            cr * 1.05f, cg * 1.05f, cb * 1.02f, false );
+    }
+
+    void EmitFormRubyInBasalt( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        // Shape law: dark host fracture exposing stout embedded corundum — not red cubes on a black cube.
+        float const bR = 46.f, bG = 48.f, bB = 52.f;
+        float const rR = 188.f, rG = 38.f, rB = 46.f;
+        EmitIrregularHostMass( cx - S * 0.04f, cy, cz - S * 0.02f, S * 1.05f, bR, bG, bB );
+
+        // Broken-open face: planar fracture where crystal is exposed from within
+        EmitGalleryTri(
+            cx - S * 0.05f, cy - S * 0.18f, cz + S * 0.06f,
+            cx + S * 0.28f, cy - S * 0.02f, cz + S * 0.16f,
+            cx + S * 0.06f, cy + S * 0.22f, cz + S * 0.14f,
+            bR * 0.7f, bG * 0.7f, bB * 0.75f );
+        EmitGalleryTri(
+            cx - S * 0.05f, cy - S * 0.18f, cz + S * 0.06f,
+            cx + S * 0.06f, cy + S * 0.22f, cz + S * 0.14f,
+            cx - S * 0.18f, cy + S * 0.06f, cz + S * 0.10f,
+            bR * 0.65f, bG * 0.65f, bB * 0.7f );
+
+        // Dominant barrel crystal emerging from fracture (thick, legible)
+        EmitCorundumBarrel( cx + S * 0.02f, cy - S * 0.02f, cz + S * 0.02f,
+            0.15f, 0.08f, 1.f, S * 0.11f, S * 0.48f, rR, rG, rB );
+        // Smaller satellites still embedded / half-buried
+        EmitCorundumBarrel( cx - S * 0.14f, cy + S * 0.10f, cz - S * 0.02f,
+            -0.2f, 0.25f, 0.9f, S * 0.07f, S * 0.28f, rR * 0.92f, rG * 0.85f, rB * 0.88f );
+        EmitCorundumBarrel( cx + S * 0.16f, cy + S * 0.12f, cz + S * 0.00f,
+            0.35f, 0.15f, 0.85f, S * 0.055f, S * 0.22f, rR * 1.05f, rG * 0.8f, rB * 0.85f );
+    }
+
+    void EmitFormAmethystGeode( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        // Closed rind body + darker pocket dent on -Y + crystals facing out (no open-pole shell).
+        float const rindR = 70.f, rindG = 66.f, rindB = 62.f;
+        float const pR = 132.f, pG = 78.f, pB = 182.f;
+        EmitSolidLump( cx, cy + S * 0.04f, cz, S * 0.42f, S * 0.38f, S * 0.36f, 0.12f,
+            rindR, rindG, rindB );
+        EmitSolidLump( cx, cy - S * 0.14f, cz, S * 0.28f, S * 0.16f, S * 0.24f, 0.08f,
+            rindR * 0.45f, rindG * 0.42f, rindB * 0.48f ); // pocket cue
+        EmitSolidLump( cx - S * 0.18f, cy - S * 0.10f, cz + S * 0.04f,
+            S * 0.12f, S * 0.10f, S * 0.11f, 0.1f, rindR * 0.9f, rindG * 0.9f, rindB * 0.92f );
+        EmitSolidLump( cx + S * 0.16f, cy - S * 0.10f, cz - S * 0.02f,
+            S * 0.11f, S * 0.09f, S * 0.10f, 0.1f, rindR * 0.85f, rindG * 0.85f, rindB * 0.88f );
+
+        struct Pt { float x, y, z, dx, dy, dz, r, h; bool brk; };
+        Pt pts[] = {
+            { cx - S * 0.08f, cy - S * 0.06f, cz - S * 0.02f, -0.1f, -0.85f, 0.25f, S * 0.045f, S * 0.22f, false },
+            { cx + S * 0.08f, cy - S * 0.04f, cz + S * 0.02f, 0.15f, -0.9f, 0.2f, S * 0.05f, S * 0.26f, false },
+            { cx + S * 0.00f, cy - S * 0.02f, cz + S * 0.08f, 0.05f, -0.8f, 0.35f, S * 0.042f, S * 0.20f, true },
+            { cx - S * 0.04f, cy - S * 0.05f, cz - S * 0.08f, -0.05f, -0.75f, 0.15f, S * 0.038f, S * 0.18f, false },
+            { cx + S * 0.12f, cy - S * 0.08f, cz - S * 0.04f, 0.2f, -0.85f, 0.1f, S * 0.04f, S * 0.19f, false },
+            { cx - S * 0.12f, cy - S * 0.04f, cz + S * 0.06f, -0.2f, -0.8f, 0.3f, S * 0.036f, S * 0.16f, false },
+        };
+        for ( Pt const& p : pts )
+        {
+            EmitCrystalHexPoint( p.x, p.y, p.z, p.dx, p.dy, p.dz,
+                p.r, p.h * 0.65f, p.h * 0.35f, pR, pG, pB, p.brk );
+        }
+    }
+
+    void EmitFormGoldNugget( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.28f, S * 0.22f, S * 0.18f, 0.24f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.14f, cy - S * 0.04f, cz + S * 0.02f,
+            S * 0.14f, S * 0.12f, S * 0.10f, 0.20f, cr * 1.05f, cg * 1.02f, cb * 0.9f );
+        EmitSolidLump( cx - S * 0.10f, cy + S * 0.08f, cz - S * 0.02f,
+            S * 0.12f, S * 0.10f, S * 0.09f, 0.18f, cr * 0.92f, cg * 0.88f, cb * 0.75f );
+    }
+
+    void EmitFormQuartzFree( float cx, float cy, float cz, float S,
+        float cr, float cg, float cb )
+    {
+        // Free quartz cluster — no host pedestal required.
+        EmitCrystalHexPoint( cx, cy, cz - S * 0.02f, 0.05f, -0.05f, 1.f,
+            S * 0.09f, S * 0.38f, S * 0.20f, cr, cg, cb, false );
+        EmitCrystalHexPoint( cx - S * 0.12f, cy + S * 0.06f, cz - S * 0.04f,
+            -0.3f, 0.15f, 0.9f, S * 0.055f, S * 0.26f, S * 0.14f,
+            cr * 0.95f, cg * 0.95f, cb * 0.98f, false );
+        EmitCrystalHexPoint( cx + S * 0.10f, cy - S * 0.08f, cz - S * 0.02f,
+            0.25f, -0.2f, 0.92f, S * 0.05f, S * 0.22f, S * 0.12f,
+            cr * 1.02f, cg * 1.02f, cb * 1.0f, true );
+        EmitCrystalHexPoint( cx + S * 0.04f, cy + S * 0.12f, cz - S * 0.06f,
+            0.1f, 0.3f, 0.9f, S * 0.04f, S * 0.18f, S * 0.10f,
+            cr * 0.9f, cg * 0.9f, cb * 0.95f, false );
+    }
+
+    void EmitFormRubyFree( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const rR = 188.f, rG = 38.f, rB = 46.f;
+        EmitCorundumBarrel( cx, cy, cz - S * 0.04f, 0.08f, 0.05f, 1.f,
+            S * 0.12f, S * 0.52f, rR, rG, rB );
+        EmitCorundumBarrel( cx - S * 0.12f, cy + S * 0.06f, cz - S * 0.06f,
+            -0.25f, 0.2f, 0.9f, S * 0.07f, S * 0.28f, rR * 0.92f, rG * 0.85f, rB * 0.88f );
+    }
+
+    void EmitFormAmethystFree( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const pR = 132.f, pG = 78.f, pB = 182.f;
+        EmitCrystalHexPoint( cx, cy, cz - S * 0.02f, 0.05f, -0.05f, 1.f,
+            S * 0.08f, S * 0.34f, S * 0.18f, pR, pG, pB, false );
+        EmitCrystalHexPoint( cx - S * 0.10f, cy + S * 0.08f, cz - S * 0.04f,
+            -0.28f, 0.2f, 0.9f, S * 0.05f, S * 0.24f, S * 0.13f, pR * 1.05f, pG * 0.95f, pB, false );
+        EmitCrystalHexPoint( cx + S * 0.10f, cy - S * 0.06f, cz - S * 0.02f,
+            0.25f, -0.18f, 0.92f, S * 0.048f, S * 0.22f, S * 0.12f, pR, pG * 0.9f, pB * 1.05f, true );
+        EmitCrystalHexPoint( cx + S * 0.02f, cy + S * 0.12f, cz - S * 0.06f,
+            0.08f, 0.28f, 0.9f, S * 0.04f, S * 0.16f, S * 0.10f, pR * 0.9f, pG * 0.85f, pB * 1.1f, false );
+    }
+
+    void EmitFormHematiteNodule( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const hR = 88.f, hG = 48.f, hB = 42.f;
+        EmitSolidLump( cx, cy, cz, S * 0.32f, S * 0.28f, S * 0.26f, 0.16f, hR, hG, hB );
+        EmitSolidLump( cx + S * 0.12f, cy - S * 0.06f, cz + S * 0.06f,
+            S * 0.14f, S * 0.12f, S * 0.12f, 0.12f, hR * 1.15f, hG * 0.85f, hB * 0.75f );
+    }
+
+    void EmitFormAzuriteMass( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const aR = 42.f, aG = 92.f, aB = 168.f;
+        float const tR = 38.f, tG = 138.f, tB = 132.f;
+        EmitSolidLump( cx, cy, cz, S * 0.30f, S * 0.26f, S * 0.24f, 0.14f, aR, aG, aB );
+        EmitSolidLump( cx + S * 0.10f, cy + S * 0.08f, cz + S * 0.06f,
+            S * 0.14f, S * 0.12f, S * 0.12f, 0.10f, tR, tG, tB );
+    }
+
+    void EmitFormEmeraldFree( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        float const eR = 48.f, eG = 158.f, eB = 78.f;
+        EmitCrystalHexPoint( cx, cy, cz - S * 0.02f, 0.1f, 0.05f, 1.f,
+            S * 0.08f, S * 0.36f, S * 0.18f, eR, eG, eB, false );
+        EmitCrystalHexPoint( cx - S * 0.08f, cy + S * 0.06f, cz - S * 0.04f,
+            -0.2f, 0.2f, 0.9f, S * 0.05f, S * 0.20f, S * 0.11f,
+            eR * 0.9f, eG * 0.95f, eB * 0.85f, true );
+    }
+
+    void EmitFormLapisMass( float cx, float cy, float cz, float S, float cr, float cg, float cb )
+    {
+        EmitSolidLump( cx, cy, cz, S * 0.40f, S * 0.36f, S * 0.32f, 0.16f, cr, cg, cb );
+        EmitSolidLump( cx + S * 0.14f, cy - S * 0.08f, cz + S * 0.04f,
+            S * 0.18f, S * 0.16f, S * 0.14f, 0.14f, cr * 0.9f, cg * 0.92f, cb * 0.95f );
+        EmitSolidLump( cx - S * 0.12f, cy + S * 0.10f, cz - S * 0.04f,
+            S * 0.16f, S * 0.14f, S * 0.12f, 0.12f, cr * 0.82f, cg * 0.85f, cb * 0.92f );
+        EmitGalleryTri(
+            cx - S * 0.10f, cy - S * 0.20f, cz + S * 0.10f,
+            cx + S * 0.22f, cy - S * 0.06f, cz + S * 0.18f,
+            cx + S * 0.04f, cy + S * 0.14f, cz + S * 0.20f,
+            cr * 0.75f, cg * 0.78f, cb * 0.88f );
+        EmitSolidLump( cx + S * 0.02f, cy + S * 0.06f, cz + S * 0.16f,
+            S * 0.09f, S * 0.035f, S * 0.028f, 0.04f, 210.f, 206.f, 196.f );
+        EmitSolidLump( cx - S * 0.14f, cy - S * 0.04f, cz + S * 0.12f,
+            S * 0.07f, S * 0.028f, S * 0.022f, 0.04f, 198.f, 194.f, 184.f );
+        EmitSolidLump( cx + S * 0.12f, cy + S * 0.12f, cz + S * 0.10f,
+            S * 0.022f, S * 0.018f, S * 0.018f, 0.0f, 218.f, 188.f, 72.f );
+        EmitSolidLump( cx - S * 0.06f, cy - S * 0.10f, cz + S * 0.14f,
+            S * 0.018f, S * 0.016f, S * 0.016f, 0.0f, 210.f, 176.f, 58.f );
+    }
+
+    void EmitFormEmeraldHost( float cx, float cy, float cz, float S,
+        float /*cr*/, float /*cg*/, float /*cb*/ )
+    {
+        // Host rock + protruding green crystal body (seam-backed).
+        float const hR = 68.f, hG = 66.f, hB = 62.f;
+        float const eR = 48.f, eG = 158.f, eB = 78.f;
+        EmitIrregularHostMass( cx - S * 0.06f, cy, cz - S * 0.02f, S * 0.95f, hR, hG, hB );
+        EmitCrystalHexPoint( cx + S * 0.14f, cy - S * 0.02f, cz + S * 0.04f,
+            0.55f, 0.05f, 0.75f, S * 0.07f, S * 0.28f, S * 0.16f, eR, eG, eB, false );
+        EmitCrystalHexPoint( cx + S * 0.08f, cy + S * 0.10f, cz + S * 0.02f,
+            0.4f, 0.25f, 0.7f, S * 0.045f, S * 0.16f, S * 0.10f,
+            eR * 0.9f, eG * 0.95f, eB * 0.85f, true );
+    }
+
+    void EmitGalleryMaterial( char const* id, float px, float py, float cz, float edge,
+        float cr, float cg, float cb )
+    {
+        if ( !id || !id[0] ) { return; }
+        if ( std::strcmp( id, "wood" ) == 0 ) { EmitFormWoodBranch( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "basalt" ) == 0 ) { EmitFormBasaltShard( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "mica_schist" ) == 0 ) { EmitFormSchistPlate( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "granite" ) == 0 ) { EmitFormGraniteChunk( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "limestone" ) == 0 ) { EmitFormLimestoneBlock( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "shale" ) == 0 ) { EmitFormShaleFlake( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "sandstone" ) == 0 ) { EmitFormSandstoneSlab( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "stone" ) == 0 ) { EmitFormStoneChip( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "clay" ) == 0 ) { EmitFormClayLump( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "gravel" ) == 0 ) { EmitFormGravelPile( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "sand" ) == 0 ) { EmitFormSandMound( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "loam" ) == 0 ) { EmitFormLoamClod( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "dirt" ) == 0 ) { EmitFormDirtClod( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "grass" ) == 0 ) { EmitFormGrassSod( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "hematite" ) == 0 ) { EmitFormHematiteOre( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "azurite" ) == 0 ) { EmitFormAzuriteVein( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "gold" ) == 0 ) { EmitFormGoldSeam( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "quartz" ) == 0 ) { EmitFormQuartzCluster( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "ruby" ) == 0 ) { EmitFormRubyInBasalt( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "amethyst" ) == 0 ) { EmitFormAmethystGeode( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "lapis" ) == 0 ) { EmitFormLapisMass( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "emerald" ) == 0 ) { EmitFormEmeraldHost( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "hematite_free" ) == 0 ) { EmitFormHematiteNodule( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "azurite_free" ) == 0 ) { EmitFormAzuriteMass( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "gold_free" ) == 0 ) { EmitFormGoldNugget( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "quartz_free" ) == 0 ) { EmitFormQuartzFree( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "ruby_free" ) == 0 ) { EmitFormRubyFree( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "amethyst_free" ) == 0 ) { EmitFormAmethystFree( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "lapis_free" ) == 0 ) { EmitFormLapisMass( px, py, cz, edge, cr, cg, cb ); }
+        else if ( std::strcmp( id, "emerald_free" ) == 0 ) { EmitFormEmeraldFree( px, py, cz, edge, cr, cg, cb ); }
+        else { EmitGalleryBox( px, py, cz, edge * 0.4f, edge * 0.4f, edge * 0.4f, cr, cg, cb ); }
+    }
+
+    float GalleryCollideRadius( char const* id )
+    {
+        float const e = kVoxelEdgeM;
+        if ( !id ) { return e * 0.4f; }
+        if ( std::strcmp( id, "wood" ) == 0 ) { return e * 0.28f; }
+        if ( std::strcmp( id, "amethyst" ) == 0 ) { return e * 0.52f; }
+        if ( std::strcmp( id, "quartz" ) == 0 || std::strcmp( id, "quartz_free" ) == 0 ) { return e * 0.42f; }
+        if ( std::strcmp( id, "ruby" ) == 0 || std::strcmp( id, "ruby_free" ) == 0 ) { return e * 0.40f; }
+        if ( std::strstr( id, "_free" ) ) { return e * 0.36f; }
+        return e * 0.40f;
+    }
+
+    void ReseatGallerySamples()
+    {
+        for ( int i = 0; i < g.galleryCount; ++i )
+        {
+            AppState::GallerySample& s = g.gallery[i];
+            if ( !s.present || !s.id ) { continue; }
+            float ground = 0.f;
+            if ( !SampleGroundZ( s.x, s.y, ground ) ) { continue; }
+            // Seat on the heightfield so the rounded underside stays visible (not buried flat).
+            s.z = ground + GalleryCollideRadius( s.id ) * 1.02f;
+        }
+    }
+
+    void EnsureGallerySpawned()
+    {
+        if ( g.gallerySpawned ) { return; }
+        g.gallerySpawned = true;
+        g.galleryCount = 0;
+
+        // HOST-BACKED test palette (row 0–2) — occurrence forms.
+        static char const* const kHostSoil[] = {
+            "wood", "basalt", "mica_schist", "granite", "limestone", "shale", "sandstone",
+            "stone", "clay", "gravel", "sand", "loam", "dirt", "grass"
+        };
+        static char const* const kDeposit[] = { "hematite", "azurite", "gold" };
+        static char const* const kCrystalHost[] = { "quartz", "ruby", "amethyst", "lapis", "emerald" };
+        // FREE / DETACHED — same matter after liberation (size from mineral, not host voxel).
+        static char const* const kFree[] = {
+            "hematite_free", "azurite_free", "gold_free", "quartz_free",
+            "ruby_free", "amethyst_free", "lapis_free", "emerald_free"
+        };
+
+        float const spacing = kVoxelEdgeM * 2.6f;
+        float const baseX = 128.5f + 3.0f;
+        float const rowY[4] = { 128.5f, 128.05f, 127.60f, 127.15f };
+
+        auto addRow = [&]( char const* const* ids, int count, float py )
+        {
+            for ( int i = 0; i < count; ++i )
+            {
+                if ( g.galleryCount >= AppState::kGalleryMax ) { return; }
+                float const px = baseX + (float)i * spacing;
+                float ground = 0.f;
+                if ( !SampleGroundZ( px, py, ground ) ) { ground = GradeToZ( 0.85f ); }
+                AppState::GallerySample& s = g.gallery[g.galleryCount++];
+                s.id = ids[i];
+                s.x = px;
+                s.y = py;
+                s.z = ground + GalleryCollideRadius( ids[i] ) * 1.02f;
+                s.present = true;
+            }
+        };
+        addRow( kHostSoil, (int)( sizeof( kHostSoil ) / sizeof( kHostSoil[0] ) ), rowY[0] );
+        addRow( kDeposit, (int)( sizeof( kDeposit ) / sizeof( kDeposit[0] ) ), rowY[1] );
+        addRow( kCrystalHost, (int)( sizeof( kCrystalHost ) / sizeof( kCrystalHost[0] ) ), rowY[2] );
+        addRow( kFree, (int)( sizeof( kFree ) / sizeof( kFree[0] ) ), rowY[3] );
+    }
+
+    void DrawMaterialFormGallery()
+    {
+        EnsureGallerySpawned();
+        ReseatGallerySamples();
+        float const edge = kVoxelEdgeM;
+        LitSetIdentity();
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( int i = 0; i < g.galleryCount; ++i )
+        {
+            AppState::GallerySample const& s = g.gallery[i];
+            if ( !s.present || !s.id ) { continue; }
+            uint8_t rr = 90, gg = 120, bb = 70;
+            CapColor( s.id, rr, gg, bb );
+            LitBindMaterial( s.id );
+            EmitGalleryMaterial( s.id, s.x, s.y, s.z, edge, (float)rr, (float)gg, (float)bb );
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void HandHoldWorldPos( float& hx, float& hy, float& hz )
+    {
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cyw * cp, fz = sp;
+        // Projection near plane is 0.5m — keep the held body fully beyond it or it vanishes.
+        float const holdDist = 0.72f;
+        float const rad = GalleryCollideRadius( g.heldGalleryId.c_str() );
+        hx = g.camX + fx * holdDist + cyw * 0.20f;
+        hy = g.camY + fy * holdDist - sy * 0.20f;
+        hz = g.camZ + fz * holdDist - 0.10f;
+        // Keep body clear of the near clip sphere around the eye.
+        float dx = hx - g.camX, dy = hy - g.camY, dz = hz - g.camZ;
+        float d = std::sqrt( dx * dx + dy * dy + dz * dz );
+        float const minD = 0.55f + rad;
+        if ( d > 1e-5f && d < minD )
+        {
+            float s = minD / d;
+            hx = g.camX + dx * s;
+            hy = g.camY + dy * s;
+            hz = g.camZ + dz * s;
+        }
+    }
+
+    void DrawHeldGallerySample()
+    {
+        if ( g.heldGalleryId.empty() ) { return; }
+        float hx = 0.f, hy = 0.f, hz = 0.f;
+        HandHoldWorldPos( hx, hy, hz );
+        float const edge = kVoxelEdgeM;
+        uint8_t rr = 90, gg = 120, bb = 70;
+        CapColor( g.heldGalleryId.c_str(), rr, gg, bb );
+
+        // Upright by default (local Z = world up). Scroll tumbles about hand-right so you
+        // can roll the sample over in-hand; Shift+scroll spins left/right about up.
+        float const ang = g.yaw + g.heldYaw;
+        float const ca = std::cos( ang ), sa = std::sin( ang );
+        float const rx = ca, ry = -sa;           // hand-right (horizontal)
+        float const f0x = sa, f0y = ca;         // horizontal forward before tumble
+        float const ct = std::cos( g.heldTumble ), st = std::sin( g.heldTumble );
+        // Rotate forward/up about right: tip top toward camera at +90°.
+        float const fx = f0x * ct;              // f' = f*ct + u*st ; u=(0,0,1) → xy from f only
+        float const fy = f0y * ct;
+        float const fz = st;
+        float const ux = -f0x * st;             // u' = u*ct - f*st
+        float const uy = -f0y * st;
+        float const uz = ct;
+
+        // Column-major: local X | local Y | local Z | translation
+        float M[16] = {
+            rx, ry, 0.f, 0.f,
+            fx, fy, fz, 0.f,
+            ux, uy, uz, 0.f,
+            hx, hy, hz, 1.f
+        };
+
+        LitSetFromMatrix( M );
+        LitBindMaterial( g.heldGalleryId.c_str() );
+
+        glPushMatrix();
+        glMultMatrixf( M );
+        // Fresh depth so host faces occlude crystals correctly, while still drawing over world.
+        glClear( GL_DEPTH_BUFFER_BIT );
+        glEnable( GL_DEPTH_TEST );
+        glDepthFunc( GL_LESS );
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE ); // irregular shells; winding varies
+        glBegin( GL_TRIANGLES );
+        EmitGalleryMaterial( g.heldGalleryId.c_str(), 0.f, 0.f, 0.f, edge,
+            (float)rr, (float)gg, (float)bb );
+        glEnd();
+        glPopMatrix();
+        LitSetIdentity();
+    }
+
+    bool DropHeldGalleryToGround()
+    {
+        if ( g.heldGalleryId.empty() ) { return false; }
+        EnsureGallerySpawned();
+        UpdateAim();
+
+        float dx = 0.f, dy = 0.f, ground = 0.f;
+        bool atAim = false;
+        if ( g.aimHit )
+        {
+            float const adx = g.aimX - g.feetX;
+            float const ady = g.aimY - g.feetY;
+            float const adist = std::sqrt( adx * adx + ady * ady );
+            if ( adist <= kReachCells )
+            {
+                dx = g.aimX;
+                dy = g.aimY;
+                ground = g.aimZ;
+                atAim = true;
+            }
+        }
+        if ( !atAim )
+        {
+            float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            dx = g.feetX + sy * 0.55f;
+            dy = g.feetY + cyw * 0.55f;
+            if ( !SampleGroundZ( dx, dy, ground ) ) { ground = g.feetZ; }
+        }
+
+        int slot = g.heldGallerySrc;
+        if ( slot < 0 || slot >= g.galleryCount
+          || !g.gallery[slot].id
+          || std::strcmp( g.gallery[slot].id, g.heldGalleryId.c_str() ) != 0 )
+        {
+            slot = -1;
+            for ( int i = 0; i < g.galleryCount; ++i )
+            {
+                if ( g.gallery[i].id && !g.gallery[i].present
+                  && std::strcmp( g.gallery[i].id, g.heldGalleryId.c_str() ) == 0 )
+                {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+        if ( slot < 0 && g.galleryCount < AppState::kGalleryMax )
+        {
+            slot = g.galleryCount++;
+            g.gallery[slot].id = nullptr;
+            for ( int i = 0; i < g.galleryCount; ++i )
+            {
+                if ( g.gallery[i].id && std::strcmp( g.gallery[i].id, g.heldGalleryId.c_str() ) == 0 )
+                {
+                    g.gallery[slot].id = g.gallery[i].id;
+                    break;
+                }
+            }
+            if ( !g.gallery[slot].id )
+            {
+                g.gallery[slot].id = H2H::FormOrDirt( g.heldGalleryId.c_str() ).material_id;
+            }
+        }
+        if ( slot < 0 ) { return false; }
+
+        AppState::GallerySample& s = g.gallery[slot];
+        s.x = dx;
+        s.y = dy;
+        s.z = ground + GalleryCollideRadius( s.id ? s.id : g.heldGalleryId.c_str() ) * 1.02f;
+        s.present = true;
+        char d[180];
+        std::snprintf( d, sizeof( d ), "E drop — %s at %s",
+            g.heldGalleryId.c_str(), atAim ? "reticle" : "feet" );
+        g.heldGalleryId.clear();
+        g.heldGallerySrc = -1;
+        g.heldYaw = 0.f;
+        g.heldTumble = 0.f;
+        g.digestLine = d;
+        UpdateStreamHud();
+        return true;
+    }
+
+    void ResolveSolidSampleCollisions()
+    {
+        // Painted material surfaces are solid: push feet/eye out of gallery + held bodies.
+        EnsureGallerySpawned();
+        ReseatGallerySamples();
+        auto pushOut = [&]( float& x, float& y, float& z, float pointR, bool keepZ )
+        {
+            for ( int i = 0; i < g.galleryCount; ++i )
+            {
+                AppState::GallerySample const& s = g.gallery[i];
+                if ( !s.present || !s.id ) { continue; }
+                float const R = GalleryCollideRadius( s.id ) + pointR;
+                float dx = x - s.x, dy = y - s.y, dz = z - s.z;
+                float d2 = dx * dx + dy * dy + dz * dz;
+                if ( d2 >= R * R || d2 < 1e-10f ) { continue; }
+                float d = std::sqrt( d2 );
+                float nx = dx / d, ny = dy / d, nz = dz / d;
+                float pen = R - d;
+                x += nx * pen;
+                y += ny * pen;
+                if ( !keepZ ) { z += nz * pen; }
+            }
+            // Held inspect body is depth-off past near-plane — do not shove the eye away from it.
+        };
+
+        // Feet + body capsule probes
+        float fx = g.feetX, fy = g.feetY, fz = g.feetZ + 0.35f;
+        pushOut( fx, fy, fz, kCapsuleRadiusM, true );
+        g.feetX = fx; g.feetY = fy;
+        // Eye must not enter solid shells (amethyst cavity included — outer radius).
+        float ex = g.camX, ey = g.camY, ez = g.camZ;
+        pushOut( ex, ey, ez, 0.12f, false );
+        // If eye was pushed, pull feet with the horizontal delta so walk stays coherent.
+        g.feetX += ( ex - g.camX );
+        g.feetY += ( ey - g.camY );
+        g.camX = ex; g.camY = ey; g.camZ = ez;
+    }
+
+    int RayHitGallerySample( float maxDist )
+    {
+        EnsureGallerySpawned();
+        ReseatGallerySamples();
+        float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float fx = sy * cp, fy = cyw * cp, fz = sp;
+        int best = -1;
+        float bestT = maxDist;
+        for ( int i = 0; i < g.galleryCount; ++i )
+        {
+            AppState::GallerySample const& s = g.gallery[i];
+            if ( !s.present || !s.id ) { continue; }
+            float const hitR = GalleryCollideRadius( s.id );
+            float const hitR2 = hitR * hitR;
+            float const dx = s.x - g.camX;
+            float const dy = s.y - g.camY;
+            float const dz = s.z - g.camZ;
+            float const t = dx * fx + dy * fy + dz * fz;
+            if ( t < 0.2f || t > bestT ) { continue; }
+            float const px = g.camX + fx * t;
+            float const py = g.camY + fy * t;
+            float const pz = g.camZ + fz * t;
+            float const ox = s.x - px, oy = s.y - py, oz = s.z - pz;
+            if ( ox * ox + oy * oy + oz * oz > hitR2 ) { continue; }
+            bestT = t;
+            best = i;
+        }
+        return best;
+    }
+
+    bool TryPickupGallerySample()
+    {
+        if ( g.journalOpen ) { return false; }
+        int const hit = RayHitGallerySample( 3.5f );
+        if ( hit < 0 )
+        {
+            // E with nothing aimed: drop held sample back onto the ground.
+            if ( !g.heldGalleryId.empty() ) { return DropHeldGalleryToGround(); }
+            return false;
+        }
+
+        AppState::GallerySample& s = g.gallery[hit];
+        char const* newId = s.id;
+        if ( !newId || !newId[0] ) { return false; }
+
+        if ( g.grippedBodyId != 0 )
+        {
+            for ( H2H::MatterBody& b : H2H::State().bodies )
+            {
+                if ( b.body_id != g.grippedBodyId ) { continue; }
+                b.gripped = false;
+                break;
+            }
+            g.grippedBodyId = 0;
+        }
+
+        SeedStarterBag();
+        if ( !g.heldGalleryId.empty() )
+        {
+            // Swap: bag current, take the new sample (drop-to-ground is E with empty aim).
+            BagAdd( g.heldGalleryId, 1 );
+            char d[240];
+            std::snprintf( d, sizeof( d ),
+                "E swap — bagged %s, now holding %s",
+                g.heldGalleryId.c_str(), newId );
+            g.heldGalleryId = newId;
+            g.heldGallerySrc = hit;
+            g.heldYaw = 0.f;
+            g.heldTumble = 0.f;
+            s.present = false;
+            g.digestLine = d;
+        }
+        else
+        {
+            g.heldGalleryId = newId;
+            g.heldGallerySrc = hit;
+            g.heldYaw = 0.f;
+            g.heldTumble = 0.f;
+            s.present = false;
+            char d[200];
+            std::snprintf( d, sizeof( d ),
+                "E pickup — holding %s  (scroll rolls over; Shift+scroll spins)",
+                newId );
+            g.digestLine = d;
+        }
+        UpdateStreamHud();
+        return true;
     }
 
     void ParseColumnReply( std::string const& line )
@@ -2321,7 +3964,6 @@ namespace
             ++g.cellsLoaded;
         }
         cell.grade = grade;
-        DestroyCavityList( cell ); // never present fill as Minecraft slabs
         if ( !fillBytes.empty() )
         {
             cell.fill = std::move( fillBytes );
@@ -2330,28 +3972,45 @@ namespace
             cell.fillK = kz;
         }
         float const newFillZ = FillTopToWorldZ( grade, kz, meanTop );
-        if ( cell.hasFillZ )
+        // Prefetch/look/walk: store fill only. Never rebuild cavity or punch terrain.
+        // Dig path sets cell.carved before column reconcile.
+        if ( cell.carved )
         {
-            // meanTop is 8x8 averaged — never raise and visually heal a scar cup.
-            cell.fillZ = (std::min)( cell.fillZ, newFillZ );
+            if ( cell.hasFillZ )
+            {
+                cell.fillZ = (std::min)( cell.fillZ, newFillZ );
+            }
+            else
+            {
+                cell.fillZ = newFillZ;
+            }
+            cell.hasFillZ = true;
+            cell.edited = true;
+            RebuildCavityMesh( cx, cy );
+            InvalidateTerrainMesh();
+            if ( cell.hasCavity )
+            {
+                RetirePresentationScarsNear( (float)cx + 0.5f, (float)cy + 0.5f, 0.9f );
+            }
         }
         else
         {
             cell.fillZ = newFillZ;
+            cell.hasFillZ = true;
+            DestroyCavityList( cell );
         }
-        cell.hasFillZ = true;
-        cell.edited = true;
 
         char d[240];
         std::snprintf( d, sizeof( d ),
-            "COLUMN truth (%d,%d): fillZ=%.2f gradeZ=%.2f meanTop=%.2f/%d (cups present; no D2 slabs)",
-            cx, cy, cell.fillZ, GradeToZ( grade ), meanTop, kz );
+            "COLUMN truth (%d,%d): fillZ=%.2f gradeZ=%.2f meanTop=%.2f/%d cavity=%s%s",
+            cx, cy, cell.fillZ, GradeToZ( grade ), meanTop, kz,
+            cell.hasCavity ? "D2" : "none",
+            cell.carved ? " carved" : " (resident)" );
         if ( g.digestLine.find( "DIG digest" ) == std::string::npos &&
              g.digestLine.find( "PLACE digest" ) == std::string::npos )
         {
             g.digestLine = d;
         }
-        // DigScar cups stay the dig presentation — do not punch grade / draw voxel slabs.
         UpdateStreamHud();
     }
 
@@ -2820,7 +4479,9 @@ namespace
         auto it = g.iconTex.find( id );
         if ( it == g.iconTex.end() || !it->second )
         {
-            FillRect( x0 + 2, y0 + 2, x1 - 2, y1 - 2, 0.35f, 0.28f, 0.18f );
+            uint8_t rr = 90, gg = 70, bb = 45;
+            CapColor( id.c_str(), rr, gg, bb );
+            FillRect( x0 + 2, y0 + 2, x1 - 2, y1 - 2, rr / 255.f, gg / 255.f, bb / 255.f );
             return;
         }
         glEnable( GL_TEXTURE_2D );
@@ -3327,6 +4988,13 @@ namespace
         return &it->second;
     }
 
+    CellSample* GetCellMutable( int x, int y )
+    {
+        auto it = g.cells.find( CellKey( x, y ) );
+        if ( it == g.cells.end() || !it->second.valid ) { return nullptr; }
+        return &it->second;
+    }
+
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
         // Grade continuum: resident cells, else analytic Esoterica geography (absolute coords).
@@ -3533,38 +5201,57 @@ namespace
         float const maxT = g.walkMode ? ( kReachCells + 2.f ) : 80.f;
         float hitT = -1.f;
         float hitX = 0.f, hitY = 0.f, hitZ = 0.f;
-        if ( !RayHitDrawnSkin( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ ) )
+
+        // Prefer occupancy aim only on cells we carved — virgin fill crest ≠ heightfield at
+        // high relief and was steering digs / false hits while looking around.
+        bool hitOcc = false;
         {
-            // Fallback: coarse height march if triangle walk misses (sparse cells).
-            constexpr float kStep = 0.06f;
-            for ( int step = 0; step < 240; ++step )
+            // Probe aim cell without prefetching.
+            float tProbe = 1.2f;
+            int const acx = (int)std::floor( ox + fx * tProbe );
+            int const acy = (int)std::floor( oy + fy * tProbe );
+            CellSample const* ac = GetCell( acx, acy );
+            if ( ac && ac->carved && !ac->fill.empty() )
             {
-                float t = 0.12f + step * kStep;
-                if ( t > maxT ) { break; }
-                float x = ox + fx * t;
-                float y = oy + fy * t;
-                float z = oz + fz * t;
-                float ground = 0.f;
-                if ( !SampleAimSurfaceZ( x, y, ground ) ) { continue; }
-                if ( z <= ground + 0.04f )
+                hitOcc = RayHitOccupancy( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ );
+            }
+        }
+        if ( !hitOcc )
+        {
+            hitT = -1.f;
+            if ( !RayHitDrawnSkin( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ ) )
+            {
+                // Fallback: coarse height march if triangle walk misses (sparse cells).
+                constexpr float kStep = 0.06f;
+                for ( int step = 0; step < 240; ++step )
                 {
-                    float t0 = (std::max)( 0.05f, t - kStep );
-                    float t1 = t;
-                    for ( int i = 0; i < 8; ++i )
+                    float t = 0.12f + step * kStep;
+                    if ( t > maxT ) { break; }
+                    float x = ox + fx * t;
+                    float y = oy + fy * t;
+                    float z = oz + fz * t;
+                    float ground = 0.f;
+                    if ( !SampleAimSurfaceZ( x, y, ground ) ) { continue; }
+                    if ( z <= ground + 0.04f )
                     {
-                        float tm = 0.5f * ( t0 + t1 );
-                        float xm = ox + fx * tm;
-                        float ym = oy + fy * tm;
-                        float zm = oz + fz * tm;
-                        float gm = 0.f;
-                        if ( !SampleAimSurfaceZ( xm, ym, gm ) || zm <= gm + 0.04f ) { t1 = tm; }
-                        else { t0 = tm; }
+                        float t0 = (std::max)( 0.05f, t - kStep );
+                        float t1 = t;
+                        for ( int i = 0; i < 8; ++i )
+                        {
+                            float tm = 0.5f * ( t0 + t1 );
+                            float xm = ox + fx * tm;
+                            float ym = oy + fy * tm;
+                            float zm = oz + fz * tm;
+                            float gm = 0.f;
+                            if ( !SampleAimSurfaceZ( xm, ym, gm ) || zm <= gm + 0.04f ) { t1 = tm; }
+                            else { t0 = tm; }
+                        }
+                        hitT = t1;
+                        hitX = ox + fx * hitT;
+                        hitY = oy + fy * hitT;
+                        hitZ = oz + fz * hitT;
+                        break;
                     }
-                    hitT = t1;
-                    hitX = ox + fx * hitT;
-                    hitY = oy + fy * hitT;
-                    hitZ = oz + fz * hitT;
-                    break;
                 }
             }
         }
@@ -3572,6 +5259,8 @@ namespace
 
         // Only when firmly INSIDE a dig, slide deeper along the look ray.
         // Rim overlap (partial DigDep) must stay on solid so remaining dirt can still be carved.
+        // Occupancy hits already sit on the matter face — skip DigDep slide when fill owns the cell.
+        if ( !hitOcc )
         {
             float const R = kHandfulRadiusM;
             if ( DigDepAt( hitX, hitY ) > R * 0.70f )
@@ -3605,11 +5294,12 @@ namespace
         g.aimU = hitX - (float)g.aimCx;
         g.aimV = hitY - (float)g.aimCy;
         g.aimDepth = AimDigAffect().radiusM;
+        // Demand fill only when about to dig — see TryDigHandful / TryPick (not every aim frame).
     }
 
     bool TryPickFoliatedStrike()
     {
-        // Horizon-to-Hand: pick strike → persistent fracture patch → optional MatterBody plate.
+        // Horizon-to-Hand: pick strike → occupancy D2 cavity + optional MatterBody plate.
         UpdateAim();
         if ( !g.aimHit )
         {
@@ -3622,6 +5312,12 @@ namespace
         if ( std::sqrt( dx * dx + dy * dy ) > kReachCells )
         {
             g.digestLine = "PICK too far - step closer";
+            UpdateStreamHud();
+            return false;
+        }
+        if ( g.pending != PendingKind::None )
+        {
+            g.digestLine = "PICK busy - wait for engine digest";
             UpdateStreamHud();
             return false;
         }
@@ -3642,101 +5338,106 @@ namespace
         float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
         float fx = sy * cp, fy = cyw * cp, fz = sp;
 
+        DigAffectSpec const affect = AimDigAffect();
+        // Carve INTO the matter face along -N (not along look — look drifts scars up the wall).
+        float fnx = 0.f, fny = 0.f, fnz = 1.f;
+        CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
+        // Local D2 must read at voxel scale; engine receipt keeps tip affect for grams.
+        float const visualR = (std::max)( affect.radiusM, g.voxelEdgeM * 1.35f );
+        float const into = visualR * 0.70f;
+        float const bx = g.aimX - fnx * into;
+        float const by = g.aimY - fny * into;
+        float const bz = g.aimZ - fnz * into;
+        int const bcx = (int)std::floor( bx );
+        int const bcy = (int)std::floor( by );
+        float const bu = bx - (float)bcx;
+        float const bv = by - (float)bcy;
+
+        // Engine carve receipt — tip affect (authority grams); presentation uses visualR.
+        float const radEng = WorldToEngDepth( affect.radiusM );
+        float const depthEng = WorldToEngDepth( affect.depthM );
+        int px = (int)std::floor( g.feetX );
+        int py = (int)std::floor( g.feetY );
+        char params[288];
+        std::snprintf( params, sizeof( params ),
+            "{\"x\":%d,\"y\":%d,\"u\":%.5f,\"v\":%.5f,\"depth\":%.5f,\"radius\":%.5f,\"shape\":\"sphere\",\"px\":%d,\"py\":%d}",
+            bcx, bcy, bu, bv, depthEng, radEng, px, py );
+        g.intent = IntentKind::Dig;
+        g.pendingLocalScoopG = AffectAcceptedGrams( form, affect );
+        g.pendingLocalScoopMat = form.material_id;
+        g.pendingAffectRM = affect.radiusM;
+        if ( !RequestMethod( "carve", params, PendingKind::Carve ) )
+        {
+            g.digestLine = "PICK send failed";
+            g.pendingAffectRM = 0.f;
+            UpdateStreamHud();
+            return false;
+        }
+        g.pendingBiteCx = bcx;
+        g.pendingBiteCy = bcy;
+        g.pendingBiteU = bu;
+        g.pendingBiteV = bv;
+        g.pendingBiteWx = bx;
+        g.pendingBiteWy = by;
+        g.pendingBiteWz = bz;
+        g.pendingBiteForward = true;
+
+        PrefetchOccupancyCell( bcx, bcy );
+        // P3b: occupancy cavity at strike — never FoliationPlate scar stamps.
+        bool const carved = CarveOccupancySphere( bx, by, bz, visualR );
+        RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f );
+
         H2H::SeparationResult const sep = H2H::StrikePick(
             g.aimX, g.aimY, g.aimZ, fx, fy, fz, form.material_id );
 
-        // Presentation chip from fracture patch (sealed — no DigDep / stencil punch-through).
         H2H::FracturePatch const* patch = nullptr;
         for ( H2H::FracturePatch const& p : H2H::State().patches )
         {
             if ( p.patch_id == sep.patch_id ) { patch = &p; break; }
         }
-        if ( patch )
+        if ( sep.detached )
         {
-            float fnx = 0.f, fny = 0.f, fnz = 1.f;
-            CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
-            // Player-driven crack elongation in the face plane (look × N), not grade-XY scoop.
             float strikeX = 1.f, strikeY = 0.f;
             StrikeAxesFromLook( fnx, fny, fnz, fx, fy, fz, strikeX, strikeY );
-            // Soft blend toward fabric when nearly aligned (material still matters).
-            float const fdot = std::fabs( strikeX * patch->strikeX + strikeY * patch->strikeY );
-            if ( fdot > 0.55f )
+            for ( H2H::MatterBody& body : H2H::State().bodies )
             {
-                strikeX = 0.55f * strikeX + 0.45f * patch->strikeX;
-                strikeY = 0.55f * strikeY + 0.45f * patch->strikeY;
-                float const inv = 1.f / (std::max)( 1e-5f, std::sqrt( strikeX * strikeX + strikeY * strikeY ) );
-                strikeX *= inv; strikeY *= inv;
-            }
-            float const into = AimDigAffect().radiusM * 0.55f;
-            float bx = g.aimX + fx * into;
-            float by = g.aimY + fy * into;
-            float bz = g.aimZ + fz * into;
-            DigAffectSpec const affect = AimDigAffect();
-            float along = (std::max)( affect.radiusM * 1.6f, patch->crackAlongM * 0.55f );
-            float deep = (std::max)( affect.radiusM * 0.95f, patch->crackDepthM * 0.75f );
-            float lip = deep * 0.45f;
-            float depthAmp = (std::max)( affect.depthM * 1.25f, 0.035f );
-            RockStruct::FractureStage st = RockStruct::FractureStage::SeamOpened;
-            if ( sep.detached ) { st = RockStruct::FractureStage::PlateReleased; }
-            else if ( std::strcmp( sep.act, "plate_held" ) == 0 ) { st = RockStruct::FractureStage::SeamOpened; }
-            else if ( std::strcmp( sep.act, "face_flakes" ) == 0 ) { st = RockStruct::FractureStage::SurfaceFlakes; }
-            AddFoliationPlateScar( bx, by, bz, (int)std::floor( bx ), (int)std::floor( by ),
-                strikeX, strikeY, along, deep, lip, depthAmp, patch->attachment, st,
-                fnx, fny, fnz );
-            ClearPendingScarEdit();
-            FireActionCue( false, false );
-            // Detached plate: push out along look + into free space so it isn't glued to the wall skin.
-            if ( sep.detached )
-            {
-                for ( H2H::MatterBody& body : H2H::State().bodies )
-                {
-                    if ( body.body_id != sep.body_id ) { continue; }
-                    body.nx = fnx; body.ny = fny; body.nz = fnz;
-                    body.strikeX = strikeX; body.strikeY = strikeY;
-                    body.x = g.aimX + fx * 0.08f - fnx * 0.04f;
-                    body.y = g.aimY + fy * 0.08f - fny * 0.04f;
-                    body.z = g.aimZ + fz * 0.08f - fnz * 0.04f;
-                    body.vx = fx * 0.55f - fnx * 0.25f;
-                    body.vy = fy * 0.55f - fny * 0.25f;
-                    body.vz = fz * 0.55f - fnz * 0.25f - 0.2f;
-                    break;
-                }
+                if ( body.body_id != sep.body_id ) { continue; }
+                body.nx = fnx; body.ny = fny; body.nz = fnz;
+                body.strikeX = strikeX; body.strikeY = strikeY;
+                body.x = g.aimX + fx * 0.08f - fnx * 0.04f;
+                body.y = g.aimY + fy * 0.08f - fny * 0.04f;
+                body.z = g.aimZ + fz * 0.08f - fnz * 0.04f;
+                body.vx = fx * 0.55f - fnx * 0.25f;
+                body.vy = fy * 0.55f - fny * 0.25f;
+                body.vz = fz * 0.55f - fnz * 0.25f - 0.2f;
+                break;
             }
         }
+        // Fines/grams from carve digest only — do not double-credit with local StrikePick fines.
 
-        // Fines → held aggregate grams (same matter identity). Plate stays a MatterBody.
-        if ( sep.fines_g > 0 )
-        {
-            std::unordered_map<std::string, int> rem;
-            rem[sep.material_id] = sep.fines_g;
-            CreditHeld( rem );
-        }
-
+        FireActionCue( false, false );
         char d[480];
         if ( sep.detached )
         {
             std::snprintf( d, sizeof( d ),
-                "H2H %s %s sep=%llu body=%llu | plate %dg + fines %dg | parent %dg→%dg | reconciling %s | [G] grip plate",
-                sep.act, sep.material_id.c_str(),
+                "H2H %s %s D2=%s sep=%llu body=%llu | plate %dg | visualR=%.3f | [G] grip",
+                sep.act, sep.material_id.c_str(), carved ? "yes" : "miss",
                 (unsigned long long)sep.separation_id, (unsigned long long)sep.body_id,
-                sep.plate_g, sep.fines_g, sep.parent_before_g, sep.parent_after_g,
-                H2H::ReconcileOk( sep ) ? "OK" : "FAIL" );
-            g.statusLine = "Horizon-to-Hand - plate released (falls; G to grip)";
+                sep.plate_g, visualR );
+            g.statusLine = "P3b pick - plate + occupancy cavity";
         }
         else
         {
             float attach = patch ? patch->attachment : 1.f;
             std::snprintf( d, sizeof( d ),
-                "H2H %s %s patch=%llu | cracks persist attach=%.2f | fines +%dg | parent %dg→%dg | hand %dg",
-                sep.act, sep.material_id.c_str(),
-                (unsigned long long)sep.patch_id, attach, sep.fines_g,
-                sep.parent_before_g, sep.parent_after_g, g.heldTotalG );
-            g.statusLine = ( std::strcmp( sep.act, "plate_held" ) == 0 )
-                ? "Horizon-to-Hand - plate candidate held (strike again to release)"
-                : "Horizon-to-Hand - fracture patch updated";
+                "H2H %s %s D2=%s patch=%llu attach=%.2f | visualR=%.3fm tipR=%.3fm | await digest",
+                sep.act, sep.material_id.c_str(), carved ? "yes" : "miss",
+                (unsigned long long)sep.patch_id, attach, visualR, affect.radiusM );
+            g.statusLine = carved
+                ? "P3b pick - occupancy cavity (matter face)"
+                : "P3b pick - carve missed lattice (check column)";
         }
         g.digestLine = d;
-        FireActionCue( false, false );
         UpdateStreamHud();
         return true;
     }
@@ -3795,6 +5496,16 @@ namespace
         body->settled = true;
         body->vx = body->vy = body->vz = 0.f;
         g.grippedBodyId = body->body_id;
+        if ( !g.heldGalleryId.empty() )
+        {
+            // One hand: stow gallery sample to bag when gripping a plate.
+            SeedStarterBag();
+            BagAdd( g.heldGalleryId, 1 );
+            g.heldGalleryId.clear();
+            g.heldGallerySrc = -1;
+            g.heldYaw = 0.f;
+            g.heldTumble = 0.f;
+        }
         char d[240];
         std::snprintf( d, sizeof( d ),
             "H2H grip body=%llu %s %dg @ contact lever=%.2fm %s | G again to drop",
@@ -3919,45 +5630,62 @@ namespace
         g.pendingBiteWz = bz;
         g.pendingBiteForward = ( DigDepAt( g.aimX, g.aimY ) > hitAffect.radiusM * 0.20f )
             && ( -std::sin( g.pitch ) < 0.72f );
-        g.columnQueue.clear();
 
-        if ( hitAffect.mode == DigAffectMode::ScoopHemi )
+        // P3b: occupancy sphere carve owns the hole; DigScar is flash only if carve misses.
+        float const visualR = (std::max)( hitAffect.radiusM, g.voxelEdgeM * 1.35f );
+        float carveX = bx, carveY = by, carveZ = bz;
+        if ( hitAffect.mode != DigAffectMode::ScoopHemi )
         {
-            float scarZ = bz;
-            float gradeAtBite = bz;
-            if ( SampleGroundZBase( bx, by, gradeAtBite ) )
-            {
-                scarZ = (std::min)( bz, gradeAtBite - hitAffect.radiusM * 0.15f );
-            }
-            AddScar( bx, by, scarZ, bcx, bcy, false, false );
-            if ( g.pendingScarIndex >= 0 && g.pendingScarIndex < (int)g.scars.size() )
-            {
-                DigScar& s = g.scars[(size_t)g.pendingScarIndex];
-                s.radius = hitAffect.radiusM;
-                s.depth = hitAffect.depthM;
-            }
+            // Face bites: centre into the matter along -N (same as pick).
+            carveX = g.aimX - fnx * visualR * 0.70f;
+            carveY = g.aimY - fny * visualR * 0.70f;
+            carveZ = g.aimZ - fnz * visualR * 0.70f;
         }
-        else
+        PrefetchOccupancyCell( bcx, bcy );
+        PrefetchOccupancyCell( (int)std::floor( carveX ), (int)std::floor( carveY ) );
+        bool const carved = CarveOccupancySphere( carveX, carveY, carveZ, visualR );
+        if ( carved ) { RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f ); }
+        if ( !carved )
         {
-            // Face puncture / tip — same R as dig-volume sphere, recess along face normal.
-            float const rad = hitAffect.radiusM;
-            float const depthAmp = hitAffect.depthM;
-            float const cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
-            float const cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
-            float const lx = sy * cp, ly = cyw * cp, lz = sp;
-            AddFacePunctureScar( g.aimX + lx * rad * 0.35f,
-                g.aimY + ly * rad * 0.35f,
-                g.aimZ + lz * rad * 0.35f,
-                bcx, bcy, rad, depthAmp, fnx, fny, fnz );
+            if ( hitAffect.mode == DigAffectMode::ScoopHemi )
+            {
+                float scarZ = bz;
+                float gradeAtBite = bz;
+                if ( SampleGroundZBase( bx, by, gradeAtBite ) )
+                {
+                    scarZ = (std::min)( bz, gradeAtBite - hitAffect.radiusM * 0.15f );
+                }
+                AddScar( bx, by, scarZ, bcx, bcy, false, false );
+                if ( g.pendingScarIndex >= 0 && g.pendingScarIndex < (int)g.scars.size() )
+                {
+                    DigScar& s = g.scars[(size_t)g.pendingScarIndex];
+                    s.radius = hitAffect.radiusM;
+                    s.depth = hitAffect.depthM;
+                }
+            }
+            else
+            {
+                float const rad = hitAffect.radiusM;
+                float const depthAmp = hitAffect.depthM;
+                float const cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+                float const cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+                float const lx = sy * cp, ly = cyw * cp, lz = sp;
+                AddFacePunctureScar( g.aimX + lx * rad * 0.35f,
+                    g.aimY + ly * rad * 0.35f,
+                    g.aimZ + lz * rad * 0.35f,
+                    bcx, bcy, rad, depthAmp, fnx, fny, fnz );
+            }
         }
         FireActionCue( false, false );
         char sent[280];
         std::snprintf( sent, sizeof( sent ),
-            "H2H %s %s via %s — affect r=%.3fm (%.0f mL) → ~%dg (await digest)",
+            "H2H %s %s via %s — D2=%s visualR=%.3fm tipR=%.3fm → ~%dg",
             hitAffect.feel, form.material_id, tool.id,
-            hitAffect.radiusM, hitAffect.volumeM3 * 1e6f, acceptG );
+            carved ? "yes" : "flash", visualR, hitAffect.radiusM, acceptG );
         g.digestLine = sent;
-        g.statusLine = "Phase 4 - affect sphere = scar = carve = matter return";
+        g.statusLine = carved
+            ? "P3b - occupancy cavity (matter face)"
+            : "P3b - scar flash until occupancy";
         UpdateStreamHud();
         return true;
     }
@@ -4156,8 +5884,7 @@ namespace
                         float x2, float y2, float z2,
                         float cavity )
     {
-        // Flat face lighting — per-vertex smooth normals were melting landform + scoops.
-        constexpr float lx = 0.35f, ly = 0.18f, lz = 0.92f;
+        // Flat face lighting — world sun + sky on geometric normals (same frame as gallery).
         float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
         float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
         float nx = ay * bz - az * by;
@@ -4165,21 +5892,17 @@ namespace
         float nz = ax * by - ay * bx;
         float const nl = std::sqrt( nx * nx + ny * ny + nz * nz );
         if ( nl > 1e-6f ) { nx /= nl; ny /= nl; nz /= nl; }
-        float light = 0.50f + 0.50f * (std::max)( 0.f, nx * lx + ny * ly + nz * lz );
-        // cavity > 0 dig darken; cavity < 0 place brighten (mound must read vs flat skin)
-        // Keep dig cups lit (dirt-coloured bowls) — 0.40 crushed them to flat black from above.
-        if ( cavity > 0.f ) { light *= ( 1.f - 0.22f * (std::min)( 1.f, cavity ) ); }
-        else if ( cavity < 0.f ) { light *= ( 1.f - 0.35f * cavity ); }
 
         float const mx = ( x0 + x1 + x2 ) * ( 1.f / 3.f );
         float const my = ( y0 + y1 + y2 ) * ( 1.f / 3.f );
+        float const mz = ( z0 + z1 + z2 ) * ( 1.f / 3.f );
         float cr, cg, cb;
         SampleCapColor( mx, my, cr, cg, cb );
-        // VisualMaterialDef edge cue — rocks read harder/cooler; soils slightly warmer (not tile paint).
+
+        char const* cap = "dirt";
         {
             int const cx = (int)std::floor( mx );
             int const cy = (int)std::floor( my );
-            char const* cap = "dirt";
             if ( CellSample const* c = GetCell( cx, cy ) )
             {
                 if ( !c->cap.empty() ) { cap = c->cap.c_str(); }
@@ -4191,10 +5914,26 @@ namespace
                     (double)cx + 0.5, (double)cy + 0.5,
                     g.gradeDatum, g.reliefVoxels, g.voxelEdgeM ).cap;
             }
-            VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( cap );
-            light *= VisualMat::EdgeShadeBias( vd );
         }
-        glColor3f( ( cr / 255.f ) * light, ( cg / 255.f ) * light, ( cb / 255.f ) * light );
+        LitBindMaterial( cap );
+
+        float outR = 0.f, outG = 0.f, outB = 0.f;
+        ShadeLitFace( nx, ny, nz, mx, my, mz,
+            cr / 255.f, cg / 255.f, cb / 255.f, outR, outG, outB );
+
+        // cavity > 0 dig darken; cavity < 0 place brighten — enclosure cue, not sun direction.
+        if ( cavity > 0.f )
+        {
+            float const k = 1.f - 0.22f * (std::min)( 1.f, cavity );
+            outR *= k; outG *= k; outB *= k;
+        }
+        else if ( cavity < 0.f )
+        {
+            float const k = 1.f - 0.35f * cavity;
+            outR *= k; outG *= k; outB *= k;
+        }
+
+        glColor3f( outR, outG, outB );
         glVertex3f( x0, y0, z0 );
         glVertex3f( x1, y1, z1 );
         glVertex3f( x2, y2, z2 );
@@ -4219,6 +5958,14 @@ namespace
             if ( !s.place && ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) )
             {
                 continue;
+            }
+            // Soft hemi cups are interim only — occupancy D2 cavity owns the hole once present.
+            if ( !s.place )
+            {
+                int const scx = (int)std::floor( s.wx );
+                int const scy = (int)std::floor( s.wy );
+                CellSample const* sc = GetCell( scx, scy );
+                if ( sc && sc->hasCavity ) { continue; }
             }
             float const rad = s.radius;
             if ( rad < 1e-4f ) { continue; }
@@ -4291,6 +6038,7 @@ namespace
         }
         g.terrainList = AllocDisplayListOutsideFonts();
         if ( !g.terrainList ) { return; }
+        LitSetIdentity();
         glNewList( g.terrainList, GL_COMPILE );
         glShadeModel( GL_FLAT );
         glBegin( GL_TRIANGLES );
@@ -4319,7 +6067,7 @@ namespace
                         float const px11 = (float)x + u1, py11 = (float)y + v1;
 
                         float z00, z10, z01, z11;
-                        // Virgin grade vista only — dig/place are live high-res cups (no coarse diamond spikes).
+                        // Virgin grade vista only — tools (DigScar / carved D2) express digs; walk/look never open pads.
                         if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
                         if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
                         if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
@@ -4341,15 +6089,21 @@ namespace
     {
         // Invisible stencil seal — must match scoop footprint exactly.
         // Oversized / heavy offset punched a feathered grade roof around the cup; reject that.
-        if ( g.scars.empty() ) { return; }
         constexpr int kRing = 16;
         constexpr float kZBias = 0.003f;
         glBegin( GL_TRIANGLES );
+
         for ( DigScar const& s : g.scars )
         {
             if ( s.place ) { continue; }
             // Never stencil-punch foliation plates or face punctures — opens sky void on cliffs.
             if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
+            {
+                int const scx = (int)std::floor( s.wx );
+                int const scy = (int)std::floor( s.wy );
+                CellSample const* sc = GetCell( scx, scy );
+                if ( sc && sc->hasCavity ) { continue; } // occupancy footprint below
+            }
             float gradeC = 0.f;
             if ( !SampleGroundZBase( s.wx, s.wy, gradeC ) ) { continue; }
             float rad = s.radius; // same radius as the dig cup — no halo seal
@@ -4387,6 +6141,46 @@ namespace
                         SampleGroundZBase( mx, my, gMid );
                         if ( ScarTunnelDepAt( s, mx, my, gMid ) < 1e-5f ) { continue; }
                     }
+                    float z00, z10, z01, z11;
+                    if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
+                    if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
+                    if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
+                    if ( !SampleGroundZBase( px11, py11, z11 ) ) { continue; }
+                    z00 += kZBias; z10 += kZBias; z01 += kZBias; z11 += kZBias;
+                    glVertex3f( px00, py00, z00 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px01, py01, z01 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px11, py11, z11 );
+                    glVertex3f( px01, py01, z01 );
+                }
+            }
+        }
+
+        // Occupancy hole footprints — carved D2 cells only.
+        constexpr int kOcc = 12;
+        for ( auto const& kv : g.cells )
+        {
+            CellSample const& cell = kv.second;
+            if ( !cell.carved || !cell.hasCavity ) { continue; }
+            int cx = 0, cy = 0;
+            // Decode CellKey — same packing as CellKey().
+            uint64_t const key = kv.first;
+            cx = (int)(int32_t)( key >> 32 );
+            cy = (int)(int32_t)( key & 0xffffffffu );
+            float const step = 1.f / (float)kOcc;
+            for ( int j = 0; j < kOcc; ++j )
+            {
+                for ( int i = 0; i < kOcc; ++i )
+                {
+                    float const px00 = (float)cx + (float)i * step;
+                    float const py00 = (float)cy + (float)j * step;
+                    float const px10 = px00 + step, py10 = py00;
+                    float const px01 = px00, py01 = py00 + step;
+                    float const px11 = px00 + step, py11 = py00 + step;
+                    float const mx = ( px00 + px11 ) * 0.5f;
+                    float const my = ( py00 + py11 ) * 0.5f;
+                    if ( DigDepAt( mx, my ) < 1e-4f ) { continue; }
                     float z00, z10, z01, z11;
                     if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
                     if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
@@ -4489,203 +6283,14 @@ namespace
 
     void DrawFoliationPlateNotches()
     {
-        // Sealed face chips for mica-schist pick strikes — overlay only in the FACE plane.
-        // Must NOT DigDep or stencil-punch: that tears steep heightfield walls into sky void.
-        // Recess along stored face normal at the true strike point (not grade-Z sink).
-        if ( g.scars.empty() ) { return; }
-        constexpr int kAlong = 10;
-        constexpr int kAcross = 8;
-        glShadeModel( GL_FLAT );
-        glDisable( GL_CULL_FACE );
-        glEnable( GL_POLYGON_OFFSET_FILL );
-        glPolygonOffset( -2.5f, -4.f );
-        glBegin( GL_TRIANGLES );
-        for ( DigScar const& s : g.scars )
-        {
-            if ( s.place || s.kind != ScarKind::FoliationPlate ) { continue; }
-            float const halfAlong = (std::max)( 0.025f, (std::min)( 0.22f, s.plateAlong ) );
-            float const halfDeep = (std::max)( 0.02f, (std::min)( 0.12f, s.plateAcrossDeep ) );
-            float const halfLip = (std::max)( 0.012f, (std::min)( 0.06f, s.plateAcrossLip ) );
-            // Deep enough to read as a matching cavity, not a flat chip glued on the skin.
-            float const chipMax = (std::max)( 0.028f, (std::min)( 0.10f, s.depth * 1.35f ) );
-
-            float nx = s.faceNx, ny = s.faceNy, nz = s.faceNz;
-            float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
-            if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
-            else { nx = 0.f; ny = 0.f; nz = 1.f; }
-
-            // Strike along face; pry across = N × strike (into/out of seam on the wall).
-            float sx = s.strikeX, sy = s.strikeY, sz = 0.f;
-            // Project strike into face tangent plane.
-            float const sN = sx * nx + sy * ny + sz * nz;
-            sx -= nx * sN; sy -= ny * sN; sz -= nz * sN;
-            float slen = std::sqrt( sx * sx + sy * sy + sz * sz );
-            if ( slen < 1e-4f ) { sx = -ny; sy = nx; sz = 0.f; slen = std::sqrt( sx * sx + sy * sy ); }
-            if ( slen > 1e-5f ) { sx /= slen; sy /= slen; sz /= slen; }
-            float tx = ny * sz - nz * sy;
-            float ty = nz * sx - nx * sz;
-            float tz = nx * sy - ny * sx;
-
-            float const ax = s.wx, ay = s.wy, az = s.wz;
-
-            auto sample = [&]( float along, float across, float& ox, float& oy, float& oz, float& chip )
-            {
-                float const acrossMax = ( across >= 0.f ) ? halfDeep : halfLip;
-                float const ua = 1.f - ( along / halfAlong ) * ( along / halfAlong );
-                float const uc = 1.f - ( across / acrossMax ) * ( across / acrossMax );
-                float const asym = ( across >= 0.f ) ? 1.f : 0.45f;
-                chip = chipMax * std::sqrt( (std::max)( 0.f, ua * uc ) ) * asym;
-                ox = ax + sx * along + tx * across - nx * chip;
-                oy = ay + sy * along + ty * across - ny * chip;
-                oz = az + sz * along + tz * across - nz * chip;
-            };
-
-            for ( int j = 0; j < kAcross; ++j )
-            {
-                float const v0 = -1.f + 2.f * (float)j / (float)kAcross;
-                float const v1 = -1.f + 2.f * (float)( j + 1 ) / (float)kAcross;
-                for ( int i = 0; i < kAlong; ++i )
-                {
-                    float const u0 = -1.f + 2.f * (float)i / (float)kAlong;
-                    float const u1 = -1.f + 2.f * (float)( i + 1 ) / (float)kAlong;
-                    auto acrossOf = [&]( float v ) -> float
-                    {
-                        return ( v >= 0.f ) ? ( v * halfDeep ) : ( v * halfLip );
-                    };
-                    float x00, y00, z00, c00, x10, y10, z10, c10, x01, y01, z01, c01, x11, y11, z11, c11;
-                    sample( u0 * halfAlong, acrossOf( v0 ), x00, y00, z00, c00 );
-                    sample( u1 * halfAlong, acrossOf( v0 ), x10, y10, z10, c10 );
-                    sample( u0 * halfAlong, acrossOf( v1 ), x01, y01, z01, c01 );
-                    sample( u1 * halfAlong, acrossOf( v1 ), x11, y11, z11, c11 );
-                    // Dark cavity interior — occludes virgin terrain skin at the strike.
-                    float const cav = 0.42f;
-                    EmitPhase3Tri( x00, y00, z00, x10, y10, z10, x01, y01, z01, cav );
-                    EmitPhase3Tri( x10, y10, z10, x11, y11, z11, x01, y01, z01, cav );
-                }
-            }
-
-            // Rim seal: face plane → recess so glancing views don't flash sky / virgin roof.
-            for ( int i = 0; i < kAlong; ++i )
-            {
-                float const u0 = -1.f + 2.f * (float)i / (float)kAlong;
-                float const u1 = -1.f + 2.f * (float)( i + 1 ) / (float)kAlong;
-                for ( int edge = 0; edge < 2; ++edge )
-                {
-                    float const v = ( edge == 0 ) ? -1.f : 1.f;
-                    float const across = ( v >= 0.f ) ? ( v * halfDeep ) : ( v * halfLip );
-                    float x0, y0, z0, c0, x1, y1, z1, c1;
-                    sample( u0 * halfAlong, across, x0, y0, z0, c0 );
-                    sample( u1 * halfAlong, across, x1, y1, z1, c1 );
-                    float const gx0 = ax + sx * ( u0 * halfAlong ) + tx * across;
-                    float const gy0 = ay + sy * ( u0 * halfAlong ) + ty * across;
-                    float const gz0 = az + sz * ( u0 * halfAlong ) + tz * across;
-                    float const gx1 = ax + sx * ( u1 * halfAlong ) + tx * across;
-                    float const gy1 = ay + sy * ( u1 * halfAlong ) + ty * across;
-                    float const gz1 = az + sz * ( u1 * halfAlong ) + tz * across;
-                    EmitPhase3Tri( gx0, gy0, gz0, gx1, gy1, gz1, x0, y0, z0, 0.62f );
-                    EmitPhase3Tri( gx1, gy1, gz1, x1, y1, z1, x0, y0, z0, 0.62f );
-                }
-            }
-        }
-        glEnd();
-        glDisable( GL_POLYGON_OFFSET_FILL );
-        glEnable( GL_CULL_FACE );
+        // Retired for P3b — pick opens occupancy D2 cavities, not flat face-line scars.
     }
 
     void DrawFacePunctures()
     {
-        // Compact sealed chips recess INTO the face (along stored surface normal) at strike point.
-        // Must not DigDep an XY hemi — that stretches into vertical scoops on cliffs.
-        if ( g.scars.empty() ) { return; }
-        constexpr int kRing = 10;
-        constexpr int kRad = 6;
-        glShadeModel( GL_FLAT );
-        glDisable( GL_CULL_FACE );
-        glEnable( GL_POLYGON_OFFSET_FILL );
-        glPolygonOffset( -2.5f, -4.f );
-        glBegin( GL_TRIANGLES );
-        for ( DigScar const& s : g.scars )
-        {
-            if ( s.place || s.kind != ScarKind::FacePuncture ) { continue; }
-            float const rad = (std::max)( 0.012f, s.radius );
-            float const chipMax = (std::max)( 0.012f, (std::min)( s.radius * 1.05f, s.depth ) );
-
-            float nx = s.faceNx, ny = s.faceNy, nz = s.faceNz;
-            float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
-            if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
-            else { CaptureFaceNormalAt( s.wx, s.wy, nx, ny, nz ); }
-
-            float t1x = -ny, t1y = nx, t1z = 0.f;
-            float t1len = std::sqrt( t1x * t1x + t1y * t1y + t1z * t1z );
-            if ( t1len < 1e-4f )
-            {
-                t1x = 0.f; t1y = -nz; t1z = ny;
-                t1len = std::sqrt( t1x * t1x + t1y * t1y + t1z * t1z );
-            }
-            if ( t1len > 1e-5f ) { t1x /= t1len; t1y /= t1len; t1z /= t1len; }
-            float t2x = ny * t1z - nz * t1y;
-            float t2y = nz * t1x - nx * t1z;
-            float t2z = nx * t1y - ny * t1x;
-
-            // Anchor at stored strike — never re-snap to grade (that left virgin skin at wrong Z).
-            float const ax = s.wx, ay = s.wy, az = s.wz;
-
-            auto sample = [&]( float ru, float rv, float& ox, float& oy, float& oz, float& chip )
-            {
-                float const r2 = ru * ru + rv * rv;
-                chip = chipMax * std::sqrt( (std::max)( 0.f, 1.f - r2 ) );
-                ox = ax + t1x * ( ru * rad ) + t2x * ( rv * rad ) - nx * chip;
-                oy = ay + t1y * ( ru * rad ) + t2y * ( rv * rad ) - ny * chip;
-                oz = az + t1z * ( ru * rad ) + t2z * ( rv * rad ) - nz * chip;
-            };
-
-            for ( int j = 0; j < kRad; ++j )
-            {
-                float const r0 = (float)j / (float)kRad;
-                float const r1 = (float)( j + 1 ) / (float)kRad;
-                for ( int i = 0; i < kRing; ++i )
-                {
-                    float const a0 = (float)i / (float)kRing * 6.2831853f;
-                    float const a1 = (float)( i + 1 ) / (float)kRing * 6.2831853f;
-                    float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
-                    float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
-                    float x00, y00, z00, c00, x10, y10, z10, c10, x01, y01, z01, c01, x11, y11, z11, c11;
-                    sample( r0 * c0, r0 * s0, x00, y00, z00, c00 );
-                    sample( r0 * c1, r0 * s1, x10, y10, z10, c10 );
-                    sample( r1 * c0, r1 * s0, x01, y01, z01, c01 );
-                    sample( r1 * c1, r1 * s1, x11, y11, z11, c11 );
-                    float const cav = 0.52f;
-                    EmitPhase3Tri( x00, y00, z00, x10, y10, z10, x01, y01, z01, cav );
-                    EmitPhase3Tri( x10, y10, z10, x11, y11, z11, x01, y01, z01, cav );
-                }
-            }
-
-            for ( int i = 0; i < kRing; ++i )
-            {
-                float const a0 = (float)i / (float)kRing * 6.2831853f;
-                float const a1 = (float)( i + 1 ) / (float)kRing * 6.2831853f;
-                float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
-                float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
-                float x0, y0, z0, ch0, x1, y1, z1, ch1;
-                sample( c0, s0, x0, y0, z0, ch0 );
-                sample( c1, s1, x1, y1, z1, ch1 );
-                float const gx0 = ax + t1x * ( c0 * rad ) + t2x * ( s0 * rad );
-                float const gy0 = ay + t1y * ( c0 * rad ) + t2y * ( s0 * rad );
-                float const gz0 = az + t1z * ( c0 * rad ) + t2z * ( s0 * rad );
-                float const gx1 = ax + t1x * ( c1 * rad ) + t2x * ( s1 * rad );
-                float const gy1 = ay + t1y * ( c1 * rad ) + t2y * ( s1 * rad );
-                float const gz1 = az + t1z * ( c1 * rad ) + t2z * ( s1 * rad );
-                EmitPhase3Tri( gx0, gy0, gz0, gx1, gy1, gz1, x0, y0, z0, 0.60f );
-                EmitPhase3Tri( gx1, gy1, gz1, x1, y1, z1, x0, y0, z0, 0.60f );
-            }
-        }
-        glEnd();
-        glDisable( GL_POLYGON_OFFSET_FILL );
-        glEnable( GL_CULL_FACE );
+        // Retired for P3b — steep/pick soft bites use occupancy cavities, not sealed chips.
     }
 
-    void DrawFoliationPlateNotches();
-    void DrawFacePunctures();
     void DrawMatterBodies();
     void DrawHeightfield()
     {
@@ -4730,9 +6335,13 @@ namespace
         glStencilMask( 0xFF );
         glDisable( GL_STENCIL_TEST );
         glDepthFunc( GL_LEQUAL );
+        // P3b: D2 matter face after skin opens — VisualMaterial interior of removed volume.
+        DrawCavityMeshes();
+        DrawMaterialFormGallery(); // hand-scale material forms east of spawn
+        DrawHeldGallerySample();   // E-held sample at hand for close inspect
         DrawLiveScoopCups( false );
-        DrawFoliationPlateNotches(); // sealed schist chips — no stencil hole through cliffs
-        DrawFacePunctures();         // sealed steep/pick soft chips — into face, not DigDep bowls
+        DrawFoliationPlateNotches(); // flash only when carve missed
+        DrawFacePunctures();
         DrawMatterBodies();
         glDepthFunc( GL_LESS );
     }
@@ -5302,6 +6911,7 @@ namespace
                 }
             }
             FollowStreamCenter();
+            ResolveSolidSampleCollisions();
         }
         else
         {
@@ -5318,6 +6928,7 @@ namespace
             g.feetZ = g.camZ - kEyeHeightM;
             g.grounded = false;
             FollowStreamCenter();
+            ResolveSolidSampleCollisions();
         }
     }
 
@@ -5409,6 +7020,9 @@ namespace
         int w = (std::max)( 1, (int)rc.right );
         int h = (std::max)( 1, (int)rc.bottom );
         glViewport( 0, 0, w, h );
+
+        UpdateWorldSun();
+        LitSetIdentity();
 
         // Sky clear (gradient via clear + large back quad)
         glClearColor( 0.45f, 0.62f, 0.88f, 1.f );
@@ -5552,8 +7166,8 @@ namespace
             DrawHudText( 16, 64, "FREE CAMERA  [F] back to walk" );
             glColor3f( 0.95f, 0.97f, 1.f );
         }
-        DrawHudText( 16, 46, "LMB dig/pick   RMB place   [G] grip/drop plate   WASD Shift Space  [F] fly  [J] journal  Tab  Esc" );
-        DrawHudText( 16, 28, "Green aim = dig   Amber aim = place (while holding)   mounds/holes = cups" );
+        DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  scroll rolls held  [ ] sun azimuth  -/= elevation" );
+        DrawHudText( 16, 28, "Sun+sky light materials (not painted dark sides)  tumble gold — highlight must travel" );
         DrawHudText( 16, 10, g.digestLine.c_str() );
 
         g.uiWinW = w;
@@ -5706,6 +7320,62 @@ namespace
                     TryGripMatterBody();
                     return 0;
                 }
+                else if ( wParam == 'E' || wParam == 'e' )
+                {
+                    if ( TryPickupGallerySample() )
+                    {
+                        // Consume E so free-fly doesn't also rise on the same press.
+                        g.keys['E'] = false;
+                        g.keys['e'] = false;
+                    }
+                    return 0;
+                }
+                else if ( wParam == VK_OEM_4 ) // [
+                {
+                    g.sunAzimuth -= 0.15f;
+                    UpdateWorldSun();
+                    InvalidateTerrainMesh();
+                    char d[120];
+                    std::snprintf( d, sizeof( d ), "Sun azimuth %.0f°  elev %.0f°",
+                        g.sunAzimuth * ( 180.f / 3.14159265f ),
+                        g.sunElevation * ( 180.f / 3.14159265f ) );
+                    g.digestLine = d;
+                    return 0;
+                }
+                else if ( wParam == VK_OEM_6 ) // ]
+                {
+                    g.sunAzimuth += 0.15f;
+                    UpdateWorldSun();
+                    InvalidateTerrainMesh();
+                    char d[120];
+                    std::snprintf( d, sizeof( d ), "Sun azimuth %.0f°  elev %.0f°",
+                        g.sunAzimuth * ( 180.f / 3.14159265f ),
+                        g.sunElevation * ( 180.f / 3.14159265f ) );
+                    g.digestLine = d;
+                    return 0;
+                }
+                else if ( wParam == VK_OEM_MINUS || wParam == '-' )
+                {
+                    g.sunElevation = (std::max)( 0.08f, g.sunElevation - 0.08f );
+                    UpdateWorldSun();
+                    InvalidateTerrainMesh();
+                    char d[120];
+                    std::snprintf( d, sizeof( d ), "Sun elev %.0f°  (horizon→zenith)",
+                        g.sunElevation * ( 180.f / 3.14159265f ) );
+                    g.digestLine = d;
+                    return 0;
+                }
+                else if ( wParam == VK_OEM_PLUS || wParam == '=' )
+                {
+                    g.sunElevation = (std::min)( 1.45f, g.sunElevation + 0.08f );
+                    UpdateWorldSun();
+                    InvalidateTerrainMesh();
+                    char d[120];
+                    std::snprintf( d, sizeof( d ), "Sun elev %.0f°  (horizon→zenith)",
+                        g.sunElevation * ( 180.f / 3.14159265f ) );
+                    g.digestLine = d;
+                    return 0;
+                }
                 else if ( wParam == 'R' )
                 {
                     g.lastAttemptMs = GetTickCount();
@@ -5714,6 +7384,24 @@ namespace
                 return 0;
             case WM_KEYUP:
                 if ( wParam < 256 ) { g.keys[wParam] = false; }
+                return 0;
+            case WM_MOUSEWHEEL:
+                if ( !g.heldGalleryId.empty() && !g.journalOpen )
+                {
+                    short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
+                    float const step = ( delta / (float)WHEEL_DELTA ) * ( 3.14159265f / 10.f );
+                    if ( ( GetKeyState( VK_SHIFT ) & 0x8000 ) != 0 )
+                    {
+                        // Shift+scroll: spin left/right about world up.
+                        g.heldYaw += step;
+                    }
+                    else
+                    {
+                        // Scroll: tumble/roll over about hand-right (inspect underside / faces).
+                        g.heldTumble += step;
+                    }
+                    return 0;
+                }
                 return 0;
             case WM_LBUTTONDOWN:
             {

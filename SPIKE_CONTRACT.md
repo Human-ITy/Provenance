@@ -34,19 +34,20 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P1** Native window + protocol handshake + identity/HUD | Caps / revisions / reconnect | Done (wire live) |
 | **P2** Far projection only (no dig authority) | Heightfield + sky + camera | Done (analytic + streamed surface) |
 | **P3** Standable projection + collision | Walk / wall capsule | Partial |
-| **P3b Voxel form gate** | Interaction geometry from **occupancy / D2**, not heightfield cups | **Not done — blocks correct dig/pick** |
-| **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Blocked on P3b |
+| **P3b Voxel form gate** | Interaction geometry from **occupancy / D2**, not heightfield cups | **Client land** — affect-sphere carve → D2 cavity + skin open; column reconcile; P4 next |
+| **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 
 ### The voxel-form gate (user law)
 
 > Dig and pick will not be correct until the world represents its forms by our voxel definitions.
 
-That means:
+**P3b client land (2026-08-08):**
 
-- Aim / carve / scar / matter return must come from **authoritative subvoxel occupancy** (and material identity), not from grade cups or sealed face overlays alone.
-- Heightfield + DigScar cups are **bring-up projection** — useful for walk/look, insufficient for Horizon-to-Hand truth.
-- Next concrete work after isolation: consume `voxel_column` / occupancy for contact solid, removed volume, and cavity presentation (D2 reconstruct), still via existing wire receipts.
+- Aim prefers resident occupancy solid; dig/pick subtract the same affect sphere from fill (synthetic until `voxel_column`).
+- Cavity presentation = solid|air D2 boundary painted with `VisualMaterialDef` (exterior material becomes viewable interior).
+- Heightfield pads open where matter was removed (`SurfaceOpenedByOccupancy`); DigScar is flash-only then retired.
+- Engine carve digest + column reply remain authority for grams / reconcile — client mesh is never world truth.
 
 ## Isolation rules
 
