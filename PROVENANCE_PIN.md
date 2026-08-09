@@ -92,7 +92,7 @@ PHYS chips: gravity → `SupportBelow(x,y,currentZ)` → contact + normal → se
 
 ```
 P3d.1 CHIP QUIESCENCE
-SHA: (pending commit)
+SHA: 0a8867affc536b003c3408d9af43bbd8bc4066cd
 ```
 
 Sleep on quiescence hysteresis — **not** flat `nz ≥ 0.88` gate. Support normal influences slide only. Wake thresholds above sleep; wake on `supportRev` / EditedRegion change under chip. Cert: cavity `CountActiveChips==0` for N frames + steep-static regression. **STOP before placement/re-fill.**

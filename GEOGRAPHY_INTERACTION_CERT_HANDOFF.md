@@ -296,7 +296,7 @@ Live `--cert-geo` after chip floor: `exit_code=0`, `PASS_rows=97 FAIL_rows=0 SKI
 
 ```
 P3d.1 CHIP QUIESCENCE
-SHA: (pending commit)
+SHA: 0a8867affc536b003c3408d9af43bbd8bc4066cd
 ```
 
 Sleep = supported + speed < sleepSpeed + `|z-restZ|` < sleepPosEps + contact stable for N frames → SETTLED. **No flat-nz sleep gate** (steep-static / rough cavity floors must sleep). Wake thresholds clearly larger; wake on support move/loss, meaningful impulse, or `supportRev` / EditedRegion change under chip. HUD/cert probe: id, life, state, speed, support nz, z, restZ, `|z-restZ|`, quietFrames, supportRev.

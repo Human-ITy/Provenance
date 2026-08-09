@@ -37,7 +37,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P3b Voxel form gate** | Interaction geometry from **occupancy / D2**, not heightfield cups | **Client land** — affect-sphere carve → D2 cavity + skin open; column reconcile |
 | **P3c Occupancy support** | `SupportBelow(x,y,queryZ)` through occupancy | **Floor** @ `5e9e786` |
 | **P3d Detached matter support** | PHYS chips on SupportBelow + ACTIVE/SETTLED lifecycle | **Floor** @ `b1fec59`; **stop before place** |
-| **P3d.1 Chip quiescence** | Hysteretic ACTIVE→SETTLED; steep-static sleep; wake on supportRev | **Cert green** — pin next; **stop before place** |
+| **P3d.1 Chip quiescence** | Hysteretic ACTIVE→SETTLED; steep-static sleep; wake on supportRev | **Floor** @ `0a8867a`; **stop before place** |
 | **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next (after place/async) |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 
