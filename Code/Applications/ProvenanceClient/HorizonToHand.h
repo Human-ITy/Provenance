@@ -588,6 +588,18 @@ namespace H2H
         int quietFrames = 0;
         int supportRev = -1;
         bool contactStable = false;
+        // P3d.2 limit-cycle / orbit halt — ring of recent positions + vel sign flips.
+        static constexpr int kOrbitHistN = 24;
+        float orbitX[kOrbitHistN] = {};
+        float orbitY[kOrbitHistN] = {};
+        float orbitZ[kOrbitHistN] = {};
+        uint8_t orbitNear[kOrbitHistN] = {}; // 1 if sample was near |z-rest|
+        uint8_t orbitN = 0;       // samples filled (caps at kOrbitHistN)
+        uint8_t orbitI = 0;       // next write
+        uint8_t orbitNearRestN = 0; // count of near-rest samples in ring
+        int8_t lastVxSign = 0;
+        int8_t lastVySign = 0;
+        uint8_t velSignFlips = 0;
     };
 
     struct AggregatePatch
@@ -926,7 +938,7 @@ namespace H2H
         return "?";
     }
 
-    // HUD / cert probe: id, life, state, speed, support nz, z, restZ, |z-restZ|, quietFrames, supportRev
+    // HUD / cert probe: id, life, state, speed, support nz, z, restZ, |z-restZ|, quietFrames, supportRev, orbit
     inline int FormatChipProbe( MatterBody const& b, char* buf, int bufN )
     {
         if ( !buf || bufN <= 0 ) { return 0; }
@@ -934,7 +946,7 @@ namespace H2H
         float const dz = std::fabs( b.z - b.restZ );
         char const* state = ChipIntegrates( b ) ? "integrating" : "sleep";
         return std::snprintf( buf, (size_t)bufN,
-            "id=%llu life=%s state=%s spd=%.4f nz=%.3f z=%.3f restZ=%.3f |z-rest|=%.4f quiet=%d rev=%d",
+            "id=%llu life=%s state=%s spd=%.4f nz=%.3f z=%.3f restZ=%.3f |z-rest|=%.4f quiet=%d rev=%d orb=%u flips=%u",
             (unsigned long long)b.body_id,
             ChipLifeName( b.life ),
             state,
@@ -944,7 +956,138 @@ namespace H2H
             b.restZ,
             dz,
             b.quietFrames,
-            b.supportRev );
+            b.supportRev,
+            (unsigned)b.orbitN,
+            (unsigned)b.velSignFlips );
+    }
+
+    // Quiescence hysteresis — support normal influences slide, NOT sleep permission.
+    inline constexpr float kChipSleepSpeed = 0.07f;
+    inline constexpr float kChipWakeSpeed = 0.28f;       // clearly above sleep
+    inline constexpr float kChipSleepPosEps = 0.02f;
+    inline constexpr float kChipWakePosEps = 0.08f;      // clearly above sleep
+    inline constexpr int kChipSleepQuietFrames = 12;     // N consecutive quiet contact frames
+    // P3d.2 vibrate / limit-cycle halt (complements speed hysteresis — does not replace it).
+    inline constexpr float kChipOrbitBoundEps = 0.045f;    // AABB extent for "buzzing in place"
+    inline constexpr float kChipOrbitPathMin = 0.08f;     // path length inside bound → orbiting
+    inline constexpr float kChipProgressEps = 0.025f;     // net XY travel = real slide, not orbit
+    inline constexpr float kChipTangentialDamp = 0.78f;   // per-frame KE drain when near rest
+    inline constexpr float kChipOrbitNearFrac = 0.70f;    // fraction of window near |z-rest|
+
+    inline void ChipOrbitReset( MatterBody& b )
+    {
+        b.orbitN = 0;
+        b.orbitI = 0;
+        b.orbitNearRestN = 0;
+        b.lastVxSign = 0;
+        b.lastVySign = 0;
+        b.velSignFlips = 0;
+        for ( int i = 0; i < MatterBody::kOrbitHistN; ++i )
+        {
+            b.orbitX[i] = b.orbitY[i] = b.orbitZ[i] = 0.f;
+            b.orbitNear[i] = 0;
+        }
+    }
+
+    inline int8_t ChipVelSign( float v )
+    {
+        constexpr float kEps = 0.02f;
+        if ( v > kEps ) { return 1; }
+        if ( v < -kEps ) { return -1; }
+        return 0;
+    }
+
+    // Record contact sample; rolling near-rest count + tangential sign flips.
+    inline void ChipOrbitPush( MatterBody& b, float x, float y, float z, bool nearRest )
+    {
+        if ( b.orbitN == MatterBody::kOrbitHistN && b.orbitNear[b.orbitI] )
+        {
+            if ( b.orbitNearRestN > 0 ) { b.orbitNearRestN = (uint8_t)( b.orbitNearRestN - 1 ); }
+        }
+        b.orbitX[b.orbitI] = x;
+        b.orbitY[b.orbitI] = y;
+        b.orbitZ[b.orbitI] = z;
+        b.orbitNear[b.orbitI] = nearRest ? 1u : 0u;
+        if ( nearRest ) { b.orbitNearRestN = (uint8_t)( b.orbitNearRestN + 1 ); }
+        b.orbitI = (uint8_t)( ( b.orbitI + 1 ) % MatterBody::kOrbitHistN );
+        if ( b.orbitN < MatterBody::kOrbitHistN ) { b.orbitN = (uint8_t)( b.orbitN + 1 ); }
+
+        int8_t const sx = ChipVelSign( b.vx );
+        int8_t const sy = ChipVelSign( b.vy );
+        if ( sx != 0 && b.lastVxSign != 0 && sx != b.lastVxSign && b.velSignFlips < 250 )
+        {
+            b.velSignFlips = (uint8_t)( b.velSignFlips + 1 );
+        }
+        if ( sy != 0 && b.lastVySign != 0 && sy != b.lastVySign && b.velSignFlips < 250 )
+        {
+            b.velSignFlips = (uint8_t)( b.velSignFlips + 1 );
+        }
+        if ( sx != 0 ) { b.lastVxSign = sx; }
+        if ( sy != 0 ) { b.lastVySign = sy; }
+    }
+
+    // True when recent motion is a bounded repeat / orbit while mostly near rest.
+    inline bool ChipOrbitShouldHalt( MatterBody const& b, float& outMeanX, float& outMeanY )
+    {
+        outMeanX = b.x;
+        outMeanY = b.y;
+        if ( b.orbitN < MatterBody::kOrbitHistN ) { return false; }
+
+        float minX = b.orbitX[0], maxX = b.orbitX[0];
+        float minY = b.orbitY[0], maxY = b.orbitY[0];
+        float minZ = b.orbitZ[0], maxZ = b.orbitZ[0];
+        float sumX = 0.f, sumY = 0.f;
+        for ( int i = 0; i < MatterBody::kOrbitHistN; ++i )
+        {
+            float const x = b.orbitX[i], y = b.orbitY[i], z = b.orbitZ[i];
+            minX = (std::min)( minX, x ); maxX = (std::max)( maxX, x );
+            minY = (std::min)( minY, y ); maxY = (std::max)( maxY, y );
+            minZ = (std::min)( minZ, z ); maxZ = (std::max)( maxZ, z );
+            sumX += x; sumY += y;
+        }
+        float path = 0.f;
+        int const start = (int)b.orbitI; // oldest when ring is full
+        for ( int k = 0; k < MatterBody::kOrbitHistN - 1; ++k )
+        {
+            int const i0 = ( start + k ) % MatterBody::kOrbitHistN;
+            int const i1 = ( start + k + 1 ) % MatterBody::kOrbitHistN;
+            float const dx = b.orbitX[i1] - b.orbitX[i0];
+            float const dy = b.orbitY[i1] - b.orbitY[i0];
+            float const dz = b.orbitZ[i1] - b.orbitZ[i0];
+            path += std::sqrt( dx * dx + dy * dy + dz * dz );
+        }
+        float const netX = b.orbitX[( start + MatterBody::kOrbitHistN - 1 ) % MatterBody::kOrbitHistN]
+            - b.orbitX[start];
+        float const netY = b.orbitY[( start + MatterBody::kOrbitHistN - 1 ) % MatterBody::kOrbitHistN]
+            - b.orbitY[start];
+        float const netDisp = std::sqrt( netX * netX + netY * netY );
+
+        float const ext = (std::max)( maxX - minX, (std::max)( maxY - minY, maxZ - minZ ) );
+        float const nearNeed = kChipOrbitNearFrac * (float)MatterBody::kOrbitHistN;
+        bool const bounded = ext <= kChipOrbitBoundEps;
+        bool const mostlyNear = (float)b.orbitNearRestN >= nearNeed;
+        bool const wiggly = ( b.velSignFlips >= 4 )
+            || ( path >= kChipOrbitPathMin && path > 2.5f * ( ext + 1e-4f ) );
+        bool const notSlidingAway = netDisp < kChipProgressEps;
+
+        if ( !( bounded && mostlyNear && wiggly && notSlidingAway ) ) { return false; }
+        outMeanX = sumX / (float)MatterBody::kOrbitHistN;
+        outMeanY = sumY / (float)MatterBody::kOrbitHistN;
+        return true;
+    }
+
+    // Net XY travel over orbit window — real downslope progress vs thrash.
+    inline float ChipOrbitNetDisp( MatterBody const& b )
+    {
+        if ( b.orbitN < 2 ) { return 1.f; } // unknown → allow kinetic pump
+        int const n = (int)b.orbitN;
+        int const start = ( n == MatterBody::kOrbitHistN )
+            ? (int)b.orbitI
+            : 0;
+        int const last = ( start + n - 1 ) % MatterBody::kOrbitHistN;
+        float const dx = b.orbitX[last] - b.orbitX[start];
+        float const dy = b.orbitY[last] - b.orbitY[start];
+        return std::sqrt( dx * dx + dy * dy );
     }
 
     // Detached chip spawn for PHYS / cert — ACTIVE life, SupportBelow consumer.
@@ -970,6 +1113,7 @@ namespace H2H
         body.quietFrames = 0;
         body.supportRev = -1;
         body.contactStable = false;
+        ChipOrbitReset( body );
         State().bodies.push_back( body );
         ++State().world_revision;
         return State().bodies.back();
@@ -985,6 +1129,7 @@ namespace H2H
         b.contactStable = false;
         b.vx = b.vy = 0.f;
         b.vz = 0.f;
+        ChipOrbitReset( b );
     }
 
     // Meaningful impulse → always wake (thresholds above sleep band).
@@ -1002,6 +1147,8 @@ namespace H2H
         b.vx = b.vy = b.vz = 0.f;
         b.settled = true;
         b.contactStable = true;
+        b.quietFrames = kChipSleepQuietFrames;
+        ChipOrbitReset( b );
         if ( explicitBody )
         {
             b.life = ChipLife::ExplicitBody;
@@ -1012,13 +1159,6 @@ namespace H2H
             b.life = ChipLife::Settled;
         }
     }
-
-    // Quiescence hysteresis — support normal influences slide, NOT sleep permission.
-    inline constexpr float kChipSleepSpeed = 0.07f;
-    inline constexpr float kChipWakeSpeed = 0.28f;       // clearly above sleep
-    inline constexpr float kChipSleepPosEps = 0.02f;
-    inline constexpr float kChipWakePosEps = 0.08f;      // clearly above sleep
-    inline constexpr int kChipSleepQuietFrames = 12;     // N consecutive quiet contact frames
 
     // PHYS: gravity → SupportBelow(x,y,currentZ) → contact + normal → settle / slide / sleep.
     // Forbidden consumers (call site must not pass): D2 tris, carve-sphere floor,
@@ -1096,6 +1236,7 @@ namespace H2H
                 b.vx = b.vy = b.vz = 0.f;
                 b.quietFrames = 0;
                 b.contactStable = false;
+                ChipOrbitReset( b );
                 continue;
             }
             if ( !h.hit )
@@ -1103,6 +1244,7 @@ namespace H2H
                 // No solid below query — keep falling (open shaft / deep void).
                 b.quietFrames = 0;
                 b.contactStable = false;
+                ChipOrbitReset( b );
                 continue;
             }
 
@@ -1111,6 +1253,7 @@ namespace H2H
             {
                 b.quietFrames = 0;
                 b.contactStable = false;
+                ChipOrbitReset( b );
                 continue; // still airborne above support
             }
 
@@ -1137,13 +1280,44 @@ namespace H2H
             // Align plate to support contact normal (presentation / slide frame).
             b.nx = nx; b.ny = ny; b.nz = nz;
 
-            float speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
             float const dzRest = std::fabs( b.z - rest ); // ~0 after pin
+            bool const nearRest = dzRest < kChipSleepPosEps;
+
+            ChipOrbitPush( b, b.x, b.y, b.z, nearRest );
+
+            // Limit-cycle / orbit halt: repeating motion in a bound while near support.
+            {
+                float meanX = b.x, meanY = b.y;
+                if ( ChipOrbitShouldHalt( b, meanX, meanY ) )
+                {
+                    b.x = meanX;
+                    b.y = meanY;
+                    b.z = rest;
+                    b.restZ = rest;
+                    b.vx = b.vy = b.vz = 0.f;
+                    SleepChip( b, b.materials_g >= 40 );
+                    continue;
+                }
+            }
+
+            float speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            bool const makingProgress = ChipOrbitNetDisp( b ) >= kChipProgressEps
+                || b.orbitN < MatterBody::kOrbitHistN;
+            // P3d.2: damp tangential KE when supported near rest and not making slide progress
+            // (complements cycle detect; does not brake honest downslope travel).
+            if ( nearRest && !makingProgress )
+            {
+                b.vx *= kChipTangentialDamp;
+                b.vy *= kChipTangentialDamp;
+                b.vz *= kChipTangentialDamp;
+                speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            }
+
             // Static / hysteresis band (below wakeSpeed): hold against weight.
             // Free-fall g was already integrated this frame; normal kill turns it into
             // tangent micro-speed — static friction must zero that or sleep never sticks.
             // Required sleep transition still: supported + quiet for N frames (nz ignored).
-            if ( speed < kChipWakeSpeed && dzRest < kChipSleepPosEps )
+            if ( speed < kChipWakeSpeed && nearRest )
             {
                 b.vx = b.vy = b.vz = 0.f;
                 b.contactStable = true;
@@ -1157,11 +1331,12 @@ namespace H2H
             }
 
             // Kinetic slide: gravity along tangent + friction (steep keeps more speed).
+            // Skip energy pump when thrashing in-place (orbit window filled, tiny net travel).
             // g=(0,0,-gAcc); g·N=-gAcc*nz; t = g - (g·N)N.
             float const tgx = gAcc * nz * nx;
             float const tgy = gAcc * nz * ny;
             float const tgz = -gAcc * ( 1.f - nz * nz );
-            if ( nz < 0.995f )
+            if ( nz < 0.995f && makingProgress )
             {
                 b.vx += tgx * dt;
                 b.vy += tgy * dt;

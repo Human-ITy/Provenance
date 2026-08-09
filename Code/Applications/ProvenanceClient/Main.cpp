@@ -9031,7 +9031,7 @@ namespace
             DrawHudText( 16, 64, "FREE CAMERA  [F] back to walk" );
             glColor3f( 0.95f, 0.97f, 1.f );
         }
-        DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  [B] cavity  [C] chips  scroll rolls held" );
+        DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  [B] cavity  [C] chips  [K] chip dump  scroll rolls held" );
         DrawHudText( 16, 28, "Sun+sky light materials (not painted dark sides)  tumble gold — highlight must travel" );
         DrawHudText( 16, 10, g.digestLine.c_str() );
 
@@ -9161,6 +9161,54 @@ namespace
             g.perfVirginD2Rebuilds,
             matterN, (int)g.chipMode,
             ( g.perfVirginD2Rebuilds == 0 ) ? "PASS" : "FAIL_or_unset" );
+        std::fclose( f );
+    }
+
+    // Agent-facing chip probe (P3d.1) — full body list; HUD stays compressed (first 3 only).
+    // Path: %TEMP%\provenance_chip_probe.txt  (1 Hz + [K] force)
+    void WriteChipProbeDump()
+    {
+        char path[MAX_PATH];
+        if ( GetTempPathA( MAX_PATH, path ) == 0 ) { return; }
+        if ( strcat_s( path, MAX_PATH, "provenance_chip_probe.txt" ) != 0 ) { return; }
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+
+        char const* mode = g.chipMode == ChipMode::Off ? "OFF"
+            : ( g.chipMode == ChipMode::Visual ? "VISUAL" : "PHYS" );
+        int const bodies = (int)H2H::State().bodies.size();
+        int const active = H2H::CountActiveChips();
+        int moving = 0;
+        int settled = 0;
+        for ( H2H::MatterBody const& b : H2H::State().bodies )
+        {
+            float const spd = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            if ( spd > 1.0e-4f ) { ++moving; }
+            if ( b.life == H2H::ChipLife::Settled || b.settled ) { ++settled; }
+        }
+
+        SYSTEMTIME st;
+        GetLocalTime( &st );
+        std::fprintf( f,
+            "# provenance_chip_probe\n"
+            "time=%04u-%02u-%02uT%02u:%02u:%02u\n"
+            "chipMode=%s\n"
+            "bodies=%d\n"
+            "activeChips=%d\n"
+            "movingChips=%d\n"
+            "settledChips=%d\n"
+            "sleepQuietN=%d\n"
+            "---\n",
+            (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+            (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+            mode, bodies, active, moving, settled, H2H::kChipSleepQuietFrames );
+
+        for ( H2H::MatterBody const& b : H2H::State().bodies )
+        {
+            char probe[256];
+            H2H::FormatChipProbe( b, probe, (int)sizeof( probe ) );
+            std::fprintf( f, "%s\n", probe );
+        }
         std::fclose( f );
     }
 
@@ -12525,6 +12573,142 @@ namespace
             }
         }
 
+        // --- P3d.2 vibrate/orbit halt: cup fixture buzzes under speed-only sleep; must SETTLED ---
+        {
+            clearCertChips();
+            float const cx = flatX + 3.f, cy = flatY;
+            float const baseZ = 12.f;
+            int const fixtureRev = 11;
+            auto cupSupport = [&]( float x, float y, float /*queryZ*/ ) -> H2H::SupportQuery
+            {
+                float const dx = x - cx, dy = y - cy;
+                // Parabolic cup — chip with sideways KE oscillates; speed stays above sleep band.
+                float const z = baseZ + 6.f * ( dx * dx + dy * dy );
+                float gx = 12.f * dx, gy = 12.f * dy; // ∂z/∂x, ∂z/∂y
+                float nx = -gx, ny = -gy, nz = 1.f;
+                float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+                if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+                H2H::SupportQuery q{};
+                q.hit = true;
+                q.deferred = false;
+                q.x = x; q.y = y; q.z = z;
+                q.nx = nx; q.ny = ny; q.nz = nz;
+                q.supportRev = fixtureRev;
+                return q;
+            };
+            float const thick = 0.04f;
+            H2H::SupportQuery const h0 = cupSupport( cx + 0.02f, cy, baseZ + 1.f );
+            float const startZ = h0.z + thick * 0.5f + 0.01f;
+            H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                cx + 0.02f, cy, startZ, 0.12f, 0.10f, thick, 200 );
+            chip.vx = 0.95f; // would buzz/orbit under P3d.1 speed thresholds alone
+            chip.vy = 0.35f;
+            chip.vz = 0.f;
+            chip.supportRev = fixtureRev;
+            int const d0 = g.perfD2Rebuilds;
+            int const h0m = g.perfHfRebuilds;
+            constexpr int kOrbitSteps = 360;
+            int settleAt = -1;
+            for ( int i = 0; i < kOrbitSteps; ++i )
+            {
+                H2H::StepBodies( kDt, cupSupport );
+                if ( H2H::CountActiveChips() == 0 ) { settleAt = i; break; }
+            }
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            bool const asleep = !H2H::ChipIntegrates( b )
+                && ( b.life == H2H::ChipLife::Settled || b.life == H2H::ChipLife::ExplicitBody );
+            bool const nearCup = std::fabs( b.x - cx ) < 0.06f && std::fabs( b.y - cy ) < 0.06f;
+            bool const noRemesh = g.perfD2Rebuilds == d0 && g.perfHfRebuilds == h0m;
+            char probe[200];
+            H2H::FormatChipProbe( b, probe, (int)sizeof( probe ) );
+            if ( !( asleep && settleAt >= 0 && nearCup && noRemesh && H2H::CountActiveChips() == 0 ) )
+            {
+                char note[240];
+                std::snprintf( note, sizeof( note ),
+                    "ORBIT_HALT_FAIL settleAt=%d life=%d active=%d near=%d remesh=%d %s",
+                    settleAt, (int)b.life, H2H::CountActiveChips(), nearCup ? 1 : 0,
+                    noRemesh ? 0 : 1, probe );
+                add( "chip_vibrate_orbit_halt", "FAIL", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 1 );
+            }
+            else
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "orbit halt SETTLED@%d active=0 cup-center %s", settleAt, probe );
+                add( "chip_vibrate_orbit_halt", "PASS", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
+        // --- P3d.2 steep kinetic settle: steep nz + restoring tilt (thrash, not free slide) ---
+        {
+            clearCertChips();
+            constexpr float kDeg = 55.f * 3.14159265f / 180.f;
+            float const sn = std::sin( kDeg );
+            float const cn = std::cos( kDeg );
+            float const planeZ = 10.f;
+            float const cx = flatX + 5.f, cy = flatY;
+            int const fixtureRev = 13;
+            auto steepSupport = [&]( float x, float y, float /*queryZ*/ ) -> H2H::SupportQuery
+            {
+                // Base steep face + XY restoring tilt so KE oscillates in-bound (HUD buzz class).
+                float const dx = x - cx, dy = y - cy;
+                float nx = sn - 14.f * dx;
+                float ny = -14.f * dy;
+                float nz = cn;
+                float const nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+                if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+                H2H::SupportQuery q{};
+                q.hit = true;
+                q.deferred = false;
+                q.x = x; q.y = y; q.z = planeZ;
+                q.nx = nx; q.ny = ny; q.nz = nz;
+                q.supportRev = fixtureRev;
+                return q;
+            };
+            float const thick = 0.04f;
+            float const rest = planeZ + thick * 0.5f + 0.01f;
+            H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                cx + 0.015f, cy, rest, 0.12f, 0.10f, thick, 200 );
+            chip.vx = 0.85f;
+            chip.vy = -0.40f;
+            chip.vz = 0.15f;
+            chip.nx = sn; chip.ny = 0.f; chip.nz = cn;
+            chip.supportRev = fixtureRev;
+            constexpr int kKinSteps = 300;
+            int settleAt = -1;
+            for ( int i = 0; i < kKinSteps; ++i )
+            {
+                H2H::StepBodies( kDt, steepSupport );
+                if ( H2H::CountActiveChips() == 0 ) { settleAt = i; break; }
+            }
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            bool const asleep = !H2H::ChipIntegrates( b )
+                && ( b.life == H2H::ChipLife::Settled || b.life == H2H::ChipLife::ExplicitBody );
+            // Fixture base is 55° (cn<0.88); restoring tilt may flatten nz at the settle point.
+            bool const steepFixture = cn < 0.88f;
+            bool const steepOk = steepFixture && asleep && H2H::CountActiveChips() == 0;
+            // Must not crest-teleport — settle near fixture center.
+            bool const noTeleport = std::fabs( b.x - cx ) < 0.10f && std::fabs( b.y - cy ) < 0.10f
+                && std::fabs( b.z - rest ) < 0.05f;
+            char probe[200];
+            H2H::FormatChipProbe( b, probe, (int)sizeof( probe ) );
+            if ( !( steepOk && noTeleport && settleAt >= 0 ) )
+            {
+                char note[240];
+                std::snprintf( note, sizeof( note ),
+                    "STEEP_KINETIC_FAIL settleAt=%d nz=%.3f life=%d active=%d %s",
+                    settleAt, b.nz, (int)b.life, H2H::CountActiveChips(), probe );
+                add( "chip_steep_kinetic_settle", "FAIL", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 1 );
+            }
+            else
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "55deg kinetic→SETTLED@%d endNz=%.3f %s", settleAt, b.nz, probe );
+                add( "chip_steep_kinetic_settle", "PASS", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
         // --- AGGREGATED scaffold: fines AggregatePatch path already present ---
         {
             bool const haveAggType = true; // AggregatePatch + StrikePick fines path
@@ -12986,6 +13170,7 @@ namespace
                     std::fclose( f );
                 }
             }
+            WriteChipProbeDump(); // %TEMP%\provenance_chip_probe.txt — full chip list for agents
         }
         Render();
         SnapVirginPerfIfNeeded();
@@ -13081,6 +13266,17 @@ namespace
                             H2H::WakeChip( b );
                         }
                     }
+                    return 0;
+                }
+                else if ( wParam == 'K' || wParam == 'k' )
+                {
+                    WriteChipProbeDump();
+                    char d[192];
+                    std::snprintf( d, sizeof( d ),
+                        "Chip probe dump → %%TEMP%%\\provenance_chip_probe.txt  (bodies=%d active=%d)",
+                        (int)H2H::State().bodies.size(), H2H::CountActiveChips() );
+                    g.digestLine = d;
+                    g.statusLine = d;
                     return 0;
                 }
                 else if ( wParam == 'B' || wParam == 'b' )

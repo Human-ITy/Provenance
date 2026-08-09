@@ -38,6 +38,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P3c Occupancy support** | `SupportBelow(x,y,queryZ)` through occupancy | **Floor** @ `5e9e786` |
 | **P3d Detached matter support** | PHYS chips on SupportBelow + ACTIVE/SETTLED lifecycle | **Floor** @ `b1fec59`; **stop before place** |
 | **P3d.1 Chip quiescence** | Hysteretic ACTIVE→SETTLED; steep-static sleep; wake on supportRev | **Floor** @ `0a8867a`; **stop before place** |
+| **P3d.2 Chip vibrate/cycle halt** | Limit-cycle / orbit detect + tangential damp → SETTLED | **Pending cert**; **stop before place** |
 | **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next (after place/async) |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 

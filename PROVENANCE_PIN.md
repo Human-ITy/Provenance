@@ -97,6 +97,13 @@ SHA: 0a8867affc536b003c3408d9af43bbd8bc4066cd
 
 Sleep on quiescence hysteresis — **not** flat `nz ≥ 0.88` gate. Support normal influences slide only. Wake thresholds above sleep; wake on `supportRev` / EditedRegion change under chip. Cert: cavity `CountActiveChips==0` for N frames + steep-static regression. **STOP before placement/re-fill.**
 
+```
+P3d.2 CHIP VIBRATE / CYCLE HALT
+SHA: (pending commit)
+```
+
+Keep P3d.1 hysteresis. Add limit-cycle / orbit detection (position ring + vel sign flips) and tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest. Wake unchanged (speed / support loss / impulse / supportRev). Cert: cavity quiescence + vibrate/orbit + steep-kinetic regressions. **STOP before placement/re-fill.**
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**

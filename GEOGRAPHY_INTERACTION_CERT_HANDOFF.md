@@ -305,7 +305,20 @@ Sleep = supported + speed < sleepSpeed + `|z-restZ|` < sleepPosEps + contact sta
 
 Live `--cert-geo` after quiescence: `exit_code=0`, `PASS_rows=100 FAIL_rows=0 SKIP_rows=5` (rows=105; §9 placement still frozen SKIP).
 
-**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.1 quiescence.
+### P3d.2 CHIP VIBRATE / CYCLE HALT
+
+```
+P3d.2 CHIP VIBRATE / CYCLE HALT
+SHA: (see PROVENANCE_PIN.md)
+```
+
+Keep P3d.1 quiescence hysteresis (no flat-nz sleep gate). Add position-ring limit-cycle / orbit detection + tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest / mean contact. Wake unchanged (speed / support loss / impulse / supportRev).
+
+§11 added: `chip_vibrate_orbit_halt`, `chip_steep_kinetic_settle`. §9 placement still frozen.
+
+Live `--cert-geo` after vibrate/cycle halt: `exit_code=0`, `PASS_rows=102 FAIL_rows=0 SKIP_rows=5` (§9 placement still frozen SKIP).
+
+**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.2.
 
 ---
 
