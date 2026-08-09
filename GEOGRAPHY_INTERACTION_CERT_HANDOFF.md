@@ -140,7 +140,9 @@ Place on flat, slope, cavity lip/floor, adjacent excavation. Must mutate matter,
 Outside EditedRegions: HF support OK. Inside: **SupportBelow(x,y,queryZ)** through occupancy (same fill D2 consumes) — not D2 tris, not column crest/topmost. Tunnel: floor below queryZ (roof ignored). Missing authority → refuse/defer, never invent HF. Support query → zero D2/HF remesh.
 
 ### §11 Chips
-Modes `OFF` / `VISUAL` / `PHYS`. Geometry cert normally OFF. PHYS: gravity, no crest teleport, cavity entry, conserved mass.
+Modes `OFF` / `VISUAL` / `PHYS`. Geometry cert normally OFF. PHYS: gravity → `SupportBelow(x,y,currentZ)` → contact normal → settle/slide; no crest teleport; cavity/tunnel entry; missing occ defer; ACTIVE→SETTLED sleep. Lifecycle also `AGGREGATED` (fines scaffold) / `EXPLICIT BODY` (meaningful plates).
+
+**Scalability:** material vocabulary is cheap; instantiated representation is what costs — wake geometry/physics only on exposure, detachment, proximity, or gameplay meaning.
 
 ### §12 Streaming / async
 Permute 3×3 `voxel_column` fan-in → identical final occupancy/materials/ER/D2/HF. `fill=keepLocalCarve`, grade preserved; no cavity rebuild unless auth edited.
@@ -227,9 +229,9 @@ Then teleport the visual client to that XYZ and inspect.
 | §6 accumulated excavation | **Done** — flat + **moderate_rock** + **steep_face** 20-strike corridors (same ER/lip/cross-cell/0.85 gates; steep uses into-normal carve) |
 | §7 HF/D2 ownership masks | **Done** — action≠dirty≠HF aperture; prior opening triple owner; no uncovered void; D2 re-extract does not mutate HF ownership; far mouth=0 |
 | §8 material correctness | **Done (instrumented gates)** — `MaterialSlumpsOpen` soft/hard; presented cap vs `SampleSurface`; soft-roof omit/sink vs hard CrestMouth; no invented remapper |
-| §9 Placement | **Frozen / deferred** — after P3c (stash: `Build/_d2_floor_stash/`) |
+| §9 Placement | **Frozen / deferred** — after P3d (stash: `Build/_d2_floor_stash/`) |
 | §10 Support/collision | **Done (P3c)** — SupportBelow occupancy floor; see live run below |
-| §11 chips | **Frozen** — do not expand until after P3c pin; no PHYS chip work yet |
+| §11 chips | **Done (P3d)** — PHYS on SupportBelow + lifecycle; see live run below |
 | §12 / §14 | **Scaffold SKIP** |
 | §13 performance budgets | **Partial** — virgin invariants + timing snapshot (header counters) |
 | §15 artifact | **Done** |
@@ -277,7 +279,20 @@ Live `--cert-geo` after support floor: `exit_code=0`, `PASS_rows=87 FAIL_rows=0 
 
 §10 probes (RANGE): virgin flat/slope HF unchanged; cavity floor ≠ virgin HF; wall no false ledge; tunnel floor below queryZ (roof ignored); lip inside/outside; cross-cell continuity; neighbor-strike far identity; missing authority refuse; support query zero remesh.
 
-**Order for next agents:** CHIP PHYSICS only after user asks; then PLACE/RE-FILL → ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership without a cert defect.
+### P3d DETACHED MATTER SUPPORT FLOOR
+
+```
+P3d DETACHED MATTER SUPPORT FLOOR
+SHA: PENDING_PIN
+```
+
+**Scalability (standing):** material vocabulary is cheap; instantiated representation is what costs. Chips: ACTIVE→SETTLED sleep; AGGREGATED fines scaffold OK; EXPLICIT BODY only for meaningful plates — not permanent active rigid bodies for every fragment.
+
+Live `--cert-geo` after chip floor: `exit_code=0`, `PASS_rows=97 FAIL_rows=0 SKIP_rows=5` (§11 all PASS; §9 placement still frozen SKIP).
+
+§11 probes (RANGE): falls to HF; into dig hole; tunnel ignores roof; incline slide + support normal; cross-cell no hop; missing occ defer; OFF→VISUAL→PHYS zero D2/HF remesh; determinism; ACTIVE→SETTLED sleep; AggregatePatch scaffold.
+
+**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.
 
 ---
 

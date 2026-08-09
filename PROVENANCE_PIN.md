@@ -81,7 +81,21 @@ P3c OCCUPANCY SUPPORT FLOOR
 SHA: 5e9e786d08d2352c4f4efc1c84f9d0ab977d12f9
 ```
 
-SupportBelow from queryZ through occupancy (not D2 tris, not column crest). Missing authority → refuse/defer. Chips remain frozen — do not resume PHYS until user asks after this floor.
+SupportBelow from queryZ through occupancy (not D2 tris, not column crest). Missing authority → refuse/defer. Chips consume this floor — do not invent chip terrain physics.
+
+```
+P3d DETACHED MATTER SUPPORT FLOOR
+SHA: PENDING_PIN
+```
+
+PHYS chips: gravity → `SupportBelow(x,y,currentZ)` → contact + normal → settle/slide/sleep. Modes `OFF` / `VISUAL` / `PHYS`. Lifecycle `ACTIVE → SETTLED → AGGREGATED (scaffold) / EXPLICIT BODY`. OFF is zero chip cost; mode switch must not remesh D2/HF. **STOP before placement/re-fill.**
+
+### Standing scalability rule
+
+> **Material vocabulary is cheap; instantiated representation is what costs.**
+> Buried/irrelevant stone, ore, mineral occurrences stay compact identity/structure data. Geometry, collision, physics, expensive optics wake only on exposure, detachment, proximity, or gameplay meaning.
+
+Apply to chips: not every fragment = permanent active rigid body forever.
 
 ## Material / appearance docs for review (keeper)
 

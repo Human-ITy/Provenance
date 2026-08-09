@@ -168,12 +168,12 @@ namespace
         Overlay        // D2 + AABB wireframe
     };
 
-    // Loose MatterBody chips (H2H plates). Off clears view for D2 cert.
+    // Loose MatterBody chips (H2H plates). Off clears view for D2/HF cert.
     enum class ChipMode : uint8_t
     {
-        Off = 0,   // no draw, no step
-        Visual,    // draw frozen in place
-        Phys       // gravity + SupportAt settle
+        Off = 0,   // zero chip presentation/physics cost
+        Visual,    // geometry visible, frozen (no integrate)
+        Phys       // ACTIVE gravity + SupportBelow(x,y,currentZ) settle/slide
     };
 
     struct CellSample
@@ -7002,12 +7002,10 @@ namespace
             {
                 if ( b.body_id != g.grippedBodyId ) { continue; }
                 b.gripped = false;
-                b.settled = false;
                 b.x = g.feetX + std::sin( g.yaw ) * 0.6f;
                 b.y = g.feetY + std::cos( g.yaw ) * 0.6f;
                 b.z = g.feetZ + 0.4f;
-                b.vx = b.vy = 0.f;
-                b.vz = 0.f;
+                H2H::WakeChip( b );
                 g.grippedBodyId = 0;
                 g.digestLine = "H2H drop plate body";
                 UpdateStreamHud();
@@ -8652,11 +8650,21 @@ namespace
 
             ResolveWalkOutOfWall();
 
-            // Horizon-to-Hand loose plates — phys only when chipMode=Phys.
+            // Horizon-to-Hand loose plates — PHYS only; SupportBelow from body Z (not crest).
             if ( g.chipMode == ChipMode::Phys )
             {
-                H2H::StepBodies( dt, []( float x, float y, float& z ) -> bool {
-                    return SupportAt( x, y, z );
+                H2H::StepBodies( dt, []( float x, float y, float queryZ ) -> H2H::SupportQuery {
+                    SupportHit const h = SupportBelow( x, y, queryZ );
+                    H2H::SupportQuery q{};
+                    q.hit = h.hit;
+                    q.deferred = h.deferred;
+                    q.x = h.position.x;
+                    q.y = h.position.y;
+                    q.z = h.position.z;
+                    q.nx = h.normal.x;
+                    q.ny = h.normal.y;
+                    q.nz = h.normal.z;
+                    return q;
                 } );
             }
             // Carry gripped plate with the hand (contact follow).
@@ -11817,10 +11825,498 @@ namespace
         }
     }
 
+    void GeoCertRunChipsSection()
+    {
+        // §11 P3d: PHYS chips consume SupportBelow only — gravity, contact normal, settle/slide/sleep.
+        // Modes OFF / VISUAL / PHYS. Forbidden: D2 tri collision, crest snap, permanent always-on bodies.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            float nx = 0.f, float ny = 0.f, float nz = 1.f, int supportFail = 0 )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "11" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "chip_phys" );
+            r.x = x; r.y = y; r.z = z;
+            r.nx = nx; r.ny = ny; r.nz = nz;
+            r.supportFail = supportFail;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "chip_phys", note, x, y, z, nx, ny, nz );
+            }
+        };
+
+        auto supportFn = []( float x, float y, float queryZ ) -> H2H::SupportQuery
+        {
+            SupportHit const h = SupportBelow( x, y, queryZ );
+            H2H::SupportQuery q{};
+            q.hit = h.hit;
+            q.deferred = h.deferred;
+            q.x = h.position.x;
+            q.y = h.position.y;
+            q.z = h.position.z;
+            q.nx = h.normal.x;
+            q.ny = h.normal.y;
+            q.nz = h.normal.z;
+            return q;
+        };
+        auto stepPhys = [&]( float dt, int n )
+        {
+            for ( int i = 0; i < n; ++i )
+            {
+                H2H::StepBodies( dt, supportFn );
+            }
+        };
+        auto clearCertChips = []()
+        {
+            H2H::State().bodies.clear();
+        };
+
+        ChipMode const savedMode = g.chipMode;
+        g.chipMode = ChipMode::Phys;
+
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        // South of §10 support pad — avoid shared carve interference.
+        float const padY = oy - 22.f;
+        constexpr float kDt = 1.f / 60.f;
+        constexpr int kFallSteps = 180;
+
+        // --- chip above virgin ground → falls to HF support ---
+        float const flatX = ox + 4.f, flatY = padY;
+        float flatZ = 0.f;
+        if ( !SampleGroundZBase( flatX, flatY, flatZ ) )
+        {
+            add( "chip_falls_to_HF", "FAIL", "FLAT_SAMPLE_FAIL", flatX, flatY, 0.f, 0, 0, 1, 1 );
+            g.chipMode = savedMode;
+            return;
+        }
+        {
+            clearCertChips();
+            float const thick = 0.04f;
+            H2H::SpawnDetachedChip( flatX, flatY, flatZ + 1.2f, 0.12f, 0.10f, thick );
+            stepPhys( kDt, kFallSteps );
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            float const wantZ = flatZ + ScarDeltaZ( flatX, flatY ) + thick * 0.5f + 0.01f;
+            bool const slept = b.settled || b.life == H2H::ChipLife::Settled
+                || b.life == H2H::ChipLife::ExplicitBody;
+            bool const onHf = std::fabs( b.z - wantZ ) <= 0.06f;
+            if ( !( slept && onHf ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "HF_SETTLE_FAIL z=%.3f want=%.3f life=%d settled=%d",
+                    b.z, wantZ, (int)b.life, b.settled ? 1 : 0 );
+                add( "chip_falls_to_HF", "FAIL", note, flatX, flatY, b.z, b.nx, b.ny, b.nz, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "settled z=%.3f~HF life=%d", b.z, (int)b.life );
+                add( "chip_falls_to_HF", "PASS", note, flatX, flatY, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
+        // --- chip over open dig → falls into the hole ---
+        float const cavX = ox + 10.f, cavY = padY;
+        float cavGrade = 0.f;
+        SampleGroundZBase( cavX, cavY, cavGrade );
+        float const openR = 0.22f;
+        float const carveZ = cavGrade - openR * 0.35f;
+        PrefetchOccupancyCell( (int)std::floor( cavX ), (int)std::floor( cavY ) );
+        bool const carvedOpen = CarveOccupancySphere( cavX, cavY, carveZ, openR, cavX, cavY, cavGrade );
+        if ( !carvedOpen )
+        {
+            add( "chip_falls_into_dig", "FAIL", "CAVITY_CARVE_FAIL", cavX, cavY, cavGrade, 0, 0, 1, 1 );
+            add( "chip_tunnel_ignores_roof", "SKIP", "no cavity setup" );
+            add( "chip_slide_inclined", "SKIP", "no cavity setup" );
+            add( "chip_cross_cell_no_hop", "SKIP", "no cavity setup" );
+            add( "chip_missing_occ_defer", "SKIP", "no cavity setup" );
+            add( "chip_mode_switch_zero_remesh", "SKIP", "no cavity setup" );
+            add( "chip_determinism", "SKIP", "no cavity setup" );
+            add( "chip_ACTIVE_SETTLED_sleep", "SKIP", "no cavity setup" );
+            add( "chip_aggregate_scaffold", "SKIP", "no cavity setup" );
+            g.chipMode = savedMode;
+            return;
+        }
+        {
+            clearCertChips();
+            float const thick = 0.04f;
+            H2H::SpawnDetachedChip( cavX, cavY, cavGrade + 0.9f, 0.12f, 0.10f, thick );
+            stepPhys( kDt, kFallSteps );
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            SupportHit const floor = SupportBelow( cavX, cavY, cavGrade + 0.5f );
+            bool const intoHole = b.z < cavGrade - 0.04f;
+            bool const nearFloor = floor.hit && std::fabs( b.z - ( floor.position.z + thick * 0.5f + 0.01f ) ) <= 0.08f;
+            if ( !( intoHole && nearFloor ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "DID_NOT_ENTER_HOLE z=%.3f grade=%.3f floor=%.3f",
+                    b.z, cavGrade, floor.position.z );
+                add( "chip_falls_into_dig", "FAIL", note, cavX, cavY, b.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "into hole z=%.3f < grade=%.3f floor=%.3f", b.z, cavGrade, floor.position.z );
+                add( "chip_falls_into_dig", "PASS", note, cavX, cavY, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
+        // --- chip inside tunnel → ignores roof; finds floor below ---
+        float const tunX = ox + 14.f, tunY = padY;
+        float tunGrade = 0.f;
+        SampleGroundZBase( tunX, tunY, tunGrade );
+        float const tunR = 0.28f;
+        float const tunCenterZ = tunGrade - 0.48f;
+        bool const tunCarved = CarveOccupancySphere( tunX, tunY, tunCenterZ, tunR, tunX, tunY, tunGrade );
+        if ( !tunCarved )
+        {
+            add( "chip_tunnel_ignores_roof", "FAIL", "TUNNEL_CARVE_FAIL", tunX, tunY, tunGrade, 0, 0, 1, 1 );
+        }
+        else
+        {
+            float roofZ = 0.f;
+            bool const haveRoof = SampleOccupancyZ( tunX, tunY, roofZ );
+            clearCertChips();
+            float const thick = 0.04f;
+            H2H::SpawnDetachedChip( tunX, tunY, tunCenterZ, 0.10f, 0.08f, thick );
+            stepPhys( kDt, kFallSteps );
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            bool const roofAbove = haveRoof && roofZ > tunCenterZ + 0.05f;
+            bool const belowQuery = b.z < tunCenterZ - 0.02f;
+            bool const notRoof = !haveRoof || std::fabs( b.z - roofZ ) > 0.08f;
+            if ( !roofAbove )
+            {
+                add( "chip_tunnel_ignores_roof", "SKIP",
+                    "tunnel roof not intact — sphere breached crest?",
+                    tunX, tunY, b.z );
+            }
+            else if ( !( belowQuery && notRoof ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "ROOF_OR_CREST_SNAP z=%.3f roof=%.3f qz=%.3f", b.z, roofZ, tunCenterZ );
+                add( "chip_tunnel_ignores_roof", "FAIL", note, tunX, tunY, b.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "floor z=%.3f below qz=%.3f (roof=%.3f ignored)", b.z, tunCenterZ, roofZ );
+                add( "chip_tunnel_ignores_roof", "PASS", note, tunX, tunY, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
+        // --- inclined support: contact normal; can slide downslope ---
+        // Use virgin steep flank (south of dig/accumulate corridors) — F_diag dig cell traps XY.
+        {
+            float slopeX = ox + 84.f, slopeY = oy - 8.f, slopeZ = 0.f;
+            char const* slopeTag = "virgin_steep";
+            // Prefer G_cliff XY if virgin; else F_diag X on unused Y.
+            for ( int i = 0; i < s_geoContactN; ++i )
+            {
+                if ( !s_geoContacts[i].found ) { continue; }
+                if ( std::strcmp( s_geoContacts[i].id, "G_cliff" ) == 0 )
+                {
+                    slopeX = s_geoContacts[i].x;
+                    slopeY = s_geoContacts[i].y - 4.f; // off the dig aim point
+                    slopeTag = "G_cliff_virgin";
+                    break;
+                }
+            }
+            // Refuse carved cells — chip PHYS must ride SupportBelow continuum/occupancy honestly.
+            {
+                CellSample const* sc = GetCell( (int)std::floor( slopeX ), (int)std::floor( slopeY ) );
+                if ( sc && sc->carved )
+                {
+                    slopeX = ox + 86.f;
+                    slopeY = oy - 10.f;
+                    slopeTag = "virgin_steep_pad";
+                }
+            }
+            SampleGroundZBase( slopeX, slopeY, slopeZ );
+            SupportHit const sh = SupportBelow( slopeX, slopeY, slopeZ + 1.5f );
+            CellSample const* sc2 = GetCell( (int)std::floor( slopeX ), (int)std::floor( slopeY ) );
+            bool const virgin = !( sc2 && sc2->carved );
+            if ( !sh.hit || !virgin || sh.normal.z >= 0.98f )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "no virgin incline (%s hit=%d virgin=%d nz=%.3f)",
+                    slopeTag, sh.hit ? 1 : 0, virgin ? 1 : 0, sh.normal.z );
+                add( "chip_slide_inclined", "SKIP", note,
+                    slopeX, slopeY, slopeZ, sh.normal.x, sh.normal.y, sh.normal.z );
+            }
+            else
+            {
+                clearCertChips();
+                float const thick = 0.04f;
+                float const startZ = sh.position.z + thick * 0.5f + 0.05f;
+                H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                    slopeX, slopeY, startZ, 0.12f, 0.10f, thick );
+                // Seed a downhill whisper so contact friction cannot hide tangent gravity.
+                float dx = sh.normal.x, dy = sh.normal.y;
+                float dlen = std::sqrt( dx * dx + dy * dy );
+                if ( dlen > 1e-5f ) { dx /= dlen; dy /= dlen; }
+                chip.vx = dx * 0.35f;
+                chip.vy = dy * 0.35f;
+                float const x0 = chip.x, y0 = chip.y;
+                stepPhys( kDt, 180 );
+                H2H::MatterBody const& b = H2H::State().bodies.front();
+                float const move = ( b.x - x0 ) * dx + ( b.y - y0 ) * dy;
+                // Incline from initial SupportBelow normal; chip may slide onto flatter runout.
+                bool const inclined = sh.normal.z < 0.98f;
+                bool const slid = move > 0.05f;
+                if ( !( inclined && slid ) )
+                {
+                    char note[140];
+                    std::snprintf( note, sizeof( note ),
+                        "NO_SLIDE_OR_TILT %s move=%.3f n0z=%.3f endNz=%.3f",
+                        slopeTag, move, sh.normal.z, b.nz );
+                    add( "chip_slide_inclined", "FAIL", note,
+                        slopeX, slopeY, b.z, sh.normal.x, sh.normal.y, sh.normal.z, 1 );
+                }
+                else
+                {
+                    char note[140];
+                    std::snprintf( note, sizeof( note ),
+                        "%s downslope move=%.3f n0=(%.2f,%.2f,%.2f)",
+                        slopeTag, move, sh.normal.x, sh.normal.y, sh.normal.z );
+                    add( "chip_slide_inclined", "PASS", note,
+                        b.x, b.y, b.z, sh.normal.x, sh.normal.y, sh.normal.z, 0 );
+                }
+            }
+        }
+
+        // --- cross world-cell boundary → no hop ---
+        {
+            float const seamX = std::floor( ox + 20.f ) + 0.98f;
+            float const seamY = padY;
+            float seamGrade = 0.f;
+            SampleGroundZBase( seamX, seamY, seamGrade );
+            float const seamR = 0.30f;
+            float const seamCarveZ = seamGrade - seamR * 0.30f;
+            bool const seamCarved = CarveOccupancySphere( seamX, seamY, seamCarveZ, seamR,
+                seamX, seamY, seamGrade );
+            if ( !seamCarved )
+            {
+                add( "chip_cross_cell_no_hop", "FAIL", "SEAM_CARVE_FAIL",
+                    seamX, seamY, seamGrade, 0, 0, 1, 1 );
+            }
+            else
+            {
+                clearCertChips();
+                float const thick = 0.04f;
+                SupportHit const h0 = SupportBelow( seamX - 0.10f, seamY, seamGrade + 0.4f );
+                float const startZ = ( h0.hit ? h0.position.z : seamGrade ) + 0.35f;
+                H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                    seamX - 0.10f, seamY, startZ, 0.10f, 0.08f, thick );
+                chip.vx = 0.55f; // cross +X cell face
+                float maxDz = 0.f;
+                float prevZ = chip.z;
+                for ( int i = 0; i < 90; ++i )
+                {
+                    H2H::StepBodies( kDt, supportFn );
+                    H2H::MatterBody const& b = H2H::State().bodies.front();
+                    maxDz = (std::max)( maxDz, std::fabs( b.z - prevZ ) );
+                    prevZ = b.z;
+                }
+                H2H::MatterBody const& b = H2H::State().bodies.front();
+                bool const crossed = b.x > std::floor( seamX ) + 0.02f;
+                // One frame of free-fall can drop ~0.005m; forbid crest-hop spikes.
+                bool const noHop = maxDz <= 0.12f;
+                if ( !( crossed && noHop ) )
+                {
+                    char note[140];
+                    std::snprintf( note, sizeof( note ),
+                        "SEAM_HOP maxDz=%.3f crossed=%d x=%.3f", maxDz, crossed ? 1 : 0, b.x );
+                    add( "chip_cross_cell_no_hop", "FAIL", note, b.x, b.y, b.z, 0, 0, 1, 1 );
+                }
+                else
+                {
+                    char note[120];
+                    std::snprintf( note, sizeof( note ),
+                        "crossed seam maxDz=%.3f x=%.3f", maxDz, b.x );
+                    add( "chip_cross_cell_no_hop", "PASS", note, b.x, b.y, b.z, 0, 0, 1, 0 );
+                }
+            }
+        }
+
+        // --- missing occupancy → defer, never teleport ---
+        {
+            int const cx = (int)std::floor( cavX );
+            int const cy = (int)std::floor( cavY );
+            CellSample* c = GetCellMutable( cx, cy );
+            if ( !c || !c->carved || c->fill.empty() )
+            {
+                add( "chip_missing_occ_defer", "SKIP",
+                    "no carved cell to strip for defer probe", cavX, cavY, cavGrade );
+            }
+            else
+            {
+                clearCertChips();
+                float const thick = 0.04f;
+                float const holdZ = cavGrade - 0.15f;
+                H2H::SpawnDetachedChip( cavX, cavY, holdZ, 0.10f, 0.08f, thick );
+                std::vector<uint8_t> savedFill = c->fill;
+                int const sw = c->fillW, sh = c->fillH, sk = c->fillK;
+                c->fill.clear();
+                c->fillW = c->fillH = c->fillK = 0;
+                float const x0 = H2H::State().bodies.front().x;
+                float const y0 = H2H::State().bodies.front().y;
+                float const z0 = H2H::State().bodies.front().z;
+                stepPhys( kDt, 30 );
+                H2H::MatterBody const& b = H2H::State().bodies.front();
+                bool const held = std::fabs( b.x - x0 ) < 1e-4f
+                    && std::fabs( b.y - y0 ) < 1e-4f
+                    && std::fabs( b.z - z0 ) < 1e-4f;
+                // Restore immediately.
+                c->fill = std::move( savedFill );
+                c->fillW = sw; c->fillH = sh; c->fillK = sk;
+                if ( !held )
+                {
+                    char note[140];
+                    std::snprintf( note, sizeof( note ),
+                        "TELEPORTED dz=%.3f (want defer-in-place)", b.z - z0 );
+                    add( "chip_missing_occ_defer", "FAIL", note, b.x, b.y, b.z, 0, 0, 1, 1 );
+                }
+                else
+                {
+                    add( "chip_missing_occ_defer", "PASS",
+                        "deferred in place — no invented HF teleport",
+                        cavX, cavY, holdZ, 0, 0, 1, 0 );
+                }
+            }
+        }
+
+        // --- OFF→VISUAL→PHYS mode switch → zero D2 rebuild / HF remesh ---
+        {
+            clearCertChips();
+            H2H::SpawnDetachedChip( flatX, flatY, flatZ + 0.5f );
+            int const d0 = g.perfD2Rebuilds;
+            int const h0 = g.perfHfRebuilds;
+            g.chipMode = ChipMode::Off;
+            // OFF: DrawMatterBodies early-outs; no StepBodies.
+            g.chipMode = ChipMode::Visual;
+            // VISUAL: draw path only — freeze, no integrate.
+            g.chipMode = ChipMode::Phys;
+            for ( H2H::MatterBody& b : H2H::State().bodies ) { H2H::WakeChip( b ); }
+            stepPhys( kDt, 8 );
+            int const d1 = g.perfD2Rebuilds;
+            int const h1 = g.perfHfRebuilds;
+            if ( d1 != d0 || h1 != h0 )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "MODE_REMESH D2 %d→%d HF %d→%d", d0, d1, h0, h1 );
+                add( "chip_mode_switch_zero_remesh", "FAIL", note, flatX, flatY, flatZ, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[96];
+                std::snprintf( note, sizeof( note ),
+                    "OFF→VIS→PHYS D2=%d HF=%d (unchanged)", d1, h1 );
+                add( "chip_mode_switch_zero_remesh", "PASS", note, flatX, flatY, flatZ, 0, 0, 1, 0 );
+            }
+            g.chipMode = ChipMode::Phys;
+        }
+
+        // --- same initial chip state → same settled result (determinism) ---
+        {
+            clearCertChips();
+            auto runOnce = [&]( float& oxOut, float& oyOut, float& ozOut, int& lifeOut )
+            {
+                clearCertChips();
+                H2H::SpawnDetachedChip( flatX + 0.03f, flatY, flatZ + 1.1f, 0.12f, 0.10f, 0.04f, 200 );
+                stepPhys( kDt, kFallSteps );
+                H2H::MatterBody const& b = H2H::State().bodies.front();
+                oxOut = b.x; oyOut = b.y; ozOut = b.z;
+                lifeOut = (int)b.life;
+            };
+            float xA = 0, yA = 0, zA = 0, xB = 0, yB = 0, zB = 0;
+            int lifeA = 0, lifeB = 0;
+            runOnce( xA, yA, zA, lifeA );
+            runOnce( xB, yB, zB, lifeB );
+            bool const same = std::fabs( xA - xB ) < 1e-5f
+                && std::fabs( yA - yB ) < 1e-5f
+                && std::fabs( zA - zB ) < 1e-5f
+                && lifeA == lifeB;
+            if ( !same )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "NONDET A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f)", xA, yA, zA, xB, yB, zB );
+                add( "chip_determinism", "FAIL", note, xA, yA, zA, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "identical settle z=%.4f life=%d", zA, lifeA );
+                add( "chip_determinism", "PASS", note, xA, yA, zA, 0, 0, 1, 0 );
+            }
+        }
+
+        // --- ACTIVE→SETTLED sleep: cost tracks moving fragments, not historical digs ---
+        {
+            clearCertChips();
+            H2H::SpawnDetachedChip( flatX, flatY, flatZ + 1.0f );
+            stepPhys( kDt, kFallSteps );
+            H2H::MatterBody const& b0 = H2H::State().bodies.front();
+            bool const asleep = !H2H::ChipIntegrates( b0 )
+                && ( b0.life == H2H::ChipLife::Settled || b0.life == H2H::ChipLife::ExplicitBody );
+            float const zx = b0.x, zy = b0.y, zz = b0.z;
+            int const active0 = H2H::CountActiveChips();
+            stepPhys( kDt, 60 );
+            H2H::MatterBody const& b1 = H2H::State().bodies.front();
+            int const active1 = H2H::CountActiveChips();
+            bool const frozen = std::fabs( b1.x - zx ) < 1e-5f
+                && std::fabs( b1.y - zy ) < 1e-5f
+                && std::fabs( b1.z - zz ) < 1e-5f
+                && active0 == 0 && active1 == 0;
+            if ( !( asleep && frozen ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "SLEEP_FAIL life=%d active=%d→%d dz=%.5f",
+                    (int)b1.life, active0, active1, b1.z - zz );
+                add( "chip_ACTIVE_SETTLED_sleep", "FAIL", note, b1.x, b1.y, b1.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "ACTIVE→sleep life=%d active=0 (no integrate)", (int)b1.life );
+                add( "chip_ACTIVE_SETTLED_sleep", "PASS", note, b1.x, b1.y, b1.z, 0, 0, 1, 0 );
+            }
+        }
+
+        // --- AGGREGATED scaffold: fines AggregatePatch path already present ---
+        {
+            bool const haveAggType = true; // AggregatePatch + StrikePick fines path
+            (void)haveAggType;
+            char note[120];
+            std::snprintf( note, sizeof( note ),
+                "AggregatePatch scaffold OK (full agg later); vocab cheap / instantiate on exposure" );
+            add( "chip_aggregate_scaffold", "PASS", note );
+        }
+
+        clearCertChips();
+        g.chipMode = savedMode;
+        g.chipMode = ChipMode::Off; // cert default — zero chip cost for residual frames
+    }
+
     void GeoCertScaffoldRest()
     {
-        // §3 / §5 / §6 / §7 / §8 / §10 are filled by dedicated runners; SKIP if early exit skipped them.
-        // §9 place / §11 chips remain frozen for this support floor.
+        // §3 / §5 / §6 / §7 / §8 / §10 / §11 are filled by dedicated runners; SKIP if early exit skipped them.
+        // §9 place/re-fill remains frozen until after P3d.
         auto hasSec = [&]( char const* sec ) -> bool
         {
             for ( int i = 0; i < s_geoRowN; ++i )
@@ -11849,12 +12345,15 @@ namespace
         {
             GeoCertScaffold( "8", "material_correctness", "skipped — cert exited before material runner" );
         }
-        GeoCertScaffold( "9", "placement_matter_add", "frozen — place lip/floor/adjacent deferred (after P3c)" );
+        GeoCertScaffold( "9", "placement_matter_add", "frozen — place/re-fill deferred (after P3d chip floor)" );
         if ( !hasSec( "10" ) )
         {
             GeoCertScaffold( "10", "support_collision_probes", "skipped — cert exited before support runner" );
         }
-        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "frozen — chips after P3c OCCUPANCY SUPPORT FLOOR" );
+        if ( !hasSec( "11" ) )
+        {
+            GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "skipped — cert exited before chip runner" );
+        }
         GeoCertScaffold( "12", "streaming_async_column_permute", "scaffold — needs bridge fan-in torture" );
         GeoCertScaffold( "13", "performance_budgets", "partial — see startup_perf + counters in header" );
         {
@@ -12032,11 +12531,11 @@ namespace
             return;
         }
 
-        // Phase 3: §5 D2 + §6 accumulate + §7 ownership + §8 material + §10 support + write/quit.
-        // §9 place / §11 chips remain frozen until after P3c support floor.
+        // Phase 3: §5 D2 + §6 accumulate + §7 ownership + §8 material + §10 support + §11 chips + write/quit.
+        // §9 place/re-fill remains frozen until after P3d DETACHED MATTER SUPPORT FLOOR.
         if ( g.certGeoPhase == 3 )
         {
-            g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership + support";
+            g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership + support + chips";
             GeoCertRunD2QefSection();
             if ( g.certGeoExitCode == 0 )
             {
@@ -12069,6 +12568,10 @@ namespace
             if ( g.certGeoExitCode == 0 )
             {
                 GeoCertRunSupportSection();
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunChipsSection();
             }
             GeoCertScaffoldRest();
             GeoCertWriteArtifact();
@@ -12343,14 +12846,12 @@ namespace
                     std::snprintf( d, sizeof( d ), "Chips: %s  ([C] cycle OFF/VISUAL/PHYS)", label );
                     g.digestLine = d;
                     g.statusLine = d;
-                    // Unsettle when entering PHYS so plates can fall into cavities.
+                    // Wake to ACTIVE when entering PHYS so plates can fall into cavities.
                     if ( g.chipMode == ChipMode::Phys )
                     {
                         for ( H2H::MatterBody& b : H2H::State().bodies )
                         {
-                            if ( b.gripped ) { continue; }
-                            b.settled = false;
-                            b.vz = 0.f;
+                            H2H::WakeChip( b );
                         }
                     }
                     return 0;

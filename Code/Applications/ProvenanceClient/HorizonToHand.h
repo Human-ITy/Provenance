@@ -504,6 +504,25 @@ namespace H2H
         Count
     };
 
+    // Detached-matter lifecycle (P3d). Cost tracks ACTIVE fragments, not historical digs.
+    // Material vocabulary is cheap; instantiated representation wakes on exposure/detachment.
+    enum class ChipLife : uint8_t
+    {
+        Active = 0,      // falling / sliding / colliding — integrates
+        Settled,         // sleeping — no integration
+        Aggregated,      // fines as one patch (identity irrelevant); AggregatePatch scaffold OK
+        ExplicitBody     // meaningful plate stays individually addressable (sleeps when settled)
+    };
+
+    // SupportBelow contact for chip PHYS — never D2 tris / never column-crest snap.
+    struct SupportQuery
+    {
+        bool hit = false;
+        bool deferred = false; // missing occupancy authority — refuse; never invent HF
+        float x = 0.f, y = 0.f, z = 0.f;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+    };
+
     // ---------- Fracture patch (persistent local cracks) ----------
     struct FracturePatch
     {
@@ -549,6 +568,7 @@ namespace H2H
         uint64_t separation_id = 0;
         uint64_t patch_id = 0;
         RepClass rep = RepClass::ExplicitBody;
+        ChipLife life = ChipLife::Active;
         std::string material_id;
         int materials_g = 0;
         float alongM = 0.f, acrossM = 0.f, thickM = 0.f;
@@ -558,7 +578,7 @@ namespace H2H
         float nx = 0.f, ny = 0.f, nz = 1.f;
         float yaw = 0.f;
         bool gripped = false;
-        bool settled = false;
+        bool settled = false; // mirror of life sleep (Settled / ExplicitBody / Aggregated)
         int body_revision = 1;
         uint64_t form_seed = 0;
     };
@@ -826,6 +846,8 @@ namespace H2H
         body.separation_id = r.separation_id;
         body.patch_id = patch->patch_id;
         body.rep = RepClass::Loose;
+        body.life = ChipLife::Active;
+        body.settled = false;
         body.material_id = form.material_id;
         body.materials_g = plateG;
         body.alongM = along; body.acrossM = across; body.thickM = thick;
@@ -866,39 +888,154 @@ namespace H2H
         return r;
     }
 
-    // Integrate loose plate gravity (client prediction = authority for Esoterica lane).
-    template <typename SampleGroundFn>
-    inline void StepBodies( float dt, SampleGroundFn sampleGround )
+    inline bool ChipIntegrates( MatterBody const& b )
+    {
+        if ( b.gripped ) { return false; }
+        if ( b.life != ChipLife::Active ) { return false; }
+        if ( b.settled ) { return false; }
+        if ( b.rep == RepClass::Aggregate || b.rep == RepClass::Structural ) { return false; }
+        return true;
+    }
+
+    inline int CountActiveChips()
+    {
+        int n = 0;
+        for ( MatterBody const& b : State().bodies )
+        {
+            if ( ChipIntegrates( b ) ) { ++n; }
+        }
+        return n;
+    }
+
+    // Detached chip spawn for PHYS / cert — ACTIVE life, SupportBelow consumer.
+    inline MatterBody& SpawnDetachedChip( float x, float y, float z,
+        float alongM = 0.12f, float acrossM = 0.10f, float thickM = 0.04f,
+        int grams = 200, char const* matId = "mica_schist" )
     {
         EnsureReady();
+        MatterBody body;
+        body.body_id = AllocId();
+        body.rep = RepClass::Loose;
+        body.life = ChipLife::Active;
+        body.settled = false;
+        body.material_id = matId ? matId : "mica_schist";
+        body.materials_g = (std::max)( 1, grams );
+        body.alongM = alongM;
+        body.acrossM = acrossM;
+        body.thickM = thickM;
+        body.x = x; body.y = y; body.z = z;
+        body.nx = 0.f; body.ny = 0.f; body.nz = 1.f;
+        body.strikeX = 1.f; body.strikeY = 0.f;
+        State().bodies.push_back( body );
+        ++State().world_revision;
+        return State().bodies.back();
+    }
+
+    inline void WakeChip( MatterBody& b )
+    {
+        if ( b.gripped ) { return; }
+        b.life = ChipLife::Active;
+        b.settled = false;
+        b.rep = RepClass::Loose;
+        b.vx = b.vy = 0.f;
+        b.vz = 0.f;
+    }
+
+    inline void SleepChip( MatterBody& b, bool explicitBody )
+    {
+        b.vx = b.vy = b.vz = 0.f;
+        b.settled = true;
+        if ( explicitBody )
+        {
+            b.life = ChipLife::ExplicitBody;
+            b.rep = RepClass::ExplicitBody;
+        }
+        else
+        {
+            b.life = ChipLife::Settled;
+        }
+    }
+
+    // PHYS: gravity → SupportBelow(x,y,currentZ) → contact + normal → settle / slide.
+    // Forbidden consumers (call site must not pass): D2 tris, carve-sphere floor,
+    // SampleOccupancyZ / column-crest snap, permanent always-on integration.
+    template <typename SupportFn>
+    inline void StepBodies( float dt, SupportFn supportBelow )
+    {
+        EnsureReady();
+        if ( dt <= 0.f ) { return; }
         constexpr float gAcc = 18.f;
+        constexpr float airDrag = 1.8f;
+        constexpr float slideFriction = 3.2f;
+        constexpr float settleSpeed = 0.07f;
+        constexpr float flatNz = 0.88f; // below this: may keep sliding
         for ( MatterBody& b : State().bodies )
         {
-            if ( b.gripped || b.settled ) { continue; }
-            if ( b.rep != RepClass::Loose && b.rep != RepClass::ExplicitBody ) { continue; }
+            if ( !ChipIntegrates( b ) ) { continue; }
+
+            float const x0 = b.x, y0 = b.y, z0 = b.z;
             b.vz -= gAcc * dt;
             b.x += b.vx * dt;
             b.y += b.vy * dt;
             b.z += b.vz * dt;
-            b.vx *= ( 1.f - 1.8f * dt );
-            b.vy *= ( 1.f - 1.8f * dt );
-            float ground = b.z;
-            if ( sampleGround( b.x, b.y, ground ) )
+            b.vx *= ( 1.f - airDrag * dt );
+            b.vy *= ( 1.f - airDrag * dt );
+
+            // Query from current body Z — roof / topmost above is ignored by SupportBelow.
+            SupportQuery const h = supportBelow( b.x, b.y, b.z );
+            if ( h.deferred )
             {
-                float const rest = ground + b.thickM * 0.5f + 0.01f;
-                if ( b.z <= rest )
-                {
-                    b.z = rest;
-                    b.vz = 0.f;
-                    b.vx *= 0.4f;
-                    b.vy *= 0.4f;
-                    if ( std::fabs( b.vx ) < 0.05f && std::fabs( b.vy ) < 0.05f )
-                    {
-                        b.settled = true;
-                        b.vx = b.vy = 0.f;
-                        b.rep = RepClass::ExplicitBody;
-                    }
-                }
+                // Missing authority: defer in place — never invent / teleport to HF.
+                b.x = x0; b.y = y0; b.z = z0;
+                b.vx = b.vy = b.vz = 0.f;
+                continue;
+            }
+            if ( !h.hit )
+            {
+                // No solid below query — keep falling (open shaft / deep void).
+                continue;
+            }
+
+            float const rest = h.z + b.thickM * 0.5f + 0.01f;
+            if ( b.z > rest )
+            {
+                continue; // still airborne above support
+            }
+
+            // Contact: pin to support, kill penetrating normal velocity, slide on incline.
+            b.z = rest;
+            float const nx = h.nx, ny = h.ny, nz = h.nz;
+            float const vn = b.vx * nx + b.vy * ny + b.vz * nz;
+            if ( vn < 0.f )
+            {
+                b.vx -= vn * nx;
+                b.vy -= vn * ny;
+                b.vz -= vn * nz;
+            }
+            // Gravity along tangent (slide / tumble cue).
+            // g=(0,0,-gAcc); g·N=-gAcc*nz; t = g - (g·N)N.
+            float const tgx = gAcc * nz * nx;
+            float const tgy = gAcc * nz * ny;
+            float const tgz = -gAcc * ( 1.f - nz * nz );
+            if ( nz < 0.995f )
+            {
+                b.vx += tgx * dt;
+                b.vy += tgy * dt;
+                b.vz += tgz * dt;
+            }
+            // Steeper contacts keep more tangential speed (fines stay cheap via sleep elsewhere).
+            float const steep = (std::max)( 0.f, (std::min)( 1.f, ( 0.98f - nz ) / 0.35f ) );
+            float const frAmt = slideFriction * ( 1.f - 0.65f * steep );
+            float const fr = ( 1.f - frAmt * dt );
+            b.vx *= fr; b.vy *= fr; b.vz *= fr;
+            // Align plate to support contact normal.
+            b.nx = nx; b.ny = ny; b.nz = nz;
+
+            float const speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            if ( speed < settleSpeed && nz >= flatNz )
+            {
+                // Meaningful plates stay ExplicitBody; fines-scale → Settled sleep.
+                SleepChip( b, b.materials_g >= 40 );
             }
         }
     }

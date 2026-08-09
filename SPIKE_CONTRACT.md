@@ -34,8 +34,10 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P1** Native window + protocol handshake + identity/HUD | Caps / revisions / reconnect | Done (wire live) |
 | **P2** Far projection only (no dig authority) | Heightfield + sky + camera | Done (analytic + streamed surface) |
 | **P3** Standable projection + collision | Walk / wall capsule | Partial |
-| **P3b Voxel form gate** | Interaction geometry from **occupancy / D2**, not heightfield cups | **Client land** — affect-sphere carve → D2 cavity + skin open; column reconcile; P4 next |
-| **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next |
+| **P3b Voxel form gate** | Interaction geometry from **occupancy / D2**, not heightfield cups | **Client land** — affect-sphere carve → D2 cavity + skin open; column reconcile |
+| **P3c Occupancy support** | `SupportBelow(x,y,queryZ)` through occupancy | **Floor** @ `5e9e786` |
+| **P3d Detached matter support** | PHYS chips on SupportBelow + ACTIVE/SETTLED lifecycle | **Floor** — pin SHA in `PROVENANCE_PIN.md`; **stop before place** |
+| **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next (after place/async) |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 
 ### The voxel-form gate (user law)
@@ -50,6 +52,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 - DigScar is flash-only then retired. Engine carve digest + column reply remain authority for grams / reconcile — client mesh is never world truth.
 - Geo fixtures: default **RANGE** (representative flank transect); **TORTURE** keeps prior extreme FBM (`--geo-fixture=` / F8). See `PROVENANCE_PIN.md`.
 - Geography interaction cert (RANGE as H2H transect, not D2-only): `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — `--cert-geo`.
+- **Scalability:** material vocabulary is cheap; instantiated representation is what costs (wake geometry/physics/optics on exposure, detachment, proximity, or gameplay meaning).
 - Material distribution / appearance docs for **review** (not cert authority): plaintxt-decoded branches `claude/terrain-material-distribution-v1` and `claude/terrain-material-set-appearance` under `fablescript/docs`. **Heightfield object palette is a keeper** — do not overwrite when merging; separate from dig/geo cert. See `PROVENANCE_PIN.md`.
 
 ## Isolation rules
