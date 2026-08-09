@@ -44,10 +44,13 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 
 **P3b client land (2026-08-08):**
 
-- Aim prefers resident occupancy solid; dig/pick subtract the same affect sphere from fill (synthetic until `voxel_column`).
-- Cavity presentation = solid|air D2 boundary painted with `VisualMaterialDef` (exterior material becomes viewable interior).
-- Heightfield pads open where matter was removed (`SurfaceOpenedByOccupancy`); DigScar is flash-only then retired.
-- Engine carve digest + column reply remain authority for grams / reconcile — client mesh is never world truth.
+- **Virgin = HF only.** HF and cavity share one virgin surface law; they are not continuously cross-materialized.
+- **Commit only:** dig/pick seeds a bounded local occupancy from that law → sphere subtract → cavity rebuild once → atomic HF→patch handoff. Aim/look must not expand volume or rebuild D2/QEF.
+- Cavity presentation = solid|air boundary painted with `VisualMaterialDef` (exterior material becomes viewable interior).
+- DigScar is flash-only then retired. Engine carve digest + column reply remain authority for grams / reconcile — client mesh is never world truth.
+- Geo fixtures: default **RANGE** (representative flank transect); **TORTURE** keeps prior extreme FBM (`--geo-fixture=` / F8). See `PROVENANCE_PIN.md`.
+- Geography interaction cert (RANGE as H2H transect, not D2-only): `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — `--cert-geo`.
+- Material distribution / appearance docs for **review** (not cert authority): plaintxt-decoded branches `claude/terrain-material-distribution-v1` and `claude/terrain-material-set-appearance` under `fablescript/docs`. **Heightfield object palette is a keeper** — do not overwrite when merging; separate from dig/geo cert. See `PROVENANCE_PIN.md`.
 
 ## Isolation rules
 

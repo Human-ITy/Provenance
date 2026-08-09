@@ -1,6 +1,11 @@
 // Esoterica-native deterministic planet geography (seed → causes → relief → surface cap).
 // Analytic until resident. Absolute coordinates. Not a Fablescript/Unreal port.
 // Chain: WORLD SEED → province → geology → relief → surface material (cap).
+//
+// Geo fixtures (D2 harness):
+//   RANGE   — default play/dev. Local mountain-flank transect near spawn (see kRangeOrigin*).
+//   TORTURE — prior extreme FBM cliffs/diagonals/voids for edge-case dig/D2 stress.
+// Select: --geo-fixture=range|torture  or F8 in-client. Virgin load stays HF-only (no D2).
 #pragma once
 
 #include "VisualMaterial.h"
@@ -14,6 +19,87 @@ namespace ProvenanceGeo
 {
     constexpr int kGeneratorVersion = 1;
     constexpr char const* kGeneratorId = "esoterica_geography_v1";
+
+    // F1 representative harness origin (matches client default feet ~128,128).
+    // Walk +X through A→G; corridor is local in Y — not a whole mountain in a tiny pad.
+    constexpr double kRangeOriginX = 128.0;
+    constexpr double kRangeOriginY = 128.0;
+
+    enum class GeoFixture : uint8_t
+    {
+        Range = 0,   // PROVENANCE GEOLOGY RANGE (representative)
+        Torture = 1  // D2 TORTURE TERRAIN (extreme prior path)
+    };
+
+    inline GeoFixture& FixtureMut()
+    {
+        static GeoFixture f = GeoFixture::Range;
+        return f;
+    }
+
+    inline GeoFixture Fixture() { return FixtureMut(); }
+
+    inline void SetFixture( GeoFixture f ) { FixtureMut() = f; }
+
+    inline char const* FixtureName( GeoFixture f )
+    {
+        switch ( f )
+        {
+        case GeoFixture::Range: return "range";
+        case GeoFixture::Torture: return "torture";
+        default: return "range";
+        }
+    }
+
+    inline char const* FixtureLabel( GeoFixture f )
+    {
+        switch ( f )
+        {
+        case GeoFixture::Range: return "PROVENANCE GEOLOGY RANGE";
+        case GeoFixture::Torture: return "D2 TORTURE TERRAIN";
+        default: return "PROVENANCE GEOLOGY RANGE";
+        }
+    }
+
+    inline bool AsciiEqI( char const* a, char const* b )
+    {
+        if ( !a || !b ) { return false; }
+        while ( *a && *b )
+        {
+            unsigned char ca = (unsigned char)*a++;
+            unsigned char cb = (unsigned char)*b++;
+            if ( ca >= 'A' && ca <= 'Z' ) { ca = (unsigned char)( ca - 'A' + 'a' ); }
+            if ( cb >= 'A' && cb <= 'Z' ) { cb = (unsigned char)( cb - 'A' + 'a' ); }
+            if ( ca != cb ) { return false; }
+        }
+        return *a == *b;
+    }
+
+    // Accepts "range" / "geology" / "f1" and "torture" / "extreme" / "f2".
+    inline bool SetFixtureFromString( char const* s )
+    {
+        if ( !s || !s[0] ) { return false; }
+        if ( AsciiEqI( s, "range" ) || AsciiEqI( s, "geology" )
+          || AsciiEqI( s, "geo-range" ) || AsciiEqI( s, "f1" ) )
+        {
+            SetFixture( GeoFixture::Range );
+            return true;
+        }
+        if ( AsciiEqI( s, "torture" ) || AsciiEqI( s, "extreme" ) || AsciiEqI( s, "f2" ) )
+        {
+            SetFixture( GeoFixture::Torture );
+            return true;
+        }
+        return false;
+    }
+
+    inline GeoFixture CycleFixture()
+    {
+        GeoFixture const n = ( Fixture() == GeoFixture::Range )
+            ? GeoFixture::Torture : GeoFixture::Range;
+        SetFixture( n );
+        return n;
+    }
 
     enum class Province : uint8_t
     {
@@ -205,17 +291,42 @@ namespace ProvenanceGeo
         return Province::VolcanicProvince;
     }
 
+    // Forward (RangeProvinceAt defined with F1 block below).
+    inline Province RangeProvinceAt( double x, double y );
+
     inline Province ProvinceAt( double x, double y )
     {
+        if ( Fixture() == GeoFixture::Range ) { return RangeProvinceAt( x, y ); }
         return ClassifyProvince( ProvinceField( x, y ) );
     }
 
-    // Dominant rock body from province + meso structure (34/15/7 m tectonic cues).
-    inline RockBody RockAt( double x, double y )
+    inline char const* ProvinceName( Province p )
+    {
+        switch ( p )
+        {
+        case Province::CoastalShelf: return "coastal_shelf";
+        case Province::SedimentaryBasin: return "sedimentary_basin";
+        case Province::InteriorPlain: return "interior_plain";
+        case Province::Plateau: return "plateau";
+        case Province::Shield: return "shield";
+        case Province::MountainBelt: return "mountain_belt";
+        case Province::VolcanicProvince: return "volcanic";
+        default: return "unknown";
+        }
+    }
+
+    inline char const* RockName( RockBody b )
+    {
+        return CapId( b );
+    }
+
+    // ---- F2 D2 TORTURE TERRAIN (prior extreme path; unchanged math) ----
+
+    inline RockBody TortureRockAt( double x, double y )
     {
         EnsureReady();
         uint64_t const s = State().seed;
-        Province const prov = ProvinceAt( x, y );
+        Province const prov = ClassifyProvince( ProvinceField( x, y ) );
         float const meso = Fbm( x, y, s ^ 0x4444ULL, 34.0, 3 );
         float const ridge = Fbm( x, y, s ^ 0x5555ULL, 15.0, 2 );
         float const hill = Fbm( x, y, s ^ 0x6666ULL, 7.0, 2 );
@@ -249,12 +360,13 @@ namespace ProvenanceGeo
     }
 
     // Geology creates relief: resistant bodies high, weak bodies low (+ drainage carve cue).
-    inline float AnalyticReliefM( double x, double y )
+    // This is the brutal prior field — keep for F2 torture only.
+    inline float TortureReliefM( double x, double y )
     {
         EnsureReady();
         uint64_t const s = State().seed;
         float const provF = ProvinceField( x, y );
-        RockBody const rock = RockAt( x, y );
+        RockBody const rock = TortureRockAt( x, y );
         float const resist = Attrs( rock ).erosionResist;
 
         // Macro uplift / basin from province field
@@ -273,6 +385,180 @@ namespace ProvenanceGeo
         z += ( Fbm( x, y, s ^ 0x9999ULL, 7.0, 2 ) - 0.5f ) * 1.8f;
 
         return z;
+    }
+
+    // ---- F1 PROVENANCE GEOLOGY RANGE (representative local flank transect) ----
+    // u = x-128 along walk; v = y-128 across. Player-scale horizontal run vs rise.
+    // A flat → B grassy slope → C mound → D drainage → E rocky hill → F diagonal bed → G local cliff
+    // (+ I scree apron, J limestone shoulder when cheap).
+
+    inline float RangeCorridorW( double v )
+    {
+        float const av = (float)std::fabs( v );
+        // Full strength |v|<14 m; fade by ~22 m — local corridor, not arena-wide cliff wall.
+        if ( av <= 14.f ) { return 1.f; }
+        if ( av >= 22.f ) { return 0.f; }
+        return 1.f - Smoothstep( ( av - 14.f ) / 8.f );
+    }
+
+    inline float RangeBand( float u, float a, float b, float edge )
+    {
+        float const e = ( edge > 0.05f ) ? edge : 0.05f;
+        return Smoothstep( ( u - a ) / e ) * ( 1.f - Smoothstep( ( u - ( b - e ) ) / e ) );
+    }
+
+    inline float RangeReliefM( double x, double y )
+    {
+        EnsureReady();
+        uint64_t const s = State().seed;
+        float const u = (float)( x - kRangeOriginX );
+        float const v = (float)( y - kRangeOriginY );
+        float const w = RangeCorridorW( v );
+
+        // Gentle mountain-flank continuum (≈2°), mild detail — never whole-mountain-in-pad.
+        float z = u * 0.035f;
+        z += ( Fbm( x, y, s ^ 0xA101ULL, 56.0, 3 ) - 0.5f ) * 0.55f;
+        z += ( Fbm( x, y, s ^ 0xA102ULL, 14.0, 2 ) - 0.5f ) * 0.16f;
+
+        float authored = 0.f;
+
+        // A — flat depositional pad near spawn: cancel flank slope locally.
+        float const aFlat = RangeBand( u, -10.f, 12.f, 4.f );
+        authored += aFlat * ( -u * 0.035f );
+
+        // B — shallow grassy slope (extra gentle rise after pad).
+        float const bSlope = RangeBand( u, 10.f, 28.f, 3.f );
+        authored += bSlope * ( ( u - 10.f ) * 0.055f );
+
+        // C — rounded earth mound.
+        {
+            float const cu = ( u - 36.f ) / 7.5f;
+            float const cv = v / 9.f;
+            float const mound = std::exp( -0.5f * ( cu * cu + cv * cv ) );
+            authored += mound * 1.35f * ( 0.4f + 0.6f * w );
+        }
+
+        // D — eroded drainage cut crossing the corridor.
+        {
+            float const along = u - 51.f;
+            float const channel = ( 1.f - Smoothstep( std::fabs( along ) / 3.2f ) )
+                * ( 0.55f + 0.45f * w );
+            authored -= channel * 1.15f;
+        }
+
+        // E — rocky hillside (steeper but walkable rise).
+        {
+            float const t = Smoothstep( ( u - 58.f ) / 18.f ) - Smoothstep( ( u - 78.f ) / 4.f );
+            authored += t * 3.4f * ( 0.35f + 0.65f * w );
+        }
+
+        // F — exposed diagonal bedrock shoulder (strike tilts with v).
+        {
+            float const plane = u + 0.55f * v - 80.f;
+            float const face = Smoothstep( plane / 7.f ) - Smoothstep( ( plane - 9.f ) / 3.f );
+            authored += face * 2.3f * ( 0.25f + 0.75f * w );
+        }
+
+        // G — true near-vertical local cliff (≈4.2 m over ≈1.3 m run), not arena-wide.
+        {
+            float const face = Smoothstep( ( u - 93.4f ) / 1.3f );
+            authored += face * 4.2f * ( 0.2f + 0.8f * w );
+        }
+
+        // I — scree / talus apron at cliff base (cheap broken rock pile).
+        {
+            float const apron = RangeBand( u, 88.f, 93.6f, 2.f )
+                * ( 1.f - Smoothstep( std::fabs( v ) / 10.f ) );
+            authored += apron * 0.55f;
+        }
+
+        // J — small mineralized limestone shoulder above cliff.
+        {
+            float const ju = ( u - 102.f ) / 4.f;
+            float const jv = ( v + 3.f ) / 3.5f;
+            float const knob = std::exp( -0.5f * ( ju * ju + jv * jv ) );
+            authored += knob * 0.85f;
+        }
+
+        z += authored * ( 0.30f + 0.70f * w );
+        return z;
+    }
+
+    inline RockBody RangeRockAt( double x, double y )
+    {
+        EnsureReady();
+        uint64_t const s = State().seed;
+        float const u = (float)( x - kRangeOriginX );
+        float const v = (float)( y - kRangeOriginY );
+        float const w = RangeCorridorW( v );
+        float const n = Fbm( x, y, s ^ 0xB201ULL, 9.0, 2 );
+
+        if ( w < 0.2f )
+        {
+            // Soft flank outside the walk corridor.
+            if ( n < 0.45f ) { return RockBody::Loam; }
+            if ( n < 0.75f ) { return RockBody::DirtMantle; }
+            return RockBody::Gravel;
+        }
+
+        // A/B gentle floor — soil mantle (cap may paint grass).
+        if ( u < 28.f ) { return ( n < 0.55f ) ? RockBody::Loam : RockBody::DirtMantle; }
+        // C mound — dirt/loam.
+        if ( u < 44.f ) { return RockBody::Loam; }
+        // D drainage — clay thalweg, gravel banks.
+        if ( u < 58.f )
+        {
+            float const along = std::fabs( u - 51.f );
+            return ( along < 2.2f ) ? RockBody::Clay : RockBody::Gravel;
+        }
+        // E rocky hillside — thinner soil → gravel / sandstone.
+        if ( u < 78.f ) { return ( n > 0.5f ) ? RockBody::Sandstone : RockBody::Gravel; }
+        // F diagonal bedrock — limestone / sandstone exposure.
+        if ( u < 92.f ) { return ( n > 0.42f ) ? RockBody::Limestone : RockBody::Sandstone; }
+        // G cliff face — hard rock.
+        if ( u < 100.f ) { return ( n > 0.55f ) ? RockBody::Granite : RockBody::MicaSchist; }
+        // J shoulder — mineralized limestone outcrop.
+        if ( u < 108.f && std::fabs( v + 3.f ) < 5.f ) { return RockBody::Limestone; }
+        return ( n > 0.5f ) ? RockBody::Sandstone : RockBody::Gravel;
+    }
+
+    inline Province RangeProvinceAt( double x, double y )
+    {
+        float const u = (float)( x - kRangeOriginX );
+        float const w = RangeCorridorW( y - kRangeOriginY );
+        if ( w > 0.25f && u >= 78.f ) { return Province::MountainBelt; }
+        if ( w > 0.25f && u >= 58.f ) { return Province::Plateau; }
+        if ( w > 0.25f && u >= 44.f && u < 58.f ) { return Province::SedimentaryBasin; }
+        return Province::InteriorPlain;
+    }
+
+    inline char const* RangeCapAt( double x, double y, RockBody rock )
+    {
+        float const u = (float)( x - kRangeOriginX );
+        float const v = (float)( y - kRangeOriginY );
+        float const w = RangeCorridorW( v );
+        // Grassy cover on gentle A/B floor; scree reads gravel at cliff base.
+        if ( w > 0.3f && u < 28.f
+          && ( rock == RockBody::Loam || rock == RockBody::DirtMantle ) )
+        {
+            return "grass";
+        }
+        if ( w > 0.35f && u >= 88.f && u < 93.8f ) { return "gravel"; }
+        return CapId( rock );
+    }
+
+    // Dominant rock body from province + meso structure (34/15/7 m tectonic cues).
+    inline RockBody RockAt( double x, double y )
+    {
+        if ( Fixture() == GeoFixture::Range ) { return RangeRockAt( x, y ); }
+        return TortureRockAt( x, y );
+    }
+
+    // Geology → relief meters. Fixture selects representative flank vs torture FBM.
+    inline float AnalyticReliefM( double x, double y )
+    {
+        if ( Fixture() == GeoFixture::Range ) { return RangeReliefM( x, y ); }
+        return TortureReliefM( x, y );
     }
 
     // Map analytic meters → grade using the same relief/datum law the client uses for Z.
@@ -300,7 +586,9 @@ namespace ProvenanceGeo
         SurfaceSample o;
         o.province = ProvinceAt( x, y );
         o.rock = RockAt( x, y );
-        o.cap = CapId( o.rock );
+        o.cap = ( Fixture() == GeoFixture::Range )
+            ? RangeCapAt( x, y, o.rock )
+            : CapId( o.rock );
         o.reliefM = AnalyticReliefM( x, y );
         o.grade = GradeFromReliefM( o.reliefM, gradeDatum, reliefVoxels, voxelEdgeM );
         return o;

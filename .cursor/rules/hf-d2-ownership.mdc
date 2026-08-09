@@ -1,0 +1,18 @@
+---
+description: HF virgin / commit-only occupancy / atomic D2 handoff
+alwaysApply: true
+---
+
+# HF ↔ occupancy ↔ D2 ownership (locked)
+
+HF and D2 share the **same canonical virgin surface law** (`SampleGroundZBase` / geography grade). They do **not** coexist or continuously cross-materialize.
+
+| Phase | Rule |
+|-------|------|
+| Virgin | **HF only** |
+| Dig/pick commit | Seed **bounded** local occupancy from that virgin law → matter edit → build cavity/D2 **once** → **atomically** hand HF ownership to the completed patch |
+| Aim / look / walk | HF contact refine OK. **Never** seed lattices, expand volume, or rebuild D2/QEF from aim alone |
+
+Reject: peel HF before cavity commit; continuous HF↔fill rematerialization; aim-driven `EnsureOccupancyLattice` / cavity rebuild.
+
+Pin: `PROVENANCE_PIN.md`, `SPIKE_CONTRACT.md`.

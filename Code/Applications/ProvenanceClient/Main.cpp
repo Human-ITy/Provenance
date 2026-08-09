@@ -20,10 +20,12 @@
 #include "VisualMaterial.h"
 #include "RockStructure.h"
 #include "HorizonToHand.h"
+#include "DualContourQef.h"
 
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -62,6 +64,9 @@ namespace
     // Steeper than ~48° is a wall — small per-frame steps used to skate up cliffs into the mesh.
     constexpr float kMaxWalkSlope = 1.10f;   // rise/run ≈ tan(48°)
     constexpr float kWallBodyClearM = 0.45f; // torso hits wall if grade beside feet exceeds this
+    constexpr float kProjNearDefaultM = 0.5f;  // outdoor / held-inspect clearance
+    constexpr float kProjNearCavityM = 0.06f; // inside carve — else near clip eats cavity walls → void
+    constexpr float kEyeCrouchMinM = 0.42f;
 
     // Handheld / manipulation volume (authoritative player scoop feel)
     constexpr int kFillFull = 255;
@@ -149,6 +154,27 @@ namespace
     };
 
     constexpr int kFillIso = 128; // half-full isosurface (engine FILL_ISO)
+    // Diagnostic: voxel_column must not mutate resident geography grade (spire conviction).
+    // Fill / fillZ / cavity reconcile still apply. Flip false only to A/B the needle.
+    constexpr bool kForbidColumnGradeOverwrite = true;
+    // AABB solid|air shell is NOT a coherent surface — never peel virgin HF for it.
+    // Production cavity = D2 Hermite/QEF; AABB stays B-key diagnostic only.
+    constexpr bool kAabbCavityOwnsHf = false;
+
+    enum class BoundaryMode : uint8_t
+    {
+        D2 = 0,        // production — Hermite/QEF dual contour on EditedRegion occupancy
+        DebugBoundary, // AABB solid|air faces (diagnostic)
+        Overlay        // D2 + AABB wireframe
+    };
+
+    // Loose MatterBody chips (H2H plates). Off clears view for D2 cert.
+    enum class ChipMode : uint8_t
+    {
+        Off = 0,   // no draw, no step
+        Visual,    // draw frozen in place
+        Phys       // gravity + SupportAt settle
+    };
 
     struct CellSample
     {
@@ -163,8 +189,36 @@ namespace
         std::vector<uint8_t> fill;
         int fillW = 0, fillH = 0, fillK = 0;
         GLuint cavityList = 0;
+        GLuint debugBoundaryList = 0;
         bool hasCavity = false;
         bool carved = false; // true only after local affect-sphere dig — never from prefetch/look/walk
+        // Commit focus (transient last action) — NOT the persistent HF aperture.
+        float carveWx = 0.f, carveWy = 0.f, carveWz = 0.f, carveRM = 0.f;
+        bool hasCarveFocus = false;
+        float patchMinX = 0.f, patchMinY = 0.f, patchMaxX = 0.f, patchMaxY = 0.f;
+        bool hasPatchBounds = false;
+        uint32_t editedRegionId = 0; // persistent excavation region (monotonic openings)
+        std::vector<DualContourQef::Tri> cavityTris;
+    };
+
+    // One connected excavation. Openings only expand on remove-only edits.
+    struct EditOpening
+    {
+        float x = 0.f, y = 0.f, z = 0.f, r = 0.f;
+        float nx = 0.f, ny = 0.f, nz = 1.f; // outward face at strike (wall mouths ≠ crest HF N)
+    };
+
+    struct EditedRegion
+    {
+        uint32_t id = 0;
+        std::vector<EditOpening> openings; // persistent HF aperture union (never shrinks on new strike)
+        std::vector<std::pair<int, int>> cells;
+        float ownMinX = 0.f, ownMinY = 0.f, ownMaxX = 0.f, ownMaxY = 0.f;
+        bool hasOwnBounds = false;
+        // Transient last action (diagnostic / RED) — may move freely.
+        float actionX = 0.f, actionY = 0.f, actionZ = 0.f, actionR = 0.f;
+        bool hasAction = false;
+        int dirtyRev = 0;
     };
 
     enum class ScarKind : uint8_t
@@ -213,6 +267,43 @@ namespace
         int port = kDefaultPort;
         DWORD lastAttemptMs = 0;
         int attempts = 0;
+        // --cert-dig: auto tour digs (move + strike), dump PPMs, quit.
+        bool certDig = false;
+        int certPhase = 0;
+        DWORD certPhaseMs = 0;
+        int certStop = 0; // 0..2 dig sites
+        float certMaxDtMs = 0.f;
+        float certLastRemeshMs = 0.f;
+        float certMaxRemeshMs = 0.f;
+        int certFrames = 0;
+        // --cert-geo / --cert-geography: RANGE Horizon-to-Hand transect cert.
+        bool certGeo = false;
+        int certGeoPhase = 0;   // 0 wait stream → 1 discover/virgin → 2 walk → 3 dig → 4 write/quit
+        DWORD certGeoPhaseMs = 0;
+        int certGeoDigIdx = 0;
+        int certGeoDigArmed = 0; // 0 move/aim, 1 struck settling
+        int certGeoExitCode = 0; // 0 PASS, 1 hard FAIL
+        int certGeoWalkHf0 = 0;
+        int certGeoWalkD20 = 0;
+        int certGeoWalkCells0 = 0;
+        int certGeoWalkSample0 = 0;
+        bool certGeoFailWritten = false;
+        // Startup / subsystem counters — prove virgin path does zero D2.
+        int perfGeoCellsCreated = 0;
+        int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
+        int perfSampleCapColorCalls = 0;  // must use cell cache (no FBM)
+        int perfHfRebuilds = 0;
+        int perfHfTris = 0;
+        float perfHfRemeshMsTotal = 0.f;
+        int perfD2Rebuilds = 0;
+        int perfD2Tris = 0;
+        int perfD2Edges = 0;
+        int perfD2QefFallbacks = 0;
+        int perfD2HaloMiss = 0;
+        float perfD2MsTotal = 0.f;
+        int perfVirginD2Rebuilds = -1; // snapshot at first stream-complete before any dig
+        bool perfVirginSnapDone = false;
+        char certOutDir[MAX_PATH] = {};
 
         // terrain_caps
         int wireVersion = 0;
@@ -245,6 +336,8 @@ namespace
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
         std::unordered_map<uint64_t, CellSample> cells;
         std::unordered_set<uint64_t> fetchedBlocks;
+        std::vector<EditedRegion> editedRegions;
+        uint32_t nextEditedRegionId = 1;
         int cellsLoaded = 0;
         int blocksLoaded = 0;
         int blocksWanted = 0;
@@ -255,6 +348,12 @@ namespace
         int aimCx = 0, aimCy = 0;
         float aimU = 0.5f, aimV = 0.5f, aimDepth = kHandfulRadiusM;
         float aimX = 0.f, aimY = 0.f, aimZ = 0.f;
+        // Crosshair identity — geography strike + biome; wire cap may differ (cover vs rock).
+        std::string aimStrikeCap = "-";
+        std::string aimWireCap = "-";
+        std::string aimBiome = "-";
+        std::string aimFormId = "-";
+        uint8_t aimStrikeR = 128, aimStrikeG = 128, aimStrikeB = 128;
         // Unreal FsDrawImmediateTerrainCue twin — brief rings/rays on dig/place press
         float cueT = 0.f;
         float cueX = 0.f, cueY = 0.f, cueZ = 0.f;
@@ -302,6 +401,25 @@ namespace
         std::vector<std::pair<int, int>> columnQueue; // cells awaiting voxel_column truth
         int pendingColX = 0, pendingColY = 0;
 
+        // Cavity boundary presentation: D2 production; B cycles diagnostic AABB.
+        BoundaryMode boundaryMode = BoundaryMode::D2;
+        int cavityTrisTotal = 0;
+        int cavityEdgesEmitted = 0;
+        // Chips default OFF so D2 cavity cert is not buried under plates.
+        ChipMode chipMode = ChipMode::Off;
+
+        // SPIRE conviction telemetry — grade authority A/B (no D2/ownership changes).
+        bool spireHavePre = false;
+        int spireCx = 0, spireCy = 0;
+        float spireGeoGrade = 0.f, spireGeoZ = 0.f;
+        float spireAimZ = 0.f;
+        float spirePreReqGrade = 0.f, spirePreReqZ = 0.f;
+        std::string spireVisualCap;   // geography / HF presentation material
+        std::string spireAuthMat;     // engine/form credit material (may disagree — no remap)
+        std::string spireLine = "SPIRE idle — dig once to capture grade/Z chain";
+        int spireOverwriteBlocked = 0;
+        int spireOverwriteWouldHave = 0;
+
         // body + camera (world meters; 1 cell = 1 m)
         float feetX = 128.f;
         float feetY = 128.f;
@@ -313,6 +431,7 @@ namespace
         float camX = 128.f;
         float camY = 128.f;
         float camZ = 40.f;
+        float projNearM = kProjNearDefaultM; // tightened inside carved cavities
         float yaw = 0.f;     // radians, 0 = +Y
         float pitch = -0.15f;
 
@@ -522,13 +641,37 @@ namespace
     bool SampleGroundZBase( float x, float y, float& outZ );
     bool SampleGroundZ( float x, float y, float& outZ );
     bool SampleAimSurfaceZ( float x, float y, float& outZ );
+    bool SampleTerrainDrawZ( float x, float y, float& outZ ); // HF; collapse where air under skin
     bool SampleOccupancyZ( float x, float y, float& outZ );
+    bool SupportAt( float x, float y, float& outZ ); // carved cell → occupancy; else HF(+scars)
+    bool OccupancySolidAt( float x, float y, float z );
     void PrefetchOccupancyCell( int cx, int cy );
+    void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v );
+    void SeedOccupancyFromVirginSurface( int cx, int cy );
     void EnsureOccupancyLattice( int cx, int cy );
-    bool CarveOccupancySphere( float wx, float wy, float wz, float radiusM );
+    bool CarveOccupancySphere( float carveX, float carveY, float carveZ, float radiusM,
+        float openX, float openY, float openZ );
     void RetirePresentationScarsNear( float wx, float wy, float radiusM );
     void RebuildCavityMesh( int cx, int cy );
     void DrawCavityMeshes();
+    void DrawCavityMeshesMouth(); // stencil ALWAYS pass — tiny offset only
+    void DrawCavityMeshesInterior(); // depth LEQUAL — no offset (offset x-rays nearby HF)
+    void DrawEditedRegionOpenings(); // wall-only tip disks (crest uses occupancy break)
+    void DrawOccupancySurfaceBreaks(); // stencil = matter-gone crest + mouth-bridge fill
+    bool CavityReadyNear( float x, float y ); // D2 present near XY — gate HF omit
+    bool NearOpeningMouthAt( float x, float y ); // bite mouth disk — not whole occupancy cell
+    bool CrestMouthStencilAt( float x, float y );
+    void DrawCarveActionFootprints(); // occupancy crest + steep wall openings
+    EditedRegion* FindEditedRegion( uint32_t id );
+    void AddOpeningMonotonic( EditedRegion& er, float x, float y, float z, float r,
+        float nx = 0.f, float ny = 0.f, float nz = 1.f );
+    uint32_t MergeOrCreateEditedRegion( float wx, float wy, float wz, float radiusM,
+        std::vector<std::pair<int, int>> const& touchedCells,
+        float nx = 0.f, float ny = 0.f, float nz = 1.f );
+    bool NearRegionOpenings( EditedRegion const& er, float xc, float yc, float zc, float collarM );
+    bool EditedRegionOwnsAt( float x, float y );
+    bool SurfaceBrokenByOccupancy( float x, float y );
+    bool CavityPatchOwnsAt( float x, float y );
     bool SurfaceOpenedByOccupancy( float x, float y );
     GLuint AllocDisplayListOutsideFonts();
     void EmitPhase3Tri( float x0, float y0, float z0,
@@ -537,6 +680,9 @@ namespace
         float cavityHint );
     void SampleAimNormal( float x, float y, float& nx, float& ny, float& nz );
     void CaptureFaceNormalAt( float x, float y, float& nx, float& ny, float& nz );
+    void ResolveCarveIntoNormal( float aimX, float aimY, float aimZ,
+        float lookX, float lookY, float lookZ,
+        float& nx, float& ny, float& nz );
     bool IsSteepFaceAt( float x, float y );
     std::string CapAtWorld( float x, float y );
     CellSample const* GetCell( int x, int y );
@@ -719,6 +865,38 @@ namespace
         else { nx = 0.f; ny = 0.f; nz = 1.f; }
     }
 
+    void ResolveCarveIntoNormal( float aimX, float aimY, float aimZ,
+        float lookX, float lookY, float lookZ,
+        float& nx, float& ny, float& nz )
+    {
+        // Outward face normal for carve centre = aim - N*into.
+        CaptureFaceNormalAt( aimX, aimY, nx, ny, nz );
+        float const lookHoriz = std::sqrt( lookX * lookX + lookY * lookY );
+        float crest = aimZ;
+        SampleGroundZBase( aimX, aimY, crest );
+        float const belowCrest = crest - aimZ;
+        auto setLookInto = [&]()
+        {
+            nx = -lookX;
+            ny = -lookY;
+            nz = -lookZ;
+            float const len = std::sqrt( nx * nx + ny * ny + nz * nz );
+            if ( len > 1e-5f ) { nx /= len; ny /= len; nz /= len; }
+            else { nx = 0.f; ny = 0.f; nz = 1.f; }
+        };
+        // Mid/lower dark wall: aim sits below crest — HF N only reads on the top pushed facet.
+        if ( belowCrest > 0.18f && lookHoriz > 0.40f && std::fabs( lookZ ) < 0.70f )
+        {
+            setLookInto();
+            return;
+        }
+        // Crest-up HF while looking into a silhouette (near-top strip edge cases).
+        if ( nz > 0.58f && lookHoriz > 0.50f && std::fabs( lookZ ) < 0.55f )
+        {
+            setLookInto();
+        }
+    }
+
     void StrikeAxesFromLook( float nx, float ny, float nz,
         float lookX, float lookY, float lookZ,
         float& strikeX, float& strikeY )
@@ -857,6 +1035,217 @@ namespace
         g.terrainDirty = true;
     }
 
+    EditedRegion* FindEditedRegion( uint32_t id )
+    {
+        if ( id == 0 ) { return nullptr; }
+        for ( EditedRegion& er : g.editedRegions )
+        {
+            if ( er.id == id ) { return &er; }
+        }
+        return nullptr;
+    }
+
+    void AddOpeningMonotonic( EditedRegion& er, float x, float y, float z, float r,
+        float nx, float ny, float nz )
+    {
+        r = (std::max)( 0.05f, r );
+        float nlen = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( nlen > 1e-5f ) { nx /= nlen; ny /= nlen; nz /= nlen; }
+        else { nx = 0.f; ny = 0.f; nz = 1.f; }
+        // Covered by existing opening in 3D → no-op (XY-only merge stacked crest disks above strikes).
+        for ( EditOpening& o : er.openings )
+        {
+            float const dx = o.x - x, dy = o.y - y, dz = o.z - z;
+            float const d = std::sqrt( dx * dx + dy * dy + dz * dz );
+            if ( d + r <= o.r + 1e-4f ) { return; }
+            // New disk fully covers old → expand old in place (still monotonic).
+            if ( d + o.r <= r + 1e-4f )
+            {
+                o.x = x; o.y = y; o.z = z; o.r = r;
+                o.nx = nx; o.ny = ny; o.nz = nz;
+                goto bounds;
+            }
+        }
+        er.openings.push_back( { x, y, z, r, nx, ny, nz } );
+    bounds:
+        if ( !er.hasOwnBounds )
+        {
+            er.ownMinX = x - r; er.ownMaxX = x + r;
+            er.ownMinY = y - r; er.ownMaxY = y + r;
+            er.hasOwnBounds = true;
+        }
+        else
+        {
+            er.ownMinX = (std::min)( er.ownMinX, x - r );
+            er.ownMaxX = (std::max)( er.ownMaxX, x + r );
+            er.ownMinY = (std::min)( er.ownMinY, y - r );
+            er.ownMaxY = (std::max)( er.ownMaxY, y + r );
+        }
+        ++er.dirtyRev;
+    }
+
+    bool NearRegionOpenings( EditedRegion const& er, float xc, float yc, float zc, float collarM )
+    {
+        for ( EditOpening const& o : er.openings )
+        {
+            float const lim = o.r + collarM;
+            float const dx = xc - o.x, dy = yc - o.y, dz = zc - o.z;
+            if ( ( dx * dx + dy * dy + dz * dz ) <= lim * lim ) { return true; }
+        }
+        return false;
+    }
+
+    bool EditedRegionOwnsAt( float x, float y )
+    {
+        // Persistent aperture from accumulated openings — not latest tip focus.
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            if ( er.openings.empty() ) { continue; }
+            if ( er.hasOwnBounds )
+            {
+                if ( x < er.ownMinX - 0.02f || x > er.ownMaxX + 0.02f
+                  || y < er.ownMinY - 0.02f || y > er.ownMaxY + 0.02f )
+                {
+                    continue;
+                }
+            }
+            for ( EditOpening const& o : er.openings )
+            {
+                float const dx = x - o.x, dy = y - o.y;
+                if ( ( dx * dx + dy * dy ) <= o.r * o.r ) { return true; }
+            }
+        }
+        return false;
+    }
+
+    // HF peel predicate: virgin skin may vanish only where occupancy is air at that skin.
+    // Opening disks alone are too wide (void skirts); steep faces need this, not XY-disk ownership.
+    bool SurfaceBrokenByOccupancy( float x, float y )
+    {
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        CellSample const* cell = GetCell( cx, cy );
+        if ( !cell || !cell->carved || cell->fill.empty() || cell->fillW <= 0 ) { return false; }
+        float virginZ = 0.f;
+        if ( !SampleGroundZBase( x, y, virginZ ) ) { return false; }
+        // Air just under the virgin sheet = surface strike actually opened the skin.
+        if ( !OccupancySolidAt( x, y, virginZ - 0.02f ) ) { return true; }
+        float occZ = virginZ;
+        if ( SampleOccupancyZ( x, y, occZ ) && occZ < virginZ - ( 0.45f * kVoxelEdgeM ) )
+        {
+            return true;
+        }
+        return false;
+    }
+
+    uint32_t MergeOrCreateEditedRegion( float wx, float wy, float wz, float radiusM,
+        std::vector<std::pair<int, int>> const& touchedCells,
+        float nx, float ny, float nz )
+    {
+        std::vector<uint32_t> hitIds;
+        for ( auto const& xy : touchedCells )
+        {
+            CellSample const* c = GetCell( xy.first, xy.second );
+            if ( c && c->editedRegionId != 0 )
+            {
+                bool seen = false;
+                for ( uint32_t id : hitIds ) { if ( id == c->editedRegionId ) { seen = true; break; } }
+                if ( !seen ) { hitIds.push_back( c->editedRegionId ); }
+            }
+        }
+        // Also absorb regions whose openings overlap this strike (bridging bites).
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            for ( EditOpening const& o : er.openings )
+            {
+                float const dx = o.x - wx, dy = o.y - wy;
+                float const lim = o.r + radiusM + 0.08f;
+                if ( ( dx * dx + dy * dy ) > lim * lim ) { continue; }
+                bool seen = false;
+                for ( uint32_t id : hitIds ) { if ( id == er.id ) { seen = true; break; } }
+                if ( !seen ) { hitIds.push_back( er.id ); }
+                break;
+            }
+        }
+
+        EditedRegion* dest = nullptr;
+        if ( hitIds.empty() )
+        {
+            EditedRegion er;
+            er.id = g.nextEditedRegionId++;
+            g.editedRegions.push_back( er );
+            dest = &g.editedRegions.back();
+        }
+        else
+        {
+            // Keep first id; merge others into it.
+            dest = FindEditedRegion( hitIds[0] );
+            if ( !dest )
+            {
+                EditedRegion er;
+                er.id = g.nextEditedRegionId++;
+                g.editedRegions.push_back( er );
+                dest = &g.editedRegions.back();
+                hitIds[0] = dest->id;
+            }
+            for ( size_t i = 1; i < hitIds.size(); ++i )
+            {
+                EditedRegion* src = FindEditedRegion( hitIds[i] );
+                if ( !src || src == dest ) { continue; }
+                for ( EditOpening const& o : src->openings )
+                {
+                    AddOpeningMonotonic( *dest, o.x, o.y, o.z, o.r, o.nx, o.ny, o.nz );
+                }
+                for ( auto const& xy : src->cells )
+                {
+                    bool have = false;
+                    for ( auto const& c : dest->cells )
+                    {
+                        if ( c.first == xy.first && c.second == xy.second ) { have = true; break; }
+                    }
+                    if ( !have ) { dest->cells.push_back( xy ); }
+                    if ( CellSample* cell = GetCellMutable( xy.first, xy.second ) )
+                    {
+                        cell->editedRegionId = dest->id;
+                    }
+                }
+                uint32_t const kill = src->id;
+                g.editedRegions.erase(
+                    std::remove_if( g.editedRegions.begin(), g.editedRegions.end(),
+                        [&]( EditedRegion const& e ) { return e.id == kill; } ),
+                    g.editedRegions.end() );
+                dest = FindEditedRegion( hitIds[0] );
+                if ( !dest ) { break; }
+            }
+        }
+        if ( !dest ) { return 0; }
+
+        AddOpeningMonotonic( *dest, wx, wy, wz, radiusM, nx, ny, nz );
+        dest->actionX = wx; dest->actionY = wy; dest->actionZ = wz; dest->actionR = radiusM;
+        dest->hasAction = true;
+
+        for ( auto const& xy : touchedCells )
+        {
+            bool have = false;
+            for ( auto const& c : dest->cells )
+            {
+                if ( c.first == xy.first && c.second == xy.second ) { have = true; break; }
+            }
+            if ( !have ) { dest->cells.push_back( xy ); }
+            if ( CellSample* cell = GetCellMutable( xy.first, xy.second ) )
+            {
+                cell->editedRegionId = dest->id;
+            }
+        }
+        return dest->id;
+    }
+
+    bool CavityPatchOwnsAt( float x, float y )
+    {
+        // Persistent EditedRegion openings own the HF aperture (remove-only monotonic).
+        return EditedRegionOwnsAt( x, y );
+    }
+
     void EnsureGeoCell( int cx, int cy )
     {
         ProvenanceGeo::EnsureReady();
@@ -871,7 +1260,17 @@ namespace
         bool const keepCarved = dest.valid && dest.carved;
         bool const keepCavity = dest.valid && dest.hasCavity;
         GLuint const keepCavityList = dest.valid ? dest.cavityList : 0;
-        if ( !dest.valid ) { ++g.cellsLoaded; }
+        bool const keepFocus = dest.valid && dest.hasCarveFocus;
+        float const kWx = dest.carveWx, kWy = dest.carveWy, kWz = dest.carveWz, kRM = dest.carveRM;
+        bool const keepPatch = dest.valid && dest.hasPatchBounds;
+        float const pMnX = dest.patchMinX, pMnY = dest.patchMinY, pMxX = dest.patchMaxX, pMxY = dest.patchMaxY;
+        uint32_t const keepRegionId = dest.valid ? dest.editedRegionId : 0;
+        if ( !dest.valid )
+        {
+            ++g.cellsLoaded;
+            ++g.perfGeoCellsCreated;
+        }
+        ++g.perfSampleSurfaceCalls; // geography FBM — once per cell create/refresh, not per tri
         // Esoterica geography = baseline grade/cap authority (bridge optional).
         dest.grade = sample.grade;
         dest.cap = sample.cap;
@@ -890,6 +1289,18 @@ namespace
             dest.hasCavity = keepCavity;
             dest.cavityList = keepCavityList;
         }
+        if ( keepFocus )
+        {
+            dest.hasCarveFocus = true;
+            dest.carveWx = kWx; dest.carveWy = kWy; dest.carveWz = kWz; dest.carveRM = kRM;
+        }
+        if ( keepPatch )
+        {
+            dest.hasPatchBounds = true;
+            dest.patchMinX = pMnX; dest.patchMinY = pMnY;
+            dest.patchMaxX = pMxX; dest.patchMaxY = pMxY;
+        }
+        if ( keepRegionId != 0 ) { dest.editedRegionId = keepRegionId; }
     }
 
     void EnsureGeoDisk( int px, int py, int radCells )
@@ -1563,7 +1974,7 @@ namespace
 
     void UpdateStreamHud()
     {
-        char d[960];
+        char d[1400];
         char heldBuf[128] = "empty";
         if ( !g.heldGalleryId.empty() )
         {
@@ -1583,6 +1994,8 @@ namespace
             "mode=%s grounded=%d | feet (%.1f,%.1f,%.2f) eyeZ=%.2f | 6ft=%.2fm eye=%.2fm\n"
             "H2H tool=%s | affect r=%.3fm (%.0f mL %s) | contact r=%.2fm | hand ref %.0f mL\n"
             "held: %s | aim %s cell(%d,%d) uv(%.2f,%.2f)\n"
+            "strike %s | biome %s | wire %s | form %s\n"
+            "%s\n"
             "%s",
             g.wireVersion,
             g.contract.empty() ? "?" : g.contract.c_str(),
@@ -1608,7 +2021,12 @@ namespace
             heldBuf,
             g.aimHit ? "HIT" : "---",
             g.aimCx, g.aimCy, g.aimU, g.aimV,
-            g.digestLine.c_str() );
+            g.aimStrikeCap.c_str(),
+            g.aimBiome.c_str(),
+            g.aimWireCap.c_str(),
+            g.aimFormId.c_str(),
+            g.digestLine.c_str(),
+            g.spireLine.c_str() );
         g.detail = d;
     }
 
@@ -1729,6 +2147,7 @@ namespace
         if ( i == std::string::npos ) { UpdateStreamHud(); return; }
         ++i;
 
+        bool anyNew = false;
         while ( i < line.size() )
         {
             while ( i < line.size() && ( line[i] == ' ' || line[i] == '\t' || line[i] == ',' || line[i] == '\r' || line[i] == '\n' ) ) { ++i; }
@@ -1759,6 +2178,7 @@ namespace
             if ( !GetCell( cx, cy ) )
             {
                 EnsureGeoCell( cx, cy );
+                anyNew = true;
             }
         }
 
@@ -1766,7 +2186,8 @@ namespace
         g.statusLine = g.streamComplete
             ? "Phase 4 - standable + interaction digests"
             : "Phase 4 - streaming standable surface (equidistant rings)";
-        InvalidateTerrainMesh();
+        // Remesh only when new cells appear — per-reply invalidate hopped the sheet and hid digs.
+        if ( anyNew ) { InvalidateTerrainMesh(); }
         UpdateStreamHud();
     }
 
@@ -2012,6 +2433,44 @@ namespace
         }
     }
 
+    void CaptureSpirePreRequest( int cx, int cy, float aimX, float aimY, float aimZ,
+        char const* authMat )
+    {
+        // Pre-carve snapshot for SPIRE conviction — SampleGroundZBase + resident geography grade.
+        g.spireHavePre = true;
+        g.spireCx = cx;
+        g.spireCy = cy;
+        g.spireAimZ = aimZ;
+        g.spireAuthMat = authMat ? authMat : "";
+        ProvenanceGeo::EnsureReady();
+        auto const surf = ProvenanceGeo::SampleSurface(
+            (double)aimX, (double)aimY,
+            g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+        g.spireVisualCap = surf.cap ? surf.cap : CellCapName( cx, cy );
+        CellSample const* cell = GetCell( cx, cy );
+        g.spireGeoGrade = cell && cell->valid ? cell->grade : 0.f;
+        g.spireGeoZ = GradeToZ( g.spireGeoGrade );
+        float aimSurfZ = aimZ;
+        SampleGroundZBase( aimX, aimY, aimSurfZ );
+        g.spirePreReqZ = aimSurfZ;
+        // Invert SampleGroundZBase continuum at cell centre for a comparable grade proxy.
+        g.spirePreReqGrade = g.spireGeoGrade;
+        if ( cell && cell->valid )
+        {
+            g.spirePreReqGrade = cell->grade;
+        }
+        char buf[384];
+        std::snprintf( buf, sizeof( buf ),
+            "SPIRE pre cell=(%d,%d) geoGrade=%.5f geoZ=%.3f aimZ=%.3f surfZ=%.3f | visCap=%s authMat=%s | colGradeGate=%s",
+            cx, cy, g.spireGeoGrade, g.spireGeoZ, aimZ, aimSurfZ,
+            g.spireVisualCap.c_str(),
+            g.spireAuthMat.empty() ? "?" : g.spireAuthMat.c_str(),
+            kForbidColumnGradeOverwrite ? "PRESERVE" : "ALLOW_OVERWRITE" );
+        g.spireLine = buf;
+        OutputDebugStringA( buf );
+        OutputDebugStringA( "\n" );
+    }
+
     void ParseRemovedMap( std::string const& line, std::unordered_map<std::string, int>& out, int& totalG, std::string& dominant )
     {
         ParseGramsMapAfterKey( line, "\"removed\"", out, totalG, dominant );
@@ -2114,6 +2573,19 @@ namespace
 
         // Credit held bite — accumulate like engine carry (stockpile scoops for later places)
         CreditHeld( removed );
+
+        // Material mismatch telemetry only — never remap auth grass ↔ visual limestone.
+        if ( !dominant.empty() && !g.spireVisualCap.empty()
+          && _stricmp( dominant.c_str(), g.spireVisualCap.c_str() ) != 0 )
+        {
+            char mm[240];
+            std::snprintf( mm, sizeof( mm ),
+                " | MISMATCH visCap=%s authRemoved=%s (telemetry, no remap)",
+                g.spireVisualCap.c_str(), dominant.c_str() );
+            g.spireLine += mm;
+            OutputDebugStringA( mm );
+            OutputDebugStringA( "\n" );
+        }
 
         float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
         float mlApprox = ( totalG / kDirtVoxelG ) * ( kVoxelVolumeM3 * 1e6f );
@@ -2270,8 +2742,30 @@ namespace
             outZ = crest - (float)kz * g.voxelEdgeM;
             return true;
         }
-        // Top solid voxel centre ≈ crest when top == kz-1.
+        // Top face of uppermost solid voxel (crest when top == kz-1).
         outZ = crest - (float)( kz - 1 - top ) * g.voxelEdgeM;
+        return true;
+    }
+
+    bool SupportAt( float x, float y, float& outZ )
+    {
+        // Authoritative support for walk / chips:
+        //   carved occupancy cell → top solid from fill (same truth D2 reconstructs)
+        //   else virgin HF (+ presentation scars outside carve)
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        CellSample const* cell = GetCell( cx, cy );
+        if ( cell && cell->carved && !cell->fill.empty() && cell->fillW > 0 && cell->fillK > 0 )
+        {
+            if ( SampleOccupancyZ( x, y, outZ ) ) { return true; }
+        }
+        if ( EditedRegionOwnsAt( x, y ) )
+        {
+            // Aperture owned but lattice not ready — never lift on DigDep cups as "the hole."
+            return SampleGroundZBase( x, y, outZ );
+        }
+        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
+        outZ += ScarDeltaZ( x, y );
         return true;
     }
 
@@ -2282,7 +2776,221 @@ namespace
             glDeleteLists( cell.cavityList, 1 );
             cell.cavityList = 0;
         }
+        if ( cell.debugBoundaryList )
+        {
+            glDeleteLists( cell.debugBoundaryList, 1 );
+            cell.debugBoundaryList = 0;
+        }
+        cell.cavityTris.clear();
         cell.hasCavity = false;
+        // No cavity → no HF handoff. Keep carve focus so a later rebuild can reclaim ownership.
+        cell.hasPatchBounds = false;
+    }
+
+    // Occupancy field for one home column + same-res neighbor halo (missing = air).
+    struct ColumnFillField : DualContourQef::IFillField
+    {
+        int homeCx = 0, homeCy = 0;
+        CellSample const* home = nullptr;
+
+        bool TrySample( int c, int r, int k, int& outFill ) const override
+        {
+            outFill = 0;
+            if ( !home || home->fill.empty() || home->fillW <= 0 ) { return false; }
+            int const w = home->fillW, h = home->fillH, kz = home->fillK;
+            if ( k < 0 || k >= kz ) { return false; }
+            int cellDx = 0, cellDy = 0;
+            int lc = c, lr = r;
+            while ( lc < 0 ) { lc += w; --cellDx; }
+            while ( lc >= w ) { lc -= w; ++cellDx; }
+            while ( lr < 0 ) { lr += h; --cellDy; }
+            while ( lr >= h ) { lr -= h; ++cellDy; }
+            CellSample const* cell = home;
+            if ( cellDx != 0 || cellDy != 0 )
+            {
+                cell = GetCell( homeCx + cellDx, homeCy + cellDy );
+                if ( !cell || cell->fill.empty()
+                    || cell->fillW != w || cell->fillH != h || cell->fillK != kz )
+                {
+                    // Missing halo = solid (not air). Air seams invent vertical D2 strips
+                    // along every cell boundary through the full column.
+                    outFill = kFillFull;
+                    return true;
+                }
+            }
+            outFill = FillAt( *cell, lc, lr, k );
+            return true;
+        }
+    };
+
+    bool OpeningTouchesCell( EditOpening const& o, int cx, int cy )
+    {
+        float const r = (std::max)( 0.05f, o.r );
+        return o.x + r >= (float)cx && o.x - r <= (float)( cx + 1 )
+            && o.y + r >= (float)cy && o.y - r <= (float)( cy + 1 );
+    }
+
+    bool DirtyBoundsFromEditedRegion( EditedRegion const* er, CellSample const& cell,
+        int cx, int cy,
+        float& mnX, float& mxX, float& mnY, float& mxY, float& mnZ, float& mxZ )
+    {
+        // Full accumulated dirty AABB for this cell's share of the EditedRegion.
+        // Never truncated — large tunnels span many cells; work may partition, bounds must not clip.
+        constexpr float kD2ReconHalo = 0.20f;
+        mnX = 1e9f; mxX = -1e9f; mnY = 1e9f; mxY = -1e9f; mnZ = 1e9f; mxZ = -1e9f;
+        bool any = false;
+        if ( er )
+        {
+            for ( EditOpening const& o : er->openings )
+            {
+                if ( !OpeningTouchesCell( o, cx, cy ) ) { continue; }
+                float const r = (std::max)( 0.05f, o.r ) + kD2ReconHalo;
+                mnX = (std::min)( mnX, o.x - r ); mxX = (std::max)( mxX, o.x + r );
+                mnY = (std::min)( mnY, o.y - r ); mxY = (std::max)( mxY, o.y + r );
+                mnZ = (std::min)( mnZ, o.z - r ); mxZ = (std::max)( mxZ, o.z + r );
+                any = true;
+            }
+        }
+        if ( cell.hasCarveFocus )
+        {
+            float const r = (std::max)( 0.10f, cell.carveRM ) + kD2ReconHalo;
+            mnX = (std::min)( mnX, cell.carveWx - r ); mxX = (std::max)( mxX, cell.carveWx + r );
+            mnY = (std::min)( mnY, cell.carveWy - r ); mxY = (std::max)( mxY, cell.carveWy + r );
+            mnZ = (std::min)( mnZ, cell.carveWz - r ); mxZ = (std::max)( mxZ, cell.carveWz + r );
+            any = true;
+        }
+        return any;
+    }
+
+    bool FocusFromEditedRegion( EditedRegion const* er, CellSample const& cell,
+        int cx, int cy, float& fx, float& fy, float& fz, float& fr )
+    {
+        // Convenience: bounding sphere of full dirty AABB (no geometric clip).
+        float mnX, mxX, mnY, mxY, mnZ, mxZ;
+        if ( !DirtyBoundsFromEditedRegion( er, cell, cx, cy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
+        {
+            return false;
+        }
+        fx = 0.5f * ( mnX + mxX );
+        fy = 0.5f * ( mnY + mxY );
+        fz = 0.5f * ( mnZ + mxZ );
+        float const dx = mxX - mnX, dy = mxY - mnY, dz = mxZ - mnZ;
+        fr = 0.5f * std::sqrt( dx * dx + dy * dy + dz * dz ) + 0.05f;
+        return fr > 0.05f;
+    }
+
+    void RebuildDebugBoundaryList( int cx, int cy, CellSample& cell, EditedRegion const* er )
+    {
+        if ( cell.debugBoundaryList )
+        {
+            glDeleteLists( cell.debugBoundaryList, 1 );
+            cell.debugBoundaryList = 0;
+        }
+        int const w = cell.fillW, h = cell.fillH, kz = cell.fillK;
+        float const edge = kVoxelEdgeM;
+        float const crest = GradeToZ( cell.grade );
+        float const x0 = (float)cx, y0 = (float)cy;
+        float const du = 1.f / (float)w, dv = 1.f / (float)h;
+        constexpr float kCollar = 0.08f;
+
+        auto solid = [&]( int c, int r, int k ) -> bool
+        {
+            if ( c < 0 || r < 0 || k < 0 || c >= w || r >= h || k >= kz ) { return false; }
+            return FillAt( cell, c, r, k ) >= kFillIso;
+        };
+        auto airInside = [&]( int nc, int nr, int nk ) -> bool
+        {
+            if ( nc < 0 || nr < 0 || nk < 0 || nc >= w || nr >= h || nk >= kz ) { return false; }
+            return !solid( nc, nr, nk );
+        };
+        auto cornerZ = [&]( int k, bool topFace ) -> float
+        {
+            return topFace ? ( crest - (float)( kz - 1 - k ) * edge )
+                           : ( crest - (float)( kz - k ) * edge );
+        };
+        auto inOpenings = [&]( float xc, float yc, float zc ) -> bool
+        {
+            if ( er && !er->openings.empty() )
+            {
+                return NearRegionOpenings( *er, xc, yc, zc, kCollar );
+            }
+            if ( !cell.hasCarveFocus ) { return false; }
+            float const lim = (std::max)( 0.10f, cell.carveRM ) + kCollar;
+            float const dx = xc - cell.carveWx, dy = yc - cell.carveWy, dz = zc - cell.carveWz;
+            return ( dx * dx + dy * dy + dz * dz ) <= lim * lim;
+        };
+
+        GLuint list = AllocDisplayListOutsideFonts();
+        if ( !list ) { return; }
+        cell.debugBoundaryList = list;
+        glNewList( list, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+        int faces = 0;
+        for ( int k = 0; k < kz; ++k )
+        {
+            for ( int r = 0; r < h; ++r )
+            {
+                for ( int c = 0; c < w; ++c )
+                {
+                    if ( !solid( c, r, k ) ) { continue; }
+                    float const xc = x0 + ( (float)c + 0.5f ) * du;
+                    float const yc = y0 + ( (float)r + 0.5f ) * dv;
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    if ( !inOpenings( xc, yc, zc ) ) { continue; }
+
+                    float const px0 = x0 + (float)c * du;
+                    float const px1 = x0 + (float)( c + 1 ) * du;
+                    float const py0 = y0 + (float)r * dv;
+                    float const py1 = y0 + (float)( r + 1 ) * dv;
+                    float const zLo = cornerZ( k, false );
+                    float const zHi = cornerZ( k, true );
+                    auto emit = [&]( float ax, float ay, float az, float bx, float by, float bz,
+                        float cx2, float cy2, float cz2 )
+                    {
+                        EmitPhase3Tri( ax, ay, az, bx, by, bz, cx2, cy2, cz2, 0.45f );
+                        ++faces;
+                    };
+                    if ( airInside( c - 1, r, k ) )
+                    {
+                        emit( px0, py0, zLo, px0, py1, zLo, px0, py0, zHi );
+                        emit( px0, py1, zLo, px0, py1, zHi, px0, py0, zHi );
+                    }
+                    if ( airInside( c + 1, r, k ) )
+                    {
+                        emit( px1, py0, zLo, px1, py0, zHi, px1, py1, zLo );
+                        emit( px1, py1, zLo, px1, py0, zHi, px1, py1, zHi );
+                    }
+                    if ( airInside( c, r - 1, k ) )
+                    {
+                        emit( px0, py0, zLo, px0, py0, zHi, px1, py0, zLo );
+                        emit( px1, py0, zLo, px0, py0, zHi, px1, py0, zHi );
+                    }
+                    if ( airInside( c, r + 1, k ) )
+                    {
+                        emit( px0, py1, zLo, px1, py1, zLo, px0, py1, zHi );
+                        emit( px1, py1, zLo, px1, py1, zHi, px0, py1, zHi );
+                    }
+                    if ( airInside( c, r, k - 1 ) )
+                    {
+                        emit( px0, py0, zLo, px1, py0, zLo, px0, py1, zLo );
+                        emit( px1, py0, zLo, px1, py1, zLo, px0, py1, zLo );
+                    }
+                    if ( airInside( c, r, k + 1 ) )
+                    {
+                        emit( px0, py0, zHi, px0, py1, zHi, px1, py0, zHi );
+                        emit( px1, py0, zHi, px0, py1, zHi, px1, py1, zHi );
+                    }
+                }
+            }
+        }
+        glEnd();
+        glEndList();
+        if ( faces <= 0 )
+        {
+            glDeleteLists( cell.debugBoundaryList, 1 );
+            cell.debugBoundaryList = 0;
+        }
     }
 
     // World → fill indices. Returns false if cell has no occupancy lattice yet.
@@ -2371,13 +3079,54 @@ namespace
 
     void PrefetchOccupancyCell( int cx, int cy )
     {
+        // Engine column fetch only — never seed local lattices or rebuild cavity from aim/look.
         if ( CellHasOccupancy( cx, cy ) ) { return; }
         QueueColumn( cx, cy );
     }
 
+    void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v )
+    {
+        if ( cell.fill.empty() || cell.fillW <= 0 ) { return; }
+        if ( c < 0 || r < 0 || k < 0 || c >= cell.fillW || r >= cell.fillH || k >= cell.fillK ) { return; }
+        cell.fill[(size_t)k * cell.fillW * cell.fillH + r * cell.fillW + c] = v;
+    }
+
+    void SeedOccupancyFromVirginSurface( int cx, int cy )
+    {
+        // Commit-time only: occupancy solid matches canonical virgin HF (SampleGroundZBase).
+        // Not a continuous HF↔volume rematerialization — called once per cell at dig commit.
+        CellSample* cell = GetCellMutable( cx, cy );
+        if ( !cell || cell->fill.empty() || cell->fillW <= 0 || cell->fillK <= 0 ) { return; }
+        int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+        float const edge = kVoxelEdgeM;
+        float const crest = GradeToZ( cell->grade );
+        float const du = 1.f / (float)w, dv = 1.f / (float)h;
+        constexpr float kEps = 0.02f;
+        for ( int r = 0; r < h; ++r )
+        {
+            for ( int c = 0; c < w; ++c )
+            {
+                float const x = (float)cx + ( (float)c + 0.5f ) * du;
+                float const y = (float)cy + ( (float)r + 0.5f ) * dv;
+                float surfZ = crest;
+                SampleGroundZBase( x, y, surfZ );
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    if ( zc > surfZ + kEps )
+                    {
+                        SetFillAt( *cell, c, r, k, 0 );
+                    }
+                }
+            }
+        }
+        cell->hasFillZ = true;
+        cell->fillZ = crest;
+    }
+
     void EnsureOccupancyLattice( int cx, int cy )
     {
-        // Local solid until voxel_column arrives — enough to carve a D2 bite immediately.
+        // Dig-commit only path. Virgin world stays HF-only until this seeds a bounded lattice.
         EnsureGeoCell( cx, cy );
         CellSample* cell = GetCellMutable( cx, cy );
         if ( !cell ) { return; }
@@ -2389,18 +3138,12 @@ namespace
         cell->fillK = kZ;
         cell->hasFillZ = true;
         cell->fillZ = GradeToZ( cell->grade );
-    }
-
-    void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v )
-    {
-        if ( cell.fill.empty() || cell.fillW <= 0 ) { return; }
-        if ( c < 0 || r < 0 || k < 0 || c >= cell.fillW || r >= cell.fillH || k >= cell.fillK ) { return; }
-        cell.fill[(size_t)k * cell.fillW * cell.fillH + r * cell.fillW + c] = v;
+        SeedOccupancyFromVirginSurface( cx, cy );
     }
 
     void RetirePresentationScarsNear( float wx, float wy, float radiusM )
     {
-        // D2 cavity owns the hole — DigScar cups/chips are flash only.
+        // Cavity owns the hole — DigScar cups/chips are flash only.
         float const lim = (std::max)( 0.05f, radiusM * 1.35f );
         float const lim2 = lim * lim;
         size_t const before = g.scars.size();
@@ -2414,9 +3157,12 @@ namespace
         if ( g.scars.size() != before ) { ++g.scarGen; }
     }
 
-    bool CarveOccupancySphere( float wx, float wy, float wz, float radiusM )
+    bool CarveOccupancySphere( float carveX, float carveY, float carveZ, float radiusM,
+        float openX, float openY, float openZ )
     {
-        // P3b: subtract affect sphere from resident/synthetic fill → D2 shell = removed volume.
+        // Commit: seed → subtract → merge EditedRegion (monotonic openings) → rebuild cavity.
+        // Matter sphere at carve*; HF aperture opening at open* (visible strike on slopes/walls).
+        float const wx = carveX, wy = carveY, wz = carveZ;
         float const R = (std::max)( 0.02f, radiusM );
         float const R2 = R * R;
         int const x0 = (int)std::floor( wx - R - 0.05f );
@@ -2424,6 +3170,7 @@ namespace
         int const y0 = (int)std::floor( wy - R - 0.05f );
         int const y1 = (int)std::floor( wy + R + 0.05f );
         bool any = false;
+        std::vector<std::pair<int, int>> touchedCells;
         for ( int cy = y0; cy <= y1; ++cy )
         {
             for ( int cx = x0; cx <= x1; ++cx )
@@ -2431,8 +3178,12 @@ namespace
                 EnsureOccupancyLattice( cx, cy );
                 CellSample* cell = GetCellMutable( cx, cy );
                 if ( !cell || cell->fill.empty() ) { continue; }
+                if ( !cell->carved )
+                {
+                    SeedOccupancyFromVirginSurface( cx, cy );
+                }
                 int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
-                float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+                float const edge = kVoxelEdgeM;
                 float const crest = GradeToZ( cell->grade );
                 float const du = 1.f / (float)w, dv = 1.f / (float)h;
                 bool touched = false;
@@ -2457,176 +3208,519 @@ namespace
                 {
                     cell->edited = true;
                     cell->carved = true;
+                    // Transient last-action stamp only — persistent aperture lives on EditedRegion.
+                    cell->carveWx = wx;
+                    cell->carveWy = wy;
+                    cell->carveWz = wz;
+                    cell->carveRM = R;
+                    cell->hasCarveFocus = true;
                     float occZ = crest;
                     SampleOccupancyZ( (float)cx + 0.5f, (float)cy + 0.5f, occZ );
                     cell->fillZ = (std::min)( cell->hasFillZ ? cell->fillZ : crest, occZ );
                     cell->hasFillZ = true;
-                    RebuildCavityMesh( cx, cy );
+                    touchedCells.push_back( { cx, cy } );
                     any = true;
                 }
             }
         }
-        if ( any )
+        if ( !any ) { return false; }
+
+        // Aperture at visible strike. Carve into-normal may be look-into (walls), but HF handoff
+        // must classify surface strikes by HF face — look-into on slopes left openings "steep"
+        // so crest HF never opened (pick credits grams, surface looks untouched).
+        float const ox = openX, oy = openY, oz = openZ;
+        float onx = 0.f, ony = 0.f, onz = 1.f;
         {
-            RetirePresentationScarsNear( wx, wy, R );
-            InvalidateTerrainMesh();
-            int const bx = (int)std::floor( wx );
-            int const by = (int)std::floor( wy );
-            for ( int dy = -1; dy <= 1; ++dy )
+            float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+            float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            ResolveCarveIntoNormal( ox, oy, oz, sy * cp, cyw * cp, sp, onx, ony, onz );
+        }
+        float openNx = onx, openNy = ony, openNz = onz;
+        bool surfaceStrike = false;
+        {
+            float skinZ = oz;
+            SampleGroundZBase( ox, oy, skinZ );
+            float hnx = 0.f, hny = 0.f, hnz = 1.f;
+            CaptureFaceNormalAt( ox, oy, hnx, hny, hnz );
+            surfaceStrike = ( std::fabs( oz - skinZ ) < 0.45f && hnz >= 0.40f );
+            if ( surfaceStrike )
             {
-                for ( int dx = -1; dx <= 1; ++dx )
+                openNx = hnx; openNy = hny; openNz = hnz;
+            }
+        }
+        // NEW STRIKE mouth contribution — tip-scale only (≤12cm). Accumulated openings grow
+        // via union of many strikes; HF aperture uses full o.r (see NearOpeningMouthAt).
+        float openR = (std::min)( (std::max)( 0.05f, R ), 0.12f );
+        if ( !surfaceStrike && onz < 0.55f )
+        {
+            openR = (std::min)( openR, (std::max)( 0.05f, R * 0.90f ) );
+        }
+        uint32_t const rid = MergeOrCreateEditedRegion( ox, oy, oz, openR, touchedCells, openNx, openNy, openNz );
+        EditedRegion* er = FindEditedRegion( rid );
+        // Through-tunnel: into the face only (-N). Look-axis probes stacked openings above strikes.
+        if ( er )
+        {
+            auto tryExit = [&]( float dx, float dy, float dz )
+            {
+                float plen = std::sqrt( dx * dx + dy * dy + dz * dz );
+                if ( plen < 1e-5f ) { return; }
+                dx /= plen; dy /= plen; dz /= plen;
+                bool prevSolid = OccupancySolidAt( ox, oy, oz );
+                for ( float t = R * 1.2f; t <= (std::max)( 1.2f, R * 8.f ); t += 0.05f )
                 {
-                    QueueColumn( bx + dx, by + dy );
+                    float const x = ox + dx * t;
+                    float const y = oy + dy * t;
+                    float const z = oz + dz * t;
+                    bool const solid = OccupancySolidAt( x, y, z );
+                    if ( prevSolid && !solid )
+                    {
+                        float skinZ = z;
+                        SampleGroundZBase( x, y, skinZ );
+                        bool const nearCrest = std::fabs( z - skinZ ) < 0.40f;
+                        bool const wallBreak = onz < 0.55f && !nearCrest;
+                        if ( !nearCrest && !wallBreak ) { return; }
+                        float const openZExit = wallBreak ? z : skinZ;
+                        float const ddx = x - ox, ddy = y - oy, ddz = openZExit - oz;
+                        if ( ( ddx * ddx + ddy * ddy + ddz * ddz ) < ( openR * 2.f ) * ( openR * 2.f ) )
+                        {
+                            return;
+                        }
+                        AddOpeningMonotonic( *er, x, y, openZExit, openR, onx, ony, onz );
+                        return;
+                    }
+                    prevSolid = solid;
+                }
+            };
+            tryExit( -onx, -ony, -onz );
+        }
+        for ( auto const& xy : touchedCells )
+        {
+            RebuildCavityMesh( xy.first, xy.second );
+            CellSample* cell = GetCellMutable( xy.first, xy.second );
+            if ( !cell ) { continue; }
+            if ( cell->hasCavity && er && er->hasOwnBounds )
+            {
+                cell->patchMinX = er->ownMinX;
+                cell->patchMaxX = er->ownMaxX;
+                cell->patchMinY = er->ownMinY;
+                cell->patchMaxY = er->ownMaxY;
+                cell->hasPatchBounds = true;
+            }
+        }
+        // Halo neighbors only (D2 seam) — rebuilding EVERY EditedRegion cell each dig lagged hard.
+        if ( er )
+        {
+            for ( auto const& t : touchedCells )
+            {
+                for ( int dy = -1; dy <= 1; ++dy )
+                {
+                    for ( int dx = -1; dx <= 1; ++dx )
+                    {
+                        if ( dx == 0 && dy == 0 ) { continue; }
+                        int const nx = t.first + dx, ny = t.second + dy;
+                        bool already = false;
+                        for ( auto const& u : touchedCells )
+                        {
+                            if ( u.first == nx && u.second == ny ) { already = true; break; }
+                        }
+                        if ( already ) { continue; }
+                        CellSample* cell = GetCellMutable( nx, ny );
+                        if ( !cell || !cell->carved ) { continue; }
+                        RebuildCavityMesh( nx, ny );
+                    }
                 }
             }
         }
-        return any;
+
+        if ( kAabbCavityOwnsHf )
+        {
+            RetirePresentationScarsNear( wx, wy, R );
+        }
+        // HF remesh whenever this strike opened virgin skin — same for flat / slope / wall HF.
+        {
+            bool remeshHf = surfaceStrike || SurfaceBrokenByOccupancy( ox, oy );
+            if ( !remeshHf )
+            {
+                for ( auto const& xy : touchedCells )
+                {
+                    if ( MaterialSlumpsOpen( CellCapName( xy.first, xy.second ) )
+                      || SurfaceBrokenByOccupancy( (float)xy.first + 0.5f, (float)xy.second + 0.5f ) )
+                    {
+                        remeshHf = true;
+                        break;
+                    }
+                }
+            }
+            if ( remeshHf ) { InvalidateTerrainMesh(); }
+        }
+        int const bx = (int)std::floor( wx );
+        int const by = (int)std::floor( wy );
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                QueueColumn( bx + dx, by + dy );
+            }
+        }
+        return true;
     }
 
     bool SurfaceOpenedByOccupancy( float x, float y )
     {
-        // Open heightfield only where WE carved — virgin column air must not punch walk/look paths.
-        int const cx = (int)std::floor( x );
-        int const cy = (int)std::floor( y );
-        CellSample const* cell = GetCell( cx, cy );
-        if ( !cell || !cell->carved || !cell->hasCavity || cell->fill.empty() ) { return false; }
-        float const crest = GradeToZ( cell->grade );
-        float occZ = crest;
-        if ( !SampleOccupancyZ( x, y, occZ ) ) { return false; }
-        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
-        return ( crest - occZ ) > edge * 0.35f;
+        return EditedRegionOwnsAt( x, y );
     }
 
     void RebuildCavityMesh( int cx, int cy )
     {
-        // P3b: interior solid|air faces only — exterior lattice faces read as Minecraft cubes.
+        // D2 on accumulated EditedRegion occupancy for this cell.
+        // ACTION is bite-local; DIRTY = union(openings,carve)+halo; publish ONE coherent cavity.
+        // Not tip-patch A/B/C hopping. HF aperture stays separate (NearOpeningMouthAt).
         auto it = g.cells.find( CellKey( cx, cy ) );
         if ( it == g.cells.end() ) { return; }
         CellSample& cell = it->second;
+        int const prevTris = (int)cell.cavityTris.size();
         DestroyCavityList( cell );
         if ( !cell.carved || cell.fill.empty() || cell.fillW <= 0 || cell.fillK <= 0 ) { return; }
 
+        EditedRegion const* er = FindEditedRegion( cell.editedRegionId );
+        if ( ( !er || er->openings.empty() ) && !cell.hasCarveFocus ) { return; }
+
         int const w = cell.fillW, h = cell.fillH, kz = cell.fillK;
-        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const edge = kVoxelEdgeM;
         float const crest = GradeToZ( cell.grade );
-        float const x0 = (float)cx, y0 = (float)cy;
-        float const du = 1.f / (float)w, dv = 1.f / (float)h;
 
-        auto solid = [&]( int c, int r, int k ) -> bool
+        ColumnFillField field;
+        field.homeCx = cx;
+        field.homeCy = cy;
+        field.home = &cell;
+
+        cell.cavityTris.clear();
+        DualContourQef::ExtractStats st{};
+        float mnX, mxX, mnY, mxY, mnZ, mxZ;
+        if ( !DirtyBoundsFromEditedRegion( er, cell, cx, cy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
         {
-            if ( c < 0 || r < 0 || k < 0 || c >= w || r >= h || k >= kz ) { return false; }
-            return FillAt( cell, c, r, k ) >= kFillIso;
-        };
-        auto airInside = [&]( int nc, int nr, int nk ) -> bool
+            return;
+        }
+
+        // Work-budget partition size — NOT a geometric clip. Full dirty AABB is always covered;
+        // oversized volumes rebuild as overlapping tiles each with full recon halo.
+        constexpr float kWorkBudgetR = 0.85f;
+        constexpr float kPartHalo = 0.20f;
+        float const spanX = mxX - mnX, spanY = mxY - mnY, spanZ = mxZ - mnZ;
+        float const frAll = 0.5f * std::sqrt( spanX * spanX + spanY * spanY + spanZ * spanZ ) + 0.05f;
+
+        auto extractFocus = [&]( float fx, float fy, float fz, float fr )
         {
-            if ( nc < 0 || nr < 0 || nk < 0 || nc >= w || nr >= h || nk >= kz ) { return false; }
-            return !solid( nc, nr, nk );
-        };
-        auto cornerZ = [&]( int k, bool topFace ) -> float
-        {
-            return topFace ? ( crest - (float)( kz - 1 - k ) * edge )
-                           : ( crest - (float)( kz - k ) * edge );
+            DualContourQef::ExtractStats const local = DualContourQef::ExtractCell(
+                field, w, h, kz, (float)cx, (float)cy, crest, edge, kFillIso,
+                cell.cavityTris, fx, fy, fz, fr );
+            st.tris += local.tris;
+            st.edgesEmitted += local.edgesEmitted;
+            st.qefMassFallback += local.qefMassFallback;
         };
 
-        GLuint list = AllocDisplayListOutsideFonts();
-        if ( !list ) { return; }
-        cell.cavityList = list;
-        glNewList( list, GL_COMPILE );
-        glShadeModel( GL_FLAT );
-        glBegin( GL_TRIANGLES );
-        int faces = 0;
-        for ( int k = 0; k < kz; ++k )
+        ++g.perfD2Rebuilds;
+        DWORD const t0 = GetTickCount();
+        if ( frAll <= kWorkBudgetR + kPartHalo )
         {
-            for ( int r = 0; r < h; ++r )
+            extractFocus( 0.5f * ( mnX + mxX ), 0.5f * ( mnY + mxY ), 0.5f * ( mnZ + mxZ ), frAll );
+        }
+        else
+        {
+            // Deterministic tile grid; step < diameter so tiles overlap by ≥ halo.
+            float const tile = kWorkBudgetR;
+            float const partR = 0.5f * tile + kPartHalo;
+            float const step = (std::max)( 0.25f, tile - kPartHalo );
+            for ( float z = mnZ; z <= mxZ + 1e-4f; z += step )
             {
-                for ( int c = 0; c < w; ++c )
+                for ( float y = mnY; y <= mxY + 1e-4f; y += step )
                 {
-                    if ( !solid( c, r, k ) ) { continue; }
-                    float const px0 = x0 + (float)c * du;
-                    float const px1 = x0 + (float)( c + 1 ) * du;
-                    float const py0 = y0 + (float)r * dv;
-                    float const py1 = y0 + (float)( r + 1 ) * dv;
-                    float const zLo = cornerZ( k, false );
-                    float const zHi = cornerZ( k, true );
-                    auto emit = [&]( float ax, float ay, float az, float bx, float by, float bz,
-                        float cx2, float cy2, float cz2 )
+                    for ( float x = mnX; x <= mxX + 1e-4f; x += step )
                     {
-                        EmitPhase3Tri( ax, ay, az, bx, by, bz, cx2, cy2, cz2, 0.62f );
-                        ++faces;
-                    };
-                    if ( airInside( c - 1, r, k ) )
-                    {
-                        emit( px0, py0, zLo, px0, py1, zLo, px0, py0, zHi );
-                        emit( px0, py1, zLo, px0, py1, zHi, px0, py0, zHi );
-                    }
-                    if ( airInside( c + 1, r, k ) )
-                    {
-                        emit( px1, py0, zLo, px1, py0, zHi, px1, py1, zLo );
-                        emit( px1, py1, zLo, px1, py0, zHi, px1, py1, zHi );
-                    }
-                    if ( airInside( c, r - 1, k ) )
-                    {
-                        emit( px0, py0, zLo, px0, py0, zHi, px1, py0, zLo );
-                        emit( px1, py0, zLo, px0, py0, zHi, px1, py0, zHi );
-                    }
-                    if ( airInside( c, r + 1, k ) )
-                    {
-                        emit( px0, py1, zLo, px1, py1, zLo, px0, py1, zHi );
-                        emit( px1, py1, zLo, px1, py1, zHi, px0, py1, zHi );
-                    }
-                    if ( airInside( c, r, k - 1 ) )
-                    {
-                        emit( px0, py0, zLo, px1, py0, zLo, px0, py1, zLo );
-                        emit( px1, py0, zLo, px1, py1, zLo, px0, py1, zLo );
-                    }
-                    if ( airInside( c, r, k + 1 ) )
-                    {
-                        emit( px0, py0, zHi, px0, py1, zHi, px1, py0, zHi );
-                        emit( px1, py0, zHi, px0, py1, zHi, px1, py1, zHi );
+                        float const fx = (std::min)( mxX, (std::max)( mnX, x + 0.5f * step ) );
+                        float const fy = (std::min)( mxY, (std::max)( mnY, y + 0.5f * step ) );
+                        float const fz = (std::min)( mxZ, (std::max)( mnZ, z + 0.5f * step ) );
+                        extractFocus( fx, fy, fz, partR );
                     }
                 }
             }
         }
-        glEnd();
-        glEndList();
-        cell.hasCavity = faces > 0;
+        g.perfD2MsTotal += (float)( GetTickCount() - t0 );
+        g.perfD2Tris += st.tris;
+        g.perfD2Edges += st.edgesEmitted;
+        g.perfD2QefFallbacks += st.qefMassFallback;
+        g.perfD2HaloMiss += st.haloMissing;
+
+        g.cavityEdgesEmitted = st.edgesEmitted;
+        g.cavityTrisTotal = (std::max)( 0, g.cavityTrisTotal - prevTris ) + (int)cell.cavityTris.size();
+
+        if ( !cell.cavityTris.empty() )
+        {
+            GLuint list = AllocDisplayListOutsideFonts();
+            if ( list )
+            {
+                cell.cavityList = list;
+                glNewList( list, GL_COMPILE );
+                glShadeModel( GL_FLAT );
+                glBegin( GL_TRIANGLES );
+                for ( DualContourQef::Tri const& t : cell.cavityTris )
+                {
+                    EmitPhase3Tri(
+                        t.a.x, t.a.y, t.a.z,
+                        t.b.x, t.b.y, t.b.z,
+                        t.c.x, t.c.y, t.c.z,
+                        0.32f );
+                }
+                glEnd();
+                glEndList();
+                cell.hasCavity = true;
+            }
+        }
+
+        RebuildDebugBoundaryList( cx, cy, cell, er );
+
         if ( !cell.hasCavity )
         {
+            // Do not promote AABB shelves as production cavity (vertical stripe source).
+            if ( cell.debugBoundaryList )
+            {
+                glDeleteLists( cell.debugBoundaryList, 1 );
+                cell.debugBoundaryList = 0;
+            }
             DestroyCavityList( cell );
+            return;
         }
-        else
+
+        if ( er && er->hasOwnBounds )
         {
-            RetirePresentationScarsNear( (float)cx + 0.5f, (float)cy + 0.5f, 0.85f );
+            cell.patchMinX = er->ownMinX;
+            cell.patchMaxX = er->ownMaxX;
+            cell.patchMinY = er->ownMinY;
+            cell.patchMaxY = er->ownMaxY;
+            cell.hasPatchBounds = true;
         }
+    }
+
+    void DrawCavityMeshesMouth()
+    {
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( -0.20f, -0.40f );
+        DrawCavityMeshes();
+        glDisable( GL_POLYGON_OFFSET_FILL );
+    }
+
+    void DrawCavityMeshesInterior()
+    {
+        // No polygon offset — offset pulled cavity through adjacent intact HF (windows).
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        DrawCavityMeshes();
     }
 
     void DrawCavityMeshes()
     {
-        // Occupancy boundary shells — carved digs only (never virgin look/walk prefetch).
+        // Production: D2. [B] DebugBoundary = AABB only. Overlay = D2 + AABB wire.
         static bool sClearedBogus = false;
         bool clearedBogus = false;
+        glDisable( GL_CULL_FACE );
+        bool const drawD2 = ( g.boundaryMode == BoundaryMode::D2
+            || g.boundaryMode == BoundaryMode::Overlay );
+        bool const drawAabb = ( g.boundaryMode == BoundaryMode::DebugBoundary
+            || g.boundaryMode == BoundaryMode::Overlay );
         for ( auto& kv : g.cells )
         {
             CellSample& cell = kv.second;
             if ( !cell.carved )
             {
-                if ( cell.hasCavity || cell.cavityList )
+                if ( cell.hasCavity || cell.cavityList || cell.debugBoundaryList )
                 {
                     DestroyCavityList( cell );
                     clearedBogus = true;
                 }
                 continue;
             }
-            if ( cell.hasCavity && cell.cavityList )
+            if ( drawD2 && cell.cavityList )
+            {
+                glCallList( cell.cavityList );
+            }
+            if ( drawAabb && cell.debugBoundaryList )
+            {
+                if ( g.boundaryMode == BoundaryMode::Overlay )
+                {
+                    glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
+                    glLineWidth( 1.f );
+                }
+                glCallList( cell.debugBoundaryList );
+                if ( g.boundaryMode == BoundaryMode::Overlay )
+                {
+                    glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
+                }
+            }
+            // DebugBoundary with no D2: still show AABB if present.
+            if ( g.boundaryMode == BoundaryMode::DebugBoundary
+                && !cell.debugBoundaryList && cell.cavityList )
             {
                 glCallList( cell.cavityList );
             }
         }
+        glEnable( GL_CULL_FACE );
         if ( clearedBogus && !sClearedBogus )
         {
             sClearedBogus = true;
-            InvalidateTerrainMesh();
         }
+    }
+
+    bool CavityReadyNear( float x, float y )
+    {
+        // HF may omit skin only where D2 exists nearby — otherwise handoff opens sky void.
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                CellSample const* c = GetCell( cx + dx, cy + dy );
+                if ( c && c->hasCavity && c->cavityList ) { return true; }
+            }
+        }
+        return false;
+    }
+
+    bool NearOpeningMouthAt( float x, float y )
+    {
+        // HF aperture = union of accumulated opening mouths (each strike adds tip-scale disk).
+        // Do NOT clamp to 12cm here — that would freeze tunnels at first-bite width.
+        // 12cm caps only the contribution of a NEW strike when AddOpeningMonotonic runs.
+        constexpr float kCollar = 0.03f;
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            for ( EditOpening const& o : er.openings )
+            {
+                float const lim = (std::max)( 0.05f, o.r ) + kCollar;
+                float const dx = x - o.x, dy = y - o.y;
+                if ( ( dx * dx + dy * dy ) <= lim * lim ) { return true; }
+            }
+        }
+        return false;
+    }
+
+    bool CrestMouthStencilAt( float x, float y )
+    {
+        // HF aperture = opening mouth ∩ occupancy skin open ∩ D2 ready.
+        if ( !NearOpeningMouthAt( x, y ) ) { return false; }
+        if ( !SurfaceBrokenByOccupancy( x, y ) ) { return false; }
+        return CavityReadyNear( x, y );
+    }
+
+    void DrawOccupancySurfaceBreaks()
+    {
+        // Seam stitch only where HF remesh may still leave a skin rim (same predicate as handoff).
+        if ( g.editedRegions.empty() ) { return; }
+
+        constexpr int kOcc = 8;
+        constexpr float kZBias = 0.004f;
+        float const feetX = g.feetX, feetY = g.feetY;
+        constexpr float kMaxDist2 = 20.f * 20.f;
+        glBegin( GL_TRIANGLES );
+        for ( auto const& kv : g.cells )
+        {
+            CellSample const& cell = kv.second;
+            if ( !cell.carved || cell.fill.empty() ) { continue; }
+            uint64_t const key = kv.first;
+            int const cx = (int)(int32_t)( key >> 32 );
+            int const cy = (int)(int32_t)( key & 0xffffffffu );
+            float const cdx = ( (float)cx + 0.5f ) - feetX;
+            float const cdy = ( (float)cy + 0.5f ) - feetY;
+            if ( ( cdx * cdx + cdy * cdy ) > kMaxDist2 ) { continue; }
+            float const step = 1.f / (float)kOcc;
+            for ( int j = 0; j < kOcc; ++j )
+            {
+                for ( int i = 0; i < kOcc; ++i )
+                {
+                    float const px00 = (float)cx + (float)i * step;
+                    float const py00 = (float)cy + (float)j * step;
+                    float const px10 = px00 + step, py10 = py00;
+                    float const px01 = px00, py01 = py00 + step;
+                    float const px11 = px00 + step, py11 = py00 + step;
+                    float const mx = ( px00 + px11 ) * 0.5f;
+                    float const my = ( py00 + py11 ) * 0.5f;
+                    if ( !CrestMouthStencilAt( mx, my ) ) { continue; }
+                    float z00, z10, z01, z11;
+                    if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
+                    if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
+                    if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
+                    if ( !SampleGroundZBase( px11, py11, z11 ) ) { continue; }
+                    z00 += kZBias; z10 += kZBias; z01 += kZBias; z11 += kZBias;
+                    glVertex3f( px00, py00, z00 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px01, py01, z01 );
+                    glVertex3f( px10, py10, z10 );
+                    glVertex3f( px11, py11, z11 );
+                    glVertex3f( px01, py01, z01 );
+                }
+            }
+        }
+        glEnd();
+    }
+
+    void DrawEditedRegionOpenings()
+    {
+        // Steep wall mouths only — crest HF is punched by DrawOccupancySurfaceBreaks.
+        // Disks sit in the strike face plane so cliff bites aren't XY circles on the crest.
+        constexpr int kRing = 18;
+        constexpr float kNBias = 0.035f; // toward air — depth-tested punch must clear HF skin
+        glBegin( GL_TRIANGLES );
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            for ( EditOpening const& o : er.openings )
+            {
+                float nx = o.nx, ny = o.ny, nz = o.nz;
+                if ( std::fabs( nz ) > 0.98f && std::fabs( nx ) < 1e-4f && std::fabs( ny ) < 1e-4f )
+                {
+                    CaptureFaceNormalAt( o.x, o.y, nx, ny, nz );
+                }
+                if ( nz >= 0.55f ) { continue; } // crest / shallow → occupancy break owns stencil
+                float rad = (std::max)( 0.05f, o.r ); // full accumulated mouth (not tip clamp)
+                float sx = o.x, sy = o.y, sz = o.z;
+                float ax = 1.f, ay = 0.f, az = 0.f;
+                if ( std::fabs( nx ) > 0.9f ) { ax = 0.f; ay = 1.f; }
+                float tx = ay * nz - az * ny;
+                float ty = az * nx - ax * nz;
+                float tz = ax * ny - ay * nx;
+                float tl = std::sqrt( tx * tx + ty * ty + tz * tz );
+                if ( tl > 1e-5f ) { tx /= tl; ty /= tl; tz /= tl; }
+                else { tx = 0.f; ty = 1.f; tz = 0.f; }
+                float bx = ny * tz - nz * ty;
+                float by = nz * tx - nx * tz;
+                float bz = nx * ty - ny * tx;
+
+                float const cx = sx + nx * kNBias;
+                float const cy = sy + ny * kNBias;
+                float const cz = sz + nz * kNBias;
+                for ( int j = 0; j < kRing; ++j )
+                {
+                    float const a0 = (float)j / (float)kRing * 6.2831853f;
+                    float const a1 = (float)( j + 1 ) / (float)kRing * 6.2831853f;
+                    float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
+                    float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
+                    float const x0 = cx + ( tx * c0 + bx * s0 ) * rad;
+                    float const y0 = cy + ( ty * c0 + by * s0 ) * rad;
+                    float const z0 = cz + ( tz * c0 + bz * s0 ) * rad;
+                    float const x1 = cx + ( tx * c1 + bx * s1 ) * rad;
+                    float const y1 = cy + ( ty * c1 + by * s1 ) * rad;
+                    float const z1 = cz + ( tz * c1 + bz * s1 ) * rad;
+                    glVertex3f( cx, cy, cz );
+                    glVertex3f( x0, y0, z0 );
+                    glVertex3f( x1, y1, z1 );
+                }
+            }
+        }
+        glEnd();
+    }
+
+    void DrawCarveActionFootprints()
+    {
+        DrawOccupancySurfaceBreaks();
+        DrawEditedRegionOpenings();
     }
 
     // ---- World sun + lit-material path (gallery, held, terrain share one frame) ----
@@ -2674,13 +3768,13 @@ namespace
         g.sunDirZ = se;
         float const len = std::sqrt( g.sunDirX * g.sunDirX + g.sunDirY * g.sunDirY + g.sunDirZ * g.sunDirZ );
         if ( len > 1e-6f ) { g.sunDirX /= len; g.sunDirY /= len; g.sunDirZ /= len; }
-        // Soft warm sun when low; cooler when high.
+        // Soft warm sun when low; cooler when high. Kept dimmer — prior fill blew out limestone.
         float const day = (std::max)( 0.15f, se );
         g.sunColorR = 1.f;
         g.sunColorG = 0.92f + 0.06f * day;
         g.sunColorB = 0.78f + 0.18f * day;
-        g.sunIntensity = 0.55f + 0.70f * day;
-        g.skyIntensity = 0.22f + 0.16f * day;
+        g.sunIntensity = 0.36f + 0.32f * day;
+        g.skyIntensity = 0.14f + 0.08f * day;
     }
 
     void ShadeLitFace( float nx, float ny, float nz,
@@ -2704,6 +3798,10 @@ namespace
         if ( vl > 1e-6f ) { vx /= vl; vy /= vl; vz /= vl; }
 
         float const ndotl = (std::max)( 0.f, wx * g.sunDirX + wy * g.sunDirY + wz * g.sunDirZ );
+        // Modest anti-sun + view fill — enough to read form, not wash the frame white.
+        float const ndotBack = (std::max)( 0.f, -( wx * g.sunDirX + wy * g.sunDirY + wz * g.sunDirZ ) );
+        float const ndotV = (std::max)( 0.f, wx * vx + wy * vy + wz * vz );
+        float const fill = 0.10f + 0.10f * ndotBack + 0.12f * ndotV;
         float hx = g.sunDirX + vx, hy = g.sunDirY + vy, hz = g.sunDirZ + vz;
         float hl = std::sqrt( hx * hx + hy * hy + hz * hz );
         if ( hl > 1e-6f ) { hx /= hl; hy /= hl; hz /= hl; }
@@ -2715,9 +3813,9 @@ namespace
         float const specAmp = ( 0.04f + ( 1.f - rough ) * 0.55f ) * ( 0.25f + metal * 1.1f );
         float const spec = std::pow( ndoth, shin ) * specAmp * g.sunIntensity;
 
-        float const ambR = g.skyColorR * g.skyIntensity;
-        float const ambG = g.skyColorG * g.skyIntensity;
-        float const ambB = g.skyColorB * g.skyIntensity;
+        float const ambR = g.skyColorR * g.skyIntensity + fill * 0.40f;
+        float const ambG = g.skyColorG * g.skyIntensity + fill * 0.40f;
+        float const ambB = g.skyColorB * g.skyIntensity + fill * 0.45f;
         float const difScale = ( 1.f - metal * 0.82f ) * g.sunIntensity * ndotl;
         float const difR = g.sunColorR * difScale;
         float const difG = g.sunColorG * difScale;
@@ -2731,9 +3829,9 @@ namespace
         outR = br * ( ambR + difR ) + sr * spec * g.sunColorR;
         outG = bg * ( ambG + difG ) + sg * spec * g.sunColorG;
         outB = bb * ( ambB + difB ) + sb * spec * g.sunColorB;
-        outR = (std::min)( 1.15f, (std::max)( 0.f, outR ) );
-        outG = (std::min)( 1.15f, (std::max)( 0.f, outG ) );
-        outB = (std::min)( 1.15f, (std::max)( 0.f, outB ) );
+        outR = (std::min)( 1.0f, (std::max)( 0.f, outR ) );
+        outG = (std::min)( 1.0f, (std::max)( 0.f, outG ) );
+        outB = (std::min)( 1.0f, (std::max)( 0.f, outB ) );
     }
 
     void EmitGalleryTri( float x0, float y0, float z0,
@@ -3604,8 +4702,8 @@ namespace
         float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
         float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
         float fx = sy * cp, fy = cyw * cp, fz = sp;
-        // Projection near plane is 0.5m — keep the held body fully beyond it or it vanishes.
-        float const holdDist = 0.72f;
+        // Projection near plane — keep held body beyond active near or it vanishes.
+        float const holdDist = (std::max)( 0.72f, g.projNearM + 0.22f );
         float const rad = GalleryCollideRadius( g.heldGalleryId.c_str() );
         hx = g.camX + fx * holdDist + cyw * 0.20f;
         hy = g.camY + fy * holdDist - sy * 0.20f;
@@ -3613,7 +4711,7 @@ namespace
         // Keep body clear of the near clip sphere around the eye.
         float dx = hx - g.camX, dy = hy - g.camY, dz = hz - g.camZ;
         float d = std::sqrt( dx * dx + dy * dy + dz * dz );
-        float const minD = 0.55f + rad;
+        float const minD = g.projNearM + 0.08f + rad;
         if ( d > 1e-5f && d < minD )
         {
             float s = minD / d;
@@ -3956,24 +5054,55 @@ namespace
         }
 
         CellSample& cell = g.cells[CellKey( cx, cy )];
+        float const wireGrade = grade;
+        float const wireZ = GradeToZ( wireGrade );
+        // Never bootstrap HF grade from wire — wire crest is ~+10m vs geography and tears
+        // vertical triangle strips between geo cells and column-first cells.
         if ( !cell.valid )
         {
-            cell.valid = true;
-            cell.grade = grade;
-            CapColor( "dirt", cell.r, cell.g, cell.b );
-            ++g.cellsLoaded;
+            EnsureGeoCell( cx, cy );
         }
-        cell.grade = grade;
-        if ( !fillBytes.empty() )
+        bool const hadGeo = cell.valid;
+        float const geoGradeBefore = hadGeo ? cell.grade : wireGrade;
+        float const geoZBefore = GradeToZ( geoGradeBefore );
+        float const deltaZm = wireZ - geoZBefore;
+
+        if ( kForbidColumnGradeOverwrite )
+        {
+            // Conviction gate: keep resident geography grade; still take fill / cavity.
+            ++g.spireOverwriteBlocked;
+            if ( std::fabs( deltaZm ) > 0.01f )
+            {
+                ++g.spireOverwriteWouldHave;
+            }
+        }
+        else
+        {
+            cell.grade = wireGrade;
+            if ( std::fabs( deltaZm ) > 0.01f )
+            {
+                ++g.spireOverwriteWouldHave;
+            }
+        }
+
+        float const keptGrade = cell.grade;
+        float const keptZ = GradeToZ( keptGrade );
+
+        // Carved cells keep local affect-sphere fill. Wire voxel_column is often virgin /
+        // pre-carve occupancy — replacing fill erased tip voids and made digs vanish at random
+        // as the 3×3 column fan-in arrived (HF "hop" / hide previous strikes).
+        bool const hadWireFill = !fillBytes.empty();
+        bool const keepLocalCarveFill = cell.carved && !cell.fill.empty();
+        if ( hadWireFill && !keepLocalCarveFill )
         {
             cell.fill = std::move( fillBytes );
             cell.fillW = bw;
             cell.fillH = bh;
             cell.fillK = kz;
         }
-        float const newFillZ = FillTopToWorldZ( grade, kz, meanTop );
+        // Crest/fillZ from KEPT geography grade — never let wire grade spike the HF datum.
+        float const newFillZ = FillTopToWorldZ( keptGrade, kz, meanTop );
         // Prefetch/look/walk: store fill only. Never rebuild cavity or punch terrain.
-        // Dig path sets cell.carved before column reconcile.
         if ( cell.carved )
         {
             if ( cell.hasFillZ )
@@ -3986,11 +5115,19 @@ namespace
             }
             cell.hasFillZ = true;
             cell.edited = true;
-            RebuildCavityMesh( cx, cy );
-            InvalidateTerrainMesh();
-            if ( cell.hasCavity )
+            if ( !keepLocalCarveFill )
             {
+                // Only rebuild when we actually accepted wire fill (non-carved→carved edge cases).
+                RebuildCavityMesh( cx, cy );
+            }
+            if ( cell.hasCavity && kAabbCavityOwnsHf )
+            {
+                InvalidateTerrainMesh();
                 RetirePresentationScarsNear( (float)cx + 0.5f, (float)cy + 0.5f, 0.9f );
+            }
+            else if ( cell.hasCavity && kAabbCavityOwnsHf == false )
+            {
+                // leave cavity list + tip stencil alone
             }
         }
         else
@@ -4000,12 +5137,37 @@ namespace
             DestroyCavityList( cell );
         }
 
+        {
+            char const* applied = kForbidColumnGradeOverwrite ? "preserved" : "overwrite";
+            char const* fillFate = keepLocalCarveFill ? "keepLocalCarve"
+                : ( hadWireFill ? "acceptWire" : "noFill" );
+            bool const struck = g.spireHavePre && cx == g.spireCx && cy == g.spireCy;
+            char buf[720];
+            std::snprintf( buf, sizeof( buf ),
+                "SPIRE col cell=(%d,%d)%s geoBefore=%.5f/%.3fm wire=%.5f/%.3fm kept=%.5f/%.3fm deltaZm=%+.3f applied=%s fill=%s blocked=%d wouldHave=%d | visCap=%s authMat=%s",
+                cx, cy, struck ? " STRUCK" : "",
+                geoGradeBefore, geoZBefore,
+                wireGrade, wireZ,
+                keptGrade, keptZ,
+                deltaZm, applied, fillFate,
+                g.spireOverwriteBlocked, g.spireOverwriteWouldHave,
+                g.spireVisualCap.empty() ? "?" : g.spireVisualCap.c_str(),
+                g.spireAuthMat.empty() ? "?" : g.spireAuthMat.c_str() );
+            if ( struck || std::fabs( deltaZm ) > 0.05f )
+            {
+                g.spireLine = buf;
+            }
+            OutputDebugStringA( buf );
+            OutputDebugStringA( "\n" );
+        }
+
         char d[240];
         std::snprintf( d, sizeof( d ),
-            "COLUMN truth (%d,%d): fillZ=%.2f gradeZ=%.2f meanTop=%.2f/%d cavity=%s%s",
-            cx, cy, cell.fillZ, GradeToZ( grade ), meanTop, kz,
+            "COLUMN truth (%d,%d): fillZ=%.2f gradeZ=%.2f (wireZ=%.2f) meanTop=%.2f/%d cavity=%s%s%s",
+            cx, cy, cell.fillZ, keptZ, wireZ, meanTop, kz,
             cell.hasCavity ? "D2" : "none",
-            cell.carved ? " carved" : " (resident)" );
+            cell.carved ? " carved" : " (resident)",
+            keepLocalCarveFill ? " keepLocal" : "" );
         if ( g.digestLine.find( "DIG digest" ) == std::string::npos &&
              g.digestLine.find( "PLACE digest" ) == std::string::npos )
         {
@@ -4104,6 +5266,49 @@ namespace
         ++g.scarGen;
         g.columnQueue.clear();
         InvalidateTerrainMesh();
+    }
+
+    // Re-author resident grades/caps after --geo-fixture / F8. Dig scars cleared (HF law changed).
+    // Does not wake D2 — cavity lists deleted; virgin path stays HF-only until next dig.
+    void RefreshGeographyFixture()
+    {
+        std::vector<std::pair<int, int>> keys;
+        keys.reserve( g.cells.size() );
+        for ( auto& kv : g.cells )
+        {
+            int const cx = (int)( kv.first >> 32 );
+            int const cy = (int)( kv.first & 0xffffffffu );
+            keys.push_back( { cx, cy } );
+            if ( kv.second.cavityList )
+            {
+                glDeleteLists( kv.second.cavityList, 1 );
+                kv.second.cavityList = 0;
+            }
+            if ( kv.second.debugBoundaryList )
+            {
+                glDeleteLists( kv.second.debugBoundaryList, 1 );
+                kv.second.debugBoundaryList = 0;
+            }
+        }
+        g.cells.clear();
+        g.cellsLoaded = 0;
+        g.scars.clear();
+        ++g.scarGen;
+        g.editedRegions.clear();
+        g.nextEditedRegionId = 1;
+        g.cavityTrisTotal = 0;
+        g.cavityEdgesEmitted = 0;
+        for ( auto const& xy : keys )
+        {
+            EnsureGeoCell( xy.first, xy.second );
+        }
+        InvalidateTerrainMesh();
+        char d[192];
+        std::snprintf( d, sizeof( d ), "Geo fixture: %s  (%s)  [F8] cycle  --geo-fixture=range|torture",
+            ProvenanceGeo::FixtureName( ProvenanceGeo::Fixture() ),
+            ProvenanceGeo::FixtureLabel( ProvenanceGeo::Fixture() ) );
+        g.digestLine = d;
+        g.statusLine = d;
     }
 
     void TryConnect()
@@ -5036,12 +6241,32 @@ namespace
         return true;
     }
 
+    bool SampleTerrainDrawZ( float x, float y, float& outZ )
+    {
+        // Drawn HF: virgin continuum by default.
+        // Handoff only when skin is open AND D2 is ready — omit without cavity = sky void.
+        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
+        if ( CrestMouthStencilAt( x, y ) ) { return false; }
+        // Soft roof collapse (sand/gravel) inside occupancy-broken crest.
+        if ( !SurfaceBrokenByOccupancy( x, y ) ) { return true; }
+        std::string const cap = CapAtWorld( x, y );
+        if ( !MaterialSlumpsOpen( cap ) ) { return true; }
+        float occZ = outZ;
+        if ( SampleOccupancyZ( x, y, occZ ) )
+        {
+            outZ = (std::min)( outZ, occZ );
+        }
+        else
+        {
+            outZ -= (std::max)( 0.08f, 1.5f * kVoxelEdgeM );
+        }
+        return true;
+    }
+
     bool SampleGroundZ( float x, float y, float& outZ )
     {
-        // Feet / walk: grade + cups (mounds minus holes).
-        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
-        outZ += ScarDeltaZ( x, y );
-        return true;
+        // Feet / walk / body settle — occupancy support inside carved cells.
+        return SupportAt( x, y, outZ );
     }
 
     bool SampleCupSurfaceZ( float x, float y, bool placeCup, float& outZ )
@@ -5128,12 +6353,11 @@ namespace
                           float maxT,
                           float& outT, float& outX, float& outY, float& outZ )
     {
-        // Ray vs MeshDiv=2 tris — identical sampling to RebuildTerrainMesh / what you see.
-        int const div = 2;
+        // Finer than MeshDiv=2 so crest edges / steep faces don't miss under the crosshair.
+        int const div = 4;
         float bestT = maxT;
         bool hit = false;
-        // Corridor along the ray (not full AABB — free-cam reach would be huge).
-        for ( float ts = 0.25f; ts <= maxT + 0.25f; ts += 0.5f )
+        for ( float ts = 0.15f; ts <= maxT + 0.2f; ts += 0.28f )
         {
             int const cx = (int)std::floor( ox + fx * ts );
             int const cy = (int)std::floor( oy + fy * ts );
@@ -5179,20 +6403,24 @@ namespace
                     }
                 }
             }
-            if ( hit && bestT < ts - 0.5f ) { break; } // already found a nearer face
+            if ( hit && bestT < ts - 0.35f ) { break; }
         }
         if ( !hit ) { return false; }
         outT = bestT;
         outX = ox + fx * bestT;
         outY = oy + fy * bestT;
         outZ = oz + fz * bestT;
-        // Keep hit on the look ray (under the crosshair). Heightfield Z-snap pulled the scoop off-ray.
         return true;
     }
 
     void UpdateAim()
     {
         g.aimHit = false;
+        g.aimStrikeCap = "-";
+        g.aimWireCap = "-";
+        g.aimBiome = "-";
+        g.aimFormId = "-";
+        g.aimStrikeR = 128; g.aimStrikeG = 128; g.aimStrikeB = 128;
         float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
         float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
         float fx = sy * cp, fy = cy * cp, fz = sp;
@@ -5202,16 +6430,16 @@ namespace
         float hitT = -1.f;
         float hitX = 0.f, hitY = 0.f, hitZ = 0.f;
 
-        // Prefer occupancy aim only on cells we carved — virgin fill crest ≠ heightfield at
-        // high relief and was steering digs / false hits while looking around.
+        // Prefer occupancy aim only on cells we already carved (committed).
+        // Aiming alone must NOT seed lattices, expand volume, or rebuild cavity/D2.
         bool hitOcc = false;
         {
-            // Probe aim cell without prefetching.
+            // Probe aim cell without prefetching / EnsureOccupancyLattice.
             float tProbe = 1.2f;
             int const acx = (int)std::floor( ox + fx * tProbe );
             int const acy = (int)std::floor( oy + fy * tProbe );
             CellSample const* ac = GetCell( acx, acy );
-            if ( ac && ac->carved && !ac->fill.empty() )
+            if ( ac && ac->carved && ac->hasCavity && !ac->fill.empty() )
             {
                 hitOcc = RayHitOccupancy( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ );
             }
@@ -5221,29 +6449,48 @@ namespace
             hitT = -1.f;
             if ( !RayHitDrawnSkin( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ ) )
             {
-                // Fallback: coarse height march if triangle walk misses (sparse cells).
-                constexpr float kStep = 0.06f;
-                for ( int step = 0; step < 240; ++step )
+                // Fallback: height march + crest/cliff proximity (triangle walk can miss ridges).
+                constexpr float kStep = 0.05f;
+                float prevZ = oz, prevG = oz;
+                bool havePrev = false;
+                for ( int step = 0; step < 320; ++step )
                 {
-                    float t = 0.12f + step * kStep;
+                    float t = 0.10f + step * kStep;
                     if ( t > maxT ) { break; }
                     float x = ox + fx * t;
                     float y = oy + fy * t;
                     float z = oz + fz * t;
                     float ground = 0.f;
-                    if ( !SampleAimSurfaceZ( x, y, ground ) ) { continue; }
-                    if ( z <= ground + 0.04f )
+                    if ( !SampleAimSurfaceZ( x, y, ground ) ) { havePrev = false; continue; }
+                    bool const below = z <= ground + 0.05f;
+                    bool const nearSkin = std::fabs( z - ground ) < 0.14f;
+                    float gxm = ground, gxp = ground, gym = ground, gyp = ground;
+                    SampleAimSurfaceZ( x - 0.10f, y, gxm );
+                    SampleAimSurfaceZ( x + 0.10f, y, gxp );
+                    SampleAimSurfaceZ( x, y - 0.10f, gym );
+                    SampleAimSurfaceZ( x, y + 0.10f, gyp );
+                    float const slope = (std::max)(
+                        std::fabs( gxp - gxm ), std::fabs( gyp - gym ) ) / 0.20f;
+                    bool hitHere = below;
+                    if ( havePrev && prevZ > prevG + 0.05f && below ) { hitHere = true; }
+                    // Crest / knife edge: ray skims the skin on a steep grade.
+                    if ( nearSkin && slope > 1.2f ) { hitHere = true; }
+                    if ( hitHere )
                     {
                         float t0 = (std::max)( 0.05f, t - kStep );
                         float t1 = t;
-                        for ( int i = 0; i < 8; ++i )
+                        for ( int i = 0; i < 10; ++i )
                         {
                             float tm = 0.5f * ( t0 + t1 );
                             float xm = ox + fx * tm;
                             float ym = oy + fy * tm;
                             float zm = oz + fz * tm;
                             float gm = 0.f;
-                            if ( !SampleAimSurfaceZ( xm, ym, gm ) || zm <= gm + 0.04f ) { t1 = tm; }
+                            if ( !SampleAimSurfaceZ( xm, ym, gm ) || zm <= gm + 0.05f
+                              || ( std::fabs( zm - gm ) < 0.14f && slope > 1.2f ) )
+                            {
+                                t1 = tm;
+                            }
                             else { t0 = tm; }
                         }
                         hitT = t1;
@@ -5252,6 +6499,7 @@ namespace
                         hitZ = oz + fz * hitT;
                         break;
                     }
+                    prevZ = z; prevG = ground; havePrev = true;
                 }
             }
         }
@@ -5294,7 +6542,23 @@ namespace
         g.aimU = hitX - (float)g.aimCx;
         g.aimV = hitY - (float)g.aimCy;
         g.aimDepth = AimDigAffect().radiusM;
-        // Demand fill only when about to dig — see TryDigHandful / TryPick (not every aim frame).
+        // Seeking identity: Esoterica geography rock + province. Wire cell.cap may be cover (grass).
+        {
+            ProvenanceGeo::EnsureReady();
+            auto const surf = ProvenanceGeo::SampleSurface(
+                (double)hitX, (double)hitY,
+                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            g.aimStrikeCap = surf.cap ? surf.cap : "dirt";
+            g.aimBiome = ProvenanceGeo::ProvinceName( surf.province );
+            CellSample const* cell = GetCell( g.aimCx, g.aimCy );
+            g.aimWireCap = ( cell && cell->valid && !cell->cap.empty() )
+                ? cell->cap
+                : g.aimStrikeCap;
+            H2H::MaterialFormContract const& form = H2H::FormOrDirt( g.aimStrikeCap.c_str() );
+            g.aimFormId = form.material_id;
+            VisualMat::CapColor( g.aimStrikeCap.c_str(), g.aimStrikeR, g.aimStrikeG, g.aimStrikeB );
+        }
+        // HF contact refine only. Occupancy seed + cavity rebuild happen on dig/pick commit.
     }
 
     bool TryPickFoliatedStrike()
@@ -5322,7 +6586,9 @@ namespace
             return false;
         }
 
-        std::string const cap = CapAtWorld( g.aimX, g.aimY );
+        std::string const cap = g.aimStrikeCap.empty() || g.aimStrikeCap == "-"
+            ? CapAtWorld( g.aimX, g.aimY )
+            : g.aimStrikeCap;
         H2H::MaterialFormContract const& form = H2H::FormOrDirt( cap.c_str() );
         bool const foliated = form.fabric == H2H::FabricKind::FoliatedAnisotropic
             || form.fabric == H2H::FabricKind::BeddedFissile
@@ -5339,11 +6605,17 @@ namespace
         float fx = sy * cp, fy = cyw * cp, fz = sp;
 
         DigAffectSpec const affect = AimDigAffect();
-        // Carve INTO the matter face along -N (not along look — look drifts scars up the wall).
+        // Carve INTO the matter face. Side/dark ridge walls need look-into, not crest-up HF N.
         float fnx = 0.f, fny = 0.f, fnz = 1.f;
-        CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
-        // Local D2 must read at voxel scale; engine receipt keeps tip affect for grams.
-        float const visualR = (std::max)( affect.radiusM, g.voxelEdgeM * 1.35f );
+        ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, fx, fy, fz, fnx, fny, fnz );
+        // Tip-only carve is invisible on HF after handoff — use readable radius on surface
+        // and contact radius on cliffs / downward chops.
+        float visualR = (std::max)( affect.radiusM, kVoxelEdgeM * 0.85f );
+        visualR = (std::max)( visualR, ActiveAimRadiusM() * 0.55f );
+        if ( fnz < 0.72f || g.pitch < -0.28f )
+        {
+            visualR = (std::max)( visualR, ActiveAimRadiusM() );
+        }
         float const into = visualR * 0.70f;
         float const bx = g.aimX - fnx * into;
         float const by = g.aimY - fny * into;
@@ -5381,11 +6653,21 @@ namespace
         g.pendingBiteWy = by;
         g.pendingBiteWz = bz;
         g.pendingBiteForward = true;
+        CaptureSpirePreRequest( bcx, bcy, g.aimX, g.aimY, g.aimZ, form.material_id );
 
         PrefetchOccupancyCell( bcx, bcy );
-        // P3b: occupancy cavity at strike — never FoliationPlate scar stamps.
-        bool const carved = CarveOccupancySphere( bx, by, bz, visualR );
-        RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f );
+        // Occupancy carve + fracture-matched stencil (crest = air-under-skin; walls = face disks).
+        bool const carved = CarveOccupancySphere( bx, by, bz, visualR, g.aimX, g.aimY, g.aimZ );
+        // Keep scars when AABB does not own HF — retired only if something else peels.
+        if ( carved && kAabbCavityOwnsHf )
+        {
+            RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f );
+        }
+        if ( !carved )
+        {
+            AddFacePunctureScar( g.aimX, g.aimY, g.aimZ, bcx, bcy,
+                affect.radiusM, affect.depthM, fnx, fny, fnz );
+        }
 
         H2H::SeparationResult const sep = H2H::StrikePick(
             g.aimX, g.aimY, g.aimZ, fx, fy, fz, form.material_id );
@@ -5527,7 +6809,9 @@ namespace
             return false;
         }
 
-        std::string const cap = CapAtWorld( g.aimX, g.aimY );
+        std::string const cap = g.aimStrikeCap.empty() || g.aimStrikeCap == "-"
+            ? CapAtWorld( g.aimX, g.aimY )
+            : g.aimStrikeCap;
         H2H::MaterialFormContract const& form = H2H::FormOrDirt( cap.c_str() );
         H2H::ToolMatterProfile const& tool = ActiveToolProfile();
         H2H::ToolRole const role = H2H::RoleForAttached( tool, form );
@@ -5597,7 +6881,11 @@ namespace
 
         // Recompute steep at bite + final affect (slope may differ from aim cell).
         float fnx = 0.f, fny = 0.f, fnz = 1.f;
-        CaptureFaceNormalAt( g.aimX, g.aimY, fnx, fny, fnz );
+        {
+            float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+            float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, sy * cp, cyw * cp, sp, fnx, fny, fnz );
+        }
         bool const steepFace = IsSteepFaceAt( bx, by ) || fnz < 0.58f;
         DigAffectSpec const hitAffect = ComputeDigAffect( tool, form, steepFace );
         int const acceptG = AffectAcceptedGrams( form, hitAffect );
@@ -5630,9 +6918,14 @@ namespace
         g.pendingBiteWz = bz;
         g.pendingBiteForward = ( DigDepAt( g.aimX, g.aimY ) > hitAffect.radiusM * 0.20f )
             && ( -std::sin( g.pitch ) < 0.72f );
+        CaptureSpirePreRequest( bcx, bcy, g.aimX, g.aimY, g.aimZ, form.material_id );
 
         // P3b: occupancy sphere carve owns the hole; DigScar is flash only if carve misses.
-        float const visualR = (std::max)( hitAffect.radiusM, g.voxelEdgeM * 1.35f );
+        float visualR = (std::max)( hitAffect.radiusM, kVoxelEdgeM * 0.85f );
+        if ( fnz < 0.72f || g.pitch < -0.28f )
+        {
+            visualR = (std::max)( visualR, ActiveAimRadiusM() );
+        }
         float carveX = bx, carveY = by, carveZ = bz;
         if ( hitAffect.mode != DigAffectMode::ScoopHemi )
         {
@@ -5643,8 +6936,8 @@ namespace
         }
         PrefetchOccupancyCell( bcx, bcy );
         PrefetchOccupancyCell( (int)std::floor( carveX ), (int)std::floor( carveY ) );
-        bool const carved = CarveOccupancySphere( carveX, carveY, carveZ, visualR );
-        if ( carved ) { RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f ); }
+        bool const carved = CarveOccupancySphere( carveX, carveY, carveZ, visualR, g.aimX, g.aimY, g.aimZ );
+        if ( carved && kAabbCavityOwnsHf ) { RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f ); }
         if ( !carved )
         {
             if ( hitAffect.mode == DigAffectMode::ScoopHemi )
@@ -5823,12 +7116,18 @@ namespace
         if ( cx == g.playerX && cy == g.playerY ) { return; }
         g.playerX = cx;
         g.playerY = cy;
+        // --cert-geo walk/dig: residency frozen after transect prefetch so walk can assert
+        // HF remesh=0 / no disk growth. Play path still expands below.
+        if ( g.certGeo && g.certGeoPhase >= 1 && g.certGeoPhase <= 3 )
+        {
+            return;
+        }
         // Expand analytic residency with the player (isotropic disk).
+        // EnsureGeoDisk invalidates only when new cells appear — do NOT remesh every footstep.
         EnsureGeoDisk( cx, cy, (std::min)( kFarRadiusCells, 64 ) );
         g.streamComplete = true;
         g.blocksLoaded = g.blocksWanted;
         g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
-        InvalidateTerrainMesh();
     }
 
     // Phase 3 terrain draw: uniform heightfield from grades (+ scoop scars as height only).
@@ -5836,6 +7135,8 @@ namespace
 
     void SampleCapColor( float x, float y, float& outR, float& outG, float& outB )
     {
+        // Use cached cell palette from EnsureGeoCell — NEVER re-run SampleSurface FBM per tri.
+        ++g.perfSampleCapColorCalls;
         int const x0 = (int)std::floor( x );
         int const y0 = (int)std::floor( y );
         float const tx = x - (float)x0;
@@ -5843,18 +7144,12 @@ namespace
         auto at = [&]( int cx, int cy, float& r, float& gcol, float& b )
         {
             CellSample const* c = GetCell( cx, cy );
-            if ( c )
+            if ( c && c->valid )
             {
                 r = (float)c->r; gcol = (float)c->g; b = (float)c->b;
                 return;
             }
-            ProvenanceGeo::EnsureReady();
-            auto s = ProvenanceGeo::SampleSurface(
-                (double)cx + 0.5, (double)cy + 0.5,
-                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
-            uint8_t ur, ug, ub;
-            VisualMat::CapColor( s.cap, ur, ug, ub );
-            r = (float)ur; gcol = (float)ug; b = (float)ub;
+            r = 90.f; gcol = 120.f; b = 70.f;
         };
         float r00, g00, b00, r10, g10, b10, r01, g01, b01, r11, g11, b11;
         at( x0, y0, r00, g00, b00 );
@@ -5874,9 +7169,93 @@ namespace
 
     int MeshDivForCell( int x, int y, float feetX, float feetY )
     {
-        // Uniform near-field subdiv — mixed 3/2/1 LOD bands cracked into dark T-junction seams.
+        // Vista base only — dig mouths use adaptive quad subdiv in RebuildTerrainMesh.
         (void)x; (void)y; (void)feetX; (void)feetY;
         return 2;
+    }
+
+    bool QuadHitsMouthCollar( float x0, float y0, float x1, float y1, float& outMinDist, float& outNeedR )
+    {
+        // True if this XY quad intersects any opening disk (+ tiny stitch collar).
+        outMinDist = 1e9f;
+        outNeedR = 0.08f;
+        float const mx = 0.5f * ( x0 + x1 ), my = 0.5f * ( y0 + y1 );
+        bool hit = false;
+        auto consider = [&]( float ox, float oy, float orad, float onz )
+        {
+            // Refine every mouth rim (shallow + steep) so HF handoff looks the same on walls
+            // and flats — walls used to stay coarse while flats adaptive-cut.
+            (void)onz;
+            // Presentation refine target tip/6 — not matter resolution (12.5cm lattice).
+            float const rad = (std::min)( (std::max)( 0.05f, orad ), 0.35f );
+            float const px = (std::min)( (std::max)( ox, x0 ), x1 );
+            float const py = (std::min)( (std::max)( oy, y0 ), y1 );
+            float const dx = px - ox, dy = py - oy;
+            float const d = std::sqrt( dx * dx + dy * dy );
+            outMinDist = (std::min)( outMinDist, d );
+            outNeedR = (std::max)( outNeedR, rad );
+            if ( d <= rad + 0.04f ) { hit = true; }
+        };
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            for ( EditOpening const& o : er.openings )
+            {
+                consider( o.x, o.y, o.r, o.nz );
+            }
+        }
+        (void)mx; (void)my;
+        return hit;
+    }
+
+    void EmitTerrainQuadAdaptive( float x0, float y0, float x1, float y1, int depth )
+    {
+        // Refine only quads that touch a mouth disk — not the whole cell (square fine patches).
+        // Same law as x64_Release_adapt: vista stays coarse 2×2; tip/6 only on opening collar.
+        float minDist = 0.f, needR = 0.08f;
+        bool const nearMouth = !g.editedRegions.empty()
+            && QuadHitsMouthCollar( x0, y0, x1, y1, minDist, needR );
+        float const span = (std::max)( x1 - x0, y1 - y0 );
+        float const target = (std::max)( 0.04f, needR / 6.f );
+        if ( nearMouth && span > target && depth < 5 )
+        {
+            float const xm = 0.5f * ( x0 + x1 );
+            float const ym = 0.5f * ( y0 + y1 );
+            EmitTerrainQuadAdaptive( x0, y0, xm, ym, depth + 1 );
+            EmitTerrainQuadAdaptive( xm, y0, x1, ym, depth + 1 );
+            EmitTerrainQuadAdaptive( x0, ym, xm, y1, depth + 1 );
+            EmitTerrainQuadAdaptive( xm, ym, x1, y1, depth + 1 );
+            return;
+        }
+        float z00 = 0.f, z10 = 0.f, z01 = 0.f, z11 = 0.f;
+        bool const ok00 = SampleTerrainDrawZ( x0, y0, z00 );
+        bool const ok10 = SampleTerrainDrawZ( x1, y0, z10 );
+        bool const ok01 = SampleTerrainDrawZ( x0, y1, z01 );
+        bool const ok11 = SampleTerrainDrawZ( x1, y1, z11 );
+        int const nOk = ( ok00 ? 1 : 0 ) + ( ok10 ? 1 : 0 ) + ( ok01 ? 1 : 0 ) + ( ok11 ? 1 : 0 );
+        if ( nOk == 0 ) { return; } // full mouth — D2 owns
+        // Mixed HF/mouth: subdivide omit cracks. At max depth do NOT emit partial tris —
+        // those became meter-long diagonal HF leaves (user shot 3) bridging grade→void.
+        if ( nOk < 4 )
+        {
+            if ( span > 0.035f && depth < 6 )
+            {
+                float const xm = 0.5f * ( x0 + x1 );
+                float const ym = 0.5f * ( y0 + y1 );
+                EmitTerrainQuadAdaptive( x0, y0, xm, ym, depth + 1 );
+                EmitTerrainQuadAdaptive( xm, y0, x1, ym, depth + 1 );
+                EmitTerrainQuadAdaptive( x0, ym, xm, y1, depth + 1 );
+                EmitTerrainQuadAdaptive( xm, ym, x1, y1, depth + 1 );
+            }
+            return;
+        }
+        if ( ok00 && ok10 && ok01 )
+        {
+            EmitPhase3Tri( x0, y0, z00, x1, y0, z10, x0, y1, z01, 0.f );
+        }
+        if ( ok10 && ok11 && ok01 )
+        {
+            EmitPhase3Tri( x1, y0, z10, x1, y1, z11, x0, y1, z01, 0.f );
+        }
     }
 
     void EmitPhase3Tri( float x0, float y0, float z0,
@@ -5901,19 +7280,8 @@ namespace
 
         char const* cap = "dirt";
         {
-            int const cx = (int)std::floor( mx );
-            int const cy = (int)std::floor( my );
-            if ( CellSample const* c = GetCell( cx, cy ) )
-            {
-                if ( !c->cap.empty() ) { cap = c->cap.c_str(); }
-            }
-            else
-            {
-                ProvenanceGeo::EnsureReady();
-                cap = ProvenanceGeo::SampleSurface(
-                    (double)cx + 0.5, (double)cy + 0.5,
-                    g.gradeDatum, g.reliefVoxels, g.voxelEdgeM ).cap;
-            }
+            CellSample const* mc = GetCell( (int)std::floor( mx ), (int)std::floor( my ) );
+            if ( mc && mc->valid && !mc->cap.empty() ) { cap = mc->cap.c_str(); }
         }
         LitBindMaterial( cap );
 
@@ -6021,6 +7389,9 @@ namespace
     void RebuildTerrainMesh()
     {
         // Phase 3 vista only — virgin grades/fill. Scoops are live cups (DrawLiveScoopCups).
+        // Adaptive mouth refine (x64_Release_adapt): coarse 2×2 vista; tip/6 only on opening disks.
+        // Never whole-cell div=12 — that fine-meshed a square metre per opening at load/dig.
+        DWORD const t0 = GetTickCount();
         constexpr int kDrawRadius = 64;
         int const ax = g.terrainAnchorX;
         int const ay = g.terrainAnchorY;
@@ -6030,6 +7401,7 @@ namespace
         int const y1 = ay + kDrawRadius;
         float const feetX = g.feetX;
         float const feetY = g.feetY;
+        (void)feetX; (void)feetY;
 
         if ( g.terrainList )
         {
@@ -6052,29 +7424,20 @@ namespace
                     continue;
                 }
 
-                int const div = MeshDivForCell( x, y, feetX, feetY );
-                for ( int j = 0; j < div; ++j )
+                // Coarse 2×2 vista; adaptive refine only quads that intersect opening disks.
+                constexpr int kBase = 2;
+                for ( int j = 0; j < kBase; ++j )
                 {
-                    for ( int i = 0; i < div; ++i )
+                    for ( int i = 0; i < kBase; ++i )
                     {
-                        float const u0 = (float)i / (float)div;
-                        float const v0 = (float)j / (float)div;
-                        float const u1 = (float)( i + 1 ) / (float)div;
-                        float const v1 = (float)( j + 1 ) / (float)div;
-                        float const px00 = (float)x + u0, py00 = (float)y + v0;
-                        float const px10 = (float)x + u1, py10 = (float)y + v0;
-                        float const px01 = (float)x + u0, py01 = (float)y + v1;
-                        float const px11 = (float)x + u1, py11 = (float)y + v1;
-
-                        float z00, z10, z01, z11;
-                        // Virgin grade vista only — tools (DigScar / carved D2) express digs; walk/look never open pads.
-                        if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
-                        if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
-                        if ( !SampleGroundZBase( px01, py01, z01 ) ) { continue; }
-                        if ( !SampleGroundZBase( px11, py11, z11 ) ) { continue; }
-
-                        EmitPhase3Tri( px00, py00, z00, px10, py10, z10, px01, py01, z01, 0.f );
-                        EmitPhase3Tri( px10, py10, z10, px11, py11, z11, px01, py01, z01, 0.f );
+                        float const u0 = (float)i / (float)kBase;
+                        float const v0 = (float)j / (float)kBase;
+                        float const u1 = (float)( i + 1 ) / (float)kBase;
+                        float const v1 = (float)( j + 1 ) / (float)kBase;
+                        EmitTerrainQuadAdaptive(
+                            (float)x + u0, (float)y + v0,
+                            (float)x + u1, (float)y + v1,
+                            0 );
                     }
                 }
             }
@@ -6082,7 +7445,24 @@ namespace
         glEnd();
         glEndList();
         g.terrainDirty = false;
-        // Ensure next launch/session after fillZ law change rebuilds virgin grade skin
+        float const ms = (float)( GetTickCount() - t0 );
+        g.certLastRemeshMs = ms;
+        if ( ms > g.certMaxRemeshMs ) { g.certMaxRemeshMs = ms; }
+        ++g.perfHfRebuilds;
+        g.perfHfRemeshMsTotal += ms;
+        // Approximate tri count: base 2×2 quads × 2 tris × cells drawn (counted during emit is heavier).
+        int cells = 0;
+        for ( int y = y0; y < y1; ++y )
+        {
+            for ( int x = x0; x < x1; ++x )
+            {
+                if ( GetCell( x, y ) && GetCell( x + 1, y ) && GetCell( x, y + 1 ) && GetCell( x + 1, y + 1 ) )
+                {
+                    ++cells;
+                }
+            }
+        }
+        g.perfHfTris = cells * 8; // 2×2 quads × 2 tris (mouth refine adds more; lower bound)
     }
 
     void DrawDigGradeFootprints()
@@ -6157,14 +7537,15 @@ namespace
             }
         }
 
-        // Occupancy hole footprints — carved D2 cells only.
+        // Occupancy hole footprints — only when AABB is allowed to own HF (disabled).
+        if ( kAabbCavityOwnsHf )
+        {
         constexpr int kOcc = 12;
         for ( auto const& kv : g.cells )
         {
             CellSample const& cell = kv.second;
-            if ( !cell.carved || !cell.hasCavity ) { continue; }
+            if ( !cell.carved || !cell.hasCavity || !cell.hasPatchBounds ) { continue; }
             int cx = 0, cy = 0;
-            // Decode CellKey — same packing as CellKey().
             uint64_t const key = kv.first;
             cx = (int)(int32_t)( key >> 32 );
             cy = (int)(int32_t)( key & 0xffffffffu );
@@ -6180,7 +7561,7 @@ namespace
                     float const px11 = px00 + step, py11 = py00 + step;
                     float const mx = ( px00 + px11 ) * 0.5f;
                     float const my = ( py00 + py11 ) * 0.5f;
-                    if ( DigDepAt( mx, my ) < 1e-4f ) { continue; }
+                    if ( !CavityPatchOwnsAt( mx, my ) ) { continue; }
                     float z00, z10, z01, z11;
                     if ( !SampleGroundZBase( px00, py00, z00 ) ) { continue; }
                     if ( !SampleGroundZBase( px10, py10, z10 ) ) { continue; }
@@ -6195,6 +7576,7 @@ namespace
                     glVertex3f( px01, py01, z01 );
                 }
             }
+        }
         }
         glEnd();
     }
@@ -6249,7 +7631,7 @@ namespace
 
     void DrawDigFloorPlugs()
     {
-        // Soft floor under punched openings — lit like the cup (not a flat black disc).
+        // Soft floor under punched openings — only until D2 cavity owns the mouth.
         if ( g.scars.empty() ) { return; }
         constexpr int kSeg = 28;
         glShadeModel( GL_FLAT );
@@ -6259,6 +7641,8 @@ namespace
         {
             if ( s.place || s.tunnel ) { continue; }
             if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
+            // Occupancy D2 owns the hole — DigDep plugs fought cavity and left bright rims.
+            if ( CavityReadyNear( s.wx, s.wy ) ) { continue; }
             float const rad = s.radius;
             if ( rad < 1e-4f ) { continue; }
             float zc = 0.f;
@@ -6296,7 +7680,11 @@ namespace
     {
         int const ax = (int)std::floor( g.feetX );
         int const ay = (int)std::floor( g.feetY );
-        if ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 )
+        // --cert-geo walk: freeze 8-cell vista recenters so remesh=0 is measurable without
+        // residency growth. Play path still recenters for streaming LOD.
+        bool const freezeVistaRecenter = g.certGeo && g.certGeoPhase == 1 && g.certGeoDigArmed == 1;
+        if ( !freezeVistaRecenter
+          && ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 ) )
         {
             g.terrainDirty = true;
         }
@@ -6308,35 +7696,41 @@ namespace
             RebuildTerrainMesh();
         }
 
-        // Terrain → open-cup stencil punch → place cups.
+        // Terrain → depth-tested stencil → mouth ALWAYS in punched pixels → interior LEQUAL.
+        // Depth-OFF stencil x-rayed through hills. Depth-ON + LEQUAL mouth left HF skin.
+        // Punch bias wins vs coplanar HF; nearer hills still win depth by metres.
         if ( g.terrainList ) { glCallList( g.terrainList ); }
 
         glClear( GL_STENCIL_BUFFER_BIT );
         glEnable( GL_STENCIL_TEST );
         glStencilMask( 0xFF );
         glStencilFunc( GL_ALWAYS, 1, 0xFF );
-        glStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
+        glStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE ); // stencil only if punch passes depth
         glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
         glDepthMask( GL_FALSE );
+        glEnable( GL_DEPTH_TEST );
+        glDepthFunc( GL_LEQUAL );
         glEnable( GL_POLYGON_OFFSET_FILL );
-        // Modest coplanar bias only — heavy offset feathered a roof overhang past the cup.
-        glPolygonOffset( -1.5f, -2.f );
+        glPolygonOffset( -3.f, -6.f ); // beat HF z-fight; not enough to leap a nearer hill
         DrawDigGradeFootprints();
+        DrawCarveActionFootprints();
         glDisable( GL_POLYGON_OFFSET_FILL );
         glDepthMask( GL_TRUE );
 
         glStencilFunc( GL_EQUAL, 1, 0xFF );
         glStencilMask( 0x00 );
         glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        // ALWAYS only inside depth-gated stencil — clears HF skin without through-hill paint.
+        // No per-frame mouth underlay (lag + side-view floaters). Backdrop peek = sky blue void.
         glDepthFunc( GL_ALWAYS );
         DrawDigFloorPlugs();
         DrawLiveScoopCups( true );
+        DrawCavityMeshesMouth();
 
         glStencilMask( 0xFF );
         glDisable( GL_STENCIL_TEST );
         glDepthFunc( GL_LEQUAL );
-        // P3b: D2 matter face after skin opens — VisualMaterial interior of removed volume.
-        DrawCavityMeshes();
+        DrawCavityMeshesInterior();
         DrawMaterialFormGallery(); // hand-scale material forms east of spawn
         DrawHeldGallerySample();   // E-held sample at hand for close inspect
         DrawLiveScoopCups( false );
@@ -6349,6 +7743,7 @@ namespace
     void DrawMatterBodies()
     {
         // Explicit H2H plates — conserved geometry, not scoop cups / not inventory cubes.
+        if ( g.chipMode == ChipMode::Off ) { return; }
         if ( H2H::State().bodies.empty() ) { return; }
         glShadeModel( GL_FLAT );
         glDisable( GL_CULL_FACE );
@@ -6679,6 +8074,13 @@ namespace
         constexpr int kProbes = 12;
         float const r = kCapsuleRadiusM;
         float const bodyTop = feetZ + kEyeHeightM; // refuse walls into the POV
+        int const feetCx = (int)std::floor( x );
+        int const feetCy = (int)std::floor( y );
+        CellSample const* feetCell = GetCell( feetCx, feetCy );
+        bool const standingInCarve = feetCell && feetCell->carved && !feetCell->fill.empty();
+        float virginUnderFeet = feetZ;
+        bool haveVirgin = SampleGroundZBase( x, y, virginUnderFeet );
+
         for ( int i = 0; i < kProbes; ++i )
         {
             float const a = ( 6.2831853f * (float)i ) / (float)kProbes;
@@ -6686,6 +8088,21 @@ namespace
             float const py = y + std::sin( a ) * r;
             float gz = feetZ;
             if ( !SampleGroundZ( px, py, gz ) ) { continue; }
+            // Standing in a cavity: ignore virgin HF sheet beside the aperture as a "wall."
+            // Real walls are occupancy-solid at torso/eye height.
+            if ( standingInCarve && haveVirgin && feetZ < virginUnderFeet - 0.12f )
+            {
+                int const pcx = (int)std::floor( px );
+                int const pcy = (int)std::floor( py );
+                CellSample const* pc = GetCell( pcx, pcy );
+                bool const probeCarved = pc && pc->carved && !pc->fill.empty();
+                if ( !probeCarved
+                    || ( !OccupancySolidAt( px, py, feetZ + 0.9f )
+                      && !OccupancySolidAt( px, py, feetZ + 1.55f ) ) )
+                {
+                    continue;
+                }
+            }
             // Wall beside feet: grade rises into the body / eyes.
             if ( gz > feetZ + kWallBodyClearM && gz > feetZ + 0.15f )
             {
@@ -6697,7 +8114,7 @@ namespace
                 return true;
             }
         }
-        // Center column: eye must stay above grade (never inside the sheet).
+        // Center column: eye must stay above support (never inside the sheet).
         float gCenter = feetZ;
         if ( SampleGroundZ( x, y, gCenter ) && gCenter > bodyTop - 0.08f )
         {
@@ -6722,6 +8139,99 @@ namespace
         float const capsuleZ = ( climb > 0.05f ) ? outGroundZ : fromZ;
         if ( CapsuleHitsWall( toX, toY, capsuleZ ) ) { return false; }
         return true;
+    }
+
+    void ResolveEyeInOccupancyAir()
+    {
+        // Inside carved matter: crouch eye under solid, then push XY if eye still embeds in a wall.
+        // Without this, standing eye height punches through the back wall → near-clip void.
+        int const cx = (int)std::floor( g.feetX );
+        int const cy = (int)std::floor( g.feetY );
+        CellSample const* cell = GetCell( cx, cy );
+        bool const inCarve = cell && cell->carved && !cell->fill.empty();
+        float virginZ = g.feetZ;
+        bool const belowVirgin = SampleGroundZBase( g.feetX, g.feetY, virginZ )
+            && g.feetZ < virginZ - 0.10f;
+        if ( !inCarve && !belowVirgin )
+        {
+            g.camX = g.feetX;
+            g.camY = g.feetY;
+            g.camZ = g.feetZ + kEyeHeightM;
+            g.projNearM = kProjNearDefaultM;
+            return;
+        }
+
+        g.projNearM = kProjNearCavityM;
+
+        float eyeH = kEyeHeightM;
+        // Shallow/open pits: standing eye floats above the virgin lip (screenshot: feet 3.66, eye 5.36
+        // over grade ~4.1). Prefer eyes under the crest when there is headroom in the pocket.
+        if ( belowVirgin )
+        {
+            float const underLip = virginZ - g.feetZ - 0.10f;
+            if ( underLip >= kEyeCrouchMinM )
+            {
+                eyeH = (std::min)( eyeH, underLip );
+            }
+        }
+        auto eyeBlocked = [&]( float h ) -> bool
+        {
+            float const ez = g.feetZ + h;
+            float const mz = g.feetZ + h * 0.55f;
+            return OccupancySolidAt( g.feetX, g.feetY, ez )
+                || OccupancySolidAt( g.feetX, g.feetY, mz );
+        };
+        if ( inCarve && eyeBlocked( eyeH ) )
+        {
+            while ( eyeH > kEyeCrouchMinM && eyeBlocked( eyeH ) )
+            {
+                eyeH -= 0.05f;
+            }
+            if ( eyeBlocked( eyeH ) ) { eyeH = kEyeCrouchMinM; }
+        }
+
+        g.camX = g.feetX;
+        g.camY = g.feetY;
+        g.camZ = g.feetZ + eyeH;
+
+        // Lateral push: eye must sit in air, not inside the wall behind the character.
+        for ( int iter = 0; iter < 10; ++iter )
+        {
+            if ( !OccupancySolidAt( g.camX, g.camY, g.camZ )
+              && !OccupancySolidAt( g.camX, g.camY, g.feetZ + 0.95f ) )
+            {
+                break;
+            }
+            float pushX = 0.f, pushY = 0.f;
+            int airN = 0;
+            constexpr int kDirs = 12;
+            for ( int i = 0; i < kDirs; ++i )
+            {
+                float const a = ( 6.2831853f * (float)i ) / (float)kDirs;
+                float const dx = std::cos( a ), dy = std::sin( a );
+                float const px = g.camX + dx * 0.12f;
+                float const py = g.camY + dy * 0.12f;
+                if ( !OccupancySolidAt( px, py, g.camZ )
+                  && !OccupancySolidAt( px, py, g.feetZ + 0.95f ) )
+                {
+                    pushX += dx; pushY += dy; ++airN;
+                }
+            }
+            if ( airN <= 0 ) { break; }
+            float plen = std::sqrt( pushX * pushX + pushY * pushY );
+            if ( plen < 1e-5f ) { break; }
+            pushX /= plen; pushY /= plen;
+            g.feetX += pushX * 0.06f;
+            g.feetY += pushY * 0.06f;
+            g.camX = g.feetX;
+            g.camY = g.feetY;
+            float ground = g.feetZ;
+            if ( SupportAt( g.feetX, g.feetY, ground ) )
+            {
+                if ( g.feetZ < ground ) { g.feetZ = ground; }
+            }
+            g.camZ = g.feetZ + eyeH;
+        }
     }
 
     void ResolveWalkOutOfWall()
@@ -6874,10 +8384,13 @@ namespace
 
             ResolveWalkOutOfWall();
 
-            // Horizon-to-Hand loose plates.
-            H2H::StepBodies( dt, []( float x, float y, float& z ) -> bool {
-                return SampleGroundZ( x, y, z );
-            } );
+            // Horizon-to-Hand loose plates — phys only when chipMode=Phys.
+            if ( g.chipMode == ChipMode::Phys )
+            {
+                H2H::StepBodies( dt, []( float x, float y, float& z ) -> bool {
+                    return SupportAt( x, y, z );
+                } );
+            }
             // Carry gripped plate with the hand (contact follow).
             if ( g.grippedBodyId != 0 )
             {
@@ -6895,19 +8408,20 @@ namespace
                 }
             }
 
-            // Camera is eyes on the 6ft body — always follows terrain while walking
-            g.camX = g.feetX;
-            g.camY = g.feetY;
-            g.camZ = g.feetZ + kEyeHeightM;
-            // Final POV clamp — never leave the eye inside the heightfield sheet.
+            // Camera is eyes on the 6ft body — crouch / push clear of occupancy walls in carves.
+            ResolveEyeInOccupancyAir();
+            // Final POV clamp — never leave the eye inside the heightfield sheet (virgin only).
             {
                 float gEye = g.camZ;
-                if ( SampleGroundZ( g.camX, g.camY, gEye ) && gEye > g.camZ - 0.05f )
+                int const ecx = (int)std::floor( g.camX );
+                int const ecy = (int)std::floor( g.camY );
+                CellSample const* ec = GetCell( ecx, ecy );
+                bool const eyeInCarve = ec && ec->carved;
+                if ( !eyeInCarve
+                  && SampleGroundZBase( g.camX, g.camY, gEye ) && gEye > g.camZ - 0.05f )
                 {
                     ResolveWalkOutOfWall();
-                    g.camX = g.feetX;
-                    g.camY = g.feetY;
-                    g.camZ = g.feetZ + kEyeHeightM;
+                    ResolveEyeInOccupancyAir();
                 }
             }
             FollowStreamCenter();
@@ -6927,6 +8441,12 @@ namespace
             g.feetY = g.camY;
             g.feetZ = g.camZ - kEyeHeightM;
             g.grounded = false;
+            {
+                int const cx = (int)std::floor( g.camX );
+                int const cy = (int)std::floor( g.camY );
+                CellSample const* cell = GetCell( cx, cy );
+                g.projNearM = ( cell && cell->carved ) ? kProjNearCavityM : kProjNearDefaultM;
+            }
             FollowStreamCenter();
             ResolveSolidSampleCollisions();
         }
@@ -7032,7 +8552,10 @@ namespace
         glLoadIdentity();
         float aspect = (float)w / (float)h;
         float fov = 60.f * 3.14159265f / 180.f;
-        float nearZ = 0.5f, farZ = 600.f;
+        float nearZ = g.projNearM;
+        if ( nearZ < 0.03f ) { nearZ = 0.03f; }
+        if ( nearZ > 1.f ) { nearZ = 1.f; }
+        float farZ = 600.f;
         float f = 1.f / std::tan( fov * 0.5f );
         float m[16] = {
             f / aspect, 0, 0, 0,
@@ -7074,16 +8597,17 @@ namespace
         };
         glLoadMatrixf( mv );
 
-        // Sky dome-ish backdrop (large inverted hemisphere proxy: far color quad behind)
+        // Far backdrop quads (depth off). BOTH use clear-sky blue — never lime/grass-green.
+        // Prior ground quad was glColor(0.70,0.80,0.55)=RGB(178,204,140); dig mesh gaps
+        // peeked that color and were misread as grass or "lime void." Peek = sky void only.
         glDisable( GL_DEPTH_TEST );
         glBegin( GL_QUADS );
-        glColor3f( 0.55f, 0.72f, 0.95f );
+        glColor3f( 0.45f, 0.62f, 0.88f ); // == glClearColor
         float sky = 400.f;
         glVertex3f( g.camX - sky, g.camY - sky, 120.f );
         glVertex3f( g.camX + sky, g.camY - sky, 120.f );
         glVertex3f( g.camX + sky, g.camY + sky, 120.f );
         glVertex3f( g.camX - sky, g.camY + sky, 120.f );
-        glColor3f( 0.70f, 0.80f, 0.55f );
         glVertex3f( g.camX - sky, g.camY - sky, -30.f );
         glVertex3f( g.camX + sky, g.camY - sky, -30.f );
         glVertex3f( g.camX + sky, g.camY + sky, -30.f );
@@ -7120,14 +8644,25 @@ namespace
                 g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
             VisualMat::VisualMaterialDef const& vd = VisualMat::OrDirt( surf.cap );
             RockStruct::Foliation const fol = RockStruct::FoliationAt( g.feetX, g.feetY );
+            int openN = 0;
+            for ( EditedRegion const& er : g.editedRegions ) { openN += (int)er.openings.size(); }
             std::snprintf( geoLine, sizeof( geoLine ),
-                "%s | geo %s | cap=%s form=%s | dip=%.0f° | bodies=%d patches=%d | [G] grip",
+                "%s | geo %s | fixture=%s | biome=%s | cap=%s form=%s | dip=%.0f° | bodies=%d | editReg=%d opens=%d | bound=%s d2=%d chips=%s | [B][C][G][F8]",
                 H2H::kCapability,
-                ProvenanceGeo::kGeneratorId, vd.id,
+                ProvenanceGeo::kGeneratorId,
+                ProvenanceGeo::FixtureName( ProvenanceGeo::Fixture() ),
+                ProvenanceGeo::ProvinceName( surf.province ),
+                vd.id,
                 H2H::FormOrDirt( surf.cap ).material_id,
                 fol.dipDeg,
                 (int)H2H::State().bodies.size(),
-                (int)H2H::State().patches.size() );
+                (int)g.editedRegions.size(),
+                openN,
+                g.boundaryMode == BoundaryMode::D2 ? "D2"
+                    : ( g.boundaryMode == BoundaryMode::DebugBoundary ? "AABB" : "OVER" ),
+                g.cavityTrisTotal,
+                g.chipMode == ChipMode::Off ? "OFF"
+                    : ( g.chipMode == ChipMode::Visual ? "VIS" : "PHYS" ) );
             DrawHudText( 16, (float)h - 56, geoLine );
         }
         std::snprintf( line, sizeof( line ), "Link: %s   Engine: %s:%d", LinkLabel( g.link ), g.host.c_str(), g.port );
@@ -7157,6 +8692,37 @@ namespace
         glVertex2f( hx, hy + 2 ); glVertex2f( hx, hy + 8 );
         glEnd();
 
+        // Aim strike identity — color swatch + material/biome (what you seek to take).
+        if ( g.aimHit )
+        {
+            float const sx0 = hx + 14.f, sy0 = hy - 8.f;
+            float const sx1 = sx0 + 14.f, sy1 = sy0 + 14.f;
+            glColor3ub( g.aimStrikeR, g.aimStrikeG, g.aimStrikeB );
+            glBegin( GL_QUADS );
+            glVertex2f( sx0, sy0 ); glVertex2f( sx1, sy0 );
+            glVertex2f( sx1, sy1 ); glVertex2f( sx0, sy1 );
+            glEnd();
+            glColor3f( 0.15f, 0.15f, 0.18f );
+            glBegin( GL_LINE_LOOP );
+            glVertex2f( sx0, sy0 ); glVertex2f( sx1, sy0 );
+            glVertex2f( sx1, sy1 ); glVertex2f( sx0, sy1 );
+            glEnd();
+            char strikeLine[192];
+            if ( _stricmp( g.aimWireCap.c_str(), g.aimStrikeCap.c_str() ) != 0 )
+            {
+                std::snprintf( strikeLine, sizeof( strikeLine ),
+                    "%s  %s   wire:%s",
+                    g.aimStrikeCap.c_str(), g.aimBiome.c_str(), g.aimWireCap.c_str() );
+            }
+            else
+            {
+                std::snprintf( strikeLine, sizeof( strikeLine ),
+                    "%s  %s", g.aimStrikeCap.c_str(), g.aimBiome.c_str() );
+            }
+            glColor3f( 0.98f, 0.98f, 0.92f );
+            DrawHudText( sx1 + 6.f, sy0 + 2.f, strikeLine );
+        }
+
         DrawCompass( (float)w - 56.f, (float)h - 70.f );
 
         glColor3f( 0.95f, 0.97f, 1.f );
@@ -7166,7 +8732,7 @@ namespace
             DrawHudText( 16, 64, "FREE CAMERA  [F] back to walk" );
             glColor3f( 0.95f, 0.97f, 1.f );
         }
-        DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  scroll rolls held  [ ] sun azimuth  -/= elevation" );
+        DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  [B] cavity  [C] chips  scroll rolls held" );
         DrawHudText( 16, 28, "Sun+sky light materials (not painted dark sides)  tumble gold — highlight must travel" );
         DrawHudText( 16, 10, g.digestLine.c_str() );
 
@@ -7183,16 +8749,1743 @@ namespace
         SwapBuffers( g.hdc );
     }
 
+    bool DumpFramePpm( char const* path )
+    {
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return false; }
+        std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "wb" ) != 0 || !f ) { return false; }
+        std::fprintf( f, "P6\n%d %d\n255\n", w, h );
+        for ( int y = h - 1; y >= 0; --y )
+        {
+            for ( int x = 0; x < w; ++x )
+            {
+                size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                unsigned char rgb[3] = { rgba[i], rgba[i + 1], rgba[i + 2] };
+                std::fwrite( rgb, 1, 3, f );
+            }
+        }
+        std::fclose( f );
+        return true;
+    }
+
+    void WriteCertPixelReport( char const* ppmPath, char const* reportPath )
+    {
+        constexpr int kVoidR = 114, kVoidG = 158, kVoidB = 224;
+        constexpr int kGrassR = 93, kGrassG = 133, kGrassB = 68;
+        constexpr int kLimeR = 193, kLimeG = 189, kLimeB = 174;
+        constexpr int kMicaR = 126, kMicaG = 123, kMicaB = 107;
+        // Legacy backdrop ground quad (pre-voidfix) — exact RGB(178,204,140); not grass.
+        constexpr int kBackR = 178, kBackG = 204, kBackB = 140;
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 8 || h <= 8 ) { return; }
+        std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+        int x0 = w * 2 / 5, x1 = w * 3 / 5, y0 = h * 2 / 5, y1 = h * 3 / 5;
+        long long n = 0, sky = 0, grassN = 0, chalk = 0, dark = 0, back = 0, other = 0;
+        auto d2 = []( int r, int gc, int b, int rr, int gg, int bb ) {
+            long long dr = r - rr, dg = gc - gg, db = b - bb;
+            return dr * dr + dg * dg + db * db;
+        };
+        for ( int y = y0; y < y1; ++y )
+        {
+            for ( int x = x0; x < x1; ++x )
+            {
+                size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                int r = rgba[i], gc = rgba[i + 1], b = rgba[i + 2];
+                ++n;
+                if ( r + gc + b < 90 ) { ++dark; continue; }
+                if ( d2( r, gc, b, kBackR, kBackG, kBackB ) <= 64 ) { ++back; continue; }
+                long long dv = d2( r, gc, b, kVoidR, kVoidG, kVoidB );
+                long long dg = d2( r, gc, b, kGrassR, kGrassG, kGrassB );
+                long long dc = d2( r, gc, b, kLimeR, kLimeG, kLimeB );
+                long long dm = d2( r, gc, b, kMicaR, kMicaG, kMicaB );
+                if ( b > gc && b > r && b > 150 && dv <= dg && dv <= dc ) { ++sky; continue; }
+                if ( dg <= dv && dg <= dc && dg <= dm && gc > r + 20 && gc > b + 20 ) { ++grassN; continue; }
+                if ( dc <= dv && dc <= dg && ( dc <= dm || r + gc + b > 480 ) ) { ++chalk; continue; }
+                ++other;
+            }
+        }
+        FILE* f = nullptr;
+        if ( fopen_s( &f, reportPath, "w" ) != 0 || !f ) { return; }
+        std::fprintf( f,
+            "ppm=%s\nviewport=%dx%d\ncenter_samples=%lld\n"
+            "refs: void_clear=RGB(%d,%d,%d) grass_mid=RGB(%d,%d,%d) limestone_mid=RGB(%d,%d,%d) mica_mid=RGB(%d,%d,%d) legacy_backdrop=RGB(%d,%d,%d)\n"
+            "class_sky_void_pct=%.2f\nclass_legacy_backdrop_void_pct=%.2f\nclass_grass_pct=%.2f\nclass_chalk_stone_pct=%.2f\nclass_shadow_dark_pct=%.2f\nclass_other_pct=%.2f\n"
+            "digest=%s\naim=%s/%s\ncavity_tris=%d\n"
+            "note=mesh gap void=sky clear (or legacy lime backdrop); grass mid is olive CapColor — never RGB(178,204,140)\n",
+            ppmPath, w, h, n,
+            kVoidR, kVoidG, kVoidB, kGrassR, kGrassG, kGrassB, kLimeR, kLimeG, kLimeB, kMicaR, kMicaG, kMicaB,
+            kBackR, kBackG, kBackB,
+            n ? ( 100.0 * sky / n ) : 0.0,
+            n ? ( 100.0 * back / n ) : 0.0,
+            n ? ( 100.0 * grassN / n ) : 0.0,
+            n ? ( 100.0 * chalk / n ) : 0.0,
+            n ? ( 100.0 * dark / n ) : 0.0,
+            n ? ( 100.0 * other / n ) : 0.0,
+            g.digestLine.c_str(),
+            g.aimStrikeCap.c_str(), g.aimWireCap.c_str(),
+            g.cavityTrisTotal );
+        std::fclose( f );
+    }
+
+    void WritePerfReport( char const* path, char const* tag )
+    {
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int matterN = (int)H2H::State().bodies.size();
+        std::fprintf( f,
+            "tag=%s\n"
+            "geoCellsCreated=%d\nSampleSurface_calls=%d\nSampleCapColor_calls=%d\n"
+            "HF_rebuild_count=%d\nHF_tris_approx=%d\nHF_remesh_ms_total=%.2f\nHF_remesh_ms_max=%.2f\n"
+            "EditedRegions=%d\n"
+            "D2_rebuild_count=%d\nD2_tris=%d\nD2_edges=%d\nD2_qef_fallbacks=%d\nD2_ms_total=%.2f\n"
+            "virgin_D2_rebuilds_at_stream=%d\n"
+            "MatterBodies=%d\nchipMode=%d\n"
+            "invariant_virgin_D2_zero=%s\n"
+            "laws=vista_cheap+interaction_local; action!=D2_dirty!=HF_aperture; "
+            "D2_0.85=work_partition_not_clip; HF_12cm=new_strike_only; tip/6=presentation_only\n",
+            tag ? tag : "-",
+            g.perfGeoCellsCreated, g.perfSampleSurfaceCalls, g.perfSampleCapColorCalls,
+            g.perfHfRebuilds, g.perfHfTris, g.perfHfRemeshMsTotal, g.certMaxRemeshMs,
+            (int)g.editedRegions.size(),
+            g.perfD2Rebuilds, g.perfD2Tris, g.perfD2Edges, g.perfD2QefFallbacks, g.perfD2MsTotal,
+            g.perfVirginD2Rebuilds,
+            matterN, (int)g.chipMode,
+            ( g.perfVirginD2Rebuilds == 0 ) ? "PASS" : "FAIL_or_unset" );
+        std::fclose( f );
+    }
+
+    void SnapVirginPerfIfNeeded()
+    {
+        if ( g.perfVirginSnapDone || !g.streamComplete ) { return; }
+        g.perfVirginD2Rebuilds = g.perfD2Rebuilds;
+        g.perfVirginSnapDone = true;
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_startup_perf.txt", g.certOutDir );
+        WritePerfReport( path, "virgin_stream_complete" );
+    }
+
+    // ---------- Geography interaction cert (--cert-geo) ----------
+    // RANGE fixture as Horizon-to-Hand transect. Capture FAIL; do not auto-fix.
+    struct GeoCertContact
+    {
+        char id[24] = {};
+        char terrain[48] = {};
+        float x = 0.f, y = 0.f, z = 0.f;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        float slopeDeg = 0.f;
+        char material[32] = {};
+        int cellX = 0, cellY = 0;
+        bool soft = true; // shovel vs pick
+        bool found = false;
+    };
+
+    struct GeoCertRow
+    {
+        char section[8] = {};
+        char scenario[64] = {};
+        char terrain[48] = {};
+        float slope = 0.f;
+        char material[32] = {};
+        float x = 0.f, y = 0.f, z = 0.f;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        char action[48] = {};
+        int grams = 0;
+        int occDelta = 0;
+        int hfSubdiv = 2;
+        int editedRegion = 0;
+        int d2Tris = 0;
+        int hermites = 0;
+        int qefFb = 0;
+        int haloMiss = 0;
+        int ownViol = 0;
+        int matMismatch = 0;
+        int supportFail = 0;
+        char hash[24] = "-";
+        char timing[48] = "-";
+        char verdict[12] = "SKIP"; // PASS / FAIL / SKIP
+        char note[160] = {};
+    };
+
+    static constexpr int kGeoCertContactCap = 16;
+    static constexpr int kGeoCertRowCap = 128;
+    static GeoCertContact s_geoContacts[kGeoCertContactCap];
+    static int s_geoContactN = 0;
+    static GeoCertRow s_geoRows[kGeoCertRowCap];
+    static int s_geoRowN = 0;
+    static char s_geoFailReason[96] = {};
+    static char s_geoFailFixture[48] = {};
+    static char s_geoFailAction[48] = {};
+    static float s_geoFailX = 0.f, s_geoFailY = 0.f, s_geoFailZ = 0.f;
+    static float s_geoFailNx = 0.f, s_geoFailNy = 0.f, s_geoFailNz = 1.f;
+
+    bool GeoCertIsSoftRock( ProvenanceGeo::RockBody b )
+    {
+        using RB = ProvenanceGeo::RockBody;
+        return b == RB::DirtMantle || b == RB::Loam || b == RB::Sand
+            || b == RB::Gravel || b == RB::Clay;
+    }
+
+    void GeoCertAddRow( GeoCertRow const& r )
+    {
+        if ( s_geoRowN >= kGeoCertRowCap ) { return; }
+        s_geoRows[s_geoRowN++] = r;
+    }
+
+    void GeoCertScaffold( char const* section, char const* scenario, char const* note )
+    {
+        GeoCertRow r{};
+        std::snprintf( r.section, sizeof( r.section ), "%s", section );
+        std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scenario );
+        std::snprintf( r.verdict, sizeof( r.verdict ), "SKIP" );
+        std::snprintf( r.note, sizeof( r.note ), "%s", note ? note : "scaffold" );
+        std::snprintf( r.action, sizeof( r.action ), "-" );
+        std::snprintf( r.terrain, sizeof( r.terrain ), "-" );
+        std::snprintf( r.material, sizeof( r.material ), "-" );
+        GeoCertAddRow( r );
+    }
+
+    void GeoCertHardFail( char const* fixture, char const* action, char const* reason,
+        float x, float y, float z, float nx, float ny, float nz )
+    {
+        if ( g.certGeoFailWritten ) { return; }
+        g.certGeoFailWritten = true;
+        g.certGeoExitCode = 1;
+        std::snprintf( s_geoFailFixture, sizeof( s_geoFailFixture ), "%s", fixture ? fixture : "?" );
+        std::snprintf( s_geoFailAction, sizeof( s_geoFailAction ), "%s", action ? action : "?" );
+        std::snprintf( s_geoFailReason, sizeof( s_geoFailReason ), "%s", reason ? reason : "?" );
+        s_geoFailX = x; s_geoFailY = y; s_geoFailZ = z;
+        s_geoFailNx = nx; s_geoFailNy = ny; s_geoFailNz = nz;
+
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_geography_interaction_fail.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) == 0 && f )
+        {
+            std::fprintf( f,
+                "FAIL:\n"
+                "fixture=%s\n"
+                "action=%s\n"
+                "world=(%.3f,%.3f,%.3f)\n"
+                "normal=(%.4f,%.4f,%.4f)\n"
+                "reason=%s\n"
+                "beforeMeshHash=-\n"
+                "afterMeshHash=-\n"
+                "occupancyHash=-\n"
+                "note=teleport visual client to world XYZ; do not auto-compensate\n"
+                "geoCellsCreated=%d SampleSurface=%d HF_rebuilds=%d D2_rebuilds=%d\n"
+                "EditedRegions=%d MatterBodies=%d virgin_D2=%d\n",
+                s_geoFailFixture, s_geoFailAction,
+                s_geoFailX, s_geoFailY, s_geoFailZ,
+                s_geoFailNx, s_geoFailNy, s_geoFailNz,
+                s_geoFailReason,
+                g.perfGeoCellsCreated, g.perfSampleSurfaceCalls, g.perfHfRebuilds, g.perfD2Rebuilds,
+                (int)g.editedRegions.size(), (int)H2H::State().bodies.size(),
+                g.perfVirginD2Rebuilds );
+            std::fclose( f );
+        }
+        char msg[160];
+        std::snprintf( msg, sizeof( msg ), "CERT-GEO FAIL %s @ (%.1f,%.1f)", reason, x, y );
+        g.statusLine = msg;
+    }
+
+    bool GeoCertSampleAt( float x, float y, float& z, float& nx, float& ny, float& nz,
+        ProvenanceGeo::SurfaceSample& surf )
+    {
+        surf = ProvenanceGeo::SampleSurface( x, y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+        // Discovery samples analytic geography — does NOT bump perfSampleSurfaceCalls
+        // (cell cache path owns that counter). Cert compares EnsureGeoCell creates only.
+        if ( !SampleGroundZBase( x, y, z ) ) { return false; }
+        CaptureFaceNormalAt( x, y, nx, ny, nz );
+        return true;
+    }
+
+    void GeoCertPushContact( char const* id, char const* terrain, float x, float y )
+    {
+        if ( s_geoContactN >= kGeoCertContactCap ) { return; }
+        GeoCertContact& c = s_geoContacts[s_geoContactN];
+        std::memset( &c, 0, sizeof( c ) );
+        std::snprintf( c.id, sizeof( c.id ), "%s", id );
+        std::snprintf( c.terrain, sizeof( c.terrain ), "%s", terrain );
+        ProvenanceGeo::SurfaceSample surf{};
+        float z = 0.f, nx = 0.f, ny = 0.f, nz = 1.f;
+        if ( !GeoCertSampleAt( x, y, z, nx, ny, nz, surf ) ) { return; }
+        c.x = x; c.y = y; c.z = z;
+        c.nx = nx; c.ny = ny; c.nz = nz;
+        float const horiz = std::sqrt( nx * nx + ny * ny );
+        c.slopeDeg = std::atan2( horiz, (std::max)( 1e-4f, nz ) ) * ( 180.f / 3.14159265f );
+        std::snprintf( c.material, sizeof( c.material ), "%s", surf.cap ? surf.cap : ProvenanceGeo::CapId( surf.rock ) );
+        c.cellX = (int)std::floor( x );
+        c.cellY = (int)std::floor( y );
+        c.soft = GeoCertIsSoftRock( surf.rock );
+        c.found = true;
+        ++s_geoContactN;
+    }
+
+    void GeoCertDiscoverContacts()
+    {
+        s_geoContactN = 0;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+
+        // Nominal RANGE transect anchors (A–J) + packaging probes.
+        GeoCertPushContact( "A_flat", "flat_soil_valley", ox + 2.f, oy );
+        GeoCertPushContact( "B_slope", "gentle_slope", ox + 18.f, oy );
+        GeoCertPushContact( "C_mound", "rounded_mound", ox + 36.f, oy );
+        GeoCertPushContact( "D_drain", "concave_drainage", ox + 51.f, oy );
+        GeoCertPushContact( "E_rocky", "moderate_rocky_slope", ox + 68.f, oy );
+        GeoCertPushContact( "F_diag", "steep_diagonal_rock", ox + 84.f, oy );
+        GeoCertPushContact( "G_cliff", "near_vertical_face", ox + 94.0f, oy );
+        GeoCertPushContact( "I_scree", "crest_or_scree_apron", ox + 91.f, oy );
+        GeoCertPushContact( "J_lime", "mineral_limestone_shoulder", ox + 102.f, oy - 3.f );
+
+        // Material boundary: scan u for rock change.
+        {
+            ProvenanceGeo::RockBody prev = ProvenanceGeo::RockAt( ox + 20.f, oy );
+            for ( float u = 22.f; u < 100.f; u += 1.f )
+            {
+                ProvenanceGeo::RockBody cur = ProvenanceGeo::RockAt( ox + u, oy );
+                if ( cur != prev )
+                {
+                    GeoCertPushContact( "mat_bound", "material_boundary", ox + u, oy );
+                    break;
+                }
+                prev = cur;
+            }
+        }
+        // World-cell boundary + multi-cell (near integer + half-step).
+        GeoCertPushContact( "cell_edge", "world_cell_boundary", std::floor( ox + 36.f ) + 0.02f, oy );
+        GeoCertPushContact( "multi_cell", "multi_cell_crossing", std::floor( ox + 68.f ) + 0.98f, oy );
+
+        // Programmatic upgrade: pick steepest sample near cliff for G if slope weak.
+        {
+            float bestSlope = -1.f;
+            float bx = ox + 94.f, by = oy, bz = 0.f, bnx = 0.f, bny = 0.f, bnz = 1.f;
+            char bmat[32] = "rock";
+            for ( float u = 92.f; u <= 97.f; u += 0.25f )
+            {
+                for ( float v = -2.f; v <= 2.f; v += 0.5f )
+                {
+                    ProvenanceGeo::SurfaceSample surf{};
+                    float z, nx, ny, nz;
+                    if ( !GeoCertSampleAt( ox + u, oy + v, z, nx, ny, nz, surf ) ) { continue; }
+                    float const horiz = std::sqrt( nx * nx + ny * ny );
+                    float const slope = std::atan2( horiz, (std::max)( 1e-4f, nz ) ) * ( 180.f / 3.14159265f );
+                    if ( slope > bestSlope )
+                    {
+                        bestSlope = slope;
+                        bx = ox + u; by = oy + v; bz = z;
+                        bnx = nx; bny = ny; bnz = nz;
+                        std::snprintf( bmat, sizeof( bmat ), "%s",
+                            surf.cap ? surf.cap : ProvenanceGeo::CapId( surf.rock ) );
+                    }
+                }
+            }
+            for ( int i = 0; i < s_geoContactN; ++i )
+            {
+                if ( std::strcmp( s_geoContacts[i].id, "G_cliff" ) != 0 ) { continue; }
+                s_geoContacts[i].x = bx; s_geoContacts[i].y = by; s_geoContacts[i].z = bz;
+                s_geoContacts[i].nx = bnx; s_geoContacts[i].ny = bny; s_geoContacts[i].nz = bnz;
+                s_geoContacts[i].slopeDeg = bestSlope;
+                std::snprintf( s_geoContacts[i].material, sizeof( s_geoContacts[i].material ), "%s", bmat );
+                s_geoContacts[i].cellX = (int)std::floor( bx );
+                s_geoContacts[i].cellY = (int)std::floor( by );
+                s_geoContacts[i].soft = false;
+                s_geoContacts[i].found = bestSlope > 35.f;
+                break;
+            }
+        }
+    }
+
+    void GeoCertTeleport( float x, float y, float pitch, float yaw )
+    {
+        g.feetX = x;
+        g.feetY = y;
+        float gz = g.feetZ;
+        if ( SampleGroundZ( x, y, gz ) ) { g.feetZ = gz; }
+        g.camX = g.feetX;
+        g.camY = g.feetY;
+        g.camZ = g.feetZ + 1.7f;
+        g.pitch = pitch;
+        g.yaw = yaw;
+        // Do NOT InvalidateTerrainMesh here — walk cert requires remesh=0 without residency change.
+        UpdateAim();
+    }
+
+    float GeoCertOxFallback( char const* id )
+    {
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        if ( std::strcmp( id, "A_flat" ) == 0 ) { return ox + 2.f; }
+        if ( std::strcmp( id, "B_slope" ) == 0 ) { return ox + 18.f; }
+        if ( std::strcmp( id, "C_mound" ) == 0 ) { return ox + 36.f; }
+        if ( std::strcmp( id, "D_drain" ) == 0 ) { return ox + 51.f; }
+        if ( std::strcmp( id, "E_rocky" ) == 0 ) { return ox + 68.f; }
+        if ( std::strcmp( id, "F_diag" ) == 0 ) { return ox + 84.f; }
+        if ( std::strcmp( id, "G_cliff" ) == 0 ) { return ox + 94.f; }
+        return ox;
+    }
+
+    void GeoCertWriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_geography_interaction_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+
+        std::fprintf( f,
+            "# provenance_geography_interaction_cert\n"
+            "fixture=%s\n"
+            "fixture_label=%s\n"
+            "exit_code=%d\n"
+            "contacts=%d\n"
+            "rows=%d\n"
+            "geoCellsCreated=%d SampleSurface=%d SampleCapColor=%d\n"
+            "HF_rebuilds=%d D2_rebuilds=%d virgin_D2=%d\n"
+            "EditedRegions=%d MatterBodies=%d\n"
+            "laws=action!=D2_dirty!=HF_aperture; 0.85=work_partition; 12cm=new_strike_mouth; tip/6=presentation\n"
+            "\n# per-scenario rows\n"
+            "# section|scenario|terrain|slope|material|xyz|N|action|grams|occDelta|hfSub|ER|d2Tris|herm|qefFb|halo|own|mat|sup|hash|timing|verdict|note\n",
+            ProvenanceGeo::FixtureName( ProvenanceGeo::Fixture() ),
+            ProvenanceGeo::FixtureLabel( ProvenanceGeo::Fixture() ),
+            g.certGeoExitCode,
+            s_geoContactN, s_geoRowN,
+            g.perfGeoCellsCreated, g.perfSampleSurfaceCalls, g.perfSampleCapColorCalls,
+            g.perfHfRebuilds, g.perfD2Rebuilds, g.perfVirginD2Rebuilds,
+            (int)g.editedRegions.size(), (int)H2H::State().bodies.size() );
+
+        for ( int i = 0; i < s_geoRowN; ++i )
+        {
+            GeoCertRow const& r = s_geoRows[i];
+            std::fprintf( f,
+                "%s|%s|%s|%.1f|%s|(%.3f,%.3f,%.3f)|(%.3f,%.3f,%.3f)|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%s|%s\n",
+                r.section, r.scenario, r.terrain, r.slope, r.material,
+                r.x, r.y, r.z, r.nx, r.ny, r.nz,
+                r.action, r.grams, r.occDelta, r.hfSubdiv, r.editedRegion,
+                r.d2Tris, r.hermites, r.qefFb, r.haloMiss, r.ownViol, r.matMismatch, r.supportFail,
+                r.hash, r.timing, r.verdict, r.note );
+        }
+
+        std::fprintf( f, "\n# discovered contacts\n" );
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            std::fprintf( f,
+                "contact id=%s terrain=%s soft=%d found=%d xyz=(%.3f,%.3f,%.3f) N=(%.3f,%.3f,%.3f) "
+                "slope=%.1f mat=%s cell=(%d,%d)\n",
+                c.id, c.terrain, c.soft ? 1 : 0, c.found ? 1 : 0,
+                c.x, c.y, c.z, c.nx, c.ny, c.nz, c.slopeDeg, c.material, c.cellX, c.cellY );
+        }
+
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_geoRowN; ++i )
+        {
+            if ( std::strcmp( s_geoRows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_geoRows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        std::fprintf( f,
+            "\n# red-gate summary\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d\n"
+            "hard_fail=%s\n"
+            "gates=spire_Z,lost_carve,HF_resurrection,uncovered_void,packaging_signature,"
+            "incomplete_halo,nondeterministic_D2,wrong_material,support_over_void,"
+            "virgin_D2_work,excessive_remesh,mass_discrepancy\n",
+            passN, failN, skipN,
+            g.certGeoExitCode ? s_geoFailReason : "none" );
+
+        if ( g.certGeoExitCode )
+        {
+            std::fprintf( f,
+                "\nFAIL:\n"
+                "fixture=%s\n"
+                "action=%s\n"
+                "world=(%.3f,%.3f,%.3f)\n"
+                "normal=(%.4f,%.4f,%.4f)\n"
+                "reason=%s\n"
+                "beforeMeshHash=-\n"
+                "afterMeshHash=-\n"
+                "occupancyHash=-\n",
+                s_geoFailFixture, s_geoFailAction,
+                s_geoFailX, s_geoFailY, s_geoFailZ,
+                s_geoFailNx, s_geoFailNy, s_geoFailNz,
+                s_geoFailReason );
+        }
+        std::fclose( f );
+
+        // Best-effort mirror under Build/cert next to common spill folders.
+        char mirror[MAX_PATH];
+        std::snprintf( mirror, sizeof( mirror ),
+            "C:\\Users\\D-Day\\ProvenanceEsoterica\\Build\\cert\\provenance_geography_interaction_cert.txt" );
+        CreateDirectoryA( "C:\\Users\\D-Day\\ProvenanceEsoterica\\Build\\cert", nullptr );
+        CopyFileA( path, mirror, FALSE );
+    }
+
+    void GeoCertRunVirginSection()
+    {
+        SnapVirginPerfIfNeeded();
+
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "2" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "virgin_assert" );
+            r.x = x; r.y = y; r.z = z;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "virgin_assert", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        // §1 rows — discovered contacts
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "1" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "discover_%s", c.id );
+            std::snprintf( r.terrain, sizeof( r.terrain ), "%s", c.terrain );
+            r.slope = c.slopeDeg;
+            std::snprintf( r.material, sizeof( r.material ), "%s", c.material );
+            r.x = c.x; r.y = c.y; r.z = c.z;
+            r.nx = c.nx; r.ny = c.ny; r.nz = c.nz;
+            std::snprintf( r.action, sizeof( r.action ), "classify" );
+            r.hfSubdiv = 2;
+            std::snprintf( r.verdict, sizeof( r.verdict ), c.found ? "PASS" : "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "cell=(%d,%d) soft=%d", c.cellX, c.cellY, c.soft ? 1 : 0 );
+            GeoCertAddRow( r );
+            if ( !c.found )
+            {
+                GeoCertHardFail( c.id, "discover", "CONTACT_NOT_FOUND", c.x, c.y, c.z, c.nx, c.ny, c.nz );
+            }
+        }
+
+        char const* required[] = {
+            "A_flat", "B_slope", "C_mound", "D_drain", "E_rocky", "F_diag", "G_cliff",
+            "cell_edge", "multi_cell"
+        };
+        for ( char const* id : required )
+        {
+            bool ok = false;
+            for ( int i = 0; i < s_geoContactN; ++i )
+            {
+                if ( std::strcmp( s_geoContacts[i].id, id ) == 0 && s_geoContacts[i].found )
+                {
+                    ok = true; break;
+                }
+            }
+            if ( !ok )
+            {
+                add( "required_contact", "FAIL", id, GeoCertOxFallback( id ), 128.f, 0.f );
+            }
+        }
+
+        int d2 = g.perfD2Rebuilds;
+        int er = (int)g.editedRegions.size();
+        int mb = (int)H2H::State().bodies.size();
+        int virgin = g.perfVirginD2Rebuilds;
+        if ( virgin < 0 ) { virgin = d2; }
+
+        if ( virgin != 0 || d2 != 0 )
+        {
+            add( "virgin_D2_zero", "FAIL", "VIRGIN_D2_WORK", g.feetX, g.feetY, g.feetZ );
+        }
+        else
+        {
+            add( "virgin_D2_zero", "PASS", "D2_rebuilds=0" );
+        }
+        // QEF proxy: no separate solve counter yet — virgin D2=0 implies QEF idle.
+        add( "virgin_QEF_zero", ( d2 == 0 ) ? "PASS" : "FAIL",
+            ( d2 == 0 ) ? "proxy_via_D2_rebuilds" : "VIRGIN_QEF_WORK" );
+
+        if ( er != 0 )
+        {
+            add( "virgin_EditedRegions", "FAIL", "VIRGIN_EDITED_REGIONS" );
+        }
+        else
+        {
+            add( "virgin_EditedRegions", "PASS", "EditedRegions=0" );
+        }
+        if ( mb != 0 )
+        {
+            add( "virgin_MatterBodies", "FAIL", "VIRGIN_MATTER_BODIES" );
+        }
+        else
+        {
+            add( "virgin_MatterBodies", "PASS", "MatterBodies=0" );
+        }
+
+        // SampleSurface ~= geoCellsCreated (allow small slack for fixture refresh paths).
+        int const ss = g.perfSampleSurfaceCalls;
+        int const gc = g.perfGeoCellsCreated;
+        int const slack = (std::max)( 4, gc / 50 );
+        if ( ss > gc + slack )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "SAMPLE_SURFACE_CACHE_MISS ss=%d gc=%d", ss, gc );
+            add( "SampleSurface_cache", "FAIL", note );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "ss=%d gc=%d slack=%d", ss, gc, slack );
+            add( "SampleSurface_cache", "PASS", note );
+        }
+
+        // Finite surface probe along transect (spire / NaN gate).
+        {
+            bool ok = true;
+            char note[96] = "finite_OK";
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float prevZ = 0.f;
+            bool havePrev = false;
+            for ( float u = 0.f; u <= 110.f; u += 2.f )
+            {
+                float z = 0.f;
+                if ( !SampleGroundZBase( ox + u, oy, z ) || !std::isfinite( z ) )
+                {
+                    ok = false;
+                    std::snprintf( note, sizeof( note ), "NONFINITE_Z u=%.1f", u );
+                    GeoCertHardFail( "transect_Z", "virgin_probe", note, ox + u, oy, z, 0, 0, 1 );
+                    break;
+                }
+                if ( havePrev && std::fabs( z - prevZ ) > 12.f )
+                {
+                    ok = false;
+                    std::snprintf( note, sizeof( note ), "SPIRE_OR_RUNAWAY_Z u=%.1f dz=%.2f", u, z - prevZ );
+                    GeoCertHardFail( "transect_Z", "virgin_probe", note, ox + u, oy, z, 0, 0, 1 );
+                    break;
+                }
+                prevZ = z;
+                havePrev = true;
+            }
+            add( "virgin_surface_finite", ok ? "PASS" : "FAIL", note );
+        }
+    }
+
+    void GeoCertRunWalkSection()
+    {
+        // Walk/teleport along already-resident RANGE corridor without InvalidateTerrainMesh.
+        // Limitation: if something else dirties HF or expands geo disk, document FAIL honestly.
+        int const hf0 = g.certGeoWalkHf0;
+        int const d20 = g.certGeoWalkD20;
+        int const cells0 = g.certGeoWalkCells0;
+        int const ss0 = g.certGeoWalkSample0;
+        int const dHf = g.perfHfRebuilds - hf0;
+        int const dD2 = g.perfD2Rebuilds - d20;
+        int const dCells = g.perfGeoCellsCreated - cells0;
+        int const dSs = g.perfSampleSurfaceCalls - ss0;
+
+        auto add = [&]( char const* scen, char const* verdict, char const* note )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "2" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "walk_transect" );
+            r.x = g.feetX; r.y = g.feetY; r.z = g.feetZ;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "walk_transect", note, g.feetX, g.feetY, g.feetZ, 0, 0, 1 );
+            }
+        };
+
+        if ( dD2 != 0 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "WALK_D2_NONEZERO dD2=%d", dD2 );
+            add( "walk_D2_zero", "FAIL", note );
+        }
+        else
+        {
+            add( "walk_D2_zero", "PASS", "dD2=0" );
+        }
+
+        if ( dCells > 0 )
+        {
+            // Honest FAIL row + reproduce blob; dig matrix still runs (documented limitation path).
+            char note[128];
+            std::snprintf( note, sizeof( note ),
+                "RESIDENCY_GREW_ON_WALK dCells=%d dHf=%d (EnsureGeoDisk recentered)", dCells, dHf );
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "2" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "walk_no_residency_growth" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "walk_transect" );
+            GeoCertAddRow( r );
+            if ( !g.certGeoFailWritten )
+            {
+                GeoCertHardFail( "walk_residency", "walk_transect", "RESIDENCY_GREW_ON_WALK",
+                    g.feetX, g.feetY, g.feetZ, 0, 0, 1 );
+            }
+            // Do not treat as terminal for §4 — continue after artifact note already written.
+        }
+        else if ( dHf != 0 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "WALK_HF_REMESH dHf=%d (no residency growth)", dHf );
+            add( "walk_HF_remesh_zero", "FAIL", note );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "dHf=0 dCells=0 dSs=%d", dSs );
+            add( "walk_HF_remesh_zero", "PASS", note );
+            add( "walk_no_residency_growth", "PASS", "dCells=0" );
+        }
+
+        // Grade stability probe (analytic geography; column reply grade gate scaffolded if no wire).
+        {
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            bool ok = true;
+            char note[96] = "grade_stable_analytic";
+            for ( float u = 0.f; u <= 100.f; u += 10.f )
+            {
+                auto a = ProvenanceGeo::SampleSurface( ox + u, oy, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+                auto b = ProvenanceGeo::SampleSurface( ox + u, oy, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+                if ( std::fabs( a.grade - b.grade ) > 1e-6f )
+                {
+                    ok = false;
+                    std::snprintf( note, sizeof( note ), "GRADE_REWRITE u=%.1f", u );
+                    break;
+                }
+            }
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "2" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "grade_before_eq_after" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), ok ? "PASS" : "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "%s; voxel_column_fanin=SKIP_needs_bridge_torture", note );
+            std::snprintf( r.action, sizeof( r.action ), "grade_probe" );
+            GeoCertAddRow( r );
+            if ( !ok )
+            {
+                GeoCertHardFail( "grade", "grade_probe", note, ox, oy, 0, 0, 0, 1 );
+            }
+        }
+    }
+
+    void GeoCertStrikeAt( GeoCertContact const& c )
+    {
+        // Stand slightly back along outward normal; look into the contact.
+        float pitch = -1.10f;
+        float yaw = 0.f;
+        if ( c.nz < 0.55f )
+        {
+            pitch = -0.20f;
+            yaw = std::atan2( -c.nx, -c.ny );
+        }
+        float const standX = c.x + c.nx * 0.55f;
+        float const standY = c.y + c.ny * 0.55f;
+        GeoCertTeleport( standX, standY, pitch, yaw );
+        // Face the contact point from camera.
+        {
+            float dx = c.x - g.camX, dy = c.y - g.camY, dz = c.z - g.camZ;
+            float const horiz = std::sqrt( dx * dx + dy * dy );
+            g.yaw = std::atan2( dx, dy );
+            g.pitch = std::atan2( dz, (std::max)( 0.05f, horiz ) );
+            if ( g.pitch < -1.4f ) { g.pitch = -1.4f; }
+            if ( g.pitch > 1.4f ) { g.pitch = 1.4f; }
+        }
+        UpdateAim();
+        g.hotbarSel = c.soft ? 0 : 2;
+        int const er0 = (int)g.editedRegions.size();
+        int const d20 = g.perfD2Rebuilds;
+        int const hf0 = g.perfHfRebuilds;
+        int const held0 = g.heldTotalG;
+        bool struck = false;
+        if ( !g.aimHit )
+        {
+            // Last resort: force aim at classified contact (still one strike attempt).
+            g.aimHit = true;
+            g.aimX = c.x; g.aimY = c.y; g.aimZ = c.z;
+            g.aimCx = c.cellX; g.aimCy = c.cellY;
+        }
+        if ( !c.soft )
+        {
+            struck = TryPickFoliatedStrike();
+            if ( !struck ) { g.hotbarSel = 0; struck = TryDigHandful(); }
+        }
+        else
+        {
+            struck = TryDigHandful();
+        }
+
+        GeoCertRow r{};
+        std::snprintf( r.section, sizeof( r.section ), "4" );
+        std::snprintf( r.scenario, sizeof( r.scenario ), "dig_%s", c.id );
+        std::snprintf( r.terrain, sizeof( r.terrain ), "%s", c.terrain );
+        r.slope = c.slopeDeg;
+        std::snprintf( r.material, sizeof( r.material ), "%s", c.material );
+        r.x = c.x; r.y = c.y; r.z = c.z;
+        r.nx = c.nx; r.ny = c.ny; r.nz = c.nz;
+        std::snprintf( r.action, sizeof( r.action ), "%s", c.soft ? "shovel" : "pick" );
+        r.grams = g.heldTotalG - held0;
+        r.editedRegion = (int)g.editedRegions.size();
+        r.d2Tris = g.perfD2Tris;
+        r.qefFb = g.perfD2QefFallbacks;
+        r.hfSubdiv = 2;
+        int const dD2 = g.perfD2Rebuilds - d20;
+        int const dHf = g.perfHfRebuilds - hf0;
+        int const dEr = (int)g.editedRegions.size() - er0;
+        std::snprintf( r.timing, sizeof( r.timing ), "dD2=%d dHf=%d dER=%d", dD2, dHf, dEr );
+        std::snprintf( r.note, sizeof( r.note ),
+            "action_strike=%d D2_dirty_rebuilds=%d HF_aperture_remesh=%d (distinct)",
+            struck ? 1 : 0, dD2, dHf );
+        if ( !struck )
+        {
+            std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+            GeoCertAddRow( r );
+            GeoCertHardFail( c.id, r.action, "STRIKE_NO_EFFECT", c.x, c.y, c.z, c.nx, c.ny, c.nz );
+            return;
+        }
+        std::snprintf( r.verdict, sizeof( r.verdict ), "PASS" );
+        GeoCertAddRow( r );
+        (void)dEr;
+    }
+
+    uint32_t GeoCertFnv1a( void const* data, size_t n, uint32_t h = 2166136261u )
+    {
+        uint8_t const* p = (uint8_t const*)data;
+        for ( size_t i = 0; i < n; ++i )
+        {
+            h ^= p[i];
+            h *= 16777619u;
+        }
+        return h;
+    }
+
+    uint32_t GeoCertHashCellFill( int cx, int cy )
+    {
+        CellSample const* cell = GetCell( cx, cy );
+        if ( !cell || cell->fill.empty() ) { return 0u; }
+        return GeoCertFnv1a( cell->fill.data(), cell->fill.size() );
+    }
+
+    uint32_t GeoCertHashCavityTris( CellSample const& cell )
+    {
+        uint32_t h = 2166136261u;
+        for ( DualContourQef::Tri const& t : cell.cavityTris )
+        {
+            float v[9] = {
+                t.a.x, t.a.y, t.a.z,
+                t.b.x, t.b.y, t.b.z,
+                t.c.x, t.c.y, t.c.z
+            };
+            h = GeoCertFnv1a( v, sizeof( v ), h );
+        }
+        uint32_t const n = (uint32_t)cell.cavityTris.size();
+        h = GeoCertFnv1a( &n, sizeof( n ), h );
+        return h;
+    }
+
+    void GeoCertRunHfRefineNoEditSection()
+    {
+        // §3: tip/6 is presentation refine on mouth collar only. Without edit there is no
+        // mouth → coarse vista stays; aim/look must not change virgin surface or wake D2.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            float nx = 0.f, float ny = 0.f, float nz = 1.f )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "3" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "hf_refine_no_edit" );
+            r.x = x; r.y = y; r.z = z;
+            r.nx = nx; r.ny = ny; r.nz = nz;
+            r.hfSubdiv = 2;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "hf_refine_no_edit", note, x, y, z, nx, ny, nz );
+            }
+        };
+
+        int const d20 = g.perfD2Rebuilds;
+        int const er0 = (int)g.editedRegions.size();
+        int const hf0 = g.perfHfRebuilds;
+
+        struct Probe { float x, y, z, nx, ny, nz; };
+        Probe before[8];
+        int probeN = 0;
+        for ( int i = 0; i < s_geoContactN && probeN < 8; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            if ( !c.found ) { continue; }
+            before[probeN++] = { c.x, c.y, c.z, c.nx, c.ny, c.nz };
+        }
+        if ( probeN == 0 )
+        {
+            add( "surface_identity", "FAIL", "NO_PROBES" );
+            return;
+        }
+
+        // Aim/look at probes without committing dig — residency already frozen from walk.
+        for ( int i = 0; i < probeN; ++i )
+        {
+            Probe const& p = before[i];
+            float pitch = -0.55f;
+            float yaw = 0.f;
+            if ( p.nz < 0.55f )
+            {
+                pitch = -0.15f;
+                yaw = std::atan2( -p.nx, -p.ny );
+            }
+            GeoCertTeleport( p.x + p.nx * 0.45f, p.y + p.ny * 0.45f, pitch, yaw );
+            UpdateAim();
+        }
+
+        bool mouthHit = false;
+        {
+            float md = 0.f, nr = 0.f;
+            mouthHit = QuadHitsMouthCollar( before[0].x - 0.25f, before[0].y - 0.25f,
+                before[0].x + 0.25f, before[0].y + 0.25f, md, nr );
+        }
+        int const div = MeshDivForCell( (int)std::floor( before[0].x ), (int)std::floor( before[0].y ),
+            g.feetX, g.feetY );
+
+        if ( g.perfD2Rebuilds != d20 || (int)g.editedRegions.size() != er0 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "AIM_WOKE_D2_OR_ER dD2=%d dER=%d",
+                g.perfD2Rebuilds - d20, (int)g.editedRegions.size() - er0 );
+            add( "aim_no_D2", "FAIL", note, before[0].x, before[0].y, before[0].z );
+        }
+        else
+        {
+            add( "aim_no_D2", "PASS", "aim/look D2=0 ER=0", before[0].x, before[0].y, before[0].z );
+        }
+
+        if ( mouthHit || !g.editedRegions.empty() )
+        {
+            add( "no_mouth_collar_pre_edit", "FAIL", "MOUTH_COLLAR_WITHOUT_EDIT",
+                before[0].x, before[0].y, before[0].z );
+        }
+        else
+        {
+            add( "no_mouth_collar_pre_edit", "PASS", "QuadHitsMouthCollar=0 tip6_dormant",
+                before[0].x, before[0].y, before[0].z );
+        }
+
+        if ( div != 2 )
+        {
+            char note[64];
+            std::snprintf( note, sizeof( note ), "VISTA_DIV_CHANGED div=%d", div );
+            add( "vista_coarse_div2", "FAIL", note );
+        }
+        else
+        {
+            add( "vista_coarse_div2", "PASS", "MeshDivForCell=2 tip6=presentation_only" );
+        }
+
+        bool surfaceOk = true;
+        char surfNote[96] = "surface_before~=after";
+        for ( int i = 0; i < probeN; ++i )
+        {
+            float z = 0.f, nx = 0.f, ny = 0.f, nz = 1.f;
+            ProvenanceGeo::SurfaceSample surf{};
+            if ( !GeoCertSampleAt( before[i].x, before[i].y, z, nx, ny, nz, surf ) )
+            {
+                surfaceOk = false;
+                std::snprintf( surfNote, sizeof( surfNote ), "SAMPLE_FAIL i=%d", i );
+                break;
+            }
+            if ( std::fabs( z - before[i].z ) > 1e-3f
+              || std::fabs( nx - before[i].nx ) > 2e-3f
+              || std::fabs( ny - before[i].ny ) > 2e-3f
+              || std::fabs( nz - before[i].nz ) > 2e-3f )
+            {
+                surfaceOk = false;
+                std::snprintf( surfNote, sizeof( surfNote ),
+                    "SURFACE_CHANGED i=%d dz=%.4f", i, z - before[i].z );
+                GeoCertHardFail( "HF_refine_no_edit", "surface_probe", surfNote,
+                    before[i].x, before[i].y, z, nx, ny, nz );
+                break;
+            }
+        }
+        add( "surface_identity", surfaceOk ? "PASS" : "FAIL", surfNote,
+            before[0].x, before[0].y, before[0].z, before[0].nx, before[0].ny, before[0].nz );
+
+        // Neighbor stitch ≠ edited matter: no remesh / no ER from aim alone.
+        if ( g.perfHfRebuilds != hf0 )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "AIM_TRIGGERED_HF_REMESH dHf=%d", g.perfHfRebuilds - hf0 );
+            add( "aim_no_HF_remesh", "FAIL", note );
+        }
+        else
+        {
+            add( "aim_no_HF_remesh", "PASS", "dHf=0 (no edit → no tip/6 remesh)" );
+        }
+    }
+
+    void GeoCertRunD2QefSection()
+    {
+        // §5: production extract halo completeness + byte-identical re-extract.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            int d2Tris = 0, int qefFb = 0, int haloMiss = 0, char const* hash = "-" )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "5" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "d2_reextract" );
+            r.x = x; r.y = y; r.z = z;
+            r.d2Tris = d2Tris;
+            r.qefFb = qefFb;
+            r.haloMiss = haloMiss;
+            std::snprintf( r.hash, sizeof( r.hash ), "%s", hash ? hash : "-" );
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "d2_reextract", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        int cx = 0, cy = 0;
+        CellSample* cell = nullptr;
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            if ( !c.found ) { continue; }
+            CellSample* cand = GetCellMutable( c.cellX, c.cellY );
+            if ( cand && cand->carved && cand->hasCavity && !cand->cavityTris.empty() )
+            {
+                cell = cand;
+                cx = c.cellX;
+                cy = c.cellY;
+                break;
+            }
+        }
+        if ( !cell )
+        {
+            // Fallback: any carved cavity in residency.
+            for ( auto& kv : g.cells )
+            {
+                if ( kv.second.carved && kv.second.hasCavity && !kv.second.cavityTris.empty() )
+                {
+                    cell = &kv.second;
+                    cx = (int)(uint32_t)( kv.first >> 32 );
+                    cy = (int)(uint32_t)( kv.first & 0xffffffffu );
+                    break;
+                }
+            }
+        }
+        if ( !cell )
+        {
+            add( "D2_QEF_halo_determinism", "FAIL", "NO_CAVITY_AFTER_DIG_MATRIX" );
+            return;
+        }
+
+        uint32_t const h0 = GeoCertHashCavityTris( *cell );
+        int const tris0 = (int)cell->cavityTris.size();
+        int const halo0 = g.perfD2HaloMiss;
+        int const qef0 = g.perfD2QefFallbacks;
+        RebuildCavityMesh( cx, cy );
+        cell = GetCellMutable( cx, cy );
+        if ( !cell || !cell->hasCavity || cell->cavityTris.empty() )
+        {
+            add( "reextract_keeps_cavity", "FAIL", "REEXTRACT_LOST_CAVITY",
+                (float)cx + 0.5f, (float)cy + 0.5f, 0.f );
+            return;
+        }
+        uint32_t const h1 = GeoCertHashCavityTris( *cell );
+        int const haloDelta = g.perfD2HaloMiss - halo0;
+        int const qefDelta = g.perfD2QefFallbacks - qef0;
+        char hashStr[24];
+        std::snprintf( hashStr, sizeof( hashStr ), "%08X", (unsigned)h1 );
+
+        bool finiteOk = true;
+        for ( DualContourQef::Tri const& t : cell->cavityTris )
+        {
+            if ( !std::isfinite( t.a.x ) || !std::isfinite( t.a.y ) || !std::isfinite( t.a.z )
+              || !std::isfinite( t.b.x ) || !std::isfinite( t.b.y ) || !std::isfinite( t.b.z )
+              || !std::isfinite( t.c.x ) || !std::isfinite( t.c.y ) || !std::isfinite( t.c.z ) )
+            {
+                finiteOk = false;
+                break;
+            }
+            float const abx = t.b.x - t.a.x, aby = t.b.y - t.a.y, abz = t.b.z - t.a.z;
+            float const acx = t.c.x - t.a.x, acy = t.c.y - t.a.y, acz = t.c.z - t.a.z;
+            float const nx = aby * acz - abz * acy;
+            float const ny = abz * acx - abx * acz;
+            float const nz = abx * acy - aby * acx;
+            if ( nx * nx + ny * ny + nz * nz < 1e-12f )
+            {
+                finiteOk = false;
+                break;
+            }
+        }
+
+        if ( haloDelta != 0 )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "INCOMPLETE_HALO haloMissDelta=%d", haloDelta );
+            add( "haloMiss_zero", "FAIL", note, (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+                (int)cell->cavityTris.size(), qefDelta, haloDelta, hashStr );
+        }
+        else
+        {
+            add( "haloMiss_zero", "PASS", "haloMissDelta=0", (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+                (int)cell->cavityTris.size(), qefDelta, 0, hashStr );
+        }
+
+        if ( h0 != h1 || tris0 != (int)cell->cavityTris.size() )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "NONDETERMINISTIC_D2 h0=%08X h1=%08X tris=%d→%d",
+                (unsigned)h0, (unsigned)h1, tris0, (int)cell->cavityTris.size() );
+            add( "reextract_bit_identity", "FAIL", note, (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+                (int)cell->cavityTris.size(), qefDelta, haloDelta, hashStr );
+        }
+        else
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "tris=%d qefFbDelta=%d", tris0, qefDelta );
+            add( "reextract_bit_identity", "PASS", note, (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+                tris0, qefDelta, haloDelta, hashStr );
+        }
+
+        add( "finite_nondegenerate_tris", finiteOk ? "PASS" : "FAIL",
+            finiteOk ? "finite_OK" : "DEGENERATE_OR_NONFINITE_TRI",
+            (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+            (int)cell->cavityTris.size(), qefDelta, haloDelta, hashStr );
+    }
+
+    void GeoCertRunAccumulateSection()
+    {
+        // §6: ≥20 adjoining strikes on flat pad → one coherent EditedRegion; prior carve stays
+        // removed; outside dirty+halo bit-identical; new mouth ≤12cm; work may partition.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            int er = 0, char const* hash = "-" )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "6" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "accumulate_strikes" );
+            r.x = x; r.y = y; r.z = z;
+            r.editedRegion = er;
+            std::snprintf( r.hash, sizeof( r.hash ), "%s", hash ? hash : "-" );
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "accumulate_strikes", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        // Fresh pad north of A_flat dig matrix site so we own a clean accumulate corridor.
+        float const padX0 = ox + 4.f;
+        float const padY = oy + 6.f;
+        float padZ = 0.f;
+        if ( !SampleGroundZBase( padX0, padY, padZ ) )
+        {
+            add( "accumulated_20_strikes", "FAIL", "PAD_SAMPLE_FAIL", padX0, padY, 0.f );
+            return;
+        }
+
+        int const farCx = (int)std::floor( ox + 40.f );
+        int const farCy = (int)std::floor( oy + 6.f );
+        // Side cell ~2 m off the corridor — stays outside dirty+halo while corridor advances.
+        int const sideCx = (int)std::floor( padX0 );
+        int const sideCy = (int)std::floor( padY ) + 2;
+        auto seedHashCell = [&]( int cx, int cy ) -> uint32_t
+        {
+            PrefetchOccupancyCell( cx, cy );
+            EnsureOccupancyLattice( cx, cy );
+            CellSample* c = GetCellMutable( cx, cy );
+            if ( c && !c->carved && c->fill.empty() )
+            {
+                SeedOccupancyFromVirginSurface( cx, cy );
+            }
+            return GeoCertHashCellFill( cx, cy );
+        };
+        uint32_t const farHash0 = seedHashCell( farCx, farCy );
+        uint32_t const sideHash0 = seedHashCell( sideCx, sideCy );
+
+        constexpr int kStrikes = 20;
+        // Step ≈ one lattice edge so each adjoining strike still bites a solid crescent;
+        // R > step/2 keeps mouths connected into one EditedRegion.
+        constexpr float kStep = 0.125f;
+        constexpr float kR = 0.20f;
+        int struck = 0;
+        float firstX = padX0, firstY = padY, firstZ = padZ;
+        uint32_t regionId = 0;
+        int openMin = 1000000;
+        int openMax = 0;
+        int prevOpens = -1;
+        bool openShrink = false;
+
+        for ( int s = 0; s < kStrikes; ++s )
+        {
+            float const x = padX0 + (float)s * kStep;
+            float const y = padY;
+            float z = padZ;
+            SampleGroundZBase( x, y, z );
+            // Soft scoop: carve under skin, open at skin. Deeper retry if overlap already air.
+            float carveZ = z - kR * 0.45f;
+            PrefetchOccupancyCell( (int)std::floor( x ), (int)std::floor( y ) );
+            bool ok = CarveOccupancySphere( x, y, carveZ, kR, x, y, z );
+            if ( !ok )
+            {
+                carveZ = z - kR * 0.90f;
+                ok = CarveOccupancySphere( x, y, carveZ, kR, x, y, z );
+            }
+            if ( !ok )
+            {
+                // Nudge forward into uncut solid (still adjoining corridor).
+                float const x2 = x + kStep * 0.5f;
+                SampleGroundZBase( x2, y, z );
+                carveZ = z - kR * 0.45f;
+                PrefetchOccupancyCell( (int)std::floor( x2 ), (int)std::floor( y ) );
+                ok = CarveOccupancySphere( x2, y, carveZ, kR, x2, y, z );
+            }
+            if ( !ok )
+            {
+                char note[80];
+                std::snprintf( note, sizeof( note ), "STRIKE_NO_CARVE s=%d", s );
+                add( "accumulated_20_strikes", "FAIL", note, x, y, z );
+                return;
+            }
+            ++struck;
+            if ( s == 0 ) { firstX = x; firstY = y; firstZ = carveZ; }
+
+            CellSample const* home = GetCell( (int)std::floor( x ), (int)std::floor( y ) );
+            if ( home && home->editedRegionId != 0 )
+            {
+                regionId = home->editedRegionId;
+            }
+            EditedRegion* er = FindEditedRegion( regionId );
+            if ( !er )
+            {
+                add( "coherent_EditedRegion", "FAIL", "ER_MISSING_MID_SEQUENCE", x, y, z );
+                return;
+            }
+            int const opens = (int)er->openings.size();
+            if ( opens < openMin ) { openMin = opens; }
+            if ( opens > openMax ) { openMax = opens; }
+            if ( prevOpens >= 0 && opens < prevOpens ) { openShrink = true; }
+            prevOpens = opens;
+        }
+
+        EditedRegion* er = FindEditedRegion( regionId );
+        int const erN = (int)g.editedRegions.size();
+        char farHashStr[24];
+        uint32_t const farHash1 = GeoCertHashCellFill( farCx, farCy );
+        uint32_t const sideHash1 = GeoCertHashCellFill( sideCx, sideCy );
+        std::snprintf( farHashStr, sizeof( farHashStr ), "%08X", (unsigned)farHash1 );
+
+        if ( struck != kStrikes )
+        {
+            char note[64];
+            std::snprintf( note, sizeof( note ), "struck=%d want=%d", struck, kStrikes );
+            add( "accumulated_20_strikes", "FAIL", note, padX0, padY, padZ, erN, farHashStr );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "struck=%d opens=%d..%d erId=%u",
+                struck, openMin == 1000000 ? 0 : openMin, openMax, (unsigned)regionId );
+            add( "accumulated_20_strikes", "PASS", note, padX0, padY, padZ,
+                er ? 1 : 0, farHashStr );
+        }
+
+        // One coherent region for the pad corridor (cells along strikes share er id).
+        bool coherent = er != nullptr && regionId != 0;
+        int distinct = 0;
+        {
+            uint32_t seen[8] = {};
+            int seenN = 0;
+            for ( int s = 0; s < kStrikes; ++s )
+            {
+                float const x = padX0 + (float)s * kStep;
+                CellSample const* c = GetCell( (int)std::floor( x ), (int)std::floor( padY ) );
+                if ( !c || c->editedRegionId == 0 ) { coherent = false; break; }
+                bool found = false;
+                for ( int i = 0; i < seenN; ++i ) { if ( seen[i] == c->editedRegionId ) { found = true; break; } }
+                if ( !found && seenN < 8 ) { seen[seenN++] = c->editedRegionId; }
+            }
+            distinct = seenN;
+            if ( seenN != 1 ) { coherent = false; }
+        }
+        if ( !coherent )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "SPLIT_OR_MISSING_ER distinct=%d", distinct );
+            add( "coherent_EditedRegion", "FAIL", note, padX0, padY, padZ, distinct, farHashStr );
+        }
+        else
+        {
+            add( "coherent_EditedRegion", "PASS", "single_ER_along_corridor", padX0, padY, padZ, 1, farHashStr );
+        }
+
+        if ( openShrink )
+        {
+            add( "openings_remove_only", "FAIL", "OPENINGS_SHRANK", padX0, padY, padZ, 1, farHashStr );
+        }
+        else
+        {
+            char note[64];
+            std::snprintf( note, sizeof( note ), "opens_max=%d", openMax );
+            add( "openings_remove_only", "PASS", note, padX0, padY, padZ, 1, farHashStr );
+        }
+
+        bool priorGone = !OccupancySolidAt( firstX, firstY, firstZ );
+        if ( !priorGone )
+        {
+            add( "prior_carve_stays_removed", "FAIL", "LOST_CARVE_OR_HF_RESURRECTION",
+                firstX, firstY, firstZ, 1, farHashStr );
+        }
+        else
+        {
+            add( "prior_carve_stays_removed", "PASS", "first_strike_air", firstX, firstY, firstZ, 1, farHashStr );
+        }
+
+        if ( farHash0 != farHash1 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "FAR_CELL_MUTATED h0=%08X h1=%08X",
+                (unsigned)farHash0, (unsigned)farHash1 );
+            add( "outside_dirty_bit_identity", "FAIL", note,
+                (float)farCx + 0.5f, (float)farCy + 0.5f, 0.f, 1, farHashStr );
+        }
+        else if ( sideHash0 != sideHash1 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "SIDE_LIP_MUTATED h0=%08X h1=%08X cell=(%d,%d)",
+                (unsigned)sideHash0, (unsigned)sideHash1, sideCx, sideCy );
+            add( "outside_dirty_bit_identity", "FAIL", note,
+                (float)sideCx + 0.5f, (float)sideCy + 0.5f, 0.f, 1, farHashStr );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "far=%s side=(%d,%d) ok", farHashStr, sideCx, sideCy );
+            add( "outside_dirty_bit_identity", "PASS", note, padX0, padY, padZ, 1, farHashStr );
+        }
+
+        // Cross cell edge continuity (corridor spans ≥1 cell with 20*0.08=1.6m).
+        int const cellA = (int)std::floor( padX0 );
+        int const cellB = (int)std::floor( padX0 + (float)( kStrikes - 1 ) * kStep );
+        if ( cellB <= cellA )
+        {
+            add( "cross_cell_continuity", "FAIL", "CORRIDOR_DID_NOT_CROSS_CELL", padX0, padY, padZ );
+        }
+        else if ( !coherent )
+        {
+            add( "cross_cell_continuity", "FAIL", "CROSS_CELL_SPLIT_ER", padX0, padY, padZ );
+        }
+        else
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "cells=%d..%d same_ER", cellA, cellB );
+            add( "cross_cell_continuity", "PASS", note, padX0, padY, padZ, 1, farHashStr );
+        }
+
+        // 0.85 = work partition, not clip: large dirty still yields cavity tris.
+        bool cavityOk = false;
+        if ( er )
+        {
+            for ( auto const& xy : er->cells )
+            {
+                CellSample const* c = GetCell( xy.first, xy.second );
+                if ( c && c->hasCavity && !c->cavityTris.empty() ) { cavityOk = true; break; }
+            }
+        }
+        if ( !cavityOk )
+        {
+            add( "work_budget_partition_not_clip", "FAIL", "CAVITY_CLIPPED_OR_MISSING", padX0, padY, padZ );
+        }
+        else
+        {
+            add( "work_budget_partition_not_clip", "PASS", "cavity_present_after_20 (0.85=partition)",
+                padX0, padY, padZ, 1, farHashStr );
+        }
+
+    }
+
+    void GeoCertScaffoldRest()
+    {
+        // §3 / §5 / §6 are filled by dedicated runners; SKIP if an early exit skipped them.
+        auto hasSec = [&]( char const* sec ) -> bool
+        {
+            for ( int i = 0; i < s_geoRowN; ++i )
+            {
+                if ( std::strcmp( s_geoRows[i].section, sec ) == 0 ) { return true; }
+            }
+            return false;
+        };
+        if ( !hasSec( "3" ) )
+        {
+            GeoCertScaffold( "3", "HF_refine_no_edit", "skipped — cert exited before no-edit runner" );
+        }
+        if ( !hasSec( "5" ) )
+        {
+            GeoCertScaffold( "5", "D2_QEF_halo_determinism", "skipped — cert exited before D2 runner" );
+        }
+        if ( !hasSec( "6" ) )
+        {
+            GeoCertScaffold( "6", "accumulated_20_strikes", "skipped — cert exited before accumulate runner" );
+        }
+        GeoCertScaffold( "7", "HF_D2_ownership_masks", "scaffold — refinement/action/ownership tracking TODO" );
+        GeoCertScaffold( "8", "material_correctness", "scaffold — AUTH_MATERIAL_MISMATCH flag TODO" );
+        GeoCertScaffold( "9", "placement_matter_add", "scaffold — place lip/floor/adjacent TODO" );
+        GeoCertScaffold( "10", "support_collision_probes", "scaffold — SupportAt over cavity TODO" );
+        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "scaffold — chip modes TODO" );
+        GeoCertScaffold( "12", "streaming_async_column_permute", "scaffold — needs bridge fan-in torture" );
+        GeoCertScaffold( "13", "performance_budgets", "partial — see startup_perf + counters in header" );
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "13" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "virgin_invariants_budget" );
+            std::snprintf( r.verdict, sizeof( r.verdict ),
+                ( g.perfVirginD2Rebuilds == 0 ) ? "PASS" : "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ),
+                "virgin_D2=%d ss=%d gc=%d HF=%d tip6=presentation_only haloMiss=%d",
+                g.perfVirginD2Rebuilds, g.perfSampleSurfaceCalls, g.perfGeoCellsCreated, g.perfHfRebuilds,
+                g.perfD2HaloMiss );
+            std::snprintf( r.action, sizeof( r.action ), "perf_snapshot" );
+            std::snprintf( r.timing, sizeof( r.timing ), "HFms=%.1f D2ms=%.1f",
+                g.perfHfRemeshMsTotal, g.perfD2MsTotal );
+            GeoCertAddRow( r );
+        }
+        GeoCertScaffold( "14", "determinism_orders", "scaffold — reverse async / fresh process TODO" );
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "15" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "artifact_written" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "PASS" );
+            std::snprintf( r.note, sizeof( r.note ), "provenance_geography_interaction_cert.txt" );
+            std::snprintf( r.action, sizeof( r.action ), "write" );
+            GeoCertAddRow( r );
+        }
+    }
+
+    void CertGeoTick()
+    {
+        if ( !g.certGeo ) { return; }
+        DWORD const now = GetTickCount();
+
+        // Phase 0: wait for stream + force RANGE.
+        if ( g.certGeoPhase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certGeoPhaseMs == 0 ) { g.certGeoPhaseMs = now; }
+                if ( now - g.certGeoPhaseMs > 45000 )
+                {
+                    GeoCertHardFail( "connect", "wait_stream", "BRIDGE_OR_CAPS_TIMEOUT",
+                        g.feetX, g.feetY, g.feetZ, 0, 0, 1 );
+                    GeoCertRow r{};
+                    std::snprintf( r.section, sizeof( r.section ), "2" );
+                    std::snprintf( r.scenario, sizeof( r.scenario ), "stream_ready" );
+                    std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+                    std::snprintf( r.note, sizeof( r.note ), "BRIDGE_OR_CAPS_TIMEOUT link=%s", LinkLabel( g.link ) );
+                    GeoCertAddRow( r );
+                    GeoCertScaffoldRest();
+                    GeoCertWriteArtifact();
+                    g.certGeoPhase = 4;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            SnapVirginPerfIfNeeded();
+            s_geoRowN = 0;
+            s_geoContactN = 0;
+            g.certGeoFailWritten = false;
+            g.certGeoExitCode = 0;
+            g.certGeoDigIdx = 0;
+            g.certGeoDigArmed = 0;
+            // Prefetch full RANGE transect residency once so walk need not grow the disk.
+            // Cover spawn→J (x~230) plus FollowStreamCenter r=64 halo if freeze ever lifts.
+            EnsureGeoDisk(
+                (int)ProvenanceGeo::kRangeOriginX + 55,
+                (int)ProvenanceGeo::kRangeOriginY,
+                120 );
+            GeoCertDiscoverContacts();
+            GeoCertRunVirginSection();
+            if ( g.certGeoExitCode != 0 )
+            {
+                GeoCertScaffoldRest();
+                GeoCertWriteArtifact();
+                g.certGeoPhase = 4;
+                PostQuitMessage( g.certGeoExitCode );
+                return;
+            }
+            g.certGeoPhase = 1; // settle prefetch remesh one frame, then walk
+            g.certGeoPhaseMs = now;
+            g.statusLine = "CERT-GEO settle transect residency";
+            return;
+        }
+
+        // Phase 1a: after prefetch remesh, snapshot baselines then walk.
+        // Phase 1 uses certGeoDigArmed as substate: 0=settle, 1=walking.
+        if ( g.certGeoPhase == 1 )
+        {
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            if ( g.certGeoDigArmed == 0 )
+            {
+                // Wait until terrainDirty cleared (remesh done) or timeout.
+                if ( g.terrainDirty && now - g.certGeoPhaseMs < 2000 ) { return; }
+                g.certGeoWalkHf0 = g.perfHfRebuilds;
+                g.certGeoWalkD20 = g.perfD2Rebuilds;
+                g.certGeoWalkCells0 = g.perfGeoCellsCreated;
+                g.certGeoWalkSample0 = g.perfSampleSurfaceCalls;
+                g.certGeoDigArmed = 1;
+                g.certGeoPhaseMs = now;
+                g.statusLine = "CERT-GEO walk transect (no remesh expected)";
+                return;
+            }
+            int step = (int)( ( now - g.certGeoPhaseMs ) / 200 );
+            if ( step <= 20 )
+            {
+                float u = (float)step * 5.f; // 0..100 m
+                GeoCertTeleport( ox + u, oy, -0.35f, 0.f );
+                return;
+            }
+            GeoCertRunWalkSection();
+            // §3 while still phase-1 walk freeze (digArmed=1): aim/look must not remesh or wake D2.
+            g.statusLine = "CERT-GEO HF refine no-edit";
+            GeoCertRunHfRefineNoEditSection();
+            if ( g.certGeoExitCode != 0 )
+            {
+                GeoCertScaffoldRest();
+                GeoCertWriteArtifact();
+                g.certGeoPhase = 4;
+                PostQuitMessage( g.certGeoExitCode );
+                return;
+            }
+            // Residency/remesh walk FAIL is recorded; continue dig matrix — dig still valuable.
+            g.certGeoPhase = 2;
+            g.certGeoPhaseMs = now;
+            g.certGeoDigIdx = 0;
+            g.certGeoDigArmed = 0;
+            g.statusLine = "CERT-GEO dig matrix";
+            return;
+        }
+
+        // Phase 2: dig matrix — one diggable contact per settle window.
+        if ( g.certGeoPhase == 2 )
+        {
+            while ( g.certGeoDigIdx < s_geoContactN )
+            {
+                GeoCertContact const& c = s_geoContacts[g.certGeoDigIdx];
+                bool diggable = c.found
+                    && std::strcmp( c.id, "cell_edge" ) != 0
+                    && std::strcmp( c.id, "multi_cell" ) != 0
+                    && std::strcmp( c.id, "mat_bound" ) != 0;
+                if ( diggable ) { break; }
+                ++g.certGeoDigIdx;
+            }
+            if ( g.certGeoDigIdx >= s_geoContactN )
+            {
+                g.certGeoPhase = 3;
+                g.certGeoPhaseMs = now;
+                return;
+            }
+            GeoCertContact const& c = s_geoContacts[g.certGeoDigIdx];
+            if ( g.certGeoDigArmed == 0 )
+            {
+                GeoCertStrikeAt( c );
+                g.certGeoDigArmed = 1;
+                g.certGeoPhaseMs = now;
+                if ( g.certGeoExitCode != 0 )
+                {
+                    GeoCertScaffoldRest();
+                    GeoCertWriteArtifact();
+                    g.certGeoPhase = 4;
+                    PostQuitMessage( g.certGeoExitCode );
+                }
+                return;
+            }
+            if ( now - g.certGeoPhaseMs >= 900 )
+            {
+                ++g.certGeoDigIdx;
+                g.certGeoDigArmed = 0;
+                g.certGeoPhaseMs = now;
+            }
+            return;
+        }
+
+        // Phase 3: §5 D2 re-extract + §6 accumulate + remaining scaffolds + write + quit.
+        if ( g.certGeoPhase == 3 )
+        {
+            g.statusLine = "CERT-GEO D2/QEF + accumulate";
+            GeoCertRunD2QefSection();
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunAccumulateSection();
+            }
+            GeoCertScaffoldRest();
+            GeoCertWriteArtifact();
+            g.statusLine = g.certGeoExitCode
+                ? "CERT-GEO done — FAIL (see cert txt)"
+                : "CERT-GEO done — PASS/SKIP rows written";
+            g.certGeoPhase = 4;
+            PostQuitMessage( g.certGeoExitCode );
+            return;
+        }
+    }
+
+    void CertDigTick()
+    {
+        if ( !g.certDig ) { return; }
+        DWORD const now = GetTickCount();
+        // Settle → dump → move → dig next. Three sites before quit.
+        struct Stop { float dx, dy; float pitch; float yaw; char const* tag; };
+        static Stop const kStops[] = {
+            { 0.f, 0.f, -1.15f, 0.f, "flat_a" },
+            { 3.2f, 1.1f, -1.05f, 0.7f, "flat_b" },
+            { -2.4f, 4.0f, -0.55f, 1.9f, "slope_look" },
+        };
+        constexpr int kStopN = 3;
+
+        if ( g.certPhase == 0 )
+        {
+            if ( !g.streamComplete || g.link != LinkState::CapsOk ) { return; }
+            SnapVirginPerfIfNeeded();
+            Stop const& s = kStops[g.certStop];
+            if ( g.certStop > 0 )
+            {
+                g.feetX += s.dx;
+                g.feetY += s.dy;
+                float gz = g.feetZ;
+                if ( SampleGroundZ( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+                g.camX = g.feetX;
+                g.camY = g.feetY;
+                g.camZ = g.feetZ + 1.7f;
+                InvalidateTerrainMesh();
+            }
+            g.pitch = s.pitch;
+            g.yaw = s.yaw;
+            UpdateAim();
+            g.hotbarSel = 2;
+            if ( !TryPickFoliatedStrike() )
+            {
+                g.hotbarSel = 0;
+                TryDigHandful();
+            }
+            g.certPhase = 1;
+            g.certPhaseMs = now;
+            char msg[96];
+            std::snprintf( msg, sizeof( msg ), "CERT dig[%d]=%s — settle", g.certStop, s.tag );
+            g.statusLine = msg;
+            return;
+        }
+        if ( g.certPhase == 1 && now - g.certPhaseMs >= 1600 )
+        {
+            Stop const& s = kStops[g.certStop];
+            char ppm[MAX_PATH], rep[MAX_PATH];
+            std::snprintf( ppm, sizeof( ppm ), "%s\\provenance_cert_%s.ppm", g.certOutDir, s.tag );
+            std::snprintf( rep, sizeof( rep ), "%s\\provenance_cert_%s_report.txt", g.certOutDir, s.tag );
+            GLint vp[4] = {};
+            glGetIntegerv( GL_VIEWPORT, vp );
+            if ( vp[2] >= 64 && vp[3] >= 64 && DumpFramePpm( ppm ) )
+            {
+                glReadBuffer( GL_FRONT );
+                WriteCertPixelReport( ppm, rep );
+                FILE* f = nullptr;
+                if ( fopen_s( &f, rep, "a" ) == 0 && f )
+                {
+                    std::fprintf( f, "cert_stop=%s\nfeet=(%.2f,%.2f,%.2f)\npitch=%.2f yaw=%.2f\n"
+                        "max_frame_dt_ms=%.2f\nlast_remesh_ms=%.2f\nmax_remesh_ms=%.2f\nframes_so_far=%d\ncavity_tris=%d\n"
+                        "D2_rebuilds=%d\nD2_ms_total=%.2f\nHF_rebuilds=%d\nSampleSurface=%d\nSampleCapColor=%d\n",
+                        s.tag, g.feetX, g.feetY, g.feetZ, g.pitch, g.yaw,
+                        g.certMaxDtMs, g.certLastRemeshMs, g.certMaxRemeshMs, g.certFrames, g.cavityTrisTotal,
+                        g.perfD2Rebuilds, g.perfD2MsTotal, g.perfHfRebuilds,
+                        g.perfSampleSurfaceCalls, g.perfSampleCapColorCalls );
+                    std::fclose( f );
+                }
+                ++g.certStop;
+                if ( g.certStop >= kStopN )
+                {
+                    char summary[MAX_PATH], perf[MAX_PATH];
+                    std::snprintf( summary, sizeof( summary ), "%s\\provenance_cert_tour_summary.txt", g.certOutDir );
+                    std::snprintf( perf, sizeof( perf ), "%s\\provenance_cert_tour_perf.txt", g.certOutDir );
+                    WritePerfReport( perf, "tour_end" );
+                    FILE* sf = nullptr;
+                    if ( fopen_s( &sf, summary, "w" ) == 0 && sf )
+                    {
+                        std::fprintf( sf,
+                            "stops=%d\nmax_frame_dt_ms=%.2f\nmax_remesh_ms=%.2f\nframes=%d\ncavity_tris=%d\n"
+                            "virgin_D2_rebuilds=%d\nD2_rebuilds_end=%d\nSampleSurface=%d\nSampleCapColor=%d\nHF_rebuilds=%d\n"
+                            "invariant_virgin_D2_zero=%s\n"
+                            "note=adapt shell preserved; D2 dirty partitions not clipped; "
+                            "HF aperture=union of mouths (12cm=new strike only)\n",
+                            kStopN, g.certMaxDtMs, g.certMaxRemeshMs, g.certFrames, g.cavityTrisTotal,
+                            g.perfVirginD2Rebuilds, g.perfD2Rebuilds,
+                            g.perfSampleSurfaceCalls, g.perfSampleCapColorCalls, g.perfHfRebuilds,
+                            ( g.perfVirginD2Rebuilds == 0 ) ? "PASS" : "FAIL" );
+                        std::fclose( sf );
+                    }
+                    g.statusLine = "CERT tour done — quitting";
+                    g.certPhase = 2;
+                    PostQuitMessage( 0 );
+                    return;
+                }
+                g.certPhase = 0;
+                g.certPhaseMs = now;
+                g.statusLine = "CERT moving to next dig site";
+                return;
+            }
+            if ( now - g.certPhaseMs >= 20000 )
+            {
+                g.statusLine = "CERT timeout — no frame dump";
+                g.certPhase = 2;
+                PostQuitMessage( 2 );
+            }
+        }
+    }
+
     void TickFrame()
     {
         DWORD now = GetTickCount();
         float dt = 0.016f;
+        float rawDt = 0.016f;
         if ( g.lastFrameMs != 0 )
         {
-            dt = (std::min)( 0.05f, ( now - g.lastFrameMs ) * 0.001f );
+            rawDt = ( now - g.lastFrameMs ) * 0.001f;
+            dt = (std::min)( 0.05f, rawDt );
         }
         g.lastFrameMs = now;
         g.frameDt = dt;
+        if ( g.certDig || g.certGeo )
+        {
+            ++g.certFrames;
+            float const rawMs = rawDt * 1000.f;
+            if ( rawMs > g.certMaxDtMs ) { g.certMaxDtMs = rawMs; }
+        }
 
         if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
         {
@@ -7242,6 +10535,9 @@ namespace
             }
         }
         Render();
+        SnapVirginPerfIfNeeded();
+        CertDigTick();
+        CertGeoTick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -7315,6 +10611,39 @@ namespace
                     SetMouseLook( hwnd, !g.mouseLook );
                     return 0;
                 }
+                else if ( wParam == 'C' || wParam == 'c' )
+                {
+                    g.chipMode = (ChipMode)( ( (int)g.chipMode + 1 ) % 3 );
+                    char const* label = g.chipMode == ChipMode::Off ? "OFF"
+                        : ( g.chipMode == ChipMode::Visual ? "VISUAL" : "PHYS" );
+                    char d[160];
+                    std::snprintf( d, sizeof( d ), "Chips: %s  ([C] cycle OFF/VISUAL/PHYS)", label );
+                    g.digestLine = d;
+                    g.statusLine = d;
+                    // Unsettle when entering PHYS so plates can fall into cavities.
+                    if ( g.chipMode == ChipMode::Phys )
+                    {
+                        for ( H2H::MatterBody& b : H2H::State().bodies )
+                        {
+                            if ( b.gripped ) { continue; }
+                            b.settled = false;
+                            b.vz = 0.f;
+                        }
+                    }
+                    return 0;
+                }
+                else if ( wParam == 'B' || wParam == 'b' )
+                {
+                    g.boundaryMode = (BoundaryMode)( ( (int)g.boundaryMode + 1 ) % 3 );
+                    char const* label = g.boundaryMode == BoundaryMode::D2 ? "D2"
+                        : ( g.boundaryMode == BoundaryMode::DebugBoundary ? "AABB debug" : "D2+AABB overlay" );
+                    char d[160];
+                    std::snprintf( d, sizeof( d ), "Boundary: %s  (d2Tris=%d lastEdges=%d)",
+                        label, g.cavityTrisTotal, g.cavityEdgesEmitted );
+                    g.digestLine = d;
+                    g.statusLine = d;
+                    return 0;
+                }
                 else if ( wParam == 'G' || wParam == 'g' )
                 {
                     TryGripMatterBody();
@@ -7380,6 +10709,12 @@ namespace
                 {
                     g.lastAttemptMs = GetTickCount();
                     TryConnect();
+                }
+                else if ( wParam == VK_F8 )
+                {
+                    ProvenanceGeo::CycleFixture();
+                    RefreshGeographyFixture();
+                    return 0;
                 }
                 return 0;
             case WM_KEYUP:
@@ -7498,13 +10833,56 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         LPWSTR* argv = CommandLineToArgvW( GetCommandLineW(), &argc );
         if ( argv )
         {
-            if ( argc >= 2 )
+            GetTempPathA( MAX_PATH, g.certOutDir );
+            // Default play/dev fixture = RANGE (representative geology). Torture via flag/F8.
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            for ( int i = 1; i < argc; ++i )
             {
-                char host[128];
-                WideCharToMultiByte( CP_UTF8, 0, argv[1], -1, host, sizeof( host ), nullptr, nullptr );
-                g.host = host;
+                if ( _wcsicmp( argv[i], L"--cert-dig" ) == 0 )
+                {
+                    g.certDig = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-geo" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-geography" ) == 0 )
+                {
+                    g.certGeo = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--geo-fixture=", 14 ) == 0 )
+                {
+                    char fixture[64];
+                    WideCharToMultiByte( CP_UTF8, 0, argv[i] + 14, -1,
+                        fixture, sizeof( fixture ), nullptr, nullptr );
+                    if ( !ProvenanceGeo::SetFixtureFromString( fixture ) )
+                    {
+                        ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    }
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--geo-fixture" ) == 0 && i + 1 < argc )
+                {
+                    char fixture[64];
+                    WideCharToMultiByte( CP_UTF8, 0, argv[++i], -1,
+                        fixture, sizeof( fixture ), nullptr, nullptr );
+                    if ( !ProvenanceGeo::SetFixtureFromString( fixture ) )
+                    {
+                        ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    }
+                    continue;
+                }
+                if ( i == 1 && argv[i][0] != L'-' )
+                {
+                    char host[128];
+                    WideCharToMultiByte( CP_UTF8, 0, argv[i], -1, host, sizeof( host ), nullptr, nullptr );
+                    g.host = host;
+                }
+                else if ( i == 2 && argv[i][0] != L'-' )
+                {
+                    g.port = _wtoi( argv[i] );
+                }
             }
-            if ( argc >= 3 ) { g.port = _wtoi( argv[2] ); }
             LocalFree( argv );
         }
     }

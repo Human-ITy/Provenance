@@ -39,10 +39,41 @@ Branches:
 Owned mesh = projection of authoritative matter face for targeting — never authority.  
 End state: engine sphere subtract → settle → **D2 reconstructs boundary**.
 
+### HF / occupancy / D2 ownership (locked 2026-08-08)
+
+HF and D2 must share the **same canonical virgin surface law** (`SampleGroundZBase` / geography grade). They do **not** coexist or continuously cross-materialize.
+
+| Phase | Owner |
+|-------|--------|
+| Virgin terrain | **HF only** |
+| Committed dig/pick | Seed **bounded** local occupancy from that virgin law → apply matter edit → build cavity/D2 **once** → **atomically** hand ownership to the completed patch |
+| Aim / look / walk | May refine HF contact. Must **not** trigger D2/QEF rebuilds or volumetric expansion |
+
+Reject: continuous HF↔occupancy rematerialization; peel HF before cavity commit; aim-driven lattice growth; HF aperture from latest tip focus alone.
+
+**EditedRegion (remove-only monotonic):** connected excavation keeps a persistent openings union. Later strikes may enlarge/merge; they must never roof a prior mouth because focus moved. Tip/action disk is transient. Stencil aperture = openings union.
+
 ### Interim → P3b
-`Main.cpp` carves local/synthetic fill at affect radius, rebuilds interior D2 shell, retires DigScar when cavity owns the hole, demands `voxel_column` reconcile. Heightfield remains far/targeting underlay and opens pads via `SurfaceOpenedByOccupancy`.
+`Main.cpp` carves local/synthetic fill at affect radius (seeded from virgin surface law), rebuilds cavity once, hands HF pads to the completed patch, demands `voxel_column` reconcile. DigScar = flash only.
 
 ## Launch
 
-`RunProvenanceClient.bat` → prefers `Build\x64_Release_new` if present (when primary exe is locked).  
+`RunProvenanceClient.bat` → prefers newest `Build\x64_Release*\ProvenanceClient.exe` (LNK1104 spill folders included).  
 Engine: `voxel_bridge.py` on `127.0.0.1:8765`.
+
+## Geo fixtures (D2 harness)
+
+Default play/dev: **PROVENANCE GEOLOGY RANGE** (representative local flank transect near spawn `(128,128)`, walk `+X` through flat→slope→mound→drain→hill→bedrock→local cliff).  
+Alternate: **D2 TORTURE TERRAIN** (prior extreme FBM) via `--geo-fixture=torture` or **F8**.  
+Code: `ProvenanceGeography.h` (`Range*` / `Torture*`); virgin load remains HF-only (D2 dormant until dig).
+
+**Geography interaction cert (Horizon-to-Hand transect):** see `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — run with `--cert-geo` / `--cert-geography` (forces RANGE).
+
+## Material / appearance docs for review (keeper)
+
+Review-only refs (not geo-cert / dig-cert authority; do **not** overwrite when merging):
+
+- https://github.com/Human-ITy/plaintxt-decoded/tree/claude/terrain-material-distribution-v1/fablescript/docs
+- https://github.com/Human-ITy/plaintxt-decoded/tree/claude/terrain-material-set-appearance/fablescript/docs
+
+**Heightfield object palette = keeper** — its own presentation/worldbuilding lane. Separate from `--cert-geo` / occupancy / D2. Do not replace it when folding material-distribution or appearance docs from other branches. Exact palette filenames TBD when those trees are locally fetchable (see handoff §Related docs).
