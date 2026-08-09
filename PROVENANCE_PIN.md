@@ -85,7 +85,7 @@ SupportBelow from queryZ through occupancy (not D2 tris, not column crest). Miss
 
 ```
 P3d DETACHED MATTER SUPPORT FLOOR
-SHA: PENDING_PIN
+SHA: b1fec59aa637ad69884f92e36419946d0c256f07
 ```
 
 PHYS chips: gravity → `SupportBelow(x,y,currentZ)` → contact + normal → settle/slide/sleep. Modes `OFF` / `VISUAL` / `PHYS`. Lifecycle `ACTIVE → SETTLED → AGGREGATED (scaffold) / EXPLICIT BODY`. OFF is zero chip cost; mode switch must not remesh D2/HF. **STOP before placement/re-fill.**

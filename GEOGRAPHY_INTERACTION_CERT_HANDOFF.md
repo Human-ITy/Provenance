@@ -283,7 +283,7 @@ Live `--cert-geo` after support floor: `exit_code=0`, `PASS_rows=87 FAIL_rows=0 
 
 ```
 P3d DETACHED MATTER SUPPORT FLOOR
-SHA: PENDING_PIN
+SHA: b1fec59aa637ad69884f92e36419946d0c256f07
 ```
 
 **Scalability (standing):** material vocabulary is cheap; instantiated representation is what costs. Chips: ACTIVE→SETTLED sleep; AGGREGATED fines scaffold OK; EXPLICIT BODY only for meaningful plates — not permanent active rigid bodies for every fragment.
