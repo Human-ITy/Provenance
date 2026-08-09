@@ -71,7 +71,7 @@ Code: `ProvenanceGeography.h` (`Range*` / `Torture*`); virgin load remains HF-on
 
 ```
 P3b D2 CORE FLOOR
-SHA: <pending — filled after commit 1>
+SHA: 523e796eba8c3f1f67559caadb27e76957645f4e
 ```
 
 Freeze D2 contracts/topology (Unknown halo refuse, +max seam ownership, partitioned halo stats, order independence). Support/chips frozen — may consume occupancy/ER/D2 boundary later; must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect. Prior `haloMiss=0` PASS revoked — see handoff §5.

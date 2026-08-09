@@ -242,7 +242,7 @@ Checkpoint after green pre-commit D2 closure. Pin records exact SHA in a follow-
 
 ```
 P3b D2 CORE FLOOR
-SHA: <pending — filled after commit 1>
+SHA: 523e796eba8c3f1f67559caadb27e76957645f4e
 ```
 
 Meaning: freeze D2 **contracts and topology**; bugfixes ok later; support/chips may consume occupancy / EditedRegion / D2 boundary but must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect.
