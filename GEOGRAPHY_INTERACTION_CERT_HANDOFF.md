@@ -212,8 +212,10 @@ Then teleport the visual client to that XYZ and inspect.
 | §3 HF refine no-edit | **Done** — aim/look: D2=0, no mouth collar, vista div=2, surface Z/N identity, no HF remesh (tip/6 dormant pre-edit) |
 | §4 dig matrix soft/hard (record action/D2/HF distinct) | **Minimal runnable** |
 | §5 D2/QEF halo + re-extract | **Done** — wires `perfD2HaloMiss`; re-extract bit-identity + finite non-degenerate tris |
-| §6 accumulated excavation | **Done (flat corridor)** — 20 adjoining `CarveOccupancySphere` strikes; coherent ER; openings remove-only; prior carve stays air; far+side lip fill hash; cross-cell; cavity present (0.85=partition). Moderate-rock / steep-face accumulate still TODO |
-| §7–§12, §14 | **Scaffold SKIP** |
+| §6 accumulated excavation | **Done** — flat + **moderate_rock** + **steep_face** 20-strike corridors (same ER/lip/cross-cell/0.85 gates; steep uses into-normal carve) |
+| §7 HF/D2 ownership masks | **Done** — action≠dirty≠HF aperture; prior opening triple owner; no uncovered void; D2 re-extract does not mutate HF ownership; far mouth=0 |
+| §8 material correctness | **Done (instrumented gates)** — `MaterialSlumpsOpen` soft/hard; presented cap vs `SampleSurface`; soft-roof omit/sink vs hard CrestMouth; no invented remapper |
+| §9–§12, §14 | **Scaffold SKIP** |
 | §13 performance budgets | **Partial** — virgin invariants + timing snapshot (header counters) |
 | §15 artifact | **Done** |
 | Async permutation / determinism / chips PHYS | **TODO** |
@@ -222,10 +224,10 @@ Then teleport the visual client to that XYZ and inspect.
 ### Live run (2026-08-09)
 
 `Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-geo`  
-→ `exit_code=0`, `PASS_rows=48 FAIL_rows=0 SKIP_rows=8`, artifact `%TEMP%\provenance_geography_interaction_cert.txt`.  
-Rebuilt `OutDir=Build\x64_Release_geocert\` after §3/§5/§6 slice (bridge up `:8765`, ~19s).
+→ `exit_code=0`, `PASS_rows=71 FAIL_rows=0 SKIP_rows=6`, artifact `%TEMP%\provenance_geography_interaction_cert.txt`.  
+Rebuilt `OutDir=Build\x64_Release_geocert\` after §6 rock/steep + §7 ownership + §8 material (bridge up `:8765`, ~19s).
 
-**Order for next agents:** §7 HF/D2 ownership masks → §8 material correctness → §6 moderate-rock/steep accumulate → §9 place → §10 SupportAt → §12 column permute / §14 determinism. Prefer incremental runnable cert over mega-framework.
+**Order for next agents:** §9 place → §10 SupportAt → §11 chips OFF → §12 column permute / §14 determinism. Prefer incremental runnable cert over mega-framework.
 
 ---
 

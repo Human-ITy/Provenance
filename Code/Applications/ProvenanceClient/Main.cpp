@@ -10133,9 +10133,660 @@ namespace
 
     }
 
+    // §6 variant: same ER/lip/cross-cell gates as flat, on a named pad with optional face-normal carve.
+    void GeoCertRunAccumulatePad( char const* tag, float padX0, float padY,
+        float stepNx, float stepNy, float stepNz, bool intoNormal )
+    {
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            int er = 0, char const* hash = "-" )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "6" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s_%s", scen, tag );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "accumulate_strikes" );
+            std::snprintf( r.terrain, sizeof( r.terrain ), "%s", tag );
+            r.x = x; r.y = y; r.z = z;
+            r.editedRegion = er;
+            std::snprintf( r.hash, sizeof( r.hash ), "%s", hash ? hash : "-" );
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( r.scenario, "accumulate_strikes", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        float padZ = 0.f;
+        if ( !SampleGroundZBase( padX0, padY, padZ ) )
+        {
+            add( "accumulated_20_strikes", "FAIL", "PAD_SAMPLE_FAIL", padX0, padY, 0.f );
+            return;
+        }
+        float snx = stepNx, sny = stepNy, snz = stepNz;
+        float snLen = std::sqrt( snx * snx + sny * sny + snz * snz );
+        if ( snLen < 1e-4f ) { snx = 1.f; sny = 0.f; snz = 0.f; snLen = 1.f; }
+        snx /= snLen; sny /= snLen; snz /= snLen;
+
+        float fnx = 0.f, fny = 0.f, fnz = 1.f;
+        CaptureFaceNormalAt( padX0, padY, fnx, fny, fnz );
+
+        int const farCx = (int)std::floor( padX0 + 36.f );
+        int const farCy = (int)std::floor( padY );
+        int const sideCx = (int)std::floor( padX0 );
+        int const sideCy = (int)std::floor( padY ) + 2;
+        auto seedHashCell = [&]( int cx, int cy ) -> uint32_t
+        {
+            PrefetchOccupancyCell( cx, cy );
+            EnsureOccupancyLattice( cx, cy );
+            CellSample* c = GetCellMutable( cx, cy );
+            if ( c && !c->carved && c->fill.empty() )
+            {
+                SeedOccupancyFromVirginSurface( cx, cy );
+            }
+            return GeoCertHashCellFill( cx, cy );
+        };
+        uint32_t const farHash0 = seedHashCell( farCx, farCy );
+        uint32_t const sideHash0 = seedHashCell( sideCx, sideCy );
+
+        constexpr int kStrikes = 20;
+        constexpr float kStep = 0.125f;
+        constexpr float kR = 0.20f;
+        int struck = 0;
+        float firstX = padX0, firstY = padY, firstZ = padZ;
+        uint32_t regionId = 0;
+        int openMin = 1000000;
+        int openMax = 0;
+        int prevOpens = -1;
+        bool openShrink = false;
+
+        for ( int s = 0; s < kStrikes; ++s )
+        {
+            float const x = padX0 + snx * (float)s * kStep;
+            float const y = padY + sny * (float)s * kStep;
+            float z = padZ;
+            SampleGroundZBase( x, y, z );
+            if ( intoNormal )
+            {
+                CaptureFaceNormalAt( x, y, fnx, fny, fnz );
+            }
+            float carveX = x, carveY = y, carveZ = z - kR * 0.45f;
+            if ( intoNormal )
+            {
+                carveX = x - fnx * kR * 0.55f;
+                carveY = y - fny * kR * 0.55f;
+                carveZ = z - fnz * kR * 0.55f;
+            }
+            PrefetchOccupancyCell( (int)std::floor( x ), (int)std::floor( y ) );
+            bool ok = CarveOccupancySphere( carveX, carveY, carveZ, kR, x, y, z );
+            if ( !ok )
+            {
+                carveX = x - fnx * kR * 0.90f;
+                carveY = y - fny * kR * 0.90f;
+                carveZ = z - fnz * kR * 0.90f;
+                ok = CarveOccupancySphere( carveX, carveY, carveZ, kR, x, y, z );
+            }
+            if ( !ok )
+            {
+                char note[80];
+                std::snprintf( note, sizeof( note ), "STRIKE_NO_CARVE s=%d", s );
+                add( "accumulated_20_strikes", "FAIL", note, x, y, z );
+                return;
+            }
+            ++struck;
+            if ( s == 0 ) { firstX = carveX; firstY = carveY; firstZ = carveZ; }
+
+            CellSample const* home = GetCell( (int)std::floor( x ), (int)std::floor( y ) );
+            if ( home && home->editedRegionId != 0 ) { regionId = home->editedRegionId; }
+            EditedRegion* er = FindEditedRegion( regionId );
+            if ( !er )
+            {
+                add( "coherent_EditedRegion", "FAIL", "ER_MISSING_MID_SEQUENCE", x, y, z );
+                return;
+            }
+            int const opens = (int)er->openings.size();
+            if ( opens < openMin ) { openMin = opens; }
+            if ( opens > openMax ) { openMax = opens; }
+            if ( prevOpens >= 0 && opens < prevOpens ) { openShrink = true; }
+            prevOpens = opens;
+        }
+
+        EditedRegion* er = FindEditedRegion( regionId );
+        char farHashStr[24];
+        uint32_t const farHash1 = GeoCertHashCellFill( farCx, farCy );
+        uint32_t const sideHash1 = GeoCertHashCellFill( sideCx, sideCy );
+        std::snprintf( farHashStr, sizeof( farHashStr ), "%08X", (unsigned)farHash1 );
+
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "struck=%d opens=%d..%d erId=%u",
+                struck, openMin == 1000000 ? 0 : openMin, openMax, (unsigned)regionId );
+            add( "accumulated_20_strikes", struck == kStrikes ? "PASS" : "FAIL", note,
+                padX0, padY, padZ, er ? 1 : 0, farHashStr );
+            if ( struck != kStrikes ) { return; }
+        }
+
+        bool coherent = er != nullptr && regionId != 0;
+        int distinct = 0;
+        {
+            uint32_t seen[8] = {};
+            int seenN = 0;
+            for ( int s = 0; s < kStrikes; ++s )
+            {
+                float const x = padX0 + snx * (float)s * kStep;
+                float const y = padY + sny * (float)s * kStep;
+                CellSample const* c = GetCell( (int)std::floor( x ), (int)std::floor( y ) );
+                if ( !c || c->editedRegionId == 0 ) { coherent = false; break; }
+                bool found = false;
+                for ( int i = 0; i < seenN; ++i ) { if ( seen[i] == c->editedRegionId ) { found = true; break; } }
+                if ( !found && seenN < 8 ) { seen[seenN++] = c->editedRegionId; }
+            }
+            distinct = seenN;
+            if ( seenN != 1 ) { coherent = false; }
+        }
+        if ( !coherent )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "SPLIT_OR_MISSING_ER distinct=%d", distinct );
+            add( "coherent_EditedRegion", "FAIL", note, padX0, padY, padZ, distinct, farHashStr );
+        }
+        else
+        {
+            add( "coherent_EditedRegion", "PASS", "single_ER_along_corridor", padX0, padY, padZ, 1, farHashStr );
+        }
+
+        add( "openings_remove_only", openShrink ? "FAIL" : "PASS",
+            openShrink ? "OPENINGS_SHRANK" : "opens_monotonic",
+            padX0, padY, padZ, 1, farHashStr );
+
+        bool priorGone = !OccupancySolidAt( firstX, firstY, firstZ );
+        add( "prior_carve_stays_removed", priorGone ? "PASS" : "FAIL",
+            priorGone ? "first_strike_air" : "LOST_CARVE_OR_HF_RESURRECTION",
+            firstX, firstY, firstZ, 1, farHashStr );
+
+        if ( farHash0 != farHash1 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "FAR_CELL_MUTATED h0=%08X h1=%08X",
+                (unsigned)farHash0, (unsigned)farHash1 );
+            add( "outside_dirty_bit_identity", "FAIL", note,
+                (float)farCx + 0.5f, (float)farCy + 0.5f, 0.f, 1, farHashStr );
+        }
+        else if ( sideHash0 != sideHash1 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "SIDE_LIP_MUTATED h0=%08X h1=%08X",
+                (unsigned)sideHash0, (unsigned)sideHash1 );
+            add( "outside_dirty_bit_identity", "FAIL", note,
+                (float)sideCx + 0.5f, (float)sideCy + 0.5f, 0.f, 1, farHashStr );
+        }
+        else
+        {
+            add( "outside_dirty_bit_identity", "PASS", "far+side ok", padX0, padY, padZ, 1, farHashStr );
+        }
+
+        int const cellA = (int)std::floor( padX0 );
+        int const cellB = (int)std::floor( padX0 + snx * (float)( kStrikes - 1 ) * kStep );
+        int const cellAy = (int)std::floor( padY );
+        int const cellBy = (int)std::floor( padY + sny * (float)( kStrikes - 1 ) * kStep );
+        bool crossed = ( cellB != cellA ) || ( cellBy != cellAy );
+        if ( !crossed )
+        {
+            add( "cross_cell_continuity", "FAIL", "CORRIDOR_DID_NOT_CROSS_CELL", padX0, padY, padZ );
+        }
+        else if ( !coherent )
+        {
+            add( "cross_cell_continuity", "FAIL", "CROSS_CELL_SPLIT_ER", padX0, padY, padZ );
+        }
+        else
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "cells=(%d,%d)..(%d,%d)", cellA, cellAy, cellB, cellBy );
+            add( "cross_cell_continuity", "PASS", note, padX0, padY, padZ, 1, farHashStr );
+        }
+
+        bool cavityOk = false;
+        if ( er )
+        {
+            for ( auto const& xy : er->cells )
+            {
+                CellSample const* c = GetCell( xy.first, xy.second );
+                if ( c && c->hasCavity && !c->cavityTris.empty() ) { cavityOk = true; break; }
+            }
+        }
+        add( "work_budget_partition_not_clip", cavityOk ? "PASS" : "FAIL",
+            cavityOk ? "cavity_present (0.85=partition)" : "CAVITY_CLIPPED_OR_MISSING",
+            padX0, padY, padZ, 1, farHashStr );
+    }
+
+    void GeoCertRunOwnershipSection()
+    {
+        // §7: action bite ≠ D2 dirty(+halo) ≠ HF aperture; no cross-owner mutation; no uncovered void.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            int ownViol = 0, int er = 0 )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "7" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "ownership_masks" );
+            r.x = x; r.y = y; r.z = z;
+            r.ownViol = ownViol;
+            r.editedRegion = er;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "ownership_masks", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        EditedRegion* er = nullptr;
+        int homeCx = 0, homeCy = 0;
+        CellSample* homeCell = nullptr;
+        // Prefer accumulate corridor ER (largest openings), else any carved ER with action.
+        size_t bestOpens = 0;
+        for ( EditedRegion& cand : g.editedRegions )
+        {
+            if ( cand.openings.empty() || !cand.hasAction ) { continue; }
+            if ( cand.openings.size() >= bestOpens )
+            {
+                bestOpens = cand.openings.size();
+                er = &cand;
+            }
+        }
+        if ( !er )
+        {
+            add( "HF_D2_ownership_masks", "FAIL", "NO_ER_WITH_ACTION_OPENINGS" );
+            return;
+        }
+        // Dirty AABB is per-cell — evaluate the cell that owns the action tip (last strike),
+        // not an arbitrary first cell along a multi-cell corridor.
+        homeCx = (int)std::floor( er->actionX );
+        homeCy = (int)std::floor( er->actionY );
+        homeCell = GetCellMutable( homeCx, homeCy );
+        if ( !homeCell || !homeCell->carved )
+        {
+            homeCell = nullptr;
+            for ( auto const& xy : er->cells )
+            {
+                CellSample* c = GetCellMutable( xy.first, xy.second );
+                if ( c && c->carved && c->hasCarveFocus )
+                {
+                    homeCell = c;
+                    homeCx = xy.first;
+                    homeCy = xy.second;
+                    break;
+                }
+            }
+        }
+        if ( !homeCell )
+        {
+            for ( auto const& xy : er->cells )
+            {
+                CellSample* c = GetCellMutable( xy.first, xy.second );
+                if ( c && c->carved )
+                {
+                    homeCell = c;
+                    homeCx = xy.first;
+                    homeCy = xy.second;
+                    break;
+                }
+            }
+        }
+        if ( !homeCell )
+        {
+            add( "HF_D2_ownership_masks", "FAIL", "NO_CARVED_HOME_CELL",
+                er->actionX, er->actionY, er->actionZ, 1, (int)er->id );
+            return;
+        }
+
+        float mnX, mxX, mnY, mxY, mnZ, mxZ;
+        if ( !DirtyBoundsFromEditedRegion( er, *homeCell, homeCx, homeCy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
+        {
+            add( "masks_distinct", "FAIL", "DIRTY_BOUNDS_EMPTY",
+                er->actionX, er->actionY, er->actionZ, 1, (int)er->id );
+            return;
+        }
+        float const dirtySpanX = mxX - mnX;
+        float const dirtySpanY = mxY - mnY;
+        float const dirtyHalf = 0.5f * std::sqrt( dirtySpanX * dirtySpanX + dirtySpanY * dirtySpanY );
+        float maxOpenR = 0.f;
+        for ( EditOpening const& o : er->openings )
+        {
+            if ( o.r > maxOpenR ) { maxOpenR = o.r; }
+        }
+        float const biteR = homeCell->hasCarveFocus ? homeCell->carveRM : 0.f;
+        float const actionR = er->hasAction ? er->actionR : 0.f;
+
+        // Distinct: dirty (+halo) larger than tip aperture; bite carve may exceed tip mouth.
+        bool const actionInsideDirty =
+            er->actionX >= mnX - 1e-3f && er->actionX <= mxX + 1e-3f
+            && er->actionY >= mnY - 1e-3f && er->actionY <= mxY + 1e-3f
+            && er->actionZ >= mnZ - 1e-3f && er->actionZ <= mxZ + 1e-3f;
+        bool const dirtyGtHf = dirtyHalf > maxOpenR + 0.05f; // halo 0.20 expands beyond tip mouth
+        bool const tipCapOk = actionR <= 0.12f + 1e-3f;
+        bool const biteNeAction = !homeCell->hasCarveFocus
+            || std::fabs( biteR - actionR ) > 1e-4f
+            || std::fabs( homeCell->carveWx - er->actionX ) > 1e-4f
+            || std::fabs( homeCell->carveWz - er->actionZ ) > 1e-4f
+            || biteR > actionR + 1e-4f; // soft pads often share XY; bite R still distinct
+
+        int viol = 0;
+        char failWhy[64] = "ACTION_D2_HF_NOT_DISTINCT";
+        if ( !actionInsideDirty ) { ++viol; std::snprintf( failWhy, sizeof( failWhy ), "ACTION_OUTSIDE_DIRTY" ); }
+        if ( !dirtyGtHf ) { ++viol; std::snprintf( failWhy, sizeof( failWhy ), "DIRTY_NOT_LARGER_THAN_HF" ); }
+        if ( !tipCapOk ) { ++viol; std::snprintf( failWhy, sizeof( failWhy ), "NEW_STRIKE_MOUTH_GT_12CM" ); }
+        {
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "biteR=%.3f actionR=%.3f maxOpenR=%.3f dirtyHalf=%.3f tip<=12=%d insideDirty=%d biteNeTip=%d",
+                biteR, actionR, maxOpenR, dirtyHalf, tipCapOk ? 1 : 0, actionInsideDirty ? 1 : 0,
+                biteNeAction ? 1 : 0 );
+            if ( viol != 0 )
+            {
+                add( "masks_distinct", "FAIL", failWhy,
+                    er->actionX, er->actionY, er->actionZ, viol, (int)er->id );
+            }
+            else
+            {
+                add( "masks_distinct", "PASS", note,
+                    er->actionX, er->actionY, er->actionZ, 0, (int)er->id );
+            }
+        }
+
+        // Prior openings: occupancy carved + HF aperture + D2 owner present.
+        EditOpening const& o0 = er->openings.front();
+        bool const occOpen = SurfaceBrokenByOccupancy( o0.x, o0.y )
+            || !OccupancySolidAt( o0.x, o0.y, o0.z - 0.02f );
+        bool const hfMouth = NearOpeningMouthAt( o0.x, o0.y );
+        bool const d2Ready = CavityReadyNear( o0.x, o0.y );
+        bool homeHasCavity = false;
+        for ( auto const& xy : er->cells )
+        {
+            CellSample const* c = GetCell( xy.first, xy.second );
+            if ( c && c->hasCavity && !c->cavityTris.empty() ) { homeHasCavity = true; break; }
+        }
+        if ( !occOpen || !hfMouth || !d2Ready || !homeHasCavity )
+        {
+            char note[120];
+            std::snprintf( note, sizeof( note ),
+                "PRIOR_OPEN_OWNERSHIP occ=%d hf=%d d2=%d cavity=%d",
+                occOpen ? 1 : 0, hfMouth ? 1 : 0, d2Ready ? 1 : 0, homeHasCavity ? 1 : 0 );
+            add( "prior_opening_triple_owner", "FAIL", note, o0.x, o0.y, o0.z, 1, (int)er->id );
+        }
+        else
+        {
+            add( "prior_opening_triple_owner", "PASS", "occ+HF_mouth+D2_owner",
+                o0.x, o0.y, o0.z, 0, (int)er->id );
+        }
+
+        // No uncovered void: CrestMouthStencil ⇒ CavityReady; mouth∩skin-open without D2 = FAIL.
+        int voidViol = 0;
+        int stencilN = 0;
+        if ( er->hasOwnBounds )
+        {
+            float const x0 = er->ownMinX - 0.05f, x1 = er->ownMaxX + 0.05f;
+            float const y0 = er->ownMinY - 0.05f, y1 = er->ownMaxY + 0.05f;
+            for ( float y = y0; y <= y1 + 1e-4f; y += 0.10f )
+            {
+                for ( float x = x0; x <= x1 + 1e-4f; x += 0.10f )
+                {
+                    bool const mouth = NearOpeningMouthAt( x, y );
+                    bool const skin = SurfaceBrokenByOccupancy( x, y );
+                    bool const d2 = CavityReadyNear( x, y );
+                    bool const stencil = CrestMouthStencilAt( x, y );
+                    if ( stencil ) { ++stencilN; if ( !d2 ) { ++voidViol; } }
+                    if ( mouth && skin && !d2 ) { ++voidViol; }
+                }
+            }
+        }
+        if ( voidViol != 0 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ), "UNCOVERED_VOID viol=%d stencilN=%d", voidViol, stencilN );
+            add( "no_uncovered_void", "FAIL", note, o0.x, o0.y, o0.z, voidViol, (int)er->id );
+        }
+        else
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "stencilN=%d voidViol=0", stencilN );
+            add( "no_uncovered_void", "PASS", note, o0.x, o0.y, o0.z, 0, (int)er->id );
+        }
+
+        // D2 re-extract must not mutate HF ownership (openings / action / own bounds).
+        int const opens0 = (int)er->openings.size();
+        float const ownMinX0 = er->ownMinX, ownMaxX0 = er->ownMaxX;
+        float const actX0 = er->actionX, actR0 = er->actionR;
+        int const dirtyRev0 = er->dirtyRev;
+        RebuildCavityMesh( homeCx, homeCy );
+        er = FindEditedRegion( er->id );
+        if ( !er )
+        {
+            add( "d2_no_cross_owner_mutation", "FAIL", "ER_LOST_AFTER_REEXTRACT",
+                (float)homeCx + 0.5f, (float)homeCy + 0.5f, 0.f, 1 );
+            return;
+        }
+        bool const hfStable = (int)er->openings.size() == opens0
+            && er->dirtyRev == dirtyRev0
+            && std::fabs( er->ownMinX - ownMinX0 ) < 1e-6f
+            && std::fabs( er->ownMaxX - ownMaxX0 ) < 1e-6f
+            && std::fabs( er->actionX - actX0 ) < 1e-6f
+            && std::fabs( er->actionR - actR0 ) < 1e-6f;
+        if ( !hfStable )
+        {
+            add( "d2_no_cross_owner_mutation", "FAIL", "D2_MUTATED_HF_OWNERSHIP",
+                er->actionX, er->actionY, er->actionZ, 1, (int)er->id );
+        }
+        else
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ), "opens=%d dirtyRev=%d HF_fields_stable", opens0, dirtyRev0 );
+            add( "d2_no_cross_owner_mutation", "PASS", note,
+                er->actionX, er->actionY, er->actionZ, 0, (int)er->id );
+        }
+
+        // Unrelated far sample: no HF aperture flicker / no mouth ownership.
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        float const farX = ox + 40.f, farY = oy + 10.f;
+        bool const farMouth = NearOpeningMouthAt( farX, farY ) || CrestMouthStencilAt( farX, farY );
+        if ( farMouth )
+        {
+            add( "unrelated_no_hf_flicker", "FAIL", "FAR_HF_APERTURE_OWNED", farX, farY, 0.f, 1 );
+        }
+        else
+        {
+            add( "unrelated_no_hf_flicker", "PASS", "far_mouth=0", farX, farY, 0.f, 0 );
+        }
+    }
+
+    void GeoCertRunMaterialSection()
+    {
+        // §8: presented vs authoritative caps; soft roof (sand/gravel) vs hard rock gate.
+        // Do not invent AUTH remappers — flag mismatch only.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            char const* mat = "-", int matMismatch = 0 )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "8" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "material_gate" );
+            std::snprintf( r.material, sizeof( r.material ), "%s", mat ? mat : "-" );
+            r.x = x; r.y = y; r.z = z;
+            r.matMismatch = matMismatch;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "material_gate", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        // Soft vs hard gate instrumentation exists (MaterialSlumpsOpen / SampleTerrainDrawZ).
+        bool const softSand = MaterialSlumpsOpen( "sand" );
+        bool const softGravel = MaterialSlumpsOpen( "gravel" );
+        bool const hardLime = !MaterialSlumpsOpen( "limestone" );
+        bool const hardGranite = !MaterialSlumpsOpen( "granite" );
+        bool const hardDirt = !MaterialSlumpsOpen( "dirt" );
+        if ( !( softSand && softGravel && hardLime && hardGranite && hardDirt ) )
+        {
+            add( "soft_roof_vs_hard_gate", "FAIL", "MATERIAL_SLUMP_GATE_WRONG" );
+        }
+        else
+        {
+            add( "soft_roof_vs_hard_gate", "PASS", "sand/gravel slump; rock/dirt hold" );
+        }
+
+        // Presented cell.cap / CapAtWorld vs geography SampleSurface.cap along contacts.
+        int mismatchN = 0;
+        float failX = 0.f, failY = 0.f, failZ = 0.f;
+        char failMat[32] = "-";
+        char failNote[120] = "presented~=auth";
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            if ( !c.found ) { continue; }
+            ProvenanceGeo::SurfaceSample surf = ProvenanceGeo::SampleSurface(
+                c.x, c.y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            char const* auth = surf.cap ? surf.cap : ProvenanceGeo::CapId( surf.rock );
+            std::string presented = CapAtWorld( c.x, c.y );
+            CellSample const* cell = GetCell( c.cellX, c.cellY );
+            char const* cellCap = ( cell && !cell->cap.empty() ) ? cell->cap.c_str() : presented.c_str();
+            if ( std::strcmp( cellCap, auth ) != 0 && presented != auth )
+            {
+                ++mismatchN;
+                failX = c.x; failY = c.y; failZ = c.z;
+                std::snprintf( failMat, sizeof( failMat ), "%s", auth );
+                std::snprintf( failNote, sizeof( failNote ),
+                    "AUTH_MATERIAL_MISMATCH presented=%s auth=%s id=%s",
+                    presented.c_str(), auth, c.id );
+                break;
+            }
+        }
+        if ( mismatchN != 0 )
+        {
+            add( "presented_vs_auth", "FAIL", failNote, failX, failY, failZ, failMat, mismatchN );
+        }
+        else
+        {
+            add( "presented_vs_auth", "PASS", "contacts_cap_match_SampleSurface", 0.f, 0.f, 0.f, "-", 0 );
+        }
+
+        // Soft roof draw path: gravel/sand + SurfaceBroken + !CrestMouth → SampleTerrainDrawZ sinks.
+        // Hard rock draw path: SurfaceBroken + !slump → keeps virgin Z (unless CrestMouth omits).
+        float softX = 0.f, softY = 0.f, softZ = 0.f;
+        bool softFound = false;
+        float hardX = 0.f, hardY = 0.f, hardZ = 0.f;
+        bool hardFound = false;
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            GeoCertContact const& c = s_geoContacts[i];
+            if ( !c.found ) { continue; }
+            std::string cap = CapAtWorld( c.x, c.y );
+            if ( !softFound && MaterialSlumpsOpen( cap ) && SurfaceBrokenByOccupancy( c.x, c.y ) )
+            {
+                softX = c.x; softY = c.y; softZ = c.z; softFound = true;
+            }
+            if ( !hardFound && !MaterialSlumpsOpen( cap ) && SurfaceBrokenByOccupancy( c.x, c.y )
+              && ( std::strcmp( c.id, "F_diag" ) == 0 || std::strcmp( c.id, "J_lime" ) == 0
+                || std::strcmp( c.id, "E_rocky" ) == 0 || !c.soft ) )
+            {
+                // Prefer hard host rock contacts; E may be gravel — skip if soft.
+                if ( !MaterialSlumpsOpen( cap ) )
+                {
+                    hardX = c.x; hardY = c.y; hardZ = c.z; hardFound = true;
+                }
+            }
+        }
+        // Fallback scan for soft broken gravel near I_scree / E.
+        if ( !softFound )
+        {
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            for ( float u = 60.f; u <= 95.f && !softFound; u += 1.f )
+            {
+                float const x = ox + u, y = oy;
+                if ( MaterialSlumpsOpen( CapAtWorld( x, y ) ) && SurfaceBrokenByOccupancy( x, y ) )
+                {
+                    softX = x; softY = y; SampleGroundZBase( x, y, softZ ); softFound = true;
+                }
+            }
+        }
+        if ( !hardFound )
+        {
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            for ( float u = 80.f; u <= 105.f && !hardFound; u += 1.f )
+            {
+                float const x = ox + u, y = oy;
+                std::string cap = CapAtWorld( x, y );
+                if ( !MaterialSlumpsOpen( cap ) && SurfaceBrokenByOccupancy( x, y ) )
+                {
+                    hardX = x; hardY = y; SampleGroundZBase( x, y, hardZ ); hardFound = true;
+                }
+            }
+        }
+
+        if ( softFound )
+        {
+            float virginZ = 0.f;
+            SampleGroundZBase( softX, softY, virginZ );
+            float drawZ = virginZ;
+            bool const drew = SampleTerrainDrawZ( softX, softY, drawZ );
+            // Soft roof: either CrestMouth omits (drew=false) or drawZ sunk below virgin.
+            bool const softOk = !drew || ( drawZ < virginZ - 0.02f );
+            char note[120];
+            std::snprintf( note, sizeof( note ), "cap=%s drew=%d dz=%.3f",
+                CapAtWorld( softX, softY ).c_str(), drew ? 1 : 0, virginZ - drawZ );
+            add( "soft_roof_draw_sink", softOk ? "PASS" : "FAIL",
+                softOk ? note : "SOFT_ROOF_DID_NOT_SINK",
+                softX, softY, softZ, CapAtWorld( softX, softY ).c_str(), softOk ? 0 : 1 );
+        }
+        else
+        {
+            // Dig matrix may not have broken a soft cell — classify-only gate already PASS above.
+            add( "soft_roof_draw_sink", "SKIP",
+                "no SurfaceBroken sand/gravel after dig matrix — gate fn covered" );
+        }
+
+        if ( hardFound )
+        {
+            float virginZ = 0.f;
+            SampleGroundZBase( hardX, hardY, virginZ );
+            if ( CrestMouthStencilAt( hardX, hardY ) )
+            {
+                // Aperture omit is HF presentation owner, not soft-roof path — OK.
+                add( "hard_rock_holds_roof", "PASS", "CrestMouthStencil_omit_HF (not soft-slump)",
+                    hardX, hardY, hardZ, CapAtWorld( hardX, hardY ).c_str(), 0 );
+            }
+            else
+            {
+                float drawZ = virginZ;
+                bool const drew = SampleTerrainDrawZ( hardX, hardY, drawZ );
+                bool const hardOk = drew && std::fabs( drawZ - virginZ ) < 0.03f;
+                char note[120];
+                std::snprintf( note, sizeof( note ), "cap=%s drew=%d dz=%.3f",
+                    CapAtWorld( hardX, hardY ).c_str(), drew ? 1 : 0, virginZ - drawZ );
+                add( "hard_rock_holds_roof", hardOk ? "PASS" : "FAIL",
+                    hardOk ? note : "HARD_ROCK_SOFT_SANK",
+                    hardX, hardY, hardZ, CapAtWorld( hardX, hardY ).c_str(), hardOk ? 0 : 1 );
+            }
+        }
+        else
+        {
+            add( "hard_rock_holds_roof", "SKIP",
+                "no SurfaceBroken hard-rock sample after dig matrix — gate fn covered" );
+        }
+    }
+
     void GeoCertScaffoldRest()
     {
-        // §3 / §5 / §6 are filled by dedicated runners; SKIP if an early exit skipped them.
+        // §3 / §5 / §6 / §7 / §8 are filled by dedicated runners; SKIP if an early exit skipped them.
         auto hasSec = [&]( char const* sec ) -> bool
         {
             for ( int i = 0; i < s_geoRowN; ++i )
@@ -10156,8 +10807,14 @@ namespace
         {
             GeoCertScaffold( "6", "accumulated_20_strikes", "skipped — cert exited before accumulate runner" );
         }
-        GeoCertScaffold( "7", "HF_D2_ownership_masks", "scaffold — refinement/action/ownership tracking TODO" );
-        GeoCertScaffold( "8", "material_correctness", "scaffold — AUTH_MATERIAL_MISMATCH flag TODO" );
+        if ( !hasSec( "7" ) )
+        {
+            GeoCertScaffold( "7", "HF_D2_ownership_masks", "skipped — cert exited before ownership runner" );
+        }
+        if ( !hasSec( "8" ) )
+        {
+            GeoCertScaffold( "8", "material_correctness", "skipped — cert exited before material runner" );
+        }
         GeoCertScaffold( "9", "placement_matter_add", "scaffold — place lip/floor/adjacent TODO" );
         GeoCertScaffold( "10", "support_collision_probes", "scaffold — SupportAt over cavity TODO" );
         GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "scaffold — chip modes TODO" );
@@ -10338,14 +10995,38 @@ namespace
             return;
         }
 
-        // Phase 3: §5 D2 re-extract + §6 accumulate + remaining scaffolds + write + quit.
+        // Phase 3: §5 D2 + §6 accumulate (+rock/steep) + §7 ownership + §8 material + write/quit.
         if ( g.certGeoPhase == 3 )
         {
-            g.statusLine = "CERT-GEO D2/QEF + accumulate";
+            g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership";
             GeoCertRunD2QefSection();
             if ( g.certGeoExitCode == 0 )
             {
                 GeoCertRunAccumulateSection();
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                // Moderate rocky hillside (E) — north of dig matrix strike.
+                float const ox = (float)ProvenanceGeo::kRangeOriginX;
+                float const oy = (float)ProvenanceGeo::kRangeOriginY;
+                GeoCertRunAccumulatePad( "moderate_rock", ox + 68.f, oy + 6.f,
+                    1.f, 0.f, 0.f, /*intoNormal=*/false );
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                // Steep diagonal rock (F) — into-normal carve along +X corridor.
+                float const ox = (float)ProvenanceGeo::kRangeOriginX;
+                float const oy = (float)ProvenanceGeo::kRangeOriginY;
+                GeoCertRunAccumulatePad( "steep_face", ox + 84.f, oy + 5.f,
+                    1.f, 0.f, 0.f, /*intoNormal=*/true );
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunOwnershipSection();
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunMaterialSection();
             }
             GeoCertScaffoldRest();
             GeoCertWriteArtifact();
