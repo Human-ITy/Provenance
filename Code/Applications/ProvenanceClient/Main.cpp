@@ -1,4 +1,4 @@
-// Provenance Phase 4 client - Esoterica fork app.
+﻿// Provenance Phase 4 client - Esoterica fork app.
 // Phase 2 far heightfield + Phase 3 6ft walk + Phase 4 interaction digests (handful scoop).
 // Handheld law: ~245 mL ~= 1 cup ~= 32/255 of a 12.5cm storage voxel (~8 scoops per voxel).
 // Protocol matches Unreal FFablescriptClient (newline JSON, version 1).
@@ -649,7 +649,19 @@ namespace
     bool SampleAimSurfaceZ( float x, float y, float& outZ );
     bool SampleTerrainDrawZ( float x, float y, float& outZ ); // HF; collapse where air under skin
     bool SampleOccupancyZ( float x, float y, float& outZ );
-    bool SupportAt( float x, float y, float& outZ ); // carved cell → occupancy; else HF(+scars)
+    // Occupancy / HF physical support — not D2 tris. Prefer SupportBelow (Z-aware).
+    struct SupportHit
+    {
+        bool hit = false;
+        bool deferred = false; // missing authority — refuse; never invent a floor
+        DualContourQef::Vec3 position{};
+        DualContourQef::Vec3 normal{ 0.f, 0.f, 1.f };
+        char material[32] = {};
+        int cellX = 0, cellY = 0;
+        int regionRev = -1; // EditedRegion::dirtyRev when known
+    };
+    SupportHit SupportBelow( float x, float y, float queryZ );
+    bool SupportAt( float x, float y, float& outZ ); // thin XY adapter → SupportBelow
     bool OccupancySolidAt( float x, float y, float z );
     void PrefetchOccupancyCell( int cx, int cy );
     void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v );
@@ -2753,25 +2765,179 @@ namespace
         return true;
     }
 
+    // Physical support from occupancy (same fill D2 consumes) or virgin HF.
+    // Searches downward from queryZ — roof/topmost solid above the body is ignored.
+    // Never queries D2 triangles. Never invents a floor when authority is missing.
+    SupportHit SupportBelow( float x, float y, float queryZ )
+    {
+        SupportHit hit{};
+        hit.cellX = (int)std::floor( x );
+        hit.cellY = (int)std::floor( y );
+        CellSample const* cell = GetCell( hit.cellX, hit.cellY );
+        bool const carvedReady = cell && cell->carved && !cell->fill.empty()
+            && cell->fillW > 0 && cell->fillK > 0;
+        bool const erOwns = EditedRegionOwnsAt( x, y );
+
+        // Missing authority → refuse/defer. Never stand on virgin HF over excavated claim.
+        if ( ( erOwns || ( cell && cell->carved ) ) && !carvedReady )
+        {
+            hit.deferred = true;
+            hit.hit = false;
+            return hit;
+        }
+
+        auto writeMat = [&]( SupportHit& h )
+        {
+            std::string const cap = ( cell && !cell->cap.empty() ) ? cell->cap : CapAtWorld( x, y );
+            std::snprintf( h.material, sizeof( h.material ), "%s",
+                cap.empty() ? "?" : cap.c_str() );
+        };
+        auto writeRev = [&]( SupportHit& h )
+        {
+            if ( !cell || cell->editedRegionId == 0 ) { return; }
+            if ( EditedRegion* er = FindEditedRegion( cell->editedRegionId ) )
+            {
+                h.regionRev = er->dirtyRev;
+            }
+        };
+
+        if ( carvedReady )
+        {
+            float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+            float const step = edge * 0.25f;
+            float const crest = GradeToZ( cell->grade );
+            float const columnBottom = crest - (float)cell->fillK * edge - edge;
+            writeRev( hit );
+
+            auto refineAirToSolid = [&]( float zAir, float zSolid ) -> float
+            {
+                float t0 = zAir, t1 = zSolid;
+                for ( int i = 0; i < 12; ++i )
+                {
+                    float const tm = 0.5f * ( t0 + t1 );
+                    if ( OccupancySolidAt( x, y, tm ) ) { t1 = tm; }
+                    else { t0 = tm; }
+                }
+                return t1;
+            };
+            auto estimateNormal = [&]( float zHit, SupportHit& h )
+            {
+                float const eps = edge;
+                auto neighZ = [&]( float nx, float ny, float& oz ) -> bool
+                {
+                    if ( OccupancySolidAt( nx, ny, queryZ ) )
+                    {
+                        // Neighbor column solid at query — walk up to its top face.
+                        float zTop = queryZ;
+                        for ( float z = queryZ; z <= crest + edge * 2.f; z += step )
+                        {
+                            if ( !OccupancySolidAt( nx, ny, z ) ) { break; }
+                            zTop = z;
+                        }
+                        oz = refineAirToSolid( zTop + step, zTop );
+                        return true;
+                    }
+                    float prev = queryZ;
+                    for ( float z = queryZ - step; z >= columnBottom; z -= step )
+                    {
+                        if ( OccupancySolidAt( nx, ny, z ) )
+                        {
+                            oz = refineAirToSolid( prev, z );
+                            return true;
+                        }
+                        prev = z;
+                    }
+                    return false;
+                };
+                float zxp = zHit, zxm = zHit, zyp = zHit, zym = zHit;
+                int ok = 0;
+                ok += neighZ( x + eps, y, zxp ) ? 1 : 0;
+                ok += neighZ( x - eps, y, zxm ) ? 1 : 0;
+                ok += neighZ( x, y + eps, zyp ) ? 1 : 0;
+                ok += neighZ( x, y - eps, zym ) ? 1 : 0;
+                if ( ok >= 2 )
+                {
+                    float nx = ( zxm - zxp ) / ( 2.f * eps );
+                    float ny = ( zym - zyp ) / ( 2.f * eps );
+                    float nz = 1.f;
+                    float const len = std::sqrt( nx * nx + ny * ny + nz * nz );
+                    if ( len > 1e-6f )
+                    {
+                        h.normal = DualContourQef::Vec3{ nx / len, ny / len, nz / len };
+                        return;
+                    }
+                }
+                h.normal = DualContourQef::Vec3{ 0.f, 0.f, 1.f };
+            };
+
+            // Penetrating solid: settle to top face of this solid stack (still occupancy, not HF).
+            if ( OccupancySolidAt( x, y, queryZ ) )
+            {
+                float zTop = queryZ;
+                for ( float z = queryZ; z <= crest + edge * 2.f; z += step )
+                {
+                    if ( !OccupancySolidAt( x, y, z ) ) { break; }
+                    zTop = z;
+                }
+                float const supportZ = refineAirToSolid( zTop + step, zTop );
+                hit.hit = true;
+                hit.position = DualContourQef::Vec3{ x, y, supportZ };
+                estimateNormal( supportZ, hit );
+                writeMat( hit );
+                return hit;
+            }
+
+            // Air: march downward from queryZ — ignore roof / topmost solid above.
+            float prevZ = queryZ;
+            for ( float z = queryZ - step; z >= columnBottom; z -= step )
+            {
+                if ( OccupancySolidAt( x, y, z ) )
+                {
+                    float const supportZ = refineAirToSolid( prevZ, z );
+                    hit.hit = true;
+                    hit.position = DualContourQef::Vec3{ x, y, supportZ };
+                    estimateNormal( supportZ, hit );
+                    writeMat( hit );
+                    return hit;
+                }
+                prevZ = z;
+            }
+            // Authority present but no solid below query — miss (do not invent HF).
+            hit.hit = false;
+            return hit;
+        }
+
+        // Virgin continuum: HF (+ presentation scars). Unchanged vs prior SupportAt outside ER.
+        float z = 0.f;
+        if ( !SampleGroundZBase( x, y, z ) )
+        {
+            hit.hit = false;
+            return hit;
+        }
+        z += ScarDeltaZ( x, y );
+        hit.hit = true;
+        hit.position = DualContourQef::Vec3{ x, y, z };
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        CaptureFaceNormalAt( x, y, nx, ny, nz );
+        hit.normal = DualContourQef::Vec3{ nx, ny, nz };
+        writeMat( hit );
+        (void)queryZ; // virgin support is the continuum surface (settle/push uses this Z)
+        return hit;
+    }
+
     bool SupportAt( float x, float y, float& outZ )
     {
-        // Authoritative support for walk / chips:
-        //   carved occupancy cell → top solid from fill (same truth D2 reconstructs)
-        //   else virgin HF (+ presentation scars outside carve)
-        int const cx = (int)std::floor( x );
-        int const cy = (int)std::floor( y );
-        CellSample const* cell = GetCell( cx, cy );
-        if ( cell && cell->carved && !cell->fill.empty() && cell->fillW > 0 && cell->fillK > 0 )
+        // XY-only adapter. Prefer SupportBelow with the body's current Z.
+        float qz = g.camZ;
+        if ( !std::isfinite( qz ) ) { qz = g.feetZ + 1.6f; }
+        if ( std::fabs( x - g.feetX ) > 3.f || std::fabs( y - g.feetY ) > 3.f )
         {
-            if ( SampleOccupancyZ( x, y, outZ ) ) { return true; }
+            float crest = 0.f;
+            if ( SampleGroundZBase( x, y, crest ) ) { qz = crest + 2.5f; }
         }
-        if ( EditedRegionOwnsAt( x, y ) )
-        {
-            // Aperture owned but lattice not ready — never lift on DigDep cups as "the hole."
-            return SampleGroundZBase( x, y, outZ );
-        }
-        if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
-        outZ += ScarDeltaZ( x, y );
+        SupportHit const h = SupportBelow( x, y, qz );
+        if ( !h.hit ) { return false; }
+        outZ = h.position.z;
         return true;
     }
 
@@ -6358,8 +6524,17 @@ namespace
 
     bool SampleGroundZ( float x, float y, float& outZ )
     {
-        // Feet / walk / body settle — occupancy support inside carved cells.
-        return SupportAt( x, y, outZ );
+        // Feet / walk / body settle — Z-aware occupancy support (not column crest / D2 tris).
+        float qz = (std::max)( g.camZ, g.feetZ + 1.2f );
+        if ( std::fabs( x - g.feetX ) > 3.f || std::fabs( y - g.feetY ) > 3.f )
+        {
+            float crest = 0.f;
+            if ( SampleGroundZBase( x, y, crest ) ) { qz = crest + 2.5f; }
+        }
+        SupportHit const h = SupportBelow( x, y, qz );
+        if ( !h.hit ) { return false; }
+        outZ = h.position.z;
+        return true;
     }
 
     bool SampleCupSurfaceZ( float x, float y, bool placeCup, float& outZ )
@@ -9012,7 +9187,7 @@ namespace
     };
 
     static constexpr int kGeoCertContactCap = 16;
-    static constexpr int kGeoCertRowCap = 128;
+    static constexpr int kGeoCertRowCap = 160;
     static GeoCertContact s_geoContacts[kGeoCertContactCap];
     static int s_geoContactN = 0;
     static GeoCertRow s_geoRows[kGeoCertRowCap];
@@ -11245,10 +11420,407 @@ namespace
         }
     }
 
+    void GeoCertRunSupportSection()
+    {
+        // §10 P3c: SupportBelow from queryZ through occupancy (not D2 tris, not column crest).
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            float nx = 0.f, float ny = 0.f, float nz = 1.f, int supportFail = 0 )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "10" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "support_probe" );
+            r.x = x; r.y = y; r.z = z;
+            r.nx = nx; r.ny = ny; r.nz = nz;
+            r.supportFail = supportFail;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "support_probe", note, x, y, z, nx, ny, nz );
+            }
+        };
+
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        // Fresh pad south of dig/accumulate corridors.
+        float const padY = oy - 14.f;
+
+        // --- virgin flat / slope: HF support unchanged ---
+        float const flatX = ox + 4.f, flatY = padY;
+        float flatZ = 0.f;
+        if ( !SampleGroundZBase( flatX, flatY, flatZ ) )
+        {
+            add( "virgin_flat_HF_unchanged", "FAIL", "FLAT_SAMPLE_FAIL", flatX, flatY, 0.f, 0, 0, 1, 1 );
+            return;
+        }
+        {
+            float const scar = ScarDeltaZ( flatX, flatY );
+            SupportHit const h = SupportBelow( flatX, flatY, flatZ + 1.5f );
+            if ( !h.hit || std::fabs( h.position.z - ( flatZ + scar ) ) > 0.03f )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ), "FLAT_HF_MISMATCH sup=%.3f want=%.3f",
+                    h.position.z, flatZ + scar );
+                add( "virgin_flat_HF_unchanged", "FAIL", note, flatX, flatY, h.position.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                add( "virgin_flat_HF_unchanged", "PASS", "SupportBelow~HF+scars flat",
+                    flatX, flatY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 0 );
+            }
+        }
+        float slopeX = ox + 18.f, slopeY = padY, slopeZ = 0.f;
+        char const* slopeTerrain = "gentle_slope";
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            if ( std::strcmp( s_geoContacts[i].id, "B_slope" ) == 0 && s_geoContacts[i].found )
+            {
+                slopeX = s_geoContacts[i].x;
+                slopeY = padY;
+                slopeTerrain = s_geoContacts[i].terrain;
+                break;
+            }
+        }
+        SampleGroundZBase( slopeX, slopeY, slopeZ );
+        {
+            float const scar = ScarDeltaZ( slopeX, slopeY );
+            SupportHit const h = SupportBelow( slopeX, slopeY, slopeZ + 1.5f );
+            if ( !h.hit || std::fabs( h.position.z - ( slopeZ + scar ) ) > 0.03f )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ), "SLOPE_HF_MISMATCH sup=%.3f want=%.3f",
+                    h.position.z, slopeZ + scar );
+                add( "virgin_slope_HF_unchanged", "FAIL", note, slopeX, slopeY, h.position.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[96];
+                std::snprintf( note, sizeof( note ), "SupportBelow~HF (%s)", slopeTerrain );
+                add( "virgin_slope_HF_unchanged", "PASS", note,
+                    slopeX, slopeY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 0 );
+            }
+        }
+
+        // --- open cavity floor: probe falls to remaining matter, not virgin HF ---
+        float const cavX = ox + 10.f, cavY = padY;
+        float cavGrade = 0.f;
+        SampleGroundZBase( cavX, cavY, cavGrade );
+        float const openR = 0.22f;
+        float const carveZ = cavGrade - openR * 0.35f;
+        PrefetchOccupancyCell( (int)std::floor( cavX ), (int)std::floor( cavY ) );
+        bool const carvedOpen = CarveOccupancySphere( cavX, cavY, carveZ, openR, cavX, cavY, cavGrade );
+        if ( !carvedOpen )
+        {
+            add( "cavity_floor_not_virgin_HF", "FAIL", "CAVITY_CARVE_FAIL", cavX, cavY, cavGrade, 0, 0, 1, 1 );
+            add( "cavity_wall_no_false_floor", "SKIP", "no cavity for wall probe" );
+            add( "tunnel_floor_below_queryZ", "SKIP", "no cavity setup" );
+            add( "lip_either_side", "SKIP", "no cavity setup" );
+            add( "cross_cell_support_continuous", "SKIP", "no cavity setup" );
+            add( "neighbor_strike_support_identity", "SKIP", "no cavity setup" );
+            add( "missing_authority_refuse", "SKIP", "no cavity setup" );
+            add( "support_query_zero_remesh", "SKIP", "no cavity setup" );
+            return;
+        }
+        {
+            SupportHit const h = SupportBelow( cavX, cavY, cavGrade + 0.5f );
+            float occTop = 0.f;
+            bool const haveOcc = SampleOccupancyZ( cavX, cavY, occTop );
+            bool const sunk = haveOcc && ( cavGrade - occTop ) > 0.04f;
+            bool const matchesOcc = h.hit && haveOcc && std::fabs( h.position.z - occTop ) <= 0.04f;
+            bool const offVirgin = h.hit && std::fabs( h.position.z - cavGrade ) > 0.03f;
+            if ( !sunk )
+            {
+                add( "cavity_floor_not_virgin_HF", "SKIP",
+                    "cavity floor not sunk enough vs virgin grade", cavX, cavY, h.position.z );
+            }
+            else if ( !( h.hit && matchesOcc && offVirgin ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "SUPPORT_OVER_VOID grade=%.3f occ=%.3f sup=%.3f hit=%d",
+                    cavGrade, occTop, h.position.z, h.hit ? 1 : 0 );
+                add( "cavity_floor_not_virgin_HF", "FAIL", note,
+                    cavX, cavY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "sup=%.3f occ=%.3f grade=%.3f (occupancy floor)", h.position.z, occTop, cavGrade );
+                add( "cavity_floor_not_virgin_HF", "PASS", note,
+                    cavX, cavY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 0 );
+            }
+        }
+
+        // --- cavity wall / steep face: mid-air query must fall to floor (no false ledge at queryZ) ---
+        {
+            float const qz = carveZ; // mid cavity air
+            SupportHit const h = SupportBelow( cavX, cavY, qz );
+            bool const fell = h.hit && ( qz - h.position.z ) > 0.04f;
+            bool const notAtQuery = h.hit && std::fabs( h.position.z - qz ) > 0.03f;
+            bool const notVirgin = h.hit && std::fabs( h.position.z - cavGrade ) > 0.03f;
+            if ( !( h.hit && fell && notAtQuery && notVirgin ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "FALSE_FLOOR qz=%.3f sup=%.3f grade=%.3f hit=%d",
+                    qz, h.position.z, cavGrade, h.hit ? 1 : 0 );
+                add( "cavity_wall_no_false_floor", "FAIL", note,
+                    cavX, cavY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "fell qz=%.3f->sup=%.3f (no mid-air ledge)", qz, h.position.z );
+                add( "cavity_wall_no_false_floor", "PASS", note,
+                    cavX, cavY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 0 );
+            }
+        }
+
+        // --- tunnel with roof: floor below queryZ, not roof/topmost ---
+        float const tunX = ox + 14.f, tunY = padY;
+        float tunGrade = 0.f;
+        SampleGroundZBase( tunX, tunY, tunGrade );
+        float const tunR = 0.28f;
+        float const tunCenterZ = tunGrade - 0.48f; // sphere stays under crest → roof remains
+        bool const tunCarved = CarveOccupancySphere( tunX, tunY, tunCenterZ, tunR, tunX, tunY, tunGrade );
+        if ( !tunCarved )
+        {
+            add( "tunnel_floor_below_queryZ", "FAIL", "TUNNEL_CARVE_FAIL", tunX, tunY, tunGrade, 0, 0, 1, 1 );
+        }
+        else
+        {
+            float roofZ = 0.f;
+            bool const haveRoof = SampleOccupancyZ( tunX, tunY, roofZ ); // topmost = roof
+            float const qz = tunCenterZ; // body inside cavity under roof
+            SupportHit const h = SupportBelow( tunX, tunY, qz );
+            bool const roofAbove = haveRoof && roofZ > qz + 0.05f;
+            bool const floorBelow = h.hit && h.position.z < qz - 0.03f;
+            bool const notRoof = h.hit && haveRoof && std::fabs( h.position.z - roofZ ) > 0.05f;
+            if ( !roofAbove )
+            {
+                add( "tunnel_floor_below_queryZ", "SKIP",
+                    "tunnel roof not intact above query (sphere breached crest?)",
+                    tunX, tunY, h.position.z );
+            }
+            else if ( !( floorBelow && notRoof ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "ROOF_TELEPORT roof=%.3f qz=%.3f sup=%.3f hit=%d",
+                    roofZ, qz, h.position.z, h.hit ? 1 : 0 );
+                add( "tunnel_floor_below_queryZ", "FAIL", note,
+                    tunX, tunY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "floor=%.3f below qz=%.3f (roof=%.3f ignored)", h.position.z, qz, roofZ );
+                add( "tunnel_floor_below_queryZ", "PASS", note,
+                    tunX, tunY, h.position.z, h.normal.x, h.normal.y, h.normal.z, 0 );
+            }
+        }
+
+        // --- lip: outside = HF (uncarved cell), inside = cavity floor ---
+        {
+            float const lipInsideX = cavX;
+            // Clear the carved cell + sphere halo; virgin continuum must remain HF support.
+            float const lipOutsideX = cavX + 1.55f;
+            float outGrade = 0.f;
+            SampleGroundZBase( lipOutsideX, cavY, outGrade );
+            CellSample const* outCell = GetCell( (int)std::floor( lipOutsideX ), (int)std::floor( cavY ) );
+            bool const outVirginCell = !( outCell && outCell->carved );
+            SupportHit const hin = SupportBelow( lipInsideX, cavY, cavGrade + 0.4f );
+            SupportHit const hout = SupportBelow( lipOutsideX, cavY, outGrade + 1.5f );
+            float const outScar = ScarDeltaZ( lipOutsideX, cavY );
+            bool const outOk = hout.hit && outVirginCell
+                && std::fabs( hout.position.z - ( outGrade + outScar ) ) <= 0.04f;
+            bool const inOk = hin.hit && hin.position.z < cavGrade - 0.03f;
+            if ( !outVirginCell )
+            {
+                add( "lip_either_side", "SKIP",
+                    "outside probe landed in carved cell — widen pad",
+                    lipOutsideX, cavY, hout.position.z );
+            }
+            else if ( !( outOk && inOk ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "LIP_SIDE in=%.3f out=%.3f gradeIn=%.3f gradeOut=%.3f",
+                    hin.position.z, hout.position.z, cavGrade, outGrade );
+                add( "lip_either_side", "FAIL", note, cavX, cavY, hin.position.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "inside=%.3f outside=%.3f~HF", hin.position.z, hout.position.z );
+                add( "lip_either_side", "PASS", note, cavX, cavY, hin.position.z, 0, 0, 1, 0 );
+            }
+        }
+
+        // --- cross-cell cavity: no support discontinuity at seam ---
+        float const seamX = std::floor( ox + 20.f ) + 0.98f; // near +X cell face
+        float const seamY = padY;
+        float seamGrade = 0.f;
+        SampleGroundZBase( seamX, seamY, seamGrade );
+        float const seamR = 0.30f;
+        float const seamCarveZ = seamGrade - seamR * 0.30f;
+        bool const seamCarved = CarveOccupancySphere( seamX, seamY, seamCarveZ, seamR,
+            seamX, seamY, seamGrade );
+        if ( !seamCarved )
+        {
+            add( "cross_cell_support_continuous", "FAIL", "SEAM_CARVE_FAIL",
+                seamX, seamY, seamGrade, 0, 0, 1, 1 );
+        }
+        else
+        {
+            float const xL = std::floor( seamX ) - 0.02f;
+            float const xR = std::floor( seamX ) + 1.02f;
+            // Keep both probes inside the carve XY footprint.
+            float const xL2 = seamX - 0.12f;
+            float const xR2 = seamX + 0.12f;
+            (void)xL; (void)xR;
+            SupportHit const hL = SupportBelow( xL2, seamY, seamGrade + 0.4f );
+            SupportHit const hR = SupportBelow( xR2, seamY, seamGrade + 0.4f );
+            bool const both = hL.hit && hR.hit;
+            bool const cont = both && std::fabs( hL.position.z - hR.position.z ) <= 0.08f;
+            bool const sunk = both && hL.position.z < seamGrade - 0.03f
+                && hR.position.z < seamGrade - 0.03f;
+            if ( !( cont && sunk ) )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "SEAM_DISCONT L=%.3f R=%.3f grade=%.3f hit=%d/%d",
+                    hL.position.z, hR.position.z, seamGrade, hL.hit ? 1 : 0, hR.hit ? 1 : 0 );
+                add( "cross_cell_support_continuous", "FAIL", note,
+                    seamX, seamY, hL.position.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "L=%.3f R=%.3f d=%.3f", hL.position.z, hR.position.z,
+                    std::fabs( hL.position.z - hR.position.z ) );
+                add( "cross_cell_support_continuous", "PASS", note,
+                    seamX, seamY, 0.5f * ( hL.position.z + hR.position.z ), 0, 0, 1, 0 );
+            }
+        }
+
+        // --- neighboring strike: support outside dirty+halo identical ---
+        float const farX = ox + 40.f, farY = padY;
+        float farGrade = 0.f;
+        SampleGroundZBase( farX, farY, farGrade );
+        SupportHit const far0 = SupportBelow( farX, farY, farGrade + 1.5f );
+        float const nearX = ox + 24.f, nearY = padY;
+        float nearGrade = 0.f;
+        SampleGroundZBase( nearX, nearY, nearGrade );
+        bool const nearCarved = CarveOccupancySphere( nearX, nearY, nearGrade - 0.08f, 0.20f,
+            nearX, nearY, nearGrade );
+        SupportHit const far1 = SupportBelow( farX, farY, farGrade + 1.5f );
+        if ( !nearCarved )
+        {
+            add( "neighbor_strike_support_identity", "FAIL", "NEAR_CARVE_FAIL",
+                nearX, nearY, nearGrade, 0, 0, 1, 1 );
+        }
+        else if ( !far0.hit || !far1.hit
+            || std::fabs( far0.position.z - far1.position.z ) > 1e-4f
+            || std::fabs( far0.normal.x - far1.normal.x ) > 1e-4f
+            || std::fabs( far0.normal.y - far1.normal.y ) > 1e-4f
+            || std::fabs( far0.normal.z - far1.normal.z ) > 1e-4f )
+        {
+            char note[140];
+            std::snprintf( note, sizeof( note ),
+                "FAR_SUPPORT_MUTATED z0=%.4f z1=%.4f", far0.position.z, far1.position.z );
+            add( "neighbor_strike_support_identity", "FAIL", note,
+                farX, farY, far1.position.z, 0, 0, 1, 1 );
+        }
+        else
+        {
+            add( "neighbor_strike_support_identity", "PASS",
+                "far SupportBelow identical after neighbor strike",
+                farX, farY, far1.position.z, far1.normal.x, far1.normal.y, far1.normal.z, 0 );
+        }
+
+        // --- missing authority → refuse/defer, never invent floor ---
+        {
+            int const cx = (int)std::floor( cavX );
+            int const cy = (int)std::floor( cavY );
+            CellSample* c = GetCellMutable( cx, cy );
+            if ( !c || !c->carved || c->fill.empty() )
+            {
+                add( "missing_authority_refuse", "SKIP", "no carved cell to strip for refuse probe",
+                    cavX, cavY, cavGrade );
+            }
+            else
+            {
+                std::vector<uint8_t> savedFill = c->fill;
+                int const sw = c->fillW, sh = c->fillH, sk = c->fillK;
+                c->fill.clear();
+                c->fillW = c->fillH = c->fillK = 0;
+                SupportHit const h = SupportBelow( cavX, cavY, cavGrade + 0.5f );
+                // Restore immediately.
+                c->fill = std::move( savedFill );
+                c->fillW = sw; c->fillH = sh; c->fillK = sk;
+                if ( h.hit || !h.deferred )
+                {
+                    char note[120];
+                    std::snprintf( note, sizeof( note ),
+                        "INVENTED_OR_NONDEFER hit=%d deferred=%d z=%.3f",
+                        h.hit ? 1 : 0, h.deferred ? 1 : 0, h.position.z );
+                    add( "missing_authority_refuse", "FAIL", note,
+                        cavX, cavY, h.position.z, 0, 0, 1, 1 );
+                }
+                else
+                {
+                    add( "missing_authority_refuse", "PASS",
+                        "SupportBelow deferred - no invented HF floor",
+                        cavX, cavY, cavGrade, 0, 0, 1, 0 );
+                }
+            }
+        }
+
+        // --- support query → zero D2 rebuilds, zero HF remeshes ---
+        {
+            int const d0 = g.perfD2Rebuilds;
+            int const h0 = g.perfHfRebuilds;
+            float zScratch = 0.f;
+            SampleGroundZBase( flatX, flatY, zScratch );
+            for ( int i = 0; i < 32; ++i )
+            {
+                float const px = flatX + 0.01f * (float)i;
+                SupportBelow( px, flatY, zScratch + 1.5f );
+                SupportBelow( cavX, cavY, carveZ );
+                SupportBelow( tunX, tunY, tunCenterZ );
+            }
+            int const d1 = g.perfD2Rebuilds;
+            int const h1 = g.perfHfRebuilds;
+            if ( d1 != d0 || h1 != h0 )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "QUERY_REMESH D2 %d→%d HF %d→%d", d0, d1, h0, h1 );
+                add( "support_query_zero_remesh", "FAIL", note, flatX, flatY, zScratch, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[96];
+                std::snprintf( note, sizeof( note ),
+                    "32x SupportBelow D2=%d HF=%d (unchanged)", d1, h1 );
+                add( "support_query_zero_remesh", "PASS", note, flatX, flatY, zScratch, 0, 0, 1, 0 );
+            }
+        }
+    }
+
     void GeoCertScaffoldRest()
     {
-        // §3 / §5 / §6 / §7 / §8 are filled by dedicated runners; SKIP if an early exit skipped them.
-        // §9 place / §10 support / §11 chips frozen — not in this D2 core floor commit.
+        // §3 / §5 / §6 / §7 / §8 / §10 are filled by dedicated runners; SKIP if early exit skipped them.
+        // §9 place / §11 chips remain frozen for this support floor.
         auto hasSec = [&]( char const* sec ) -> bool
         {
             for ( int i = 0; i < s_geoRowN; ++i )
@@ -11277,9 +11849,12 @@ namespace
         {
             GeoCertScaffold( "8", "material_correctness", "skipped — cert exited before material runner" );
         }
-        GeoCertScaffold( "9", "placement_matter_add", "frozen — place lip/floor/adjacent deferred (D2 floor)" );
-        GeoCertScaffold( "10", "support_collision_probes", "frozen — SupportAt over cavity deferred (D2 floor)" );
-        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "frozen — chip modes deferred (D2 floor)" );
+        GeoCertScaffold( "9", "placement_matter_add", "frozen — place lip/floor/adjacent deferred (after P3c)" );
+        if ( !hasSec( "10" ) )
+        {
+            GeoCertScaffold( "10", "support_collision_probes", "skipped — cert exited before support runner" );
+        }
+        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "frozen — chips after P3c OCCUPANCY SUPPORT FLOOR" );
         GeoCertScaffold( "12", "streaming_async_column_permute", "scaffold — needs bridge fan-in torture" );
         GeoCertScaffold( "13", "performance_budgets", "partial — see startup_perf + counters in header" );
         {
@@ -11457,11 +12032,11 @@ namespace
             return;
         }
 
-        // Phase 3: §5 D2 + §6 accumulate (+rock/steep) + §7 ownership + §8 material + write/quit.
-        // §9 place / §10 support / §11 chips frozen — not resumed in this D2 core floor.
+        // Phase 3: §5 D2 + §6 accumulate + §7 ownership + §8 material + §10 support + write/quit.
+        // §9 place / §11 chips remain frozen until after P3c support floor.
         if ( g.certGeoPhase == 3 )
         {
-            g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership";
+            g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership + support";
             GeoCertRunD2QefSection();
             if ( g.certGeoExitCode == 0 )
             {
@@ -11490,6 +12065,10 @@ namespace
             if ( g.certGeoExitCode == 0 )
             {
                 GeoCertRunMaterialSection();
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunSupportSection();
             }
             GeoCertScaffoldRest();
             GeoCertWriteArtifact();
