@@ -199,6 +199,10 @@ namespace
         bool hasPatchBounds = false;
         uint32_t editedRegionId = 0; // persistent excavation region (monotonic openings)
         std::vector<DualContourQef::Tri> cavityTris;
+        // Last D2 extract telemetry (fail-closed halo + seam ownership).
+        int lastD2HaloMissing = 0;
+        int lastD2BoundaryEdges = 0;
+        bool lastD2PublishRefused = false;
     };
 
     // One connected excavation. Openings only expand on remove-only edits.
@@ -280,6 +284,8 @@ namespace
         bool certGeo = false;
         int certGeoPhase = 0;   // 0 wait stream → 1 discover/virgin → 2 walk → 3 dig → 4 write/quit
         DWORD certGeoPhaseMs = 0;
+        // Cert-only: skip EnsureD2HaloLattices so deliberate Unknown-halo refusal can be proven.
+        bool certD2SkipHaloEnsure = false;
         int certGeoDigIdx = 0;
         int certGeoDigArmed = 0; // 0 move/aim, 1 struck settling
         int certGeoExitCode = 0; // 0 PASS, 1 hard FAIL
@@ -2798,7 +2804,9 @@ namespace
             outFill = 0;
             if ( !home || home->fill.empty() || home->fillW <= 0 ) { return false; }
             int const w = home->fillW, h = home->fillH, kz = home->fillK;
-            if ( k < 0 || k >= kz ) { return false; }
+            // Column Z domain boundary (not a missing neighbor): below = solid, above = air.
+            if ( k < 0 ) { outFill = kFillFull; return true; }
+            if ( k >= kz ) { outFill = 0; return true; }
             int cellDx = 0, cellDy = 0;
             int lc = c, lr = r;
             while ( lc < 0 ) { lc += w; --cellDx; }
@@ -2812,16 +2820,53 @@ namespace
                 if ( !cell || cell->fill.empty()
                     || cell->fillW != w || cell->fillH != h || cell->fillK != kz )
                 {
-                    // Missing halo = solid (not air). Air seams invent vertical D2 strips
-                    // along every cell boundary through the full column.
-                    outFill = kFillFull;
-                    return true;
+                    // Unknown halo — never synthesize solid or air. Caller must fetch or refuse.
+                    return false;
                 }
             }
             outFill = FillAt( *cell, lc, lr, k );
             return true;
         }
     };
+
+    // Ensure 3×3 neighbor occupancy lattices exist for D2 halo sampling (virgin seed OK).
+    // Returns false if any neighbor still cannot provide a matching fill field.
+    bool EnsureD2HaloLattices( int cx, int cy )
+    {
+        CellSample const* home = GetCell( cx, cy );
+        if ( !home || home->fill.empty() || home->fillW <= 0 ) { return false; }
+        int const w = home->fillW, h = home->fillH, kz = home->fillK;
+        bool ok = true;
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                int const nx = cx + dx, ny = cy + dy;
+                PrefetchOccupancyCell( nx, ny );
+                EnsureOccupancyLattice( nx, ny );
+                CellSample* n = GetCellMutable( nx, ny );
+                if ( !n ) { ok = false; continue; }
+                if ( n->fill.empty() || n->fillW <= 0 )
+                {
+                    EnsureOccupancyLattice( nx, ny );
+                    n = GetCellMutable( nx, ny );
+                }
+                if ( n && !n->fill.empty() && !n->carved && !n->hasFillZ )
+                {
+                    // Local lattice just created (no wire fill yet): seed from virgin HF.
+                    // Do not overwrite authoritative voxel_column fill (hasFillZ already set).
+                    SeedOccupancyFromVirginSurface( nx, ny );
+                }
+                n = GetCellMutable( nx, ny );
+                if ( !n || n->fill.empty()
+                  || n->fillW != w || n->fillH != h || n->fillK != kz )
+                {
+                    ok = false;
+                }
+            }
+        }
+        return ok;
+    }
 
     bool OpeningTouchesCell( EditOpening const& o, int cx, int cy )
     {
@@ -3375,29 +3420,30 @@ namespace
         // D2 on accumulated EditedRegion occupancy for this cell.
         // ACTION is bite-local; DIRTY = union(openings,carve)+halo; publish ONE coherent cavity.
         // Not tip-patch A/B/C hopping. HF aperture stays separate (NearOpeningMouthAt).
+        // Fail-closed: unknown halo → fetch once → still missing refuses publication.
         auto it = g.cells.find( CellKey( cx, cy ) );
         if ( it == g.cells.end() ) { return; }
-        CellSample& cell = it->second;
-        int const prevTris = (int)cell.cavityTris.size();
-        DestroyCavityList( cell );
-        if ( !cell.carved || cell.fill.empty() || cell.fillW <= 0 || cell.fillK <= 0 ) { return; }
+        int const prevTris = (int)it->second.cavityTris.size();
+        DestroyCavityList( it->second );
+        it->second.lastD2HaloMissing = 0;
+        it->second.lastD2BoundaryEdges = 0;
+        it->second.lastD2PublishRefused = false;
+        if ( !it->second.carved || it->second.fill.empty()
+          || it->second.fillW <= 0 || it->second.fillK <= 0 )
+        {
+            return;
+        }
 
-        EditedRegion const* er = FindEditedRegion( cell.editedRegionId );
-        if ( ( !er || er->openings.empty() ) && !cell.hasCarveFocus ) { return; }
+        uint32_t const erId = it->second.editedRegionId;
+        EditedRegion const* er = FindEditedRegion( erId );
+        if ( ( !er || er->openings.empty() ) && !it->second.hasCarveFocus ) { return; }
 
-        int const w = cell.fillW, h = cell.fillH, kz = cell.fillK;
+        int const w = it->second.fillW, h = it->second.fillH, kz = it->second.fillK;
         float const edge = kVoxelEdgeM;
-        float const crest = GradeToZ( cell.grade );
+        float const crest = GradeToZ( it->second.grade );
 
-        ColumnFillField field;
-        field.homeCx = cx;
-        field.homeCy = cy;
-        field.home = &cell;
-
-        cell.cavityTris.clear();
-        DualContourQef::ExtractStats st{};
         float mnX, mxX, mnY, mxY, mnZ, mxZ;
-        if ( !DirtyBoundsFromEditedRegion( er, cell, cx, cy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
+        if ( !DirtyBoundsFromEditedRegion( er, it->second, cx, cy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
         {
             return;
         }
@@ -3409,49 +3455,95 @@ namespace
         float const spanX = mxX - mnX, spanY = mxY - mnY, spanZ = mxZ - mnZ;
         float const frAll = 0.5f * std::sqrt( spanX * spanX + spanY * spanY + spanZ * spanZ ) + 0.05f;
 
-        auto extractFocus = [&]( float fx, float fy, float fz, float fr )
+        auto runExtractPass = [&]( DualContourQef::ExtractStats& outSt ) -> bool
         {
-            DualContourQef::ExtractStats const local = DualContourQef::ExtractCell(
-                field, w, h, kz, (float)cx, (float)cy, crest, edge, kFillIso,
-                cell.cavityTris, fx, fy, fz, fr );
-            st.tris += local.tris;
-            st.edgesEmitted += local.edgesEmitted;
-            st.qefMassFallback += local.qefMassFallback;
-        };
-
-        ++g.perfD2Rebuilds;
-        DWORD const t0 = GetTickCount();
-        if ( frAll <= kWorkBudgetR + kPartHalo )
-        {
-            extractFocus( 0.5f * ( mnX + mxX ), 0.5f * ( mnY + mxY ), 0.5f * ( mnZ + mxZ ), frAll );
-        }
-        else
-        {
-            // Deterministic tile grid; step < diameter so tiles overlap by ≥ halo.
-            float const tile = kWorkBudgetR;
-            float const partR = 0.5f * tile + kPartHalo;
-            float const step = (std::max)( 0.25f, tile - kPartHalo );
-            for ( float z = mnZ; z <= mxZ + 1e-4f; z += step )
+            it = g.cells.find( CellKey( cx, cy ) );
+            if ( it == g.cells.end() ) { return false; }
+            CellSample* home = &it->second;
+            ColumnFillField field;
+            field.homeCx = cx;
+            field.homeCy = cy;
+            field.home = home;
+            outSt = {};
+            home->cavityTris.clear();
+            auto extractFocus = [&]( float fx, float fy, float fz, float fr )
             {
-                for ( float y = mnY; y <= mxY + 1e-4f; y += step )
+                DualContourQef::ExtractStats const local = DualContourQef::ExtractCell(
+                    field, w, h, kz, (float)cx, (float)cy, crest, edge, kFillIso,
+                    home->cavityTris, fx, fy, fz, fr );
+                DualContourQef::AccumulateStats( outSt, local );
+            };
+            if ( frAll <= kWorkBudgetR + kPartHalo )
+            {
+                extractFocus( 0.5f * ( mnX + mxX ), 0.5f * ( mnY + mxY ), 0.5f * ( mnZ + mxZ ), frAll );
+            }
+            else
+            {
+                float const tile = kWorkBudgetR;
+                float const partR = 0.5f * tile + kPartHalo;
+                float const step = (std::max)( 0.25f, tile - kPartHalo );
+                for ( float z = mnZ; z <= mxZ + 1e-4f; z += step )
                 {
-                    for ( float x = mnX; x <= mxX + 1e-4f; x += step )
+                    for ( float y = mnY; y <= mxY + 1e-4f; y += step )
                     {
-                        float const fx = (std::min)( mxX, (std::max)( mnX, x + 0.5f * step ) );
-                        float const fy = (std::min)( mxY, (std::max)( mnY, y + 0.5f * step ) );
-                        float const fz = (std::min)( mxZ, (std::max)( mnZ, z + 0.5f * step ) );
-                        extractFocus( fx, fy, fz, partR );
+                        for ( float x = mnX; x <= mxX + 1e-4f; x += step )
+                        {
+                            float const fx = (std::min)( mxX, (std::max)( mnX, x + 0.5f * step ) );
+                            float const fy = (std::min)( mxY, (std::max)( mnY, y + 0.5f * step ) );
+                            float const fz = (std::min)( mxZ, (std::max)( mnZ, z + 0.5f * step ) );
+                            extractFocus( fx, fy, fz, partR );
+                        }
                     }
                 }
             }
+            return true;
+        };
+
+        if ( !g.certD2SkipHaloEnsure )
+        {
+            EnsureD2HaloLattices( cx, cy );
+        }
+
+        ++g.perfD2Rebuilds;
+        DWORD const t0 = GetTickCount();
+        DualContourQef::ExtractStats st{};
+        if ( !runExtractPass( st ) ) { return; }
+        if ( st.haloMissing > 0 && !g.certD2SkipHaloEnsure )
+        {
+            // One fetch+retry; still incomplete → refuse publication (fail-closed).
+            EnsureD2HaloLattices( cx, cy );
+            if ( !runExtractPass( st ) ) { return; }
         }
         g.perfD2MsTotal += (float)( GetTickCount() - t0 );
+
+        it = g.cells.find( CellKey( cx, cy ) );
+        if ( it == g.cells.end() ) { return; }
+        CellSample& cell = it->second;
+        cell.lastD2HaloMissing = st.haloMissing;
+        cell.lastD2BoundaryEdges = st.boundaryEdgesEmitted;
+
         g.perfD2Tris += st.tris;
         g.perfD2Edges += st.edgesEmitted;
         g.perfD2QefFallbacks += st.qefMassFallback;
         g.perfD2HaloMiss += st.haloMissing;
-
         g.cavityEdgesEmitted = st.edgesEmitted;
+
+        if ( st.haloMissing > 0 )
+        {
+            // Incomplete halo — refuse publication. Do not ship a cavity built on Unknown samples.
+            cell.lastD2PublishRefused = true;
+            cell.cavityTris.clear();
+            cell.hasCavity = false;
+            DestroyCavityList( cell );
+            if ( cell.debugBoundaryList )
+            {
+                glDeleteLists( cell.debugBoundaryList, 1 );
+                cell.debugBoundaryList = 0;
+            }
+            g.cavityTrisTotal = (std::max)( 0, g.cavityTrisTotal - prevTris );
+            return;
+        }
+
         g.cavityTrisTotal = (std::max)( 0, g.cavityTrisTotal - prevTris ) + (int)cell.cavityTris.size();
 
         if ( !cell.cavityTris.empty() )
@@ -3477,6 +3569,7 @@ namespace
             }
         }
 
+        er = FindEditedRegion( erId );
         RebuildDebugBoundaryList( cx, cy, cell, er );
 
         if ( !cell.hasCavity )
@@ -9808,7 +9901,20 @@ namespace
         int const qef0 = g.perfD2QefFallbacks;
         RebuildCavityMesh( cx, cy );
         cell = GetCellMutable( cx, cy );
-        if ( !cell || !cell->hasCavity || cell->cavityTris.empty() )
+        if ( !cell || cell->lastD2PublishRefused || cell->lastD2HaloMissing > 0 )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "HALO_PUBLISH_REFUSED miss=%d refused=%d (fail-closed)",
+                cell ? cell->lastD2HaloMissing : -1,
+                cell && cell->lastD2PublishRefused ? 1 : 0 );
+            add( "halo_fail_closed_complete", "FAIL", note,
+                (float)cx + 0.5f, (float)cy + 0.5f, 0.f );
+            add( "reextract_keeps_cavity", "FAIL", "REEXTRACT_LOST_CAVITY_OR_HALO",
+                (float)cx + 0.5f, (float)cy + 0.5f, 0.f );
+            return;
+        }
+        if ( !cell->hasCavity || cell->cavityTris.empty() )
         {
             add( "reextract_keeps_cavity", "FAIL", "REEXTRACT_LOST_CAVITY",
                 (float)cx + 0.5f, (float)cy + 0.5f, 0.f );
@@ -9842,16 +9948,39 @@ namespace
             }
         }
 
-        if ( haloDelta != 0 )
+        // Documentary revoke of prior false-confident haloMiss=0 PASS (invented solid neighbors,
+        // dens=0→Solid, tiled haloMissing not aggregated). Does not hard-fail the process.
         {
-            char note[80];
-            std::snprintf( note, sizeof( note ), "INCOMPLETE_HALO haloMissDelta=%d", haloDelta );
-            add( "haloMiss_zero", "FAIL", note, (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
-                (int)cell->cavityTris.size(), qefDelta, haloDelta, hashStr );
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "5" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "haloMiss_zero_PRIOR_REVOKED" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "SKIP" );
+            std::snprintf( r.note, sizeof( r.note ),
+                "revoked false PASS — invent kFillFull + dens0 Solid + incomplete tile agg" );
+            std::snprintf( r.action, sizeof( r.action ), "d2_reextract" );
+            GeoCertAddRow( r );
+        }
+
+        // Re-prove: fail-closed Unknown halo + full ExtractStats aggregation (incl. haloMissing).
+        bool const haloOk = ( cell->lastD2HaloMissing == 0 && haloDelta == 0
+            && !cell->lastD2PublishRefused );
+        if ( !haloOk )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "INCOMPLETE_HALO lastMiss=%d delta=%d refused=%d",
+                cell->lastD2HaloMissing, haloDelta, cell->lastD2PublishRefused ? 1 : 0 );
+            add( "halo_fail_closed_complete", "FAIL", note,
+                (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+                (int)cell->cavityTris.size(), qefDelta, cell->lastD2HaloMissing, hashStr );
         }
         else
         {
-            add( "haloMiss_zero", "PASS", "haloMissDelta=0", (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "haloMiss=0 after Ensure+agg (fail-closed Unknown; no invent solid)" );
+            add( "halo_fail_closed_complete", "PASS", note,
+                (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
                 (int)cell->cavityTris.size(), qefDelta, 0, hashStr );
         }
 
@@ -9875,6 +10004,338 @@ namespace
             finiteOk ? "finite_OK" : "DEGENERATE_OR_NONFINITE_TRI",
             (float)cx + 0.5f, (float)cy + 0.5f, 0.f,
             (int)cell->cavityTris.size(), qefDelta, haloDelta, hashStr );
+
+        // --- Cross-cell primal-edge ownership / watertight seam topology ---
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        int const leftCx = (int)std::floor( ox + 22.f );
+        int const seamCy = (int)std::floor( oy - 10.f );
+        int const rightCx = leftCx + 1;
+        float const seamX = (float)rightCx; // shared +X face of left cell
+        float const seamY = (float)seamCy + 0.5f;
+        float seamZ = 0.f;
+        if ( !SampleGroundZBase( seamX, seamY, seamZ ) )
+        {
+            add( "cross_cell_seam_watertight", "FAIL", "SEAM_PAD_SAMPLE_FAIL", seamX, seamY, 0.f );
+            return;
+        }
+        EnsureD2HaloLattices( leftCx, seamCy );
+        EnsureD2HaloLattices( rightCx, seamCy );
+        constexpr float kSeamR = 0.28f;
+        bool const carvedSeam = CarveOccupancySphere(
+            seamX, seamY, seamZ - kSeamR * 0.45f, kSeamR, seamX, seamY, seamZ );
+        if ( !carvedSeam )
+        {
+            add( "cross_cell_seam_watertight", "FAIL", "SEAM_CARVE_FAIL", seamX, seamY, seamZ );
+            return;
+        }
+        RebuildCavityMesh( leftCx, seamCy );
+        RebuildCavityMesh( rightCx, seamCy );
+        CellSample const* left = GetCell( leftCx, seamCy );
+        CellSample const* right = GetCell( rightCx, seamCy );
+        if ( !left || !right )
+        {
+            add( "cross_cell_seam_watertight", "FAIL", "SEAM_CELLS_MISSING", seamX, seamY, seamZ );
+            return;
+        }
+        if ( left->lastD2HaloMissing > 0 || right->lastD2HaloMissing > 0
+          || left->lastD2PublishRefused || right->lastD2PublishRefused )
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "SEAM_HALO_INCOMPLETE Lmiss=%d Rmiss=%d Lref=%d Rref=%d",
+                left->lastD2HaloMissing, right->lastD2HaloMissing,
+                left->lastD2PublishRefused ? 1 : 0, right->lastD2PublishRefused ? 1 : 0 );
+            add( "cross_cell_seam_watertight", "FAIL", note, seamX, seamY, seamZ,
+                0, 0, left->lastD2HaloMissing + right->lastD2HaloMissing );
+            return;
+        }
+        if ( !left->hasCavity || !right->hasCavity
+          || left->cavityTris.empty() || right->cavityTris.empty() )
+        {
+            add( "cross_cell_seam_watertight", "FAIL", "SEAM_CAVITY_MISSING",
+                seamX, seamY, seamZ,
+                (int)( left->cavityTris.size() + right->cavityTris.size() ) );
+            return;
+        }
+
+        // +max face ownership: left cell emits the shared X seam; right does not emit -min face.
+        // Prove owner emitted at least one +face boundary edge in this rebuild.
+        if ( left->lastD2BoundaryEdges <= 0 )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ),
+                "SEAM_OWNER_NO_BOUNDARY_EDGE Lbound=%d Rbound=%d",
+                left->lastD2BoundaryEdges, right->lastD2BoundaryEdges );
+            add( "cross_cell_seam_owner_once", "FAIL", note, seamX, seamY, seamZ,
+                0, 0, 0 );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "owner=+max Lbound=%d Rbound=%d (-min not emitted)",
+                left->lastD2BoundaryEdges, right->lastD2BoundaryEdges );
+            add( "cross_cell_seam_owner_once", "PASS", note, seamX, seamY, seamZ,
+                left->lastD2BoundaryEdges, 0, 0 );
+        }
+
+        auto countSeamTris = [&]( CellSample const& c ) -> int
+        {
+            constexpr float kEps = 0.10f;
+            int n = 0;
+            for ( DualContourQef::Tri const& t : c.cavityTris )
+            {
+                auto vertOnSeam = [&]( DualContourQef::Vec3 const& v ) -> bool {
+                    return std::fabs( v.x - seamX ) <= kEps;
+                };
+                if ( vertOnSeam( t.a ) || vertOnSeam( t.b ) || vertOnSeam( t.c ) ) { ++n; }
+            }
+            return n;
+        };
+        int const seamTrisL = countSeamTris( *left );
+        int const seamTrisR = countSeamTris( *right );
+        // Watertight presence: owner mesh covers the seam; neighbor may also have near-seam verts
+        // from halo dual cells, but topology must not leave an empty shared face.
+        if ( seamTrisL <= 0 )
+        {
+            char note[80];
+            std::snprintf( note, sizeof( note ),
+                "SEAM_GAP ownerTris=%d neighborTris=%d", seamTrisL, seamTrisR );
+            add( "cross_cell_seam_watertight", "FAIL", note, seamX, seamY, seamZ,
+                seamTrisL + seamTrisR );
+        }
+        else
+        {
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "seamTris L=%d R=%d boundL=%d (watertight +max owner)",
+                seamTrisL, seamTrisR, left->lastD2BoundaryEdges );
+            add( "cross_cell_seam_watertight", "PASS", note, seamX, seamY, seamZ,
+                seamTrisL + seamTrisR, 0, 0 );
+        }
+
+        // --- Order independence: L→R vs R→L must yield identical per-cell canonical hashes ---
+        {
+            left = GetCell( leftCx, seamCy );
+            right = GetCell( rightCx, seamCy );
+            uint32_t const hL0 = left ? GeoCertHashCavityTris( *left ) : 0u;
+            uint32_t const hR0 = right ? GeoCertHashCavityTris( *right ) : 0u;
+            int const tL0 = left ? (int)left->cavityTris.size() : 0;
+            int const tR0 = right ? (int)right->cavityTris.size() : 0;
+            RebuildCavityMesh( rightCx, seamCy );
+            RebuildCavityMesh( leftCx, seamCy );
+            left = GetCell( leftCx, seamCy );
+            right = GetCell( rightCx, seamCy );
+            uint32_t const hL1 = left ? GeoCertHashCavityTris( *left ) : 0u;
+            uint32_t const hR1 = right ? GeoCertHashCavityTris( *right ) : 0u;
+            int const tL1 = left ? (int)left->cavityTris.size() : 0;
+            int const tR1 = right ? (int)right->cavityTris.size() : 0;
+            bool const orderOk = left && right
+                && !left->lastD2PublishRefused && !right->lastD2PublishRefused
+                && hL0 == hL1 && hR0 == hR1 && tL0 == tL1 && tR0 == tR1;
+            if ( !orderOk )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "ORDER_MISMATCH L %08X→%08X R %08X→%08X",
+                    (unsigned)hL0, (unsigned)hL1, (unsigned)hR0, (unsigned)hR1 );
+                add( "order_independence_LR_RL", "FAIL", note, seamX, seamY, seamZ );
+            }
+            else
+            {
+                char note[96];
+                std::snprintf( note, sizeof( note ),
+                    "L→R==R→L L=%08X R=%08X tris=%d/%d",
+                    (unsigned)hL0, (unsigned)hR0, tL0, tR0 );
+                add( "order_independence_LR_RL", "PASS", note, seamX, seamY, seamZ,
+                    tL0 + tR0, 0, 0 );
+            }
+        }
+
+        // --- Deliberate Unknown halo: strip required neighbor → refuse, no publishable cavity ---
+        {
+            EnsureD2HaloLattices( leftCx, seamCy );
+            CellSample* home = GetCellMutable( leftCx, seamCy );
+            CellSample* nbr = GetCellMutable( leftCx + 1, seamCy );
+            if ( !home || !nbr || home->fill.empty() )
+            {
+                add( "UNKNOWN_HALO_REFUSED", "FAIL", "HALO_REFUSE_SETUP_FAIL",
+                    seamX, seamY, seamZ );
+            }
+            else
+            {
+                std::vector<uint8_t> savedFill = nbr->fill;
+                int const sw = nbr->fillW, sh = nbr->fillH, sk = nbr->fillK;
+                bool const sfz = nbr->hasFillZ;
+                nbr->fill.clear();
+                nbr->fillW = nbr->fillH = nbr->fillK = 0;
+                nbr->hasFillZ = false;
+
+                g.certD2SkipHaloEnsure = true;
+                RebuildCavityMesh( leftCx, seamCy );
+                g.certD2SkipHaloEnsure = false;
+
+                home = GetCellMutable( leftCx, seamCy );
+                bool const refused = home
+                    && home->lastD2PublishRefused
+                    && home->lastD2HaloMissing > 0
+                    && !home->hasCavity
+                    && home->cavityTris.empty();
+                int const miss = home ? home->lastD2HaloMissing : -1;
+
+                // Restore neighbor authority and republish.
+                nbr = GetCellMutable( leftCx + 1, seamCy );
+                if ( nbr )
+                {
+                    nbr->fill = savedFill;
+                    nbr->fillW = sw;
+                    nbr->fillH = sh;
+                    nbr->fillK = sk;
+                    nbr->hasFillZ = sfz;
+                }
+                RebuildCavityMesh( leftCx, seamCy );
+                RebuildCavityMesh( rightCx, seamCy );
+
+                if ( !refused )
+                {
+                    char note[96];
+                    std::snprintf( note, sizeof( note ),
+                        "HALO_DID_NOT_REFUSE miss=%d refused=%d cavity=%d",
+                        miss,
+                        home && home->lastD2PublishRefused ? 1 : 0,
+                        home && home->hasCavity ? 1 : 0 );
+                    add( "UNKNOWN_HALO_REFUSED", "FAIL", note, seamX, seamY, seamZ,
+                        0, 0, miss );
+                }
+                else
+                {
+                    char note[96];
+                    std::snprintf( note, sizeof( note ),
+                        "refuse+empty cavity; missing authority recorded miss=%d (no invent solid/air)",
+                        miss );
+                    add( "UNKNOWN_HALO_REFUSED", "PASS", note, seamX, seamY, seamZ,
+                        0, 0, miss );
+                }
+            }
+        }
+
+        // --- Partitioned extract: large corridor + Unknown halo stats aggregate + determinism ---
+        {
+            float const partY = (float)seamCy - 3.5f;
+            float partZ = 0.f;
+            float const partX0 = (float)leftCx + 0.5f;
+            if ( !SampleGroundZBase( partX0, partY, partZ ) )
+            {
+                add( "order_independence_partitioned", "FAIL", "PART_PAD_SAMPLE_FAIL",
+                    partX0, partY, 0.f );
+            }
+            else
+            {
+                // Overlapping strikes → dirty span forces work-budget partition (>0.85+halo).
+                constexpr float kPartR = 0.32f;
+                for ( int i = 0; i < 8; ++i )
+                {
+                    float const x = partX0 + (float)i * 0.40f;
+                    CarveOccupancySphere( x, partY, partZ - kPartR * 0.4f, kPartR,
+                        x, partY, partZ );
+                }
+                int const partCx = (int)std::floor( partX0 + 1.5f );
+                int const partCy = (int)std::floor( partY );
+                EnsureD2HaloLattices( partCx, partCy );
+                RebuildCavityMesh( partCx, partCy );
+                CellSample* pcell = GetCellMutable( partCx, partCy );
+                if ( !pcell || pcell->lastD2PublishRefused || !pcell->hasCavity
+                    || pcell->cavityTris.empty() )
+                {
+                    add( "order_independence_partitioned", "FAIL", "PART_CAVITY_MISSING",
+                        partX0, partY, partZ );
+                }
+                else
+                {
+                    uint32_t const hp0 = GeoCertHashCavityTris( *pcell );
+                    int const tp0 = (int)pcell->cavityTris.size();
+                    RebuildCavityMesh( partCx, partCy );
+                    pcell = GetCellMutable( partCx, partCy );
+                    uint32_t const hp1 = pcell ? GeoCertHashCavityTris( *pcell ) : 0u;
+                    int const tp1 = pcell ? (int)pcell->cavityTris.size() : 0;
+                    bool const partDetOk = pcell && hp0 == hp1 && tp0 == tp1
+                        && !pcell->lastD2PublishRefused && pcell->lastD2HaloMissing == 0;
+                    if ( !partDetOk )
+                    {
+                        char note[96];
+                        std::snprintf( note, sizeof( note ),
+                            "PART_NONDET %08X→%08X tris=%d→%d",
+                            (unsigned)hp0, (unsigned)hp1, tp0, tp1 );
+                        add( "order_independence_partitioned", "FAIL", note,
+                            partX0, partY, partZ );
+                    }
+                    else
+                    {
+                        char note[96];
+                        std::snprintf( note, sizeof( note ),
+                            "partition rebuild hash-stable %08X tris=%d",
+                            (unsigned)hp0, tp0 );
+                        add( "order_independence_partitioned", "PASS", note,
+                            partX0, partY, partZ, tp0, 0, 0 );
+                    }
+
+                    // Partitioned Unknown-halo: strip neighbor → refuse; haloMissing must aggregate.
+                    CellSample* pnbr = GetCellMutable( partCx + 1, partCy );
+                    if ( !pnbr )
+                    {
+                        add( "UNKNOWN_HALO_REFUSED_partitioned", "FAIL", "PART_NBR_MISSING",
+                            partX0, partY, partZ );
+                    }
+                    else
+                    {
+                        std::vector<uint8_t> savedFill = pnbr->fill;
+                        int const sw = pnbr->fillW, sh = pnbr->fillH, sk = pnbr->fillK;
+                        bool const sfz = pnbr->hasFillZ;
+                        pnbr->fill.clear();
+                        pnbr->fillW = pnbr->fillH = pnbr->fillK = 0;
+                        pnbr->hasFillZ = false;
+                        g.certD2SkipHaloEnsure = true;
+                        RebuildCavityMesh( partCx, partCy );
+                        g.certD2SkipHaloEnsure = false;
+                        pcell = GetCellMutable( partCx, partCy );
+                        bool const prefused = pcell
+                            && pcell->lastD2PublishRefused
+                            && pcell->lastD2HaloMissing > 0
+                            && !pcell->hasCavity
+                            && pcell->cavityTris.empty();
+                        int const pmiss = pcell ? pcell->lastD2HaloMissing : -1;
+                        pnbr = GetCellMutable( partCx + 1, partCy );
+                        if ( pnbr )
+                        {
+                            pnbr->fill = savedFill;
+                            pnbr->fillW = sw;
+                            pnbr->fillH = sh;
+                            pnbr->fillK = sk;
+                            pnbr->hasFillZ = sfz;
+                        }
+                        RebuildCavityMesh( partCx, partCy );
+                        if ( !prefused )
+                        {
+                            char note[96];
+                            std::snprintf( note, sizeof( note ),
+                                "PART_HALO_DID_NOT_REFUSE miss=%d", pmiss );
+                            add( "UNKNOWN_HALO_REFUSED_partitioned", "FAIL", note,
+                                partX0, partY, partZ, 0, 0, pmiss );
+                        }
+                        else
+                        {
+                            char note[96];
+                            std::snprintf( note, sizeof( note ),
+                                "partition AccumulateStats haloMiss=%d refused (no invent)",
+                                pmiss );
+                            add( "UNKNOWN_HALO_REFUSED_partitioned", "PASS", note,
+                                partX0, partY, partZ, 0, 0, pmiss );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void GeoCertRunAccumulateSection()
@@ -10787,6 +11248,7 @@ namespace
     void GeoCertScaffoldRest()
     {
         // §3 / §5 / §6 / §7 / §8 are filled by dedicated runners; SKIP if an early exit skipped them.
+        // §9 place / §10 support / §11 chips frozen — not in this D2 core floor commit.
         auto hasSec = [&]( char const* sec ) -> bool
         {
             for ( int i = 0; i < s_geoRowN; ++i )
@@ -10815,9 +11277,9 @@ namespace
         {
             GeoCertScaffold( "8", "material_correctness", "skipped — cert exited before material runner" );
         }
-        GeoCertScaffold( "9", "placement_matter_add", "scaffold — place lip/floor/adjacent TODO" );
-        GeoCertScaffold( "10", "support_collision_probes", "scaffold — SupportAt over cavity TODO" );
-        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "scaffold — chip modes TODO" );
+        GeoCertScaffold( "9", "placement_matter_add", "frozen — place lip/floor/adjacent deferred (D2 floor)" );
+        GeoCertScaffold( "10", "support_collision_probes", "frozen — SupportAt over cavity deferred (D2 floor)" );
+        GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "frozen — chip modes deferred (D2 floor)" );
         GeoCertScaffold( "12", "streaming_async_column_permute", "scaffold — needs bridge fan-in torture" );
         GeoCertScaffold( "13", "performance_budgets", "partial — see startup_perf + counters in header" );
         {
@@ -10996,6 +11458,7 @@ namespace
         }
 
         // Phase 3: §5 D2 + §6 accumulate (+rock/steep) + §7 ownership + §8 material + write/quit.
+        // §9 place / §10 support / §11 chips frozen — not resumed in this D2 core floor.
         if ( g.certGeoPhase == 3 )
         {
             g.statusLine = "CERT-GEO D2/QEF + accumulate + ownership";

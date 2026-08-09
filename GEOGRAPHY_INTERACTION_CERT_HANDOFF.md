@@ -110,7 +110,19 @@ Refine to interaction target **without edit**. Surface/ray/normal unchanged; onl
 Soft → shovel/dig; hard → pick. Per strike record visual XYZ/N, penetration, action volume, material, grams, occupancy, **D2 dirty bounds**, **HF aperture bounds**, EditedRegion — three volumes stay distinct. Penetration in contact frame, not blind −Z.
 
 ### §5 D2/QEF
-Production extract: complete halo, finite Hermites/normals, QEF in clamp, deterministic, no degenerates. `haloMiss = 0`. Byte-identical re-extract. Bite centered / 1-boundary / multi-cell — no cell-sized packaging signature.
+Production extract: complete halo, finite Hermites/normals, QEF in clamp, deterministic, no degenerates. Byte-identical re-extract. Bite centered / 1-boundary / multi-cell — no cell-sized packaging signature.
+
+**Fail-closed Unknown halo (2026-08-09 correction):**
+- Missing neighbor column is **Unknown** — never invent `kFillFull` solid or air in `ColumnFillField::TrySample`.
+- `SampleDensity` returns NaN on TrySample fail (`Solid` must not see dens=0 as at-ISO solid).
+- `RebuildCavityMesh` aggregates **all** tiled `ExtractStats` (incl. `haloMissing`) via `AccumulateStats`; fetch 3×3 lattices then refuse publication if still incomplete.
+- Prior `haloMiss_zero` PASS is **REVOKED** (false confidence). Re-prove with `halo_fail_closed_complete`.
+
+**Cross-cell primal-edge ownership:**
+- Each column emits its **+max** face edges (`c=w-1→w`, `r=h-1→h`) exactly once; **-min** face is never emitted (neighbor owns that seam as its +max).
+- Cert: `cross_cell_seam_owner_once` + `cross_cell_seam_watertight` (not merely single-ER corridor continuity).
+
+**D2 core is not freeze-ready until both halo fail-closed and seam ownership gates PASS.**
 
 ### §6 Accumulated excavation
 ≥20 adjoining strikes on flat, moderate rock, steep face → one coherent EditedRegion when connected. Prior carve stays removed; no HF roof because focus moved. Outside dirty+halo bit-identical. Extend past 1 cell, several cells, and **0.85 work budget** (partition OK, clip FAIL).
@@ -211,23 +223,50 @@ Then teleport the visual client to that XYZ and inspect.
 | §2 virgin + walk | **Done** — cert freezes `FollowStreamCenter` + 8-cell vista recenter during walk so remesh=0 is measurable; play path unchanged |
 | §3 HF refine no-edit | **Done** — aim/look: D2=0, no mouth collar, vista div=2, surface Z/N identity, no HF remesh (tip/6 dormant pre-edit) |
 | §4 dig matrix soft/hard (record action/D2/HF distinct) | **Minimal runnable** |
-| §5 D2/QEF halo + re-extract | **Done** — wires `perfD2HaloMiss`; re-extract bit-identity + finite non-degenerate tris |
+| §5 D2/QEF halo + re-extract | **Done (corrected)** — fail-closed Unknown halo + tile stats agg + cross-cell seam owner/watertight + order independence; prior `haloMiss=0` PASS revoked (SKIP); explicit `UNKNOWN_HALO_REFUSED` |
 | §6 accumulated excavation | **Done** — flat + **moderate_rock** + **steep_face** 20-strike corridors (same ER/lip/cross-cell/0.85 gates; steep uses into-normal carve) |
 | §7 HF/D2 ownership masks | **Done** — action≠dirty≠HF aperture; prior opening triple owner; no uncovered void; D2 re-extract does not mutate HF ownership; far mouth=0 |
 | §8 material correctness | **Done (instrumented gates)** — `MaterialSlumpsOpen` soft/hard; presented cap vs `SampleSurface`; soft-roof omit/sink vs hard CrestMouth; no invented remapper |
-| §9–§12, §14 | **Scaffold SKIP** |
+| §9 Placement | **Frozen / deferred** — not in D2 core floor commit (stash: `Build/_d2_floor_stash/`) |
+| §10 Support/collision | **Frozen / deferred** — not in D2 core floor commit |
+| §11 chips | **Frozen** — do not expand until user asks |
+| §12 / §14 | **Scaffold SKIP** |
 | §13 performance budgets | **Partial** — virgin invariants + timing snapshot (header counters) |
 | §15 artifact | **Done** |
-| Async permutation / determinism / chips PHYS | **TODO** |
+| Async permutation / chips PHYS | **TODO** (after freeze) |
 | Visual teleport helper CLI | **TODO** (manual feet set from FAIL blob) |
 
-### Live run (2026-08-09)
+### P3b D2 CORE FLOOR — pending SHA
+
+Checkpoint after green pre-commit D2 closure. Pin records exact SHA in a follow-up commit.
+
+```
+P3b D2 CORE FLOOR
+SHA: <pending — filled after commit 1>
+```
+
+Meaning: freeze D2 **contracts and topology**; bugfixes ok later; support/chips may consume occupancy / EditedRegion / D2 boundary but must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect.
+
+### Live run (2026-08-09) — D2 halo/seam / refusal / order closure
 
 `Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-geo`  
-→ `exit_code=0`, `PASS_rows=71 FAIL_rows=0 SKIP_rows=6`, artifact `%TEMP%\provenance_geography_interaction_cert.txt`.  
-Rebuilt `OutDir=Build\x64_Release_geocert\` after §6 rock/steep + §7 ownership + §8 material (bridge up `:8765`, ~19s).
+→ `exit_code=0`, `PASS_rows=77 FAIL_rows=0 SKIP_rows=7` (D2-only; §9/§10 frozen out).
 
-**Order for next agents:** §9 place → §10 SupportAt → §11 chips OFF → §12 column permute / §14 determinism. Prefer incremental runnable cert over mega-framework.
+| Row | Required |
+|-----|----------|
+| `haloMiss_zero_PRIOR_REVOKED` | **SKIP** (documentary revoke of false invent-solid PASS) |
+| `UNKNOWN_HALO_REFUSED` | **PASS** — deliberate missing neighbor → refuse, empty cavity, miss recorded |
+| `UNKNOWN_HALO_REFUSED_partitioned` | **PASS** — partitioned `AccumulateStats` propagates halo/refusal |
+| `halo_fail_closed_complete` | **PASS** — haloMiss=0 after Ensure+full tile agg; no invent |
+| `cross_cell_seam_owner_once` | **PASS** — Lbound>0, Rbound=0 on shared +X |
+| `cross_cell_seam_watertight` | **PASS** — owner seam tris present |
+| `order_independence_LR_RL` | **PASS** — L→R and R→L hashes match |
+| `order_independence_partitioned` | **PASS** — partitioned rebuild hash-stable |
+| §6 20-strike corridors | **PASS** — coherent ER; no packaging / HF resurrection / spires |
+
+**Support/chips frozen** for this checkpoint — stashed aside, not resumed here.
+
+**Order for next agents:** only after user asks — resume §9/§10 from stash; never redesign D2 halo/seam ownership without a cert defect.
 
 ---
 

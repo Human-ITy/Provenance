@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace DualContourQef
@@ -50,7 +51,21 @@ namespace DualContourQef
         int zeroHermiteSkip = 0;
         int rejectedLongEdge = 0;
         int qefMassFallback = 0;
+        // Primal X/Y edges that cross this column's +max face (world-cell seam).
+        int boundaryEdgesEmitted = 0;
     };
+
+    inline void AccumulateStats( ExtractStats& dst, ExtractStats const& src )
+    {
+        dst.tris += src.tris;
+        dst.edgesEmitted += src.edgesEmitted;
+        dst.haloMissing += src.haloMissing;
+        dst.gradDegraded += src.gradDegraded;
+        dst.zeroHermiteSkip += src.zeroHermiteSkip;
+        dst.rejectedLongEdge += src.rejectedLongEdge;
+        dst.qefMassFallback += src.qefMassFallback;
+        dst.boundaryEdgesEmitted += src.boundaryEdgesEmitted;
+    }
 
     struct IFillField
     {
@@ -70,18 +85,21 @@ namespace DualContourQef
         };
     }
 
+    // Density = fill - iso. Unknown samples return NaN — never invent solid or air.
+    // (Legacy bug: returning 0.f made Solid(dens)>=0 treat missing as solid/at-ISO.)
     inline float SampleDensity( IFillField const& field, int c, int r, int k, int iso, ExtractStats& st )
     {
         int fill = 0;
         if ( !field.TrySample( c, r, k, fill ) )
         {
             ++st.haloMissing;
-            return 0.f; // treat missing as air — never invent solid
+            return std::numeric_limits<float>::quiet_NaN();
         }
         return (float)fill - (float)iso;
     }
 
-    inline bool Solid( float dens ) { return dens >= 0.f; }
+    inline bool IsUnknown( float dens ) { return !std::isfinite( dens ); }
+    inline bool Solid( float dens ) { return dens >= 0.f; } // only valid when !IsUnknown(dens)
 
     struct Hermite { Vec3 p, n; };
 
@@ -93,6 +111,7 @@ namespace DualContourQef
     {
         float const d0 = SampleDensity( field, c0, r0, k0, iso, st );
         float const d1 = SampleDensity( field, c1, r1, k1, iso, st );
+        if ( IsUnknown( d0 ) || IsUnknown( d1 ) ) { return false; }
         if ( Solid( d0 ) == Solid( d1 ) ) { return false; }
         float t = 0.5f;
         float const den = d0 - d1;
@@ -103,14 +122,21 @@ namespace DualContourQef
         out.p = p0 + ( p1 - p0 ) * t;
 
         // Central-difference gradient on density (points toward air / out of solid).
+        // Unknown neighbor samples degrade to edge direction — do not invent density.
         auto dens = [&]( int c, int r, int k ) { return SampleDensity( field, c, r, k, iso, st ); };
         int const cm = ( c0 + c1 ) / 2, rm = ( r0 + r1 ) / 2, km = ( k0 + k1 ) / 2;
-        Vec3 g{
-            dens( cm + 1, rm, km ) - dens( cm - 1, rm, km ),
-            dens( cm, rm + 1, km ) - dens( cm, rm - 1, km ),
-            dens( cm, rm, km + 1 ) - dens( cm, rm, km - 1 )
-        };
-        if ( Len( g ) < 1e-5f )
+        float const gx0 = dens( cm + 1, rm, km ), gx1 = dens( cm - 1, rm, km );
+        float const gy0 = dens( cm, rm + 1, km ), gy1 = dens( cm, rm - 1, km );
+        float const gz0 = dens( cm, rm, km + 1 ), gz1 = dens( cm, rm, km - 1 );
+        Vec3 g{ 0.f, 0.f, 0.f };
+        bool gradOk = true;
+        if ( IsUnknown( gx0 ) || IsUnknown( gx1 ) ) { gradOk = false; }
+        else { g.x = gx0 - gx1; }
+        if ( IsUnknown( gy0 ) || IsUnknown( gy1 ) ) { gradOk = false; }
+        else { g.y = gy0 - gy1; }
+        if ( IsUnknown( gz0 ) || IsUnknown( gz1 ) ) { gradOk = false; }
+        else { g.z = gz0 - gz1; }
+        if ( !gradOk || Len( g ) < 1e-5f )
         {
             ++st.gradDegraded;
             g = p1 - p0;
@@ -295,14 +321,16 @@ namespace DualContourQef
                     Vec3 cellMax = LatticeWorld( c + 1, r + 1, k + 1, originX, originY, crestZ, du, dv, edge, kz );
                     Vec3 mid = ( cellCentre + cellMax ) * 0.5f;
 
-                    bool anyAir = false, anySolid = false;
+                    bool anyAir = false, anySolid = false, anyUnknown = false;
                     for ( int i = 0; i < 8; ++i )
                     {
                         float const d = dens( cc[i], rr[i], kk[i] );
+                        if ( IsUnknown( d ) ) { anyUnknown = true; break; }
                         if ( Solid( d ) ) { anySolid = true; }
                         else { anyAir = true; }
                     }
-                    if ( !( anyAir && anySolid ) ) { continue; }
+                    // Fail-closed: dual cells that touch unavailable samples do not invent a feature.
+                    if ( anyUnknown || !( anyAir && anySolid ) ) { continue; }
 
                     if ( focusRM > 0.f )
                     {
@@ -348,15 +376,19 @@ namespace DualContourQef
         };
 
         // Emit quads: for each primal sign-changing edge, 4 dual cells share it.
+        // World-cell seam ownership: each column emits its +max face edges (c=w-1→w, r=h-1→h)
+        // and never the -min face (c=-1→0 / r=-1→0). Interior edges use lex-min dual owner.
         auto tryEdge = [&]( int c0, int r0, int k0, int c1, int r1, int k1,
             int dc0, int dr0, int dk0, int dc1, int dr1, int dk1,
-            int dc2, int dr2, int dk2, int dc3, int dr3, int dk3 )
+            int dc2, int dr2, int dk2, int dc3, int dr3, int dk3,
+            bool worldSeamEdge )
         {
             float const d0 = dens( c0, r0, k0 );
             float const d1 = dens( c1, r1, k1 );
+            if ( IsUnknown( d0 ) || IsUnknown( d1 ) ) { return; }
             if ( Solid( d0 ) == Solid( d1 ) ) { return; }
 
-            // Lex-min dual cell among the four is the owner.
+            // Lex-min dual cell among the four is the owner (within this column extract).
             int oc[4] = { dc0, dc1, dc2, dc3 };
             int orr[4] = { dr0, dr1, dr2, dr3 };
             int ok[4] = { dk0, dk1, dk2, dk3 };
@@ -382,32 +414,40 @@ namespace DualContourQef
             Vec3 const p0 = LatticeWorld( c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz );
             Vec3 const p1 = LatticeWorld( c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz );
             Vec3 towardAir = Solid( d0 ) ? ( p1 - p0 ) : ( p0 - p1 );
+            int const edgesBefore = stats.edgesEmitted;
             EmitQuad( v[0], v[1], v[2], v[3], towardAir, maxEdge, stats, outTris );
+            if ( worldSeamEdge && stats.edgesEmitted > edgesBefore )
+            {
+                ++stats.boundaryEdgesEmitted;
+            }
         };
 
-        // X-edges
+        // X-edges: interior c=0..w-2 plus +X world seam c=w-1→w (owned by this column).
         for ( int k = 0; k < kz; ++k )
         for ( int r = 0; r < h; ++r )
-        for ( int c = 0; c < w - 1; ++c )
+        for ( int c = 0; c < w; ++c )
         {
             tryEdge( c, r, k, c + 1, r, k,
-                c, r - 1, k - 1,  c, r, k - 1,  c, r, k,  c, r - 1, k );
+                c, r - 1, k - 1,  c, r, k - 1,  c, r, k,  c, r - 1, k,
+                /*worldSeamEdge=*/c == w - 1 );
         }
-        // Y-edges
+        // Y-edges: interior r=0..h-2 plus +Y world seam r=h-1→h (owned by this column).
         for ( int k = 0; k < kz; ++k )
-        for ( int r = 0; r < h - 1; ++r )
+        for ( int r = 0; r < h; ++r )
         for ( int c = 0; c < w; ++c )
         {
             tryEdge( c, r, k, c, r + 1, k,
-                c - 1, r, k - 1,  c, r, k - 1,  c, r, k,  c - 1, r, k );
+                c - 1, r, k - 1,  c, r, k - 1,  c, r, k,  c - 1, r, k,
+                /*worldSeamEdge=*/r == h - 1 );
         }
-        // Z-edges (vertical in lattice index; world Z down from crest)
+        // Z-edges (vertical in lattice index; world Z down from crest) — no world-cell seam.
         for ( int k = 0; k < kz - 1; ++k )
         for ( int r = 0; r < h; ++r )
         for ( int c = 0; c < w; ++c )
         {
             tryEdge( c, r, k, c, r, k + 1,
-                c - 1, r - 1, k,  c, r - 1, k,  c, r, k,  c - 1, r, k );
+                c - 1, r - 1, k,  c, r - 1, k,  c, r, k,  c - 1, r, k,
+                /*worldSeamEdge=*/false );
         }
 
         return stats;

@@ -69,6 +69,13 @@ Code: `ProvenanceGeography.h` (`Range*` / `Torture*`); virgin load remains HF-on
 
 **Geography interaction cert (Horizon-to-Hand transect):** see `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — run with `--cert-geo` / `--cert-geography` (forces RANGE).
 
+```
+P3b D2 CORE FLOOR
+SHA: <pending — filled after commit 1>
+```
+
+Freeze D2 contracts/topology (Unknown halo refuse, +max seam ownership, partitioned halo stats, order independence). Support/chips frozen — may consume occupancy/ER/D2 boundary later; must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect. Prior `haloMiss=0` PASS revoked — see handoff §5.
+
 ## Material / appearance docs for review (keeper)
 
 Review-only refs (not geo-cert / dig-cert authority; do **not** overwrite when merging):
