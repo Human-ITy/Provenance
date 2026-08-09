@@ -137,7 +137,7 @@ Presented vs authoritative vs removed. Flag `AUTH_MATERIAL_MISMATCH` (do not rem
 Place on flat, slope, cavity lip/floor, adjacent excavation. Must mutate matter, not presentation blob. remove→place→remove conserves mass; no HF resurrection.
 
 ### §10 Support/collision
-Outside EditedRegions: HF support OK. Inside: occupancy/cavity. Probe bodies must not rest on obsolete virgin HF over open cavity.
+Outside EditedRegions: HF support OK. Inside: **SupportBelow(x,y,queryZ)** through occupancy (same fill D2 consumes) — not D2 tris, not column crest/topmost. Tunnel: floor below queryZ (roof ignored). Missing authority → refuse/defer, never invent HF. Support query → zero D2/HF remesh.
 
 ### §11 Chips
 Modes `OFF` / `VISUAL` / `PHYS`. Geometry cert normally OFF. PHYS: gravity, no crest teleport, cavity entry, conserved mass.
@@ -205,7 +205,7 @@ Then teleport the visual client to that XYZ and inspect.
 | Virgin surface | `SampleGroundZBase`, `EnsureGeoCell` / `SampleSurface` |
 | D2 rebuild | `RebuildCavityMesh` (`kWorkBudgetR = 0.85f`) |
 | HF aperture / stencil | `CrestMouthStencilAt`, `NearOpeningMouthAt`, openings union |
-| Support | `SupportAt` |
+| Support | `SupportBelow` (Z-aware); `SupportAt` / `SampleGroundZ` adapters |
 | Perf counters | `perfVirginD2Rebuilds`, `perfSampleSurfaceCalls`, `perfGeoCellsCreated`, `perfHfRebuilds`, `perfD2Rebuilds`, … |
 | Adapt HF | `EmitTerrainQuadAdaptive` (tip/6), vista 2×2 |
 
@@ -227,9 +227,9 @@ Then teleport the visual client to that XYZ and inspect.
 | §6 accumulated excavation | **Done** — flat + **moderate_rock** + **steep_face** 20-strike corridors (same ER/lip/cross-cell/0.85 gates; steep uses into-normal carve) |
 | §7 HF/D2 ownership masks | **Done** — action≠dirty≠HF aperture; prior opening triple owner; no uncovered void; D2 re-extract does not mutate HF ownership; far mouth=0 |
 | §8 material correctness | **Done (instrumented gates)** — `MaterialSlumpsOpen` soft/hard; presented cap vs `SampleSurface`; soft-roof omit/sink vs hard CrestMouth; no invented remapper |
-| §9 Placement | **Frozen / deferred** — not in D2 core floor commit (stash: `Build/_d2_floor_stash/`) |
-| §10 Support/collision | **Frozen / deferred** — not in D2 core floor commit |
-| §11 chips | **Frozen** — do not expand until user asks |
+| §9 Placement | **Frozen / deferred** — after P3c (stash: `Build/_d2_floor_stash/`) |
+| §10 Support/collision | **Done (P3c)** — SupportBelow occupancy floor; see live run below |
+| §11 chips | **Frozen** — do not expand until after P3c pin; no PHYS chip work yet |
 | §12 / §14 | **Scaffold SKIP** |
 | §13 performance budgets | **Partial** — virgin invariants + timing snapshot (header counters) |
 | §15 artifact | **Done** |
@@ -264,9 +264,20 @@ Meaning: freeze D2 **contracts and topology**; bugfixes ok later; support/chips 
 | `order_independence_partitioned` | **PASS** — partitioned rebuild hash-stable |
 | §6 20-strike corridors | **PASS** — coherent ER; no packaging / HF resurrection / spires |
 
-**Support/chips frozen** for this checkpoint — stashed aside, not resumed here.
+**Chips frozen** for P3b — support resumed as P3c below.
 
-**Order for next agents:** only after user asks — resume §9/§10 from stash; never redesign D2 halo/seam ownership without a cert defect.
+### P3c OCCUPANCY SUPPORT FLOOR
+
+```
+P3c OCCUPANCY SUPPORT FLOOR
+SHA: 5e9e786d08d2352c4f4efc1c84f9d0ab977d12f9
+```
+
+Live `--cert-geo` after support floor: `exit_code=0`, `PASS_rows=87 FAIL_rows=0 SKIP_rows=6` (§10 all PASS; §9/§11 still frozen SKIP).
+
+§10 probes (RANGE): virgin flat/slope HF unchanged; cavity floor ≠ virgin HF; wall no false ledge; tunnel floor below queryZ (roof ignored); lip inside/outside; cross-cell continuity; neighbor-strike far identity; missing authority refuse; support query zero remesh.
+
+**Order for next agents:** CHIP PHYSICS only after user asks; then PLACE/RE-FILL → ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership without a cert defect.
 
 ---
 

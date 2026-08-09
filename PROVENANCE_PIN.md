@@ -74,7 +74,14 @@ P3b D2 CORE FLOOR
 SHA: 523e796eba8c3f1f67559caadb27e76957645f4e
 ```
 
-Freeze D2 contracts/topology (Unknown halo refuse, +max seam ownership, partitioned halo stats, order independence). Support/chips frozen — may consume occupancy/ER/D2 boundary later; must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect. Prior `haloMiss=0` PASS revoked — see handoff §5.
+Freeze D2 contracts/topology (Unknown halo refuse, +max seam ownership, partitioned halo stats, order independence). Must not redesign Hermite/QEF ownership, halo semantics, or HF↔D2 handoff unless a cert exposes a defect. Prior `haloMiss=0` PASS revoked — see handoff §5.
+
+```
+P3c OCCUPANCY SUPPORT FLOOR
+SHA: 5e9e786d08d2352c4f4efc1c84f9d0ab977d12f9
+```
+
+SupportBelow from queryZ through occupancy (not D2 tris, not column crest). Missing authority → refuse/defer. Chips remain frozen — do not resume PHYS until user asks after this floor.
 
 ## Material / appearance docs for review (keeper)
 
