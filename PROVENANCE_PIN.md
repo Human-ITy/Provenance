@@ -99,7 +99,7 @@ Sleep on quiescence hysteresis — **not** flat `nz ≥ 0.88` gate. Support norm
 
 ```
 P3d.2 CHIP VIBRATE / CYCLE HALT
-SHA: (pending commit)
+SHA: 6afec516291bf908c9f88dfae277fada9196bda6
 ```
 
 Keep P3d.1 hysteresis. Add limit-cycle / orbit detection (position ring + vel sign flips) and tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest. Wake unchanged (speed / support loss / impulse / supportRev). Cert: cavity quiescence + vibrate/orbit + steep-kinetic regressions. **STOP before placement/re-fill.**

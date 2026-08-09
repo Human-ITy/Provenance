@@ -309,7 +309,7 @@ Live `--cert-geo` after quiescence: `exit_code=0`, `PASS_rows=100 FAIL_rows=0 SK
 
 ```
 P3d.2 CHIP VIBRATE / CYCLE HALT
-SHA: (see PROVENANCE_PIN.md)
+SHA: 6afec516291bf908c9f88dfae277fada9196bda6
 ```
 
 Keep P3d.1 quiescence hysteresis (no flat-nz sleep gate). Add position-ring limit-cycle / orbit detection + tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest / mean contact. Wake unchanged (speed / support loss / impulse / supportRev).
