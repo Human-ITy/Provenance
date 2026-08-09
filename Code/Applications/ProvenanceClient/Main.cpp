@@ -8664,6 +8664,7 @@ namespace
                     q.nx = h.normal.x;
                     q.ny = h.normal.y;
                     q.nz = h.normal.z;
+                    q.supportRev = h.regionRev;
                     return q;
                 } );
             }
@@ -8940,6 +8941,28 @@ namespace
                 g.chipMode == ChipMode::Off ? "OFF"
                     : ( g.chipMode == ChipMode::Visual ? "VIS" : "PHYS" ) );
             DrawHudText( 16, (float)h - 56, geoLine );
+        }
+        // Chip quiescence probe (P3d.1) — id/life/state/speed/nz/z/restZ/|z-rest|/quiet/supportRev
+        if ( g.chipMode != ChipMode::Off && !H2H::State().bodies.empty() )
+        {
+            int shown = 0;
+            float chipY = (float)h - 62.f;
+            for ( H2H::MatterBody const& b : H2H::State().bodies )
+            {
+                if ( shown >= 3 ) { break; }
+                char probe[256];
+                H2H::FormatChipProbe( b, probe, (int)sizeof( probe ) );
+                glColor3f( 0.85f, 0.95f, 0.75f );
+                DrawHudText( 16, chipY - (float)( shown * 12 ), probe );
+                ++shown;
+            }
+            char actLine[96];
+            std::snprintf( actLine, sizeof( actLine ),
+                "activeChips=%d sleepQuietN=%d",
+                H2H::CountActiveChips(), H2H::kChipSleepQuietFrames );
+            glColor3f( 0.75f, 0.90f, 0.70f );
+            DrawHudText( 16, chipY - (float)( shown * 12 ), actLine );
+            glColor3f( 0.95f, 0.97f, 1.f );
         }
         std::snprintf( line, sizeof( line ), "Link: %s   Engine: %s:%d", LinkLabel( g.link ), g.host.c_str(), g.port );
         DrawHudText( 16, (float)h - 68, line );
@@ -11861,6 +11884,7 @@ namespace
             q.nx = h.normal.x;
             q.ny = h.normal.y;
             q.nz = h.normal.z;
+            q.supportRev = h.regionRev;
             return q;
         };
         auto stepPhys = [&]( float dt, int n )
@@ -11929,7 +11953,8 @@ namespace
         float const carveZ = cavGrade - openR * 0.35f;
         PrefetchOccupancyCell( (int)std::floor( cavX ), (int)std::floor( cavY ) );
         bool const carvedOpen = CarveOccupancySphere( cavX, cavY, carveZ, openR, cavX, cavY, cavGrade );
-        if ( !carvedOpen )
+        bool const chipCavityOk = carvedOpen;
+        if ( !chipCavityOk )
         {
             add( "chip_falls_into_dig", "FAIL", "CAVITY_CARVE_FAIL", cavX, cavY, cavGrade, 0, 0, 1, 1 );
             add( "chip_tunnel_ignores_roof", "SKIP", "no cavity setup" );
@@ -11939,10 +11964,10 @@ namespace
             add( "chip_mode_switch_zero_remesh", "SKIP", "no cavity setup" );
             add( "chip_determinism", "SKIP", "no cavity setup" );
             add( "chip_ACTIVE_SETTLED_sleep", "SKIP", "no cavity setup" );
-            add( "chip_aggregate_scaffold", "SKIP", "no cavity setup" );
-            g.chipMode = savedMode;
-            return;
+            add( "chip_cavity_quiescence", "SKIP", "no cavity setup" );
+            // steep-static + wake-on-rev use fixtures — still run below
         }
+        if ( chipCavityOk )
         {
             clearCertChips();
             float const thick = 0.04f;
@@ -11967,7 +11992,6 @@ namespace
                     "into hole z=%.3f < grade=%.3f floor=%.3f", b.z, cavGrade, floor.position.z );
                 add( "chip_falls_into_dig", "PASS", note, cavX, cavY, b.z, b.nx, b.ny, b.nz, 0 );
             }
-        }
 
         // --- chip inside tunnel → ignores roof; finds floor below ---
         float const tunX = ox + 14.f, tunY = padY;
@@ -12058,15 +12082,17 @@ namespace
             {
                 clearCertChips();
                 float const thick = 0.04f;
-                float const startZ = sh.position.z + thick * 0.5f + 0.05f;
+                // Spawn ON rest (not airborne) so inelastic-land absorb does not eat the slide seed.
+                float const startZ = sh.position.z + thick * 0.5f + 0.01f;
                 H2H::MatterBody& chip = H2H::SpawnDetachedChip(
                     slopeX, slopeY, startZ, 0.12f, 0.10f, thick );
-                // Seed a downhill whisper so contact friction cannot hide tangent gravity.
+                // Seed above wakeSpeed so kinetic slide runs (hysteresis band holds below wake).
                 float dx = sh.normal.x, dy = sh.normal.y;
                 float dlen = std::sqrt( dx * dx + dy * dy );
                 if ( dlen > 1e-5f ) { dx /= dlen; dy /= dlen; }
-                chip.vx = dx * 0.35f;
-                chip.vy = dy * 0.35f;
+                float const slideSeed = H2H::kChipWakeSpeed + 0.12f;
+                chip.vx = dx * slideSeed;
+                chip.vy = dy * slideSeed;
                 float const x0 = chip.x, y0 = chip.y;
                 stepPhys( kDt, 180 );
                 H2H::MatterBody const& b = H2H::State().bodies.front();
@@ -12295,6 +12321,207 @@ namespace
                 std::snprintf( note, sizeof( note ),
                     "ACTIVE→sleep life=%d active=0 (no integrate)", (int)b1.life );
                 add( "chip_ACTIVE_SETTLED_sleep", "PASS", note, b1.x, b1.y, b1.z, 0, 0, 1, 0 );
+            }
+        }
+
+        // --- Cavity quiescence: supportable chips SETTLED; CountActiveChips==0 for N frames ---
+        // No D2 rebuild / HF remesh / crest teleport / position drift while quiet.
+        {
+            clearCertChips();
+            int const d0 = g.perfD2Rebuilds;
+            int const h0 = g.perfHfRebuilds;
+            float const thick = 0.04f;
+            // Three chips into the dig cavity — rough floor may have nz < 0.88.
+            H2H::SpawnDetachedChip( cavX, cavY, cavGrade + 0.85f, 0.12f, 0.10f, thick, 200 );
+            H2H::SpawnDetachedChip( cavX + 0.04f, cavY - 0.03f, cavGrade + 0.95f, 0.10f, 0.08f, thick, 80 );
+            H2H::SpawnDetachedChip( cavX - 0.03f, cavY + 0.02f, cavGrade + 0.75f, 0.11f, 0.09f, thick, 120 );
+            constexpr int kBoundSteps = 480;
+            constexpr int kHoldFrames = 60; // N consecutive active==0
+            int settleAt = -1;
+            for ( int i = 0; i < kBoundSteps; ++i )
+            {
+                H2H::StepBodies( kDt, supportFn );
+                if ( H2H::CountActiveChips() == 0 )
+                {
+                    settleAt = i;
+                    break;
+                }
+            }
+            bool allSettled = settleAt >= 0 && H2H::CountActiveChips() == 0;
+            for ( H2H::MatterBody const& b : H2H::State().bodies )
+            {
+                if ( H2H::ChipIntegrates( b ) ) { allSettled = false; break; }
+                if ( !( b.life == H2H::ChipLife::Settled || b.life == H2H::ChipLife::ExplicitBody ) )
+                {
+                    allSettled = false;
+                    break;
+                }
+            }
+            // Snapshot positions after settle; hold active==0 without drift / remesh.
+            struct Pose { float x, y, z; };
+            std::vector<Pose> poses;
+            poses.reserve( H2H::State().bodies.size() );
+            for ( H2H::MatterBody const& b : H2H::State().bodies )
+            {
+                poses.push_back( Pose{ b.x, b.y, b.z } );
+            }
+            int holdOk = 0;
+            float maxDrift = 0.f;
+            for ( int i = 0; i < kHoldFrames; ++i )
+            {
+                H2H::StepBodies( kDt, supportFn );
+                if ( H2H::CountActiveChips() != 0 ) { break; }
+                for ( size_t bi = 0; bi < H2H::State().bodies.size() && bi < poses.size(); ++bi )
+                {
+                    H2H::MatterBody const& b = H2H::State().bodies[bi];
+                    float const d = std::fabs( b.x - poses[bi].x )
+                        + std::fabs( b.y - poses[bi].y )
+                        + std::fabs( b.z - poses[bi].z );
+                    maxDrift = (std::max)( maxDrift, d );
+                }
+                ++holdOk;
+            }
+            int const d1 = g.perfD2Rebuilds;
+            int const h1 = g.perfHfRebuilds;
+            bool const noRemesh = ( d1 == d0 && h1 == h0 );
+            bool const held = holdOk == kHoldFrames && maxDrift < 1e-5f;
+            char probe0[200] = {};
+            if ( !H2H::State().bodies.empty() )
+            {
+                H2H::FormatChipProbe( H2H::State().bodies.front(), probe0, (int)sizeof( probe0 ) );
+            }
+            if ( !( allSettled && held && noRemesh ) )
+            {
+                char note[220];
+                std::snprintf( note, sizeof( note ),
+                    "QUIESCE_FAIL settleAt=%d active=%d hold=%d/%d drift=%.6f D2 %d→%d HF %d→%d %s",
+                    settleAt, H2H::CountActiveChips(), holdOk, kHoldFrames, maxDrift,
+                    d0, d1, h0, h1, probe0 );
+                add( "chip_cavity_quiescence", "FAIL", note, cavX, cavY, cavGrade, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "SETTLED@%d hold=%d active=0 drift=0 D2=%d HF=%d %s",
+                    settleAt, kHoldFrames, d1, h1, probe0 );
+                add( "chip_cavity_quiescence", "PASS", note, cavX, cavY, cavGrade, 0, 0, 1, 0 );
+            }
+        }
+        } // chipCavityOk — cavity-dependent §11 probes
+
+        // --- Steep-but-static sleep: nz≈cos(55°) < 0.88 must still SETTLED (regression) ---
+        {
+            clearCertChips();
+            constexpr float kDeg = 55.f * 3.14159265f / 180.f;
+            float const sn = std::sin( kDeg );
+            float const cn = std::cos( kDeg ); // ~0.574 — below old flatNz=0.88 gate
+            float const planeZ = 10.f;
+            int const fixtureRev = 7;
+            auto steepSupport = [&]( float x, float y, float /*queryZ*/ ) -> H2H::SupportQuery
+            {
+                H2H::SupportQuery q{};
+                q.hit = true;
+                q.deferred = false;
+                q.x = x; q.y = y; q.z = planeZ;
+                q.nx = sn; q.ny = 0.f; q.nz = cn;
+                q.supportRev = fixtureRev;
+                return q;
+            };
+            float const thick = 0.04f;
+            float const rest = planeZ + thick * 0.5f + 0.01f;
+            H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                flatX, flatY, rest, 0.12f, 0.10f, thick, 200 );
+            chip.vx = chip.vy = chip.vz = 0.f;
+            chip.nx = sn; chip.ny = 0.f; chip.nz = cn;
+            chip.supportRev = fixtureRev;
+            constexpr int kSteepSteps = 90;
+            for ( int i = 0; i < kSteepSteps; ++i )
+            {
+                H2H::StepBodies( kDt, steepSupport );
+            }
+            H2H::MatterBody const& b = H2H::State().bodies.front();
+            bool const asleep = !H2H::ChipIntegrates( b )
+                && ( b.life == H2H::ChipLife::Settled || b.life == H2H::ChipLife::ExplicitBody );
+            bool const steepOk = b.nz < 0.88f && asleep && H2H::CountActiveChips() == 0;
+            bool const noDrift = std::fabs( b.z - rest ) < 1e-4f
+                && std::fabs( b.x - flatX ) < 1e-4f
+                && std::fabs( b.y - flatY ) < 1e-4f;
+            char probe[200];
+            H2H::FormatChipProbe( b, probe, (int)sizeof( probe ) );
+            if ( !( steepOk && noDrift ) )
+            {
+                char note[220];
+                std::snprintf( note, sizeof( note ),
+                    "STEEP_STATIC_FAIL nz=%.3f life=%d active=%d %s",
+                    b.nz, (int)b.life, H2H::CountActiveChips(), probe );
+                add( "chip_steep_static_sleep", "FAIL", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 1 );
+            }
+            else
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "55deg static sleep nz=%.3f life=%d active=0 %s",
+                    b.nz, (int)b.life, probe );
+                add( "chip_steep_static_sleep", "PASS", note, b.x, b.y, b.z, b.nx, b.ny, b.nz, 0 );
+            }
+        }
+
+        // --- Wake on supportRev / EditedRegion change under chip ---
+        {
+            clearCertChips();
+            int rev = 1;
+            float const planeZ = 8.f;
+            auto revSupport = [&]( float x, float y, float /*queryZ*/ ) -> H2H::SupportQuery
+            {
+                H2H::SupportQuery q{};
+                q.hit = true;
+                q.deferred = false;
+                q.x = x; q.y = y; q.z = planeZ;
+                q.nx = 0.f; q.ny = 0.f; q.nz = 1.f;
+                q.supportRev = rev;
+                return q;
+            };
+            float const thick = 0.04f;
+            float const rest = planeZ + thick * 0.5f + 0.01f;
+            H2H::MatterBody& chip = H2H::SpawnDetachedChip(
+                flatX + 1.f, flatY, rest, 0.12f, 0.10f, thick, 200 );
+            chip.vx = chip.vy = chip.vz = 0.f;
+            chip.supportRev = rev;
+            for ( int i = 0; i < 40; ++i )
+            {
+                H2H::StepBodies( kDt, revSupport );
+            }
+            bool const slept = H2H::CountActiveChips() == 0
+                && !H2H::ChipIntegrates( H2H::State().bodies.front() );
+            rev = 2; // matter / EditedRegion revision under chip
+            H2H::StepBodies( kDt, revSupport );
+            H2H::MatterBody const& bWake = H2H::State().bodies.front();
+            bool const woke = H2H::ChipIntegrates( bWake ) || bWake.life == H2H::ChipLife::Active;
+            // Allow re-settle after wake (hysteresis); revision stamp must advance.
+            for ( int i = 0; i < 40; ++i )
+            {
+                H2H::StepBodies( kDt, revSupport );
+            }
+            H2H::MatterBody const& bEnd = H2H::State().bodies.front();
+            bool const revHeld = bEnd.supportRev == 2;
+            bool const reslept = H2H::CountActiveChips() == 0;
+            char probe[200];
+            H2H::FormatChipProbe( bEnd, probe, (int)sizeof( probe ) );
+            if ( !( slept && woke && revHeld && reslept ) )
+            {
+                char note[220];
+                std::snprintf( note, sizeof( note ),
+                    "WAKE_REV_FAIL slept=%d woke=%d rev=%d reslept=%d %s",
+                    slept ? 1 : 0, woke ? 1 : 0, bEnd.supportRev, reslept ? 1 : 0, probe );
+                add( "chip_wake_on_supportRev", "FAIL", note, bEnd.x, bEnd.y, bEnd.z, 0, 0, 1, 1 );
+            }
+            else
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "wake on supportRev 1→2 then re-SETTLED %s", probe );
+                add( "chip_wake_on_supportRev", "PASS", note, bEnd.x, bEnd.y, bEnd.z, 0, 0, 1, 0 );
             }
         }
 

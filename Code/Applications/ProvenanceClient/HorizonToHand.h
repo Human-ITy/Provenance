@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -521,6 +522,7 @@ namespace H2H
         bool deferred = false; // missing occupancy authority — refuse; never invent HF
         float x = 0.f, y = 0.f, z = 0.f;
         float nx = 0.f, ny = 0.f, nz = 1.f;
+        int supportRev = -1; // EditedRegion::dirtyRev when known — wake on change
     };
 
     // ---------- Fracture patch (persistent local cracks) ----------
@@ -581,6 +583,11 @@ namespace H2H
         bool settled = false; // mirror of life sleep (Settled / ExplicitBody / Aggregated)
         int body_revision = 1;
         uint64_t form_seed = 0;
+        // Quiescence / hysteresis (P3d.1) — sleep on quiet contact, not flat-nz gate.
+        float restZ = 0.f;
+        int quietFrames = 0;
+        int supportRev = -1;
+        bool contactStable = false;
     };
 
     struct AggregatePatch
@@ -907,6 +914,39 @@ namespace H2H
         return n;
     }
 
+    inline char const* ChipLifeName( ChipLife life )
+    {
+        switch ( life )
+        {
+        case ChipLife::Active: return "ACTIVE";
+        case ChipLife::Settled: return "SETTLED";
+        case ChipLife::Aggregated: return "AGGREGATED";
+        case ChipLife::ExplicitBody: return "EXPLICIT";
+        }
+        return "?";
+    }
+
+    // HUD / cert probe: id, life, state, speed, support nz, z, restZ, |z-restZ|, quietFrames, supportRev
+    inline int FormatChipProbe( MatterBody const& b, char* buf, int bufN )
+    {
+        if ( !buf || bufN <= 0 ) { return 0; }
+        float const speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+        float const dz = std::fabs( b.z - b.restZ );
+        char const* state = ChipIntegrates( b ) ? "integrating" : "sleep";
+        return std::snprintf( buf, (size_t)bufN,
+            "id=%llu life=%s state=%s spd=%.4f nz=%.3f z=%.3f restZ=%.3f |z-rest|=%.4f quiet=%d rev=%d",
+            (unsigned long long)b.body_id,
+            ChipLifeName( b.life ),
+            state,
+            speed,
+            b.nz,
+            b.z,
+            b.restZ,
+            dz,
+            b.quietFrames,
+            b.supportRev );
+    }
+
     // Detached chip spawn for PHYS / cert — ACTIVE life, SupportBelow consumer.
     inline MatterBody& SpawnDetachedChip( float x, float y, float z,
         float alongM = 0.12f, float acrossM = 0.10f, float thickM = 0.04f,
@@ -926,6 +966,10 @@ namespace H2H
         body.x = x; body.y = y; body.z = z;
         body.nx = 0.f; body.ny = 0.f; body.nz = 1.f;
         body.strikeX = 1.f; body.strikeY = 0.f;
+        body.restZ = z;
+        body.quietFrames = 0;
+        body.supportRev = -1;
+        body.contactStable = false;
         State().bodies.push_back( body );
         ++State().world_revision;
         return State().bodies.back();
@@ -937,14 +981,27 @@ namespace H2H
         b.life = ChipLife::Active;
         b.settled = false;
         b.rep = RepClass::Loose;
+        b.quietFrames = 0;
+        b.contactStable = false;
         b.vx = b.vy = 0.f;
         b.vz = 0.f;
+    }
+
+    // Meaningful impulse → always wake (thresholds above sleep band).
+    inline void ImpulseChip( MatterBody& b, float ivx, float ivy, float ivz )
+    {
+        if ( b.gripped ) { return; }
+        WakeChip( b );
+        b.vx += ivx;
+        b.vy += ivy;
+        b.vz += ivz;
     }
 
     inline void SleepChip( MatterBody& b, bool explicitBody )
     {
         b.vx = b.vy = b.vz = 0.f;
         b.settled = true;
+        b.contactStable = true;
         if ( explicitBody )
         {
             b.life = ChipLife::ExplicitBody;
@@ -956,7 +1013,14 @@ namespace H2H
         }
     }
 
-    // PHYS: gravity → SupportBelow(x,y,currentZ) → contact + normal → settle / slide.
+    // Quiescence hysteresis — support normal influences slide, NOT sleep permission.
+    inline constexpr float kChipSleepSpeed = 0.07f;
+    inline constexpr float kChipWakeSpeed = 0.28f;       // clearly above sleep
+    inline constexpr float kChipSleepPosEps = 0.02f;
+    inline constexpr float kChipWakePosEps = 0.08f;      // clearly above sleep
+    inline constexpr int kChipSleepQuietFrames = 12;     // N consecutive quiet contact frames
+
+    // PHYS: gravity → SupportBelow(x,y,currentZ) → contact + normal → settle / slide / sleep.
     // Forbidden consumers (call site must not pass): D2 tris, carve-sphere floor,
     // SampleOccupancyZ / column-crest snap, permanent always-on integration.
     template <typename SupportFn>
@@ -967,8 +1031,50 @@ namespace H2H
         constexpr float gAcc = 18.f;
         constexpr float airDrag = 1.8f;
         constexpr float slideFriction = 3.2f;
-        constexpr float settleSpeed = 0.07f;
-        constexpr float flatNz = 0.88f; // below this: may keep sliding
+        // nz shapes kinetic slide only — NEVER a sleep gate (steep-static must sleep).
+
+        // --- Wake pass (settled / explicit / aggregated): no integration, support revision only ---
+        for ( MatterBody& b : State().bodies )
+        {
+            if ( b.gripped ) { continue; }
+            if ( b.life == ChipLife::Active ) { continue; }
+
+            SupportQuery const h = supportBelow( b.x, b.y, b.z + 0.02f );
+            if ( h.deferred )
+            {
+                continue; // keep sleep — refuse invented floor
+            }
+            float const speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            if ( speed > kChipWakeSpeed )
+            {
+                WakeChip( b );
+                continue;
+            }
+            if ( !h.hit )
+            {
+                WakeChip( b ); // support disappeared — fall
+                continue;
+            }
+            float const rest = h.z + b.thickM * 0.5f + 0.01f;
+            if ( std::fabs( rest - b.z ) > kChipWakePosEps )
+            {
+                WakeChip( b ); // support moved under chip
+                continue;
+            }
+            // Wake on EditedRegion / support revision change beneath the chip.
+            if ( b.supportRev >= 0 && h.supportRev >= 0 && h.supportRev != b.supportRev )
+            {
+                WakeChip( b );
+                b.supportRev = h.supportRev;
+                continue;
+            }
+            // Keep rest / rev stamps fresh while sleeping (no integrate).
+            b.restZ = rest;
+            if ( h.supportRev >= 0 ) { b.supportRev = h.supportRev; }
+            b.nx = h.nx; b.ny = h.ny; b.nz = h.nz;
+        }
+
+        // --- ACTIVE integrate ---
         for ( MatterBody& b : State().bodies )
         {
             if ( !ChipIntegrates( b ) ) { continue; }
@@ -988,22 +1094,31 @@ namespace H2H
                 // Missing authority: defer in place — never invent / teleport to HF.
                 b.x = x0; b.y = y0; b.z = z0;
                 b.vx = b.vy = b.vz = 0.f;
+                b.quietFrames = 0;
+                b.contactStable = false;
                 continue;
             }
             if ( !h.hit )
             {
                 // No solid below query — keep falling (open shaft / deep void).
+                b.quietFrames = 0;
+                b.contactStable = false;
                 continue;
             }
 
             float const rest = h.z + b.thickM * 0.5f + 0.01f;
             if ( b.z > rest )
             {
+                b.quietFrames = 0;
+                b.contactStable = false;
                 continue; // still airborne above support
             }
 
-            // Contact: pin to support, kill penetrating normal velocity, slide on incline.
+            // Contact: pin to support, kill penetrating normal velocity.
+            bool const cameFromAir = ( z0 > rest + 0.001f );
             b.z = rest;
+            b.restZ = rest;
+            if ( h.supportRev >= 0 ) { b.supportRev = h.supportRev; }
             float const nx = h.nx, ny = h.ny, nz = h.nz;
             float const vn = b.vx * nx + b.vy * ny + b.vz * nz;
             if ( vn < 0.f )
@@ -1012,7 +1127,36 @@ namespace H2H
                 b.vy -= vn * ny;
                 b.vz -= vn * nz;
             }
-            // Gravity along tangent (slide / tumble cue).
+            // Inelastic land: impact normal→tangent conversion must not forever-deny sleep.
+            if ( cameFromAir )
+            {
+                b.vx *= 0.12f;
+                b.vy *= 0.12f;
+                b.vz *= 0.12f;
+            }
+            // Align plate to support contact normal (presentation / slide frame).
+            b.nx = nx; b.ny = ny; b.nz = nz;
+
+            float speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
+            float const dzRest = std::fabs( b.z - rest ); // ~0 after pin
+            // Static / hysteresis band (below wakeSpeed): hold against weight.
+            // Free-fall g was already integrated this frame; normal kill turns it into
+            // tangent micro-speed — static friction must zero that or sleep never sticks.
+            // Required sleep transition still: supported + quiet for N frames (nz ignored).
+            if ( speed < kChipWakeSpeed && dzRest < kChipSleepPosEps )
+            {
+                b.vx = b.vy = b.vz = 0.f;
+                b.contactStable = true;
+                b.quietFrames += 1;
+                if ( b.quietFrames >= kChipSleepQuietFrames )
+                {
+                    // Meaningful plates stay ExplicitBody; fines-scale → Settled sleep.
+                    SleepChip( b, b.materials_g >= 40 );
+                }
+                continue;
+            }
+
+            // Kinetic slide: gravity along tangent + friction (steep keeps more speed).
             // g=(0,0,-gAcc); g·N=-gAcc*nz; t = g - (g·N)N.
             float const tgx = gAcc * nz * nx;
             float const tgy = gAcc * nz * ny;
@@ -1023,20 +1167,12 @@ namespace H2H
                 b.vy += tgy * dt;
                 b.vz += tgz * dt;
             }
-            // Steeper contacts keep more tangential speed (fines stay cheap via sleep elsewhere).
             float const steep = (std::max)( 0.f, (std::min)( 1.f, ( 0.98f - nz ) / 0.35f ) );
             float const frAmt = slideFriction * ( 1.f - 0.65f * steep );
             float const fr = ( 1.f - frAmt * dt );
             b.vx *= fr; b.vy *= fr; b.vz *= fr;
-            // Align plate to support contact normal.
-            b.nx = nx; b.ny = ny; b.nz = nz;
-
-            float const speed = std::sqrt( b.vx * b.vx + b.vy * b.vy + b.vz * b.vz );
-            if ( speed < settleSpeed && nz >= flatNz )
-            {
-                // Meaningful plates stay ExplicitBody; fines-scale → Settled sleep.
-                SleepChip( b, b.materials_g >= 40 );
-            }
+            b.quietFrames = 0;
+            b.contactStable = false;
         }
     }
 

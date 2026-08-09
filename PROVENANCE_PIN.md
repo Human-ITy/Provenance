@@ -90,6 +90,13 @@ SHA: b1fec59aa637ad69884f92e36419946d0c256f07
 
 PHYS chips: gravity → `SupportBelow(x,y,currentZ)` → contact + normal → settle/slide/sleep. Modes `OFF` / `VISUAL` / `PHYS`. Lifecycle `ACTIVE → SETTLED → AGGREGATED (scaffold) / EXPLICIT BODY`. OFF is zero chip cost; mode switch must not remesh D2/HF. **STOP before placement/re-fill.**
 
+```
+P3d.1 CHIP QUIESCENCE
+SHA: (pending commit)
+```
+
+Sleep on quiescence hysteresis — **not** flat `nz ≥ 0.88` gate. Support normal influences slide only. Wake thresholds above sleep; wake on `supportRev` / EditedRegion change under chip. Cert: cavity `CountActiveChips==0` for N frames + steep-static regression. **STOP before placement/re-fill.**
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**

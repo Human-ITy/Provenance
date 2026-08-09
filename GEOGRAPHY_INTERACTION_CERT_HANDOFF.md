@@ -292,7 +292,20 @@ Live `--cert-geo` after chip floor: `exit_code=0`, `PASS_rows=97 FAIL_rows=0 SKI
 
 §11 probes (RANGE): falls to HF; into dig hole; tunnel ignores roof; incline slide + support normal; cross-cell no hop; missing occ defer; OFF→VISUAL→PHYS zero D2/HF remesh; determinism; ACTIVE→SETTLED sleep; AggregatePatch scaffold.
 
-**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.
+### P3d.1 CHIP QUIESCENCE
+
+```
+P3d.1 CHIP QUIESCENCE
+SHA: (pending commit)
+```
+
+Sleep = supported + speed < sleepSpeed + `|z-restZ|` < sleepPosEps + contact stable for N frames → SETTLED. **No flat-nz sleep gate** (steep-static / rough cavity floors must sleep). Wake thresholds clearly larger; wake on support move/loss, meaningful impulse, or `supportRev` / EditedRegion change under chip. HUD/cert probe: id, life, state, speed, support nz, z, restZ, `|z-restZ|`, quietFrames, supportRev.
+
+§11 added: `chip_cavity_quiescence`, `chip_steep_static_sleep`, `chip_wake_on_supportRev`. §9 placement still frozen.
+
+Live `--cert-geo` after quiescence: `exit_code=0`, `PASS_rows=100 FAIL_rows=0 SKIP_rows=5` (rows=105; §9 placement still frozen SKIP).
+
+**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.1 quiescence.
 
 ---
 
