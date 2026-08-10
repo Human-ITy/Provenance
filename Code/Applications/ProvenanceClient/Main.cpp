@@ -298,12 +298,21 @@ namespace
         int certGeoWalkCells0 = 0;
         int certGeoWalkSample0 = 0;
         bool certGeoFailWritten = false;
-        // --cert-lsi: read-only Local Surface Intent capture/cert (dig+place geometry).
+        // --cert-lsi: Local Surface Intent capture/cert (dig+place geometry).
         bool certLsi = false;
         int certLsiPhase = 0; // 0 wait → 1 settle → 2 run → 3 write/quit
         DWORD certLsiPhaseMs = 0;
         int certLsiExitCode = 0; // 0 harness complete with no FAIL rows; 1 = defect FAIL rows
         bool certLsiFailWritten = false;
+        // --cert-async: column fan-in order/pacing + LSI closure determinism.
+        bool certAsync = false;
+        int certAsyncPhase = 0;
+        DWORD certAsyncPhaseMs = 0;
+        int certAsyncExitCode = 0;
+        bool certAsyncFailWritten = false;
+        int certAsyncWaitSettle = 0; // frames to wait after queue drains
+        int certAsyncPlaceAccepted = 0;
+        int certAsyncPlaceOk = 0;
         // Startup / subsystem counters — prove virgin path does zero D2.
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
@@ -13468,7 +13477,8 @@ namespace
         {
             GeoCertScaffold( "11", "chips_OFF_VISUAL_PHYS", "skipped — cert exited before chip runner" );
         }
-        GeoCertScaffold( "12", "streaming_async_column_permute", "scaffold — needs bridge fan-in torture" );
+        GeoCertScaffold( "12", "streaming_async_column_permute",
+            "covered by --cert-async (3x3 fan-in order/pacing + LSI closure)" );
         GeoCertScaffold( "13", "performance_budgets", "partial — see startup_perf + counters in header" );
         {
             GeoCertRow r{};
@@ -13485,7 +13495,8 @@ namespace
                 g.perfHfRemeshMsTotal, g.perfD2MsTotal );
             GeoCertAddRow( r );
         }
-        GeoCertScaffold( "14", "determinism_orders", "scaffold — reverse async / fresh process TODO" );
+        GeoCertScaffold( "14", "determinism_orders",
+            "covered by --cert-async (forward/reverse/checkerboard + D2 rebuild order)" );
         {
             GeoCertRow r{};
             std::snprintf( r.section, sizeof( r.section ), "15" );
@@ -14773,6 +14784,508 @@ namespace
         }
     }
 
+    // ---------- Async + determinism (--cert-async) ----------
+    // Equal matter + equal closed presentation intent under column reply order/pacing.
+    // LSI hashes/closure are part of this gate.
+    struct AsyncSnap
+    {
+        uint32_t occHash = 0;
+        uint32_t d2Hash = 0;
+        uint32_t outsideHash = 0;
+        int occSolid = 0;
+        int d2Tris = 0;
+        int unexplainedOpen = 0;
+        int mouthAnnulus = 0;
+        int openSkin = 0;
+        int mismatch = 0;
+        char label[40] = {};
+    };
+    struct AsyncRow
+    {
+        char check[48] = {};
+        char verdict[12] = "SKIP";
+        char note[200] = {};
+        uint32_t hashA = 0, hashB = 0;
+        int nA = 0, nB = 0;
+    };
+    static constexpr int kAsyncRowCap = 48;
+    static AsyncRow s_asyncRows[kAsyncRowCap];
+    static int s_asyncRowN = 0;
+    static char s_asyncFailReason[96] = {};
+    static AsyncSnap s_asyncBaseDig{};
+    static AsyncSnap s_asyncBasePlace{};
+    static float s_asyncDigX = 0.f, s_asyncDigY = 0.f, s_asyncDigZ = 0.f, s_asyncDigR = 0.24f;
+    static float s_asyncPlaceX = 0.f, s_asyncPlaceY = 0.f, s_asyncPlaceZ = 0.f, s_asyncPlaceR = 0.16f;
+    static int s_asyncPadCx = 0, s_asyncPadCy = 0;
+
+    void AsyncAddRow( char const* check, char const* verdict, char const* note,
+        uint32_t ha = 0, uint32_t hb = 0, int na = 0, int nb = 0 )
+    {
+        if ( s_asyncRowN >= kAsyncRowCap ) { return; }
+        AsyncRow& r = s_asyncRows[s_asyncRowN++];
+        std::snprintf( r.check, sizeof( r.check ), "%s", check ? check : "?" );
+        std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict ? verdict : "SKIP" );
+        std::snprintf( r.note, sizeof( r.note ), "%s", note ? note : "" );
+        r.hashA = ha; r.hashB = hb; r.nA = na; r.nB = nb;
+        if ( std::strcmp( r.verdict, "FAIL" ) == 0 )
+        {
+            g.certAsyncExitCode = 1;
+            if ( !s_asyncFailReason[0] )
+            {
+                std::snprintf( s_asyncFailReason, sizeof( s_asyncFailReason ), "%s", r.check );
+            }
+        }
+    }
+
+    void AsyncCaptureSnap( AsyncSnap& out, float cx, float cy, float cz, float r,
+        float openX, float openY, float openZ, char const* kind, char const* label )
+    {
+        out = {};
+        std::snprintf( out.label, sizeof( out.label ), "%s", label ? label : "?" );
+        LsiOccRecord occ{};
+        LsiCaptureOccupancy( occ, cx, cy, cz, r );
+        out.occHash = occ.hash;
+        out.occSolid = occ.solidCount;
+        LsiMeshRecord d2{};
+        LsiCapturePublishedD2( d2, cx, cy, r + 1.25f );
+        out.d2Hash = d2.hash;
+        out.d2Tris = d2.triCount;
+        LsiCapture cap{};
+        LsiResolveDirtyHalo( cap, cx, cy, r );
+        LsiMeshRecord hfHood{};
+        LsiCaptureLocalHf( hfHood, cx, cy, 3.5f, 0, 0, 0, 0, false );
+        LsiMeshRecord outside{};
+        LsiFilterOutsideDirty( hfHood, outside,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY );
+        out.outsideHash = outside.hash;
+        int total = 0, mouth = 0, skin = 0, dirty = 0, mismatch = 0;
+        out.unexplainedOpen = LsiCountUnexplainedOpenEdges( d2,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY,
+            openX, openY, openZ, (std::min)( r, 0.12f ),
+            total, mouth, skin, dirty, mismatch, kind, nullptr );
+        out.mouthAnnulus = mouth;
+        out.openSkin = skin;
+        out.mismatch = mismatch;
+    }
+
+    bool AsyncSnapsEqual( AsyncSnap const& a, AsyncSnap const& b, char const* check )
+    {
+        bool const ok = ( a.occHash == b.occHash ) && ( a.d2Hash == b.d2Hash )
+            && ( a.outsideHash == b.outsideHash )
+            && ( a.occSolid == b.occSolid ) && ( a.d2Tris == b.d2Tris )
+            && ( a.unexplainedOpen == b.unexplainedOpen )
+            && ( a.mismatch == b.mismatch )
+            && ( a.unexplainedOpen == 0 ) && ( b.unexplainedOpen == 0 );
+        char note[200];
+        std::snprintf( note, sizeof( note ),
+            "%s->%s occ %08x/%08x d2 %08x/%08x out %08x/%08x open %d/%d mismatch %d/%d solid %d/%d",
+            a.label, b.label,
+            (unsigned)a.occHash, (unsigned)b.occHash,
+            (unsigned)a.d2Hash, (unsigned)b.d2Hash,
+            (unsigned)a.outsideHash, (unsigned)b.outsideHash,
+            a.unexplainedOpen, b.unexplainedOpen, a.mismatch, b.mismatch,
+            a.occSolid, b.occSolid );
+        AsyncAddRow( check, ok ? "PASS" : "FAIL", note,
+            a.d2Hash, b.d2Hash, a.unexplainedOpen, b.unexplainedOpen );
+        return ok;
+    }
+
+    void AsyncEnqueueColumns( int cx, int cy, bool reverse, bool checkerboard )
+    {
+        g.columnQueue.clear();
+        std::pair<int, int> cells[9];
+        int n = 0;
+        for ( int dy = -1; dy <= 1; ++dy )
+            for ( int dx = -1; dx <= 1; ++dx )
+                cells[n++] = { cx + dx, cy + dy };
+        if ( reverse )
+        {
+            for ( int i = n - 1; i >= 0; --i ) { QueueColumn( cells[i].first, cells[i].second ); }
+        }
+        else if ( checkerboard )
+        {
+            for ( int i = 0; i < n; ++i )
+                if ( ( ( cells[i].first + cells[i].second ) & 1 ) == 0 )
+                    QueueColumn( cells[i].first, cells[i].second );
+            for ( int i = 0; i < n; ++i )
+                if ( ( ( cells[i].first + cells[i].second ) & 1 ) != 0 )
+                    QueueColumn( cells[i].first, cells[i].second );
+        }
+        else
+        {
+            for ( int i = 0; i < n; ++i ) { QueueColumn( cells[i].first, cells[i].second ); }
+        }
+    }
+
+    bool AsyncColumnsIdle()
+    {
+        return g.columnQueue.empty() && g.pending == PendingKind::None;
+    }
+
+    uint32_t AsyncRebuildD2OrderHash( int cx, int cy, bool reverse )
+    {
+        std::pair<int, int> cells[9];
+        int n = 0;
+        for ( int dy = -1; dy <= 1; ++dy )
+            for ( int dx = -1; dx <= 1; ++dx )
+                cells[n++] = { cx + dx, cy + dy };
+        auto rebuild = [&]( int i )
+        {
+            CellSample const* c = GetCell( cells[i].first, cells[i].second );
+            if ( c && c->carved && !c->fill.empty() )
+            {
+                RebuildCavityMesh( cells[i].first, cells[i].second );
+            }
+        };
+        if ( reverse ) { for ( int i = n - 1; i >= 0; --i ) { rebuild( i ); } }
+        else { for ( int i = 0; i < n; ++i ) { rebuild( i ); } }
+        LsiMeshRecord d2{};
+        LsiCapturePublishedD2( d2, (float)cx + 0.5f, (float)cy + 0.5f, 2.5f );
+        return d2.hash;
+    }
+
+    void AsyncWriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_async_determinism_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_asyncRowN; ++i )
+        {
+            if ( std::strcmp( s_asyncRows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_asyncRows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        std::fprintf( f,
+            "Provenance Async + Determinism cert\n"
+            "includes=LSI_hashes_closure\n"
+            "fixture=RANGE\n"
+            "exit_code=%d\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d\n"
+            "first_fail=%s\n"
+            "note=equal matter + equal closed presentation under column order/pacing\n"
+            "\n"
+            "check\tverdict\thashA\thashB\tnA\tnB\tnote\n",
+            g.certAsyncExitCode, passN, failN, skipN, s_asyncRowN,
+            s_asyncFailReason[0] ? s_asyncFailReason : "none" );
+        for ( int i = 0; i < s_asyncRowN; ++i )
+        {
+            AsyncRow const& r = s_asyncRows[i];
+            std::fprintf( f, "%s\t%s\t%08x\t%08x\t%d\t%d\t%s\n",
+                r.check, r.verdict, (unsigned)r.hashA, (unsigned)r.hashB, r.nA, r.nB, r.note );
+        }
+        std::fclose( f );
+        if ( g.certAsyncExitCode != 0 && !g.certAsyncFailWritten )
+        {
+            g.certAsyncFailWritten = true;
+            char fpath[MAX_PATH];
+            std::snprintf( fpath, sizeof( fpath ),
+                "%s\\provenance_async_determinism_fail.txt", g.certOutDir );
+            FILE* ff = nullptr;
+            if ( fopen_s( &ff, fpath, "w" ) == 0 && ff )
+            {
+                std::fprintf( ff, "FAIL:\nreason=%s\nsee provenance_async_determinism_cert.txt\n",
+                    s_asyncFailReason[0] ? s_asyncFailReason : "defect_rows" );
+                std::fclose( ff );
+            }
+        }
+    }
+
+    void CertAsyncTick()
+    {
+        if ( !g.certAsync ) { return; }
+        DWORD const now = GetTickCount();
+
+        if ( g.certAsyncPhase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certAsyncPhaseMs == 0 ) { g.certAsyncPhaseMs = now; }
+                if ( now - g.certAsyncPhaseMs > 45000 )
+                {
+                    AsyncAddRow( "stream_ready", "FAIL", "BRIDGE_OR_CAPS_TIMEOUT" );
+                    AsyncWriteArtifact();
+                    g.certAsyncPhase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            s_asyncRowN = 0;
+            s_asyncFailReason[0] = 0;
+            g.certAsyncExitCode = 0;
+            g.certAsyncFailWritten = false;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            s_asyncDigX = ox + 8.f;
+            s_asyncDigY = oy - 30.f;
+            s_asyncPlaceX = ox + 12.f;
+            s_asyncPlaceY = oy - 30.f;
+            s_asyncPadCx = (int)std::floor( s_asyncDigX );
+            s_asyncPadCy = (int)std::floor( s_asyncDigY );
+            EnsureGeoDisk( s_asyncPadCx, s_asyncPadCy, 24 );
+            g.certAsyncPhase = 1;
+            g.certAsyncPhaseMs = now;
+            g.statusLine = "CERT-ASYNC settle residency";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 1 )
+        {
+            if ( g.terrainDirty && now - g.certAsyncPhaseMs < 2000 ) { return; }
+            g.certAsyncPhase = 2;
+            g.certAsyncPhaseMs = now;
+            g.statusLine = "CERT-ASYNC dig baseline";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 2 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncDigX, s_asyncDigY, grade );
+            s_asyncDigZ = grade - s_asyncDigR * 0.40f;
+            for ( int dy = -1; dy <= 1; ++dy )
+                for ( int dx = -1; dx <= 1; ++dx )
+                {
+                    int const cx = s_asyncPadCx + dx, cy = s_asyncPadCy + dy;
+                    PrefetchOccupancyCell( cx, cy );
+                    EnsureOccupancyLattice( cx, cy );
+                    CellSample* cell = GetCellMutable( cx, cy );
+                    if ( cell && !cell->carved && !cell->fill.empty() )
+                    {
+                        SeedOccupancyFromVirginSurface( cx, cy );
+                    }
+                }
+            bool const carved = CarveOccupancySphere(
+                s_asyncDigX, s_asyncDigY, s_asyncDigZ, s_asyncDigR,
+                s_asyncDigX, s_asyncDigY, grade );
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            if ( !carved )
+            {
+                AsyncAddRow( "dig_baseline", "FAIL", "CARVE_FALSE" );
+            }
+            float openZ = grade;
+            AsyncCaptureSnap( s_asyncBaseDig, s_asyncDigX, s_asyncDigY, s_asyncDigZ, s_asyncDigR,
+                s_asyncDigX, s_asyncDigY, openZ, "dig", "dig_base" );
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "occ=%08x d2=%08x open=%d mouth=%d mismatch=%d solid=%d",
+                (unsigned)s_asyncBaseDig.occHash, (unsigned)s_asyncBaseDig.d2Hash,
+                s_asyncBaseDig.unexplainedOpen, s_asyncBaseDig.mouthAnnulus,
+                s_asyncBaseDig.mismatch, s_asyncBaseDig.occSolid );
+            bool const ok = ( s_asyncBaseDig.unexplainedOpen == 0 && s_asyncBaseDig.mismatch == 0
+                && s_asyncBaseDig.d2Tris > 0 );
+            AsyncAddRow( "dig_lsi_closure_base", ok ? "PASS" : "FAIL", note,
+                s_asyncBaseDig.d2Hash, s_asyncBaseDig.occHash,
+                s_asyncBaseDig.unexplainedOpen, s_asyncBaseDig.mouthAnnulus );
+            AsyncEnqueueColumns( s_asyncPadCx, s_asyncPadCy, /*reverse=*/false, /*checkerboard=*/false );
+            g.certAsyncWaitSettle = 0;
+            g.certAsyncPhase = 3;
+            g.statusLine = "CERT-ASYNC dig column forward";
+            return;
+        }
+
+        // Shared wait helper: phases 3,5,7,11,13 wait for column drain + settle frames.
+        auto waitColumns = [&]( int nextPhase ) -> bool
+        {
+            if ( !AsyncColumnsIdle() ) { g.certAsyncWaitSettle = 0; return false; }
+            ++g.certAsyncWaitSettle;
+            if ( g.certAsyncWaitSettle < 8 ) { return false; }
+            g.certAsyncPhase = nextPhase;
+            g.certAsyncWaitSettle = 0;
+            return true;
+        };
+
+        if ( g.certAsyncPhase == 3 )
+        {
+            if ( !waitColumns( 4 ) ) { return; }
+            g.statusLine = "CERT-ASYNC dig compare forward";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 4 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncDigX, s_asyncDigY, grade );
+            AsyncSnap snap{};
+            AsyncCaptureSnap( snap, s_asyncDigX, s_asyncDigY, s_asyncDigZ, s_asyncDigR,
+                s_asyncDigX, s_asyncDigY, grade, "dig", "dig_fwd" );
+            AsyncSnapsEqual( s_asyncBaseDig, snap, "dig_column_order_forward" );
+            AsyncEnqueueColumns( s_asyncPadCx, s_asyncPadCy, /*reverse=*/true, /*checkerboard=*/false );
+            g.certAsyncPhase = 5;
+            g.statusLine = "CERT-ASYNC dig column reverse";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 5 )
+        {
+            if ( !waitColumns( 6 ) ) { return; }
+            return;
+        }
+
+        if ( g.certAsyncPhase == 6 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncDigX, s_asyncDigY, grade );
+            AsyncSnap snap{};
+            AsyncCaptureSnap( snap, s_asyncDigX, s_asyncDigY, s_asyncDigZ, s_asyncDigR,
+                s_asyncDigX, s_asyncDigY, grade, "dig", "dig_rev" );
+            AsyncSnapsEqual( s_asyncBaseDig, snap, "dig_column_order_reverse" );
+            AsyncEnqueueColumns( s_asyncPadCx, s_asyncPadCy, /*reverse=*/false, /*checkerboard=*/true );
+            g.certAsyncPhase = 7;
+            g.statusLine = "CERT-ASYNC dig column checkerboard pacing";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 7 )
+        {
+            if ( !waitColumns( 8 ) ) { return; }
+            return;
+        }
+
+        if ( g.certAsyncPhase == 8 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncDigX, s_asyncDigY, grade );
+            AsyncSnap snap{};
+            AsyncCaptureSnap( snap, s_asyncDigX, s_asyncDigY, s_asyncDigZ, s_asyncDigR,
+                s_asyncDigX, s_asyncDigY, grade, "dig", "dig_chk" );
+            AsyncSnapsEqual( s_asyncBaseDig, snap, "dig_column_pacing_checkerboard" );
+            uint32_t const hFwd = AsyncRebuildD2OrderHash( s_asyncPadCx, s_asyncPadCy, false );
+            uint32_t const hRev = AsyncRebuildD2OrderHash( s_asyncPadCx, s_asyncPadCy, true );
+            bool const d2Ok = ( hFwd == hRev && hFwd == s_asyncBaseDig.d2Hash );
+            char note[120];
+            std::snprintf( note, sizeof( note ),
+                "base=%08x fwd=%08x rev=%08x",
+                (unsigned)s_asyncBaseDig.d2Hash, (unsigned)hFwd, (unsigned)hRev );
+            AsyncAddRow( "dig_d2_rebuild_order", d2Ok ? "PASS" : "FAIL", note,
+                hFwd, hRev, 0, 0 );
+            g.certAsyncPhase = 9;
+            g.statusLine = "CERT-ASYNC place baseline";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 9 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncPlaceX, s_asyncPlaceY, grade );
+            float const digR = 0.22f;
+            float const carveZ = grade - digR * 0.40f;
+            s_asyncPlaceR = (std::max)( kHandfulRadiusM * 1.8f, kVoxelEdgeM * 1.25f );
+            int const pcx = (int)std::floor( s_asyncPlaceX );
+            int const pcy = (int)std::floor( s_asyncPlaceY );
+            for ( int dy = -1; dy <= 1; ++dy )
+                for ( int dx = -1; dx <= 1; ++dx )
+                {
+                    PrefetchOccupancyCell( pcx + dx, pcy + dy );
+                    EnsureOccupancyLattice( pcx + dx, pcy + dy );
+                }
+            CarveOccupancySphere( s_asyncPlaceX, s_asyncPlaceY, carveZ, digR,
+                s_asyncPlaceX, s_asyncPlaceY, grade );
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            SupportHit const floor0 = SupportBelow( s_asyncPlaceX, s_asyncPlaceY, grade + 0.5f );
+            s_asyncPlaceZ = carveZ;
+            if ( floor0.hit ) { s_asyncPlaceZ = floor0.position.z + kVoxelEdgeM * 0.35f; }
+            std::unordered_map<std::string, int> credit;
+            credit["dirt"] = (int)std::lround( kDirtVoxelG );
+            CreditHeld( credit );
+            PlaceFillResult const pr = PlaceOccupancyFill(
+                s_asyncPlaceX, s_asyncPlaceY, s_asyncPlaceZ, s_asyncPlaceR, credit["dirt"] );
+            if ( pr.ok ) { DebitHeldTotal( pr.acceptedGrams ); }
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            // Settle 3×3 column fan-in once before baseline so virgin neighbor wire fill
+            // is not mistaken for a post-permute matter change (keepLocalCarve on carved).
+            s_asyncPadCx = pcx;
+            s_asyncPadCy = pcy;
+            g.certAsyncPlaceAccepted = pr.acceptedGrams;
+            g.certAsyncPlaceOk = pr.ok ? 1 : 0;
+            AsyncEnqueueColumns( pcx, pcy, false, false );
+            g.certAsyncWaitSettle = 0;
+            g.certAsyncPhase = 14;
+            g.statusLine = "CERT-ASYNC place settle columns before baseline";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 14 )
+        {
+            if ( !AsyncColumnsIdle() ) { g.certAsyncWaitSettle = 0; return; }
+            ++g.certAsyncWaitSettle;
+            if ( g.certAsyncWaitSettle < 8 ) { return; }
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncPlaceX, s_asyncPlaceY, grade );
+            AsyncCaptureSnap( s_asyncBasePlace, s_asyncPlaceX, s_asyncPlaceY, s_asyncPlaceZ, s_asyncPlaceR,
+                s_asyncPlaceX, s_asyncPlaceY, grade, "place", "place_base" );
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "occ=%08x d2=%08x open=%d openSkin=%d mismatch=%d accepted=%d",
+                (unsigned)s_asyncBasePlace.occHash, (unsigned)s_asyncBasePlace.d2Hash,
+                s_asyncBasePlace.unexplainedOpen, s_asyncBasePlace.openSkin,
+                s_asyncBasePlace.mismatch, g.certAsyncPlaceAccepted );
+            bool const ok = ( s_asyncBasePlace.unexplainedOpen == 0 && s_asyncBasePlace.mismatch == 0
+                && g.certAsyncPlaceOk && g.certAsyncPlaceAccepted > 0 );
+            AsyncAddRow( "place_lsi_closure_base", ok ? "PASS" : "FAIL", note,
+                s_asyncBasePlace.d2Hash, s_asyncBasePlace.occHash,
+                s_asyncBasePlace.unexplainedOpen, s_asyncBasePlace.openSkin );
+            AsyncEnqueueColumns( s_asyncPadCx, s_asyncPadCy, false, false );
+            g.certAsyncWaitSettle = 0;
+            g.certAsyncPhase = 10;
+            g.statusLine = "CERT-ASYNC place column forward";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 10 )
+        {
+            if ( !waitColumns( 11 ) ) { return; }
+            return;
+        }
+
+        if ( g.certAsyncPhase == 11 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncPlaceX, s_asyncPlaceY, grade );
+            AsyncSnap snap{};
+            AsyncCaptureSnap( snap, s_asyncPlaceX, s_asyncPlaceY, s_asyncPlaceZ, s_asyncPlaceR,
+                s_asyncPlaceX, s_asyncPlaceY, grade, "place", "place_fwd" );
+            AsyncSnapsEqual( s_asyncBasePlace, snap, "place_column_order_forward" );
+            AsyncEnqueueColumns( s_asyncPadCx, s_asyncPadCy, true, false );
+            g.certAsyncPhase = 12;
+            g.statusLine = "CERT-ASYNC place column reverse";
+            return;
+        }
+
+        if ( g.certAsyncPhase == 12 )
+        {
+            if ( !waitColumns( 13 ) ) { return; }
+            return;
+        }
+
+        if ( g.certAsyncPhase == 13 )
+        {
+            float grade = 0.f;
+            SampleGroundZBase( s_asyncPlaceX, s_asyncPlaceY, grade );
+            AsyncSnap snap{};
+            AsyncCaptureSnap( snap, s_asyncPlaceX, s_asyncPlaceY, s_asyncPlaceZ, s_asyncPlaceR,
+                s_asyncPlaceX, s_asyncPlaceY, grade, "place", "place_rev" );
+            AsyncSnapsEqual( s_asyncBasePlace, snap, "place_column_order_reverse" );
+            uint32_t const hFwd = AsyncRebuildD2OrderHash( s_asyncPadCx, s_asyncPadCy, false );
+            uint32_t const hRev = AsyncRebuildD2OrderHash( s_asyncPadCx, s_asyncPadCy, true );
+            bool const d2Ok = ( hFwd == hRev );
+            char note[120];
+            std::snprintf( note, sizeof( note ), "fwd=%08x rev=%08x base=%08x",
+                (unsigned)hFwd, (unsigned)hRev, (unsigned)s_asyncBasePlace.d2Hash );
+            AsyncAddRow( "place_d2_rebuild_order", d2Ok ? "PASS" : "FAIL", note, hFwd, hRev, 0, 0 );
+            AsyncWriteArtifact();
+            g.statusLine = g.certAsyncExitCode
+                ? "CERT-ASYNC done — FAIL"
+                : "CERT-ASYNC done — PASS";
+            g.certAsyncPhase = 99;
+            PostQuitMessage( g.certAsyncExitCode );
+            return;
+        }
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -15160,6 +15673,7 @@ namespace
         CertDigTick();
         CertGeoTick();
         CertLsiTick();
+        CertAsyncTick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -15485,6 +15999,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-local-surface-intent" ) == 0 )
                 {
                     g.certLsi = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-async" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-async-determinism" ) == 0 )
+                {
+                    g.certAsync = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
                     continue;
                 }
