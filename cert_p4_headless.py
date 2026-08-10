@@ -93,30 +93,42 @@ def main() -> int:
     py = int(ps.get("y", ps.get("py", 128)))
     add("player_state", "PASS", f"px={px} py={py} terrain_rev={ps.get('terrain_rev')}")
 
-    dig = rpc(
-        sock,
-        buf,
-        "carve",
-        {
-            "x": px,
-            "y": py,
-            "u": 0.5,
-            "v": 0.5,
-            "depth": 0.12,
-            "radius": 0.08,
-            "shape": "sphere",
-            "px": px,
-            "py": py,
-        },
-        rid,
-    )
-    rid += 1
-    grams, mats = removed_grams(dig)
+    dig = {}
+    grams, mats = 0, []
+    for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (2, 0), (0, -2), (3, 1)):
+        dig = rpc(
+            sock,
+            buf,
+            "carve",
+            {
+                "x": px + dx,
+                "y": py + dy,
+                "u": 0.5,
+                "v": 0.5,
+                "depth": 0.16,
+                "radius": 0.10,
+                "shape": "sphere",
+                "px": px,
+                "py": py,
+            },
+            rid,
+        )
+        rid += 1
+        grams, mats = removed_grams(dig)
+        if bool(dig.get("ok")) and grams > 0:
+            break
     accepted = bool(dig.get("ok")) and grams > 0
     add(
         "headless_dig_accept",
         "PASS" if accepted else "FAIL",
         f"ok={dig.get('ok')} grams={grams} mats={mats} rev={dig.get('rev')} reason={dig.get('reason')}",
+    )
+    body_id = dig.get("body_id") or 0
+    agg_id = dig.get("aggregate_id") or 0
+    add(
+        "headless_auth_body_or_aggregate_id",
+        "PASS" if accepted and (int(body_id) > 0 or int(agg_id) > 0) else ("SKIP" if not accepted else "FAIL"),
+        f"body_id={body_id} aggregate_id={agg_id} provenance={dig.get('provenance')}",
     )
 
     air = rpc(

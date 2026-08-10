@@ -489,6 +489,11 @@ namespace
         std::string lastAuthVisualCap;
         uint64_t lastAuthBodyId = 0;
         uint64_t lastAuthAggId = 0;
+        uint64_t lastAuthParentId = 0;
+        uint64_t lastAuthFormSeed = 0;
+        uint64_t lastAuthFractureSeed = 0;
+        std::string lastAuthProvenance;
+        bool lastAuthIdFromWire = false; // true only when Fablescript issued body/agg id
         int lastAuthWorldRev = 0;
 
         int lastDigRev = -1;
@@ -676,6 +681,21 @@ namespace
         long v = strtol( json.c_str() + p, &end, 10 );
         if ( end == json.c_str() + p ) { return false; }
         out = (int)v;
+        return true;
+    }
+
+    bool ExtractJsonU64( std::string const& json, char const* key, uint64_t& out )
+    {
+        std::string needle = std::string( "\"" ) + key + "\":";
+        size_t p = json.find( needle );
+        if ( p == std::string::npos ) { return false; }
+        p += needle.size();
+        while ( p < json.size() && ( json[p] == ' ' || json[p] == '\t' ) ) { ++p; }
+        if ( p >= json.size() ) { return false; }
+        char* end = nullptr;
+        unsigned long long v = strtoull( json.c_str() + p, &end, 10 );
+        if ( end == json.c_str() + p ) { return false; }
+        out = (uint64_t)v;
         return true;
     }
 
@@ -2771,8 +2791,118 @@ namespace
         }
     }
 
+    void ApplyAuthMatterIdentity( std::string const& line, bool accepted )
+    {
+        // P4.2: identity only from Fablescript receipt — never invent from local H2H mint.
+        g.lastAuthBodyId = 0;
+        g.lastAuthAggId = 0;
+        g.lastAuthParentId = 0;
+        g.lastAuthFormSeed = 0;
+        g.lastAuthFractureSeed = 0;
+        g.lastAuthProvenance.clear();
+        g.lastAuthIdFromWire = false;
+        g.lastAuthWorldRev = H2H::State().world_revision;
+        if ( !accepted ) { return; }
+
+        uint64_t bodyId = 0, aggId = 0, parentId = 0, formSeed = 0, fracSeed = 0;
+        bool const haveBody = ExtractJsonU64( line, "body_id", bodyId );
+        bool const haveAgg = ExtractJsonU64( line, "aggregate_id", aggId );
+        ExtractJsonU64( line, "parent_id", parentId );
+        ExtractJsonU64( line, "form_seed", formSeed );
+        ExtractJsonU64( line, "fracture_seed", fracSeed );
+        std::string prov;
+        ExtractJsonString( line, "provenance", prov );
+        if ( ( haveBody && bodyId != 0 ) || ( haveAgg && aggId != 0 ) )
+        {
+            g.lastAuthIdFromWire = true;
+            g.lastAuthBodyId = bodyId;
+            g.lastAuthAggId = aggId;
+            g.lastAuthParentId = parentId;
+            g.lastAuthFormSeed = formSeed;
+            g.lastAuthFractureSeed = fracSeed;
+            g.lastAuthProvenance = prov;
+            int wireRev = g.terrainRev;
+            ExtractJsonInt( line, "revision", wireRev );
+            if ( wireRev > 0 ) { g.lastAuthWorldRev = wireRev; }
+
+            if ( bodyId != 0 )
+            {
+                // Present authoritative body id locally (may replace predicted H2H mint).
+                H2H::MatterBody* found = nullptr;
+                for ( H2H::MatterBody& b : H2H::State().bodies )
+                {
+                    if ( b.body_id == bodyId ) { found = &b; break; }
+                }
+                if ( !found )
+                {
+                    // Drop trailing predicted body if present; stamp auth id instead.
+                    if ( g.pendingH2HPredictValid || g.pendingWorldPredict.valid )
+                    {
+                        // prediction discarded on accept path before this call in normal flow
+                    }
+                    if ( !H2H::State().bodies.empty()
+                      && H2H::State().bodies.back().body_id != bodyId
+                      && H2H::State().bodies.back().materials_g == g.lastAuthGrams )
+                    {
+                        H2H::State().bodies.back().body_id = bodyId;
+                        found = &H2H::State().bodies.back();
+                    }
+                    else
+                    {
+                        H2H::MatterBody body;
+                        body.body_id = bodyId;
+                        body.material_id = g.lastAuthMaterial.empty() ? "dirt" : g.lastAuthMaterial;
+                        body.materials_g = g.lastAuthGrams;
+                        H2H::State().bodies.push_back( body );
+                        found = &H2H::State().bodies.back();
+                    }
+                }
+                if ( found )
+                {
+                    found->material_id = g.lastAuthMaterial.empty() ? found->material_id : g.lastAuthMaterial;
+                    if ( g.lastAuthGrams > 0 ) { found->materials_g = g.lastAuthGrams; }
+                }
+            }
+            if ( aggId != 0 )
+            {
+                H2H::AggregatePatch* found = nullptr;
+                for ( H2H::AggregatePatch& a : H2H::State().aggregates )
+                {
+                    if ( a.aggregate_id == aggId ) { found = &a; break; }
+                }
+                if ( !found )
+                {
+                    if ( !H2H::State().aggregates.empty()
+                      && H2H::State().aggregates.back().aggregate_id != aggId )
+                    {
+                        H2H::State().aggregates.back().aggregate_id = aggId;
+                        found = &H2H::State().aggregates.back();
+                    }
+                    else
+                    {
+                        H2H::AggregatePatch agg;
+                        agg.aggregate_id = aggId;
+                        agg.material_id = g.lastAuthMaterial.empty() ? "dirt" : g.lastAuthMaterial;
+                        agg.materials_g = g.lastAuthGrams;
+                        H2H::State().aggregates.push_back( agg );
+                    }
+                }
+            }
+            char hud[160];
+            if ( bodyId != 0 )
+            {
+                std::snprintf( hud, sizeof( hud ), "body %llu", (unsigned long long)bodyId );
+            }
+            else
+            {
+                std::snprintf( hud, sizeof( hud ), "aggregate %llu", (unsigned long long)aggId );
+            }
+            g.statusLine = std::string( "P4.2 - auth " ) + hud;
+        }
+    }
+
     void NoteAuthReceipt( bool accepted, char const* reason, char const* material, int grams,
-        int rev, int heldDelta, bool matMismatch )
+        int rev, int heldDelta, bool matMismatch, std::string const* receiptLine = nullptr )
     {
         g.lastAuthHave = true;
         g.lastAuthAccepted = accepted;
@@ -2784,16 +2914,20 @@ namespace
         g.lastAuthHeldDelta = heldDelta;
         g.lastAuthMatMismatch = matMismatch;
         g.lastAuthVisualCap = g.spireVisualCap;
-        g.lastAuthBodyId = 0;
-        g.lastAuthAggId = 0;
-        g.lastAuthWorldRev = H2H::State().world_revision;
-        if ( !H2H::State().bodies.empty() )
+        if ( receiptLine )
         {
-            g.lastAuthBodyId = H2H::State().bodies.back().body_id;
+            ApplyAuthMatterIdentity( *receiptLine, accepted );
         }
-        if ( !H2H::State().aggregates.empty() )
+        else
         {
-            g.lastAuthAggId = H2H::State().aggregates.back().aggregate_id;
+            g.lastAuthBodyId = 0;
+            g.lastAuthAggId = 0;
+            g.lastAuthParentId = 0;
+            g.lastAuthFormSeed = 0;
+            g.lastAuthFractureSeed = 0;
+            g.lastAuthProvenance.clear();
+            g.lastAuthIdFromWire = false;
+            g.lastAuthWorldRev = H2H::State().world_revision;
         }
     }
 
@@ -2843,7 +2977,7 @@ namespace
                 : ( msg.empty()
                     ? ( reason.empty() ? "refused" : reason.c_str() )
                     : msg.c_str() );
-            NoteAuthReceipt( false, why, "", 0, g.terrainRev, g.heldTotalG - held0, false );
+            NoteAuthReceipt( false, why, "", 0, g.terrainRev, g.heldTotalG - held0, false, &line );
             char d[320];
             std::snprintf( d, sizeof( d ), "DIG refused @(%d,%d): %s (engine %.1fms) | no invent credit",
                 g.pendingBiteCx, g.pendingBiteCy, why, g.lastEngineMs );
@@ -2862,7 +2996,7 @@ namespace
             g.pendingLocalScoopG = 0;
             g.pendingLocalScoopMat.clear();
             g.pendingAffectRM = 0.f;
-            NoteAuthReceipt( true, "graze", "", 0, g.terrainRev, 0, false );
+            NoteAuthReceipt( true, "graze", "", 0, g.terrainRev, 0, false, &line );
             g.digestLine = "DIG grazed - no whole grams yet; scoop again or aim denser dirt";
             g.statusLine = "P4 - dig grazed (no credit)";
             UpdateStreamHud();
@@ -2895,7 +3029,7 @@ namespace
         g.pendingAffectRM = 0.f;
 
         NoteAuthReceipt( true, "ok", dominant.c_str(), totalG, g.terrainRev,
-            g.heldTotalG - held0, matMismatch );
+            g.heldTotalG - held0, matMismatch, &line );
 
         float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
         char d[384];
@@ -2984,7 +3118,7 @@ namespace
                     ? ( nothingLanded ? "nowhere_to_place" : "failed" )
                     : reason.c_str() )
                 : msg.c_str();
-            NoteAuthReceipt( false, why, "", 0, g.terrainRev, heldDelta, false );
+            NoteAuthReceipt( false, why, "", 0, g.terrainRev, heldDelta, false, &line );
             char d[320];
             std::snprintf( d, sizeof( d ), "PLACE refused @(%d,%d): %s (engine %.1fms) | no invent debit",
                 g.pendingBiteCx, g.pendingBiteCy, why, g.lastEngineMs );
@@ -3028,7 +3162,7 @@ namespace
             if ( placed <= 0 )
             {
                 NoteAuthReceipt( false, reason.empty() ? "no_placed" : reason.c_str(),
-                    "", 0, g.terrainRev, 0, false );
+                    "", 0, g.terrainRev, 0, false, &line );
                 g.pendingPlaceAsk.clear();
                 g.pendingPlaceG = 0;
                 g.pendingPlaceIntoHole = false;
@@ -3045,7 +3179,7 @@ namespace
         int const heldDelta = g.heldTotalG - held0;
         NoteAuthReceipt( true, "ok",
             placedDom.empty() ? ( g.heldDominant.empty() ? "?" : g.heldDominant.c_str() ) : placedDom.c_str(),
-            placed, g.terrainRev, heldDelta, false );
+            placed, g.terrainRev, heldDelta, false, &line );
 
         char d[320];
         std::snprintf( d, sizeof( d ),
@@ -16394,19 +16528,147 @@ namespace
                     ( heldFinal || debitOk ) ? "PASS" : "FAIL", note );
                 P4AddRow( "place_terrain_rev",
                     ( g.terrainRev >= g.certP4Rev0 ) ? "PASS" : "FAIL", note );
-                // Detached-body / aggregate identity: local prediction ids recorded; bridge body ids not yet on wire.
-                char bodyNote[160];
+                // P4.2: authoritative body/aggregate identity must come from the wire receipt.
+                char bodyNote[200];
                 std::snprintf( bodyNote, sizeof( bodyNote ),
-                    "local_body=%llu local_agg=%llu world_rev=%d (bridge body id wire=deferred)",
+                    "wire=%d body=%llu agg=%llu prov=%s form=%llu frac=%llu parent=%llu rev=%d",
+                    g.lastAuthIdFromWire ? 1 : 0,
                     (unsigned long long)g.lastAuthBodyId,
                     (unsigned long long)g.lastAuthAggId,
+                    g.lastAuthProvenance.empty() ? "-" : g.lastAuthProvenance.c_str(),
+                    (unsigned long long)g.lastAuthFormSeed,
+                    (unsigned long long)g.lastAuthFractureSeed,
+                    (unsigned long long)g.lastAuthParentId,
                     g.lastAuthWorldRev );
-                P4AddRow( "detached_body_or_aggregate_identity", "PASS", bodyNote );
+                bool const idOk = g.lastAuthIdFromWire
+                    && ( g.lastAuthBodyId != 0 || g.lastAuthAggId != 0 );
+                P4AddRow( "detached_body_or_aggregate_identity",
+                    idOk ? "PASS" : "FAIL", bodyNote );
             }
-            P4WriteArtifact();
-            g.statusLine = g.certP4ExitCode ? "CERT-P4 done — FAIL" : "CERT-P4 done — PASS";
-            g.certP4Phase = 99;
-            PostQuitMessage( g.certP4ExitCode );
+            // P4.2 adversarial: same synthetic receipt → same identity under order/delay.
+            g.certP4Phase = 70;
+            g.certP4Wait = 0;
+            g.statusLine = "CERT-P4.2 auth body identity permutations";
+            return;
+        }
+
+        if ( g.certP4Phase == 70 )
+        {
+            struct IdCase
+            {
+                char const* label;
+                char const* json;
+                uint64_t expectBody;
+                uint64_t expectAgg;
+                int delayFrames;
+            };
+            static IdCase const kCases[] = {
+                { "normal",
+                  "{\"ok\":true,\"removed\":{\"dirt\":314},\"body_id\":18472,\"aggregate_id\":0,"
+                  "\"form_seed\":11,\"fracture_seed\":22,\"parent_id\":0,\"provenance\":\"dig@cert\","
+                  "\"revision\":9001,\"rev\":9001,\"engine_ms\":0.1}",
+                  18472ull, 0ull, 0 },
+                { "reverse_fields",
+                  "{\"ok\":true,\"rev\":9002,\"engine_ms\":0.1,\"provenance\":\"dig@cert\","
+                  "\"parent_id\":0,\"fracture_seed\":22,\"form_seed\":11,\"aggregate_id\":0,"
+                  "\"body_id\":18472,\"removed\":{\"dirt\":314},\"revision\":9002}",
+                  18472ull, 0ull, 3 },
+                { "delayed",
+                  "{\"ok\":true,\"body_id\":18472,\"aggregate_id\":0,\"removed\":{\"dirt\":314},"
+                  "\"form_seed\":11,\"fracture_seed\":22,\"parent_id\":0,\"provenance\":\"dig@cert\","
+                  "\"revision\":9003,\"rev\":9003,\"engine_ms\":0.2}",
+                  18472ull, 0ull, 12 },
+                { "place_agg",
+                  "{\"ok\":true,\"placed\":314,\"placed_by\":{\"dirt\":314},\"body_id\":0,"
+                  "\"aggregate_id\":18473,\"form_seed\":33,\"fracture_seed\":44,\"parent_id\":18472,"
+                  "\"provenance\":\"place@cert\",\"revision\":9004,\"rev\":9004,\"engine_ms\":0.1}",
+                  0ull, 18473ull, 0 },
+                { "refuse_no_id",
+                  "{\"ok\":false,\"reason\":\"nothing_to_dig\",\"msg\":\"Nothing to dig there.\","
+                  "\"removed\":{},\"body_id\":99999,\"aggregate_id\":99999,\"rev\":9005,\"engine_ms\":0.1}",
+                  0ull, 0ull, 0 },
+            };
+            static int s_idCase = 0;
+            static int s_idDelayLeft = 0;
+            static bool s_idArmed = false;
+            if ( s_idCase >= (int)( sizeof( kCases ) / sizeof( kCases[0] ) ) )
+            {
+                s_idCase = 0;
+                s_idArmed = false;
+                P4WriteArtifact();
+                g.statusLine = g.certP4ExitCode ? "CERT-P4 done — FAIL" : "CERT-P4 done — PASS";
+                g.certP4Phase = 99;
+                PostQuitMessage( g.certP4ExitCode );
+                return;
+            }
+            IdCase const& c = kCases[s_idCase];
+            if ( !s_idArmed )
+            {
+                s_idDelayLeft = c.delayFrames;
+                s_idArmed = true;
+            }
+            if ( s_idDelayLeft > 0 )
+            {
+                --s_idDelayLeft;
+                return;
+            }
+            int const held0 = g.heldTotalG;
+            if ( std::strstr( c.json, "\"placed\"" ) )
+            {
+                // Ensure hand has matter so place path reconciles; identity still from receipt.
+                if ( g.heldTotalG <= 0 )
+                {
+                    g.heldBite["dirt"] = 314;
+                    g.heldTotalG = 314;
+                    g.heldDominant = "dirt";
+                }
+                g.pendingPlaceG = 314;
+                g.pendingPlaceAsk.clear();
+                g.pendingPlaceAsk["dirt"] = 314;
+                ParsePlaceReply( c.json );
+            }
+            else
+            {
+                ParseCarveReply( c.json );
+            }
+            bool ok = false;
+            char note[200];
+            if ( c.expectBody == 0 && c.expectAgg == 0 )
+            {
+                ok = !g.lastAuthAccepted && !g.lastAuthIdFromWire
+                    && g.lastAuthBodyId == 0 && g.lastAuthAggId == 0
+                    && g.heldTotalG == held0;
+                std::snprintf( note, sizeof( note ),
+                    "refuse wireId=%d body=%llu agg=%llu held=%d",
+                    g.lastAuthIdFromWire ? 1 : 0,
+                    (unsigned long long)g.lastAuthBodyId,
+                    (unsigned long long)g.lastAuthAggId,
+                    g.heldTotalG );
+            }
+            else
+            {
+                ok = g.lastAuthIdFromWire
+                    && g.lastAuthBodyId == c.expectBody
+                    && g.lastAuthAggId == c.expectAgg
+                    && ( c.expectBody == 0 || g.lastAuthProvenance.find( "dig@cert" ) != std::string::npos
+                      || g.lastAuthProvenance.find( "place@cert" ) != std::string::npos );
+                std::snprintf( note, sizeof( note ),
+                    "wire=%d body=%llu/%llu agg=%llu/%llu prov=%s",
+                    g.lastAuthIdFromWire ? 1 : 0,
+                    (unsigned long long)g.lastAuthBodyId, (unsigned long long)c.expectBody,
+                    (unsigned long long)g.lastAuthAggId, (unsigned long long)c.expectAgg,
+                    g.lastAuthProvenance.empty() ? "-" : g.lastAuthProvenance.c_str() );
+            }
+            char check[48];
+            std::snprintf( check, sizeof( check ), "auth_body_id_%s", c.label );
+            P4AddRow( check, ok ? "PASS" : "FAIL", note );
+            if ( c.expectBody == 18472ull )
+            {
+                P4AddRow( "auth_body_present_18472",
+                    ( g.lastAuthBodyId == 18472ull ) ? "PASS" : "FAIL", note );
+            }
+            ++s_idCase;
+            s_idArmed = false;
             return;
         }
     }

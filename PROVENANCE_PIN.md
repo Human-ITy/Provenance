@@ -154,6 +154,13 @@ SHA: 67790cf7b08acd845644e34b72d8b600a4d7c34d
 
 Adversarial: capture pre-intent → optimistic dig/place prediction → REFUSE / `nothing_to_dig` → exact restore of occupancy bytes, EditedRegion membership/bounds/revision, local D2 publication, HF ownership/openings, SupportBelow, held grams, and no surviving predicted chip/body. Delay permutations (0/4/18 frames) must still reverse.
 
+```
+P4.2 AUTHORITATIVE BODY IDENTITY FLOOR
+SHA: <filled on commit>
+```
+
+Wire contract: `Docs/P4_BODY_IDENTITY_WIRE.md`. Fablescript issues `body_id` / `aggregate_id` (+ form/fracture seeds, parent, provenance, revision). Clients present the receipt id (e.g. `body 18472`); never invent from local H2H.
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**

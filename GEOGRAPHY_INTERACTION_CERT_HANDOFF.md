@@ -357,7 +357,7 @@ Live `--cert-p4` (RANGE): `exit_code=0`, `PASS_rows=14 FAIL_rows=0`. Headless `c
 1. `nothing_to_dig` → client synthesizes a scoop / invents held grams
 2. `visualCap != auth material` → client silently remaps held credit to visualCap
 
-**Min compare (same contact/tool intent):** accept/reject, material contributor, exact grams, occupancy delta, terrain rev, held debit/credit, detached-body/aggregate identity (local predict + rollback; bridge body-id wire still deferred).
+**Min compare (same contact/tool intent):** accept/reject, material contributor, exact grams, occupancy delta, terrain rev, held debit/credit, detached-body/aggregate identity from authoritative wire receipt.
 
 ```
 P4.1 PREDICTION ROLLBACK FLOOR
@@ -365,6 +365,13 @@ SHA: 67790cf7b08acd845644e34b72d8b600a4d7c34d
 ```
 
 **P4.1 adversarial:** pre-intent hashes → optimistic dig/place → REFUSE/`nothing_to_dig` → occupancy/ER/D2/HF-ownership/SupportBelow/held/bodies exact match; delays 0/4/18 frames. Live `--cert-p4` must keep these rows PASS.
+
+```
+P4.2 AUTHORITATIVE BODY IDENTITY FLOOR
+SHA: <filled on commit>
+```
+
+**P4.2:** same receipt → same `body_id`/`aggregate_id`/grams/material/revision/provenance under normal/reverse/delayed reply order; refuse issues no identity. Contract: `Docs/P4_BODY_IDENTITY_WIRE.md`.
 
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-p4
