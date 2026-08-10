@@ -170,7 +170,7 @@ P4 authority holes closed: receipt-driven dig/place (no invent), prediction roll
 
 ```
 P4.3 TERRAIN RESIDENCY / INVALIDATION FLOOR
-SHA: PENDING_COMMIT
+SHA: 3a53fdde3fda0f8b720d928b3f4d0f13ee48cfb0
 ```
 
 **Law:** World activity does not imply terrain activity. Terrain presentation wakes only when terrain-relevant state changes (`affect` / classifier). Contract: `Docs/P4_3_TERRAIN_RESIDENCY.md`.

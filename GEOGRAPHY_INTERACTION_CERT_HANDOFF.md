@@ -387,7 +387,7 @@ python cert_p4_headless.py --host 127.0.0.1 --port 8765
 
 ```
 P4.3 TERRAIN RESIDENCY / INVALIDATION FLOOR
-SHA: PENDING_COMMIT
+SHA: 3a53fdde3fda0f8b720d928b3f4d0f13ee48cfb0
 ```
 
 **Law:** World activity ≠ terrain activity. `ClassifyTerrainAffect` / `ApplyActivityReceipt` ignore world_tick, NPC, inventory, combat, spell ticks, weather-info, AI, body movement alone (`affect=0`). Terrain-relevant → scoped dirty. Contract: `Docs/P4_3_TERRAIN_RESIDENCY.md`.
