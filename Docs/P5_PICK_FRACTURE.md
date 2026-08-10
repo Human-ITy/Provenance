@@ -16,6 +16,20 @@ Pick is **not** sphere/cup/cell deform. Tool supplies force/leverage; material s
 determines fracture; Fablescript owns authoritative transfer (P4); HF/D2 reconstruct one
 continuous boundary from occupancy truth. **Neither HF nor D2 chooses fracture shape.**
 
+## Hard presentation gates (no exceptions)
+
+1. **Sky / clear in or around a strike hole = FAIL.**  
+   Any sample (framebuffer or classifier) inside or around the action neighborhood whose
+   color matches the clear/sky background (`glClear` ≈ RGB(114,158,224), or the legacy
+   blue-dominant sky/backdrop classifiers) is **`PRESENTATION_COVERAGE_FAIL`**.  
+   There is **no** exception for “legitimate cavity mouth showing sky.” Closed local
+   surface means the published HF/D2/plug cover owns those pixels — clear peek is always a defect.
+
+2. **Deform outside intended strike volume = FAIL.**  
+   After a strike, any HF/D2 deformation beyond the physical fracture volume plus the
+   **minimum recon halo** is **`HF_CHANGED_OUTSIDE_RECON_HALO`** (fold explosions included).  
+   Outside that envelope the pre-strike surface must stay bit-identical.
+
 ## Contact frame (angle-independent)
 
 At hit:
@@ -80,13 +94,19 @@ Headless suite covers:
 3. Material morphology families
 4. Rotational equivalence 0°…90° for gravel / granite / mica_schist
 5. Two-strike gravel regression (interior remount, prior-strike identity, tip-scale)
-6. Outside recon-halo identity
+6. Outside recon-halo identity (tight span + envelope)
 7. No world-up fracture law (vertical ≡ flat local morph)
+8. Presentation coverage closed (mouth samples have floor/wall cover — sky/clear never excused)
+9. Outside-strike-volume deform clamp (halo span ≤ fracture AABB + 2×min recon halo)
+
+LSI-adjacent live checks use the same clear/sky RGB classifiers on the action
+neighborhood; sky-matching samples → `PRESENTATION_COVERAGE_FAIL`.
 
 ## Code
 
 - `PickFracture.h` — contact frame, envelopes, headless cert
-- `Main.cpp` — `CarveOccupancyFracture`, `TryPickFoliatedStrike` wire, cert tick
+- `Main.cpp` — `CarveOccupancyFracture`, `TryPickFoliatedStrike` wire, cert tick,
+  mouth coverage (omit HF only with D2 cover; opening plugs close clear peeks)
 
 ## Performance
 

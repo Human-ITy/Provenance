@@ -228,11 +228,15 @@ SHA: 434a565333225764fda61a3ceb3148d42fe6713c
 
 **Law:** Pick is not sphere/cup/cell deform. Contact frame `(T,B,N)` at hit owns tip/penetration/pry/fracture envelope; material structure (aggregate / compact angular / foliation) determines releasable connected volume; occupancy loses exactly that material; HF/D2 reconstruct the remaining local boundary (canonical mouth). Four distinct radii: contact/query ≠ fracture ≠ D2 recon halo ≠ HF refine. Outside physical changed + min recon halo → pre-strike surface bit-identical.
 
+**Hard presentation gates (user ruling — corrects prior “sky through mouth OK” confusion):**
+1. Any color **inside or around** a strike hole matching clear/sky (`glClear` ≈ RGB(114,158,224) / sky classifiers) = **`PRESENTATION_COVERAGE_FAIL`**. **No exception** for “legitimate cavity mouth showing sky.”
+2. Any deformation beyond fracture volume + minimum recon halo = **`HF_CHANGED_OUTSIDE_RECON_HALO`** / fold explosion FAIL.
+
 Contract: `Docs/P5_PICK_FRACTURE.md`.  
 `--cert-pick-fracture` / `--cert-p5-pick` → `%TEMP%\provenance_pick_fracture_cert.txt`  
-Committed artifact: `Docs/provenance_pick_fracture_cert.txt` — **PASS 7/0**.
+Committed artifact: `Docs/provenance_pick_fracture_cert.txt` — **PASS 9/0**.
 
-Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morphology`, `rotation_equivalence` (gravel/granite/mica_schist 0°…90°), `two_strike_gravel`, `outside_recon_halo_identity`, `no_world_up_fracture_law`.
+Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morphology`, `rotation_equivalence` (gravel/granite/mica_schist 0°…90°), `two_strike_gravel`, `outside_recon_halo_identity`, `no_world_up_fracture_law`, `presentation_coverage_closed`, `outside_strike_volume_deform`.
 
 **P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
 **P5b remains CLOSED** — STOP; do not open terrain–water coupling.

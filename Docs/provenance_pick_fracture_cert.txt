@@ -1,7 +1,9 @@
 P5 SIDE-GATE - MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
 law=impact->penetration->pry->material fracture->connected release->occupancy->local recon
 contact_frame=(T,B,N) angle-independent; P5a FREEZE; P5b CLOSED
-pass=7 fail=0 skip=0 exit_code=0
+hard_gate=sky/clear in|around hole => PRESENTATION_COVERAGE_FAIL (no mouth exception)
+hard_gate=deform beyond fracture+min recon halo => HF_CHANGED_OUTSIDE_RECON_HALO
+pass=9 fail=0 skip=0 exit_code=0
 first_fail=- @ (0.000,0.000,0.000)
 
 contact_frame_orthonormal	PASS	flat/slope/vertical/overhang orthonormal	(0.000,0.000,0.000)
@@ -9,5 +11,7 @@ radius_separation	PASS	frac=0.064 contact=0.180 d2=0.200 hf=0.160 mouth=0.067	(0
 material_morphology	PASS	gravel(aggregate_recess t=0.056) granite(compact_angular t=0.074) schist(foliation_plate t=0.103 nInto=0.043)	(0.000,0.000,0.000)
 rotation_equivalence	PASS	gravel/granite/mica_schist 0..90 local-equivalent	(0.000,0.000,0.000)
 two_strike_gravel	PASS	rem1=16 rem2=2 solid=5760->5744->5742 ext=0.057/0.050 deeper=1 priorMut=0	(0.000,0.000,-0.024)
-outside_recon_halo_identity	PASS	haloSpan=0.514 outsideClean=1	(0.000,0.000,0.000)
+outside_recon_halo_identity	PASS	haloSpan=0.514 maxAllow=0.554 fracSpan=0.114 outsideClean=1	(0.000,0.000,0.000)
 no_world_up_fracture_law	PASS	vertical==flat local morph	(0.000,0.000,0.000)
+presentation_coverage_closed	PASS	rem=24 uncoveredMouth=0 mouthR=0.060 floorDepth=0.274 (sky/clear never excused)	(0.000,0.000,0.000)
+outside_strike_volume_deform	PASS	ok	(0.000,0.000,0.000)

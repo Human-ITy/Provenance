@@ -17,6 +17,11 @@
 //   contact/query ≠ fracture volume ≠ D2 recon halo ≠ HF refine
 // Outside physical changed region + min recon halo → pre-strike surface bit-identical.
 //
+// Hard presentation gates (no exceptions):
+//   - Sky/clear RGB in or around a strike hole = PRESENTATION_COVERAGE_FAIL.
+//     There is NO "legitimate cavity mouth showing sky" exception.
+//   - Deform beyond fracture + min recon halo = HF_CHANGED_OUTSIDE_RECON_HALO.
+//
 // P5a water ledger FREEZE. P5b CLOSED. Do not redesign D2 topology / EditedRegion /
 // SupportBelow / P4 / chip lifecycle here.
 
@@ -596,6 +601,14 @@ namespace PickFracture
             for ( int i = 0; i < W * H * D; ++i ) { n += solid[i] ? 1 : 0; }
             return n;
         }
+        bool SolidAtWorld( float x, float y, float z ) const
+        {
+            int const ix = (int)std::floor( ( x - originX ) / edge );
+            int const iy = (int)std::floor( ( y - originY ) / edge );
+            int const iz = (int)std::floor( ( z - originZ ) / edge );
+            if ( !In( ix, iy, iz ) ) { return false; }
+            return solid[Idx( ix, iy, iz )] != 0;
+        }
     };
 
     // Subtract connected envelope voxels (6-connected from tip seed). Returns removed count.
@@ -923,25 +936,37 @@ namespace PickFracture
                 "granite", 42u, nullptr );
             float minX, minY, maxX, maxY;
             ReconHaloAabb( ev, minX, minY, maxX, maxY );
-            // Probe ring well outside halo — must not be classified as fracture/recon.
+            float fracMinX, fracMinY, fracMinZ, fracMaxX, fracMaxY, fracMaxZ;
+            WorldAabb( ev, fracMinX, fracMinY, fracMinZ, fracMaxX, fracMaxY, fracMaxZ );
+            float const fracSpan = (std::max)( fracMaxX - fracMinX, fracMaxY - fracMinY );
+            float const maxAllowedSpan = fracSpan + 2.f * kD2ReconHaloM + 0.04f;
+            // Probe rings outside halo — must not be classified as fracture/recon.
             bool outsideClean = true;
             float bx = 0.f, by = 0.f;
-            for ( int i = 0; i < 16; ++i )
+            float const rings[] = { 0.55f, 0.80f, 1.20f };
+            for ( float rad : rings )
             {
-                float ang = (float)i * ( 2.f * kPi / 16.f );
-                float x = 0.6f * std::cos( ang );
-                float y = 0.6f * std::sin( ang );
-                if ( x >= minX && x <= maxX && y >= minY && y <= maxY ) { continue; }
-                if ( PointInEnvelopeWorld( ev, x, y, -0.02f ) )
+                for ( int i = 0; i < 24; ++i )
                 {
-                    outsideClean = false; bx = x; by = y; break;
+                    float ang = (float)i * ( 2.f * kPi / 24.f );
+                    float x = rad * std::cos( ang );
+                    float y = rad * std::sin( ang );
+                    if ( x >= minX && x <= maxX && y >= minY && y <= maxY ) { continue; }
+                    if ( PointInEnvelopeWorld( ev, x, y, -0.02f )
+                      || PointInEnvelopeWorld( ev, x, y, 0.02f )
+                      || PointInEnvelopeWorld( ev, x, y, -0.08f ) )
+                    {
+                        outsideClean = false; bx = x; by = y; break;
+                    }
                 }
+                if ( !outsideClean ) { break; }
             }
             float const span = (std::max)( maxX - minX, maxY - minY );
-            bool ok = outsideClean && span < 0.70f; // tip + halo, not meter pad
-            char note[128];
+            bool ok = outsideClean && span <= maxAllowedSpan + 1e-4f;
+            char note[160];
             std::snprintf( note, sizeof( note ),
-                "haloSpan=%.3f outsideClean=%d", span, outsideClean ? 1 : 0 );
+                "haloSpan=%.3f maxAllow=%.3f fracSpan=%.3f outsideClean=%d",
+                span, maxAllowedSpan, fracSpan, outsideClean ? 1 : 0 );
             CertAdd( R, "outside_recon_halo_identity", ok ? "PASS" : "FAIL", note, bx, by, 0.f );
             if ( !ok )
             {
@@ -962,6 +987,93 @@ namespace PickFracture
                 ok ? "vertical==flat local morph" : why );
         }
 
+        // 8) Presentation coverage closed — mouth samples must have a solid floor/wall cover.
+        //    Sky/clear through the action neighborhood is never excused (no "open mouth OK").
+        {
+            SynthLattice lat;
+            lat.originX = -0.36f; lat.originY = -0.36f; lat.originZ = -0.40f;
+            float const crest = 0.0f;
+            lat.FillSolidBelowCrest( crest );
+            FractureEvent ev = BuildEvent( V3( 0, 0, crest ), V3( 0, 0, 1 ), V3( 1, 0, 0 ),
+                "granite", 0xC0BEu, nullptr );
+            int const rem = SubtractConnected( lat, ev );
+            float const mouthR = (std::max)( 0.05f, ev.mouthOpenRM );
+            float const floorDepth = ev.env.nInto + kD2ReconHaloM;
+            int uncovered = 0;
+            float ux = 0.f, uy = 0.f, uz = 0.f;
+            // Dense mouth disk at crest — each sample needs solid within floorDepth below.
+            for ( float y = -mouthR; y <= mouthR + 1e-4f; y += 0.02f )
+            {
+                for ( float x = -mouthR; x <= mouthR + 1e-4f; x += 0.02f )
+                {
+                    if ( x * x + y * y > mouthR * mouthR ) { continue; }
+                    bool hasFloor = false;
+                    for ( float dz = 0.01f; dz <= floorDepth + 1e-4f; dz += 0.012f )
+                    {
+                        if ( lat.SolidAtWorld( x, y, crest - dz ) )
+                        {
+                            hasFloor = true;
+                            break;
+                        }
+                    }
+                    if ( !hasFloor )
+                    {
+                        ++uncovered;
+                        if ( uncovered == 1 ) { ux = x; uy = y; uz = crest; }
+                    }
+                }
+            }
+            bool ok = rem > 0 && uncovered == 0 && ev.ok;
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "rem=%d uncoveredMouth=%d mouthR=%.3f floorDepth=%.3f (sky/clear never excused)",
+                rem, uncovered, mouthR, floorDepth );
+            CertAdd( R, "presentation_coverage_closed", ok ? "PASS" : "FAIL", note, ux, uy, uz );
+            if ( !ok )
+            {
+                CertAdd( R, "PRESENTATION_COVERAGE_FAIL", "FAIL", note, ux, uy, uz );
+            }
+        }
+
+        // 9) Outside-strike-volume deform clamp — recon halo must not inflate past fracture+halo.
+        {
+            char const* mats[] = { "gravel", "granite", "mica_schist" };
+            bool allOk = true;
+            char note[192] = "ok";
+            float fx = 0.f, fy = 0.f, fz = 0.f;
+            for ( char const* mat : mats )
+            {
+                RockStruct::Foliation fol = RockStruct::FoliationAt( 130.0, 125.0 );
+                FractureEvent ev = BuildEvent( V3( 0, 0, 0 ), V3( 0, 0, 1 ), V3( 1, 0.15f, 0 ),
+                    mat, 0xDE70ADull,
+                    ( FamilyOf( mat ) == MaterialFamily::MicaSchistFoliation ) ? &fol : nullptr );
+                float minX, minY, maxX, maxY;
+                ReconHaloAabb( ev, minX, minY, maxX, maxY );
+                float fMinX, fMinY, fMinZ, fMaxX, fMaxY, fMaxZ;
+                WorldAabb( ev, fMinX, fMinY, fMinZ, fMaxX, fMaxY, fMaxZ );
+                float const haloSpan = (std::max)( maxX - minX, maxY - minY );
+                float const fracSpan = (std::max)( fMaxX - fMinX, fMaxY - fMinY );
+                float const maxAllow = fracSpan + 2.f * kD2ReconHaloM + 0.04f;
+                // Mouth / HF refine must stay inside recon halo (not a second inflate).
+                float const mouthPad = 2.f * ev.mouthOpenRM + 2.f * kHfRefineHaloM;
+                if ( !ev.ok || haloSpan > maxAllow + 1e-4f || mouthPad > maxAllow + 0.08f
+                  || ev.fractureExtentRM > kMaxFractureExtentM + 1e-4f )
+                {
+                    allOk = false;
+                    std::snprintf( note, sizeof( note ),
+                        "%s haloSpan=%.3f max=%.3f mouthPad=%.3f fracExt=%.3f",
+                        mat, haloSpan, maxAllow, mouthPad, ev.fractureExtentRM );
+                    fx = maxX; fy = maxY; fz = 0.f;
+                    break;
+                }
+            }
+            CertAdd( R, "outside_strike_volume_deform", allOk ? "PASS" : "FAIL", note, fx, fy, fz );
+            if ( !allOk )
+            {
+                CertAdd( R, "HF_CHANGED_OUTSIDE_RECON_HALO", "FAIL", note, fx, fy, fz );
+            }
+        }
+
         return R;
     }
 
@@ -974,6 +1086,8 @@ namespace PickFracture
             "P5 SIDE-GATE - MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE\n"
             "law=impact->penetration->pry->material fracture->connected release->occupancy->local recon\n"
             "contact_frame=(T,B,N) angle-independent; P5a FREEZE; P5b CLOSED\n"
+            "hard_gate=sky/clear in|around hole => PRESENTATION_COVERAGE_FAIL (no mouth exception)\n"
+            "hard_gate=deform beyond fracture+min recon halo => HF_CHANGED_OUTSIDE_RECON_HALO\n"
             "pass=%d fail=%d skip=%d exit_code=%d\n"
             "first_fail=%s @ (%.3f,%.3f,%.3f)\n\n",
             R.passN, R.failN, R.skipN, R.exitCode,

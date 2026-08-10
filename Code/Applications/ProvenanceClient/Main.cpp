@@ -916,9 +916,11 @@ namespace
     void DrawCavityMeshesInterior(); // depth LEQUAL — no offset (offset x-rays nearby HF)
     void DrawEditedRegionOpenings(); // wall-only tip disks (crest uses occupancy break)
     void DrawOccupancySurfaceBreaks(); // stencil = matter-gone crest + mouth-bridge fill
-    bool CavityReadyNear( float x, float y ); // D2 present near XY — gate HF omit
+    bool CavityReadyNear( float x, float y ); // D2 present near XY — coarse readiness
+    bool CavityCoversXy( float x, float y, float tol = 0.10f ); // published D2 owns XY
     bool NearOpeningMouthAt( float x, float y ); // bite mouth disk — not whole occupancy cell
     bool CrestMouthStencilAt( float x, float y );
+    void DrawOpeningMouthPlugs(); // close clear/sky peeks when D2 XY cover missing
     void DrawCarveActionFootprints(); // occupancy crest + steep wall openings
     EditedRegion* FindEditedRegion( uint32_t id );
     void AddOpeningMonotonic( EditedRegion& er, float x, float y, float z, float r,
@@ -5160,7 +5162,7 @@ namespace
 
     bool CavityReadyNear( float x, float y )
     {
-        // HF may omit skin only where D2 exists nearby — otherwise handoff opens sky void.
+        // Any published cavity list in the 3×3 — coarse readiness only.
         int const cx = (int)std::floor( x );
         int const cy = (int)std::floor( y );
         for ( int dy = -1; dy <= 1; ++dy )
@@ -5169,6 +5171,31 @@ namespace
             {
                 CellSample const* c = GetCell( cx + dx, cy + dy );
                 if ( c && c->hasCavity && c->cavityList ) { return true; }
+            }
+        }
+        return false;
+    }
+
+    bool CavityCoversXy( float x, float y, float tol )
+    {
+        // True only when a published D2 tri centroid is near this XY — neighbor-has-cavity
+        // is not enough (that punched HF and peeked clear/sky beside the bite).
+        float const tol2 = tol * tol;
+        int const cx = (int)std::floor( x );
+        int const cy = (int)std::floor( y );
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                CellSample const* c = GetCell( cx + dx, cy + dy );
+                if ( !c || !c->hasCavity || c->cavityTris.empty() ) { continue; }
+                for ( DualContourQef::Tri const& t : c->cavityTris )
+                {
+                    float const mx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+                    float const my = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+                    float const ddx = mx - x, ddy = my - y;
+                    if ( ddx * ddx + ddy * ddy <= tol2 ) { return true; }
+                }
             }
         }
         return false;
@@ -5194,10 +5221,11 @@ namespace
 
     bool CrestMouthStencilAt( float x, float y )
     {
-        // HF aperture = opening mouth ∩ occupancy skin open ∩ D2 ready.
+        // HF aperture = opening mouth ∩ occupancy skin open ∩ D2 XY cover.
+        // Never punch clear/sky: omit only where published cavity owns the sample.
         if ( !NearOpeningMouthAt( x, y ) ) { return false; }
         if ( !SurfaceBrokenByOccupancy( x, y ) ) { return false; }
-        return CavityReadyNear( x, y );
+        return CavityCoversXy( x, y, 0.11f );
     }
 
     void DrawOccupancySurfaceBreaks()
@@ -7833,10 +7861,12 @@ namespace
     bool SampleTerrainDrawZ( float x, float y, float& outZ )
     {
         // Drawn HF: virgin continuum by default.
-        // Handoff only when skin is open AND D2 is ready — omit without cavity = sky void.
+        // Handoff only when mouth ∩ skin-open ∩ D2 XY cover — omit without cover = sky void FAIL.
         if ( !SampleGroundZBase( x, y, outZ ) ) { return false; }
         if ( CrestMouthStencilAt( x, y ) ) { return false; }
-        // Soft roof collapse (sand/gravel) inside occupancy-broken crest.
+        // Soft roof collapse (sand/gravel): tip mouth + collar only — not whole SurfaceBroken pad
+        // (surround fold / HF_CHANGED_OUTSIDE_RECON_HALO class defect).
+        if ( !NearOpeningMouthAt( x, y ) ) { return true; }
         if ( !SurfaceBrokenByOccupancy( x, y ) ) { return true; }
         std::string const cap = CapAtWorld( x, y );
         if ( !MaterialSlumpsOpen( cap ) ) { return true; }
@@ -8870,14 +8900,14 @@ namespace
             return;
         }
         float z00 = 0.f, z10 = 0.f, z01 = 0.f, z11 = 0.f;
-        bool const ok00 = SampleTerrainDrawZ( x0, y0, z00 );
-        bool const ok10 = SampleTerrainDrawZ( x1, y0, z10 );
-        bool const ok01 = SampleTerrainDrawZ( x0, y1, z01 );
-        bool const ok11 = SampleTerrainDrawZ( x1, y1, z11 );
+        bool ok00 = SampleTerrainDrawZ( x0, y0, z00 );
+        bool ok10 = SampleTerrainDrawZ( x1, y0, z10 );
+        bool ok01 = SampleTerrainDrawZ( x0, y1, z01 );
+        bool ok11 = SampleTerrainDrawZ( x1, y1, z11 );
         int const nOk = ( ok00 ? 1 : 0 ) + ( ok10 ? 1 : 0 ) + ( ok01 ? 1 : 0 ) + ( ok11 ? 1 : 0 );
-        if ( nOk == 0 ) { return; } // full mouth — D2 owns
-        // Mixed HF/mouth: subdivide omit cracks. At max depth do NOT emit partial tris —
-        // those became meter-long diagonal HF leaves (user shot 3) bridging grade→void.
+        if ( nOk == 0 ) { return; } // full mouth — D2 / opening plug owns
+        // Mixed HF/mouth: subdivide omit cracks. At max depth KEEP virgin Z on omitted
+        // corners so we never open a clear/sky pixel (PRESENTATION_COVERAGE_FAIL).
         if ( nOk < 4 )
         {
             if ( span > 0.035f && depth < 6 )
@@ -8888,8 +8918,12 @@ namespace
                 EmitTerrainQuadAdaptive( xm, y0, x1, ym, depth + 1 );
                 EmitTerrainQuadAdaptive( x0, ym, xm, y1, depth + 1 );
                 EmitTerrainQuadAdaptive( xm, ym, x1, y1, depth + 1 );
+                return;
             }
-            return;
+            if ( !ok00 ) { ok00 = SampleGroundZBase( x0, y0, z00 ); }
+            if ( !ok10 ) { ok10 = SampleGroundZBase( x1, y0, z10 ); }
+            if ( !ok01 ) { ok01 = SampleGroundZBase( x0, y1, z01 ); }
+            if ( !ok11 ) { ok11 = SampleGroundZBase( x1, y1, z11 ); }
         }
         if ( ok00 && ok10 && ok01 )
         {
@@ -9274,7 +9308,7 @@ namespace
 
     void DrawDigFloorPlugs()
     {
-        // Soft floor under punched openings — only until D2 cavity owns the mouth.
+        // Soft floor under punched openings — only until D2 cavity owns the mouth XY.
         if ( g.scars.empty() ) { return; }
         constexpr int kSeg = 28;
         glShadeModel( GL_FLAT );
@@ -9285,7 +9319,7 @@ namespace
             if ( s.place || s.tunnel ) { continue; }
             if ( s.kind == ScarKind::FoliationPlate || s.kind == ScarKind::FacePuncture ) { continue; }
             // Occupancy D2 owns the hole — DigDep plugs fought cavity and left bright rims.
-            if ( CavityReadyNear( s.wx, s.wy ) ) { continue; }
+            if ( CavityCoversXy( s.wx, s.wy, 0.12f ) ) { continue; }
             float const rad = s.radius;
             if ( rad < 1e-4f ) { continue; }
             float zc = 0.f;
@@ -9302,6 +9336,56 @@ namespace
                 SampleCupSurfaceZ( x0, y0, false, z0 );
                 SampleCupSurfaceZ( x1, y1, false, z1 );
                 EmitPhase3Tri( s.wx, s.wy, zc, x0, y0, z0, x1, y1, z1, 1.f );
+            }
+        }
+        glEnd();
+        glEnable( GL_CULL_FACE );
+    }
+
+    void DrawOpeningMouthPlugs()
+    {
+        // Closed rock plug for pick/occupancy openings that lack D2 XY cover.
+        // Hard gate: sky/clear through a strike hole is always PRESENTATION_COVERAGE_FAIL —
+        // never leave stencil-punched pixels peeking glClear.
+        if ( g.editedRegions.empty() ) { return; }
+        constexpr int kSeg = 24;
+        glShadeModel( GL_FLAT );
+        glDisable( GL_CULL_FACE );
+        glBegin( GL_TRIANGLES );
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            for ( EditOpening const& o : er.openings )
+            {
+                if ( CavityCoversXy( o.x, o.y, 0.12f ) ) { continue; }
+                float const rad = (std::max)( 0.05f, o.r );
+                float gradeZ = o.z;
+                SampleGroundZBase( o.x, o.y, gradeZ );
+                float floorZ = gradeZ;
+                if ( !SampleOccupancyZ( o.x, o.y, floorZ ) )
+                {
+                    floorZ = gradeZ - (std::max)( 0.06f, 1.5f * kVoxelEdgeM );
+                }
+                // Recess floor slightly below grade so the lip still reads.
+                floorZ = (std::min)( floorZ, gradeZ - 0.04f );
+                for ( int i = 0; i < kSeg; ++i )
+                {
+                    float const a0 = (float)i / (float)kSeg * 6.2831853f;
+                    float const a1 = (float)( i + 1 ) / (float)kSeg * 6.2831853f;
+                    float const x0 = o.x + std::cos( a0 ) * rad;
+                    float const y0 = o.y + std::sin( a0 ) * rad;
+                    float const x1 = o.x + std::cos( a1 ) * rad;
+                    float const y1 = o.y + std::sin( a1 ) * rad;
+                    float z0 = floorZ, z1 = floorZ;
+                    float g0 = gradeZ, g1 = gradeZ;
+                    SampleGroundZBase( x0, y0, g0 );
+                    SampleGroundZBase( x1, y1, g1 );
+                    float o0 = g0, o1 = g1;
+                    if ( SampleOccupancyZ( x0, y0, o0 ) ) { z0 = (std::min)( o0, g0 - 0.04f ); }
+                    else { z0 = g0 - 0.06f; }
+                    if ( SampleOccupancyZ( x1, y1, o1 ) ) { z1 = (std::min)( o1, g1 - 0.04f ); }
+                    else { z1 = g1 - 0.06f; }
+                    EmitPhase3Tri( o.x, o.y, floorZ, x0, y0, z0, x1, y1, z1, 0.85f );
+                }
             }
         }
         glEnd();
@@ -9367,9 +9451,10 @@ namespace
         glStencilMask( 0x00 );
         glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
         // ALWAYS only inside depth-gated stencil — clears HF skin without through-hill paint.
-        // No per-frame mouth underlay (lag + side-view floaters). Backdrop peek = sky blue void.
+        // Opening plugs + D2 must own punched pixels — sky/clear peek is PRESENTATION_COVERAGE_FAIL.
         glDepthFunc( GL_ALWAYS );
         DrawDigFloorPlugs();
+        DrawOpeningMouthPlugs();
         DrawLiveScoopCups( true );
         DrawCavityMeshesMouth();
 
@@ -15242,9 +15327,9 @@ namespace
                     {
                         char note[120];
                         std::snprintf( note, sizeof( note ),
-                            "void hf=%d mouth=%d d2=%d occ=%d",
+                            "void hf=%d mouth=%d d2=%d occ=%d (sky/clear never excused)",
                             hfOk ? 1 : 0, mouth ? 1 : 0, d2Ok ? 1 : 0, occSolid ? 1 : 0 );
-                        LsiAddDefect( "UNEXPLAINED_VOID", note, x, y, zIntent );
+                        LsiAddDefect( "PRESENTATION_COVERAGE_FAIL", note, x, y, zIntent );
                     }
                 }
             }
@@ -15285,6 +15370,70 @@ namespace
             if ( !ok )
             {
                 LsiAddDefect( "COVERAGE_GAP", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
+            }
+        }
+
+        // Presentation sky/clear hard gate — action neighborhood framebuffer.
+        // Any sky-matching sample in/around the hole = PRESENTATION_COVERAGE_FAIL.
+        // No exception for "legitimate cavity mouth showing sky."
+        {
+            constexpr int kVoidR = 114, kVoidG = 158, kVoidB = 224; // glClear 0.45,0.62,0.88
+            constexpr int kBackR = 178, kBackG = 204, kBackB = 140; // legacy backdrop
+            auto d2 = []( int r, int gc, int b, int rr, int gg, int bb ) {
+                long long dr = r - rr, dg = gc - gg, db = b - bb;
+                return dr * dr + dg * dg + db * db;
+            };
+            auto isSkyOrClear = [&]( int r, int gc, int b ) -> bool {
+                if ( d2( r, gc, b, kVoidR, kVoidG, kVoidB ) <= 48 * 48 ) { return true; }
+                if ( d2( r, gc, b, kBackR, kBackG, kBackB ) <= 8 * 8 ) { return true; }
+                // Blue-dominant sky classifier (same family as WriteCertPixelReport).
+                long long dv = d2( r, gc, b, kVoidR, kVoidG, kVoidB );
+                if ( b > gc && b > r && b > 150 && dv <= 70 * 70 ) { return true; }
+                return false;
+            };
+            GLint vp[4] = {};
+            glGetIntegerv( GL_VIEWPORT, vp );
+            int const w = vp[2], h = vp[3];
+            int skyHits = 0;
+            int sampled = 0;
+            if ( w >= 64 && h >= 64 )
+            {
+                // Crosshair / action neighborhood (center of view — LSI aims at the strike).
+                int const x0 = w * 2 / 5, x1 = w * 3 / 5;
+                int const y0 = h * 2 / 5, y1 = h * 3 / 5;
+                std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+                glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+                glReadBuffer( GL_FRONT );
+                glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+                for ( int y = y0; y < y1; y += 2 )
+                {
+                    for ( int x = x0; x < x1; x += 2 )
+                    {
+                        size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                        int r = rgba[i], gc = rgba[i + 1], b = rgba[i + 2];
+                        ++sampled;
+                        if ( isSkyOrClear( r, gc, b ) ) { ++skyHits; }
+                    }
+                }
+            }
+            char note[200];
+            std::snprintf( note, sizeof( note ),
+                "skyOrClear=%d sampled=%d void_clear=RGB(%d,%d,%d) (mouth sky never excused)",
+                skyHits, sampled, kVoidR, kVoidG, kVoidB );
+            if ( sampled <= 0 )
+            {
+                row( "presentation_sky_clear", "SKIP", "no framebuffer for sky classifier", 0, 0, 0, 0 );
+            }
+            else
+            {
+                // Dig/place action neighborhood must not show clear. Allow tiny AA fringe.
+                bool const ok = skyHits <= (std::max)( 2, sampled / 200 );
+                row( "presentation_sky_clear", ok ? "PASS" : "FAIL", note, 0, 0, skyHits, sampled );
+                if ( !ok )
+                {
+                    LsiAddDefect( "PRESENTATION_COVERAGE_FAIL", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
+                    g.certLsiExitCode = 1;
+                }
             }
         }
 
