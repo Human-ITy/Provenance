@@ -30,7 +30,7 @@ Branches:
 - **P0–P2** done: stock build, handshake, far/streamed heightfield walk.
 - **P3** partial: standable + wall capsule; not occupancy collision.
 - **P3b voxel-form gate — client land:** dig/pick subtract affect sphere from occupancy → D2 matter-face cavity (VisualMaterial interior); heightfield opens where matter is gone; DigScar cups/chips are flash-only. Authoritative grams still from carve digest + column reconcile.
-- **P4 parity digests** next (headless = Unreal = Esoterica receipts).
+- **P4 Fablescript authority floor** — see pin block below (`--cert-p4`).
 - **P5 water** deferred.
 
 ## Dig / tunnel ruling (locked)
@@ -136,7 +136,16 @@ ASYNC + DETERMINISM FLOOR
 SHA: faa8b9fcefddf1037f467cd7458a7eb2b32908dd
 ```
 
-`--cert-async` / `--cert-async-determinism` → `%TEMP%\provenance_async_determinism_cert.txt`. Equal matter + equal LSI closure (unexplainedOpen=0, occ/D2/outside hashes) under 3×3 `voxel_column` forward/reverse/checkerboard pacing and D2 rebuild order. `keepLocalCarve` preserved. **Next: P4.**
+`--cert-async` / `--cert-async-determinism` → `%TEMP%\provenance_async_determinism_cert.txt`. Equal matter + equal LSI closure (unexplainedOpen=0, occ/D2/outside hashes) under 3×3 `voxel_column` forward/reverse/checkerboard pacing and D2 rebuild order. `keepLocalCarve` preserved.
+
+```
+P4 FABLESCRIPT AUTHORITY FLOOR
+SHA: (set on green commit)
+```
+
+**Law:** Client owns intent, prediction, cache and presentation. Fablescript owns matter, mutation, inventory transfer, fracture/separation identity and world revision.
+
+`--cert-p4` / `--cert-p4-authority` → `%TEMP%\provenance_p4_authority_cert.txt`. Headless probe: `cert_p4_headless.py`. Hard kills: `nothing_to_dig` must not synthesize a scoop; visualCap≠auth must not silently remap (flag/telemetry only). Dig/place held credit/debit and terrain rev follow the authoritative receipt; StrikePick prediction rolls back on refuse.
 
 ### Standing scalability rule
 

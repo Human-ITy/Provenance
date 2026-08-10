@@ -39,7 +39,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P3d Detached matter support** | PHYS chips on SupportBelow + ACTIVE/SETTLED lifecycle | **Floor** @ `b1fec59`; **stop before place** |
 | **P3d.1 Chip quiescence** | Hysteretic ACTIVE→SETTLED; steep-static sleep; wake on supportRev | **Floor** @ `0a8867a`; **stop before place** |
 | **P3d.2 Chip vibrate/cycle halt** | Limit-cycle / orbit detect + tangential damp → SETTLED | **Floor** @ `6afec51`; **stop before place** |
-| **P4** Interaction parity digests | Headless = Unreal = Esoterica material receipts | Next (after place/async) |
+| **P4** Fablescript authority floor | Receipt-driven dig/place; no invent on refuse; `--cert-p4` | In progress / see pin |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 
 ### The voxel-form gate (user law)

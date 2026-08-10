@@ -1385,4 +1385,44 @@ namespace H2H
     {
         return ( r.parent_after_g + r.plate_g + r.fines_g ) == r.parent_before_g;
     }
+
+    // P4: local StrikePick / fines / body mint is prediction only — restore on refuse/nothing_to_dig.
+    struct PredictionCheckpoint
+    {
+        bool valid = false;
+        size_t bodiesN = 0;
+        size_t aggregatesN = 0;
+        int world_revision = 0;
+        uint64_t next_id = 1;
+        std::vector<FracturePatch> patches;
+        std::unordered_map<uint64_t, int> parent_remaining_g;
+    };
+
+    inline PredictionCheckpoint CapturePredictionCheckpoint()
+    {
+        EnsureReady();
+        PredictionCheckpoint cp;
+        World const& w = State();
+        cp.valid = true;
+        cp.bodiesN = w.bodies.size();
+        cp.aggregatesN = w.aggregates.size();
+        cp.world_revision = w.world_revision;
+        cp.next_id = w.next_id;
+        cp.patches = w.patches;
+        cp.parent_remaining_g = w.parent_remaining_g;
+        return cp;
+    }
+
+    inline void RestorePredictionCheckpoint( PredictionCheckpoint const& cp )
+    {
+        if ( !cp.valid ) { return; }
+        EnsureReady();
+        World& w = State();
+        w.patches = cp.patches;
+        if ( w.bodies.size() > cp.bodiesN ) { w.bodies.resize( cp.bodiesN ); }
+        if ( w.aggregates.size() > cp.aggregatesN ) { w.aggregates.resize( cp.aggregatesN ); }
+        w.world_revision = cp.world_revision;
+        w.next_id = cp.next_id;
+        w.parent_remaining_g = cp.parent_remaining_g;
+    }
 }

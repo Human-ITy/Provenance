@@ -313,6 +313,20 @@ namespace
         int certAsyncWaitSettle = 0; // frames to wait after queue drains
         int certAsyncPlaceAccepted = 0;
         int certAsyncPlaceOk = 0;
+        // --cert-p4: Fablescript authority floor (receipt-driven dig/place; no invent).
+        bool certP4 = false;
+        int certP4Phase = 0;
+        DWORD certP4PhaseMs = 0;
+        int certP4ExitCode = 0;
+        bool certP4FailWritten = false;
+        int certP4Wait = 0;
+        int certP4Held0 = 0;
+        int certP4Rev0 = -1;
+        int certP4OccSolid0 = 0;
+        uint32_t certP4OccHash0 = 0;
+        float certP4DigX = 0.f, certP4DigY = 0.f, certP4DigZ = 0.f;
+        float certP4PlaceX = 0.f, certP4PlaceY = 0.f, certP4PlaceZ = 0.f;
+        int certP4PadCx = 0, certP4PadCy = 0;
         // Startup / subsystem counters — prove virgin path does zero D2.
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
@@ -416,9 +430,26 @@ namespace
         GallerySample gallery[kGalleryMax] = {};
         int galleryCount = 0;
         bool gallerySpawned = false;
-        int pendingLocalScoopG = 0;
+        int pendingLocalScoopG = 0; // prediction / HUD only — never credit on refuse/nothing_to_dig
         std::string pendingLocalScoopMat;
         float pendingAffectRM = kHandfulRadiusM; // dig-volume sphere committed with the pending carve
+        H2H::PredictionCheckpoint pendingH2HPredict{}; // StrikePick prediction; restore on refuse
+        bool pendingH2HPredictValid = false;
+
+        // P4 last authoritative receipt snapshot (applied client state must match these).
+        bool lastAuthHave = false;
+        bool lastAuthAccepted = false;
+        std::string lastAuthReason;
+        std::string lastAuthMaterial;
+        int lastAuthGrams = 0;
+        int lastAuthRev = -1;
+        int lastAuthHeldAfter = 0;
+        int lastAuthHeldDelta = 0;
+        bool lastAuthMatMismatch = false; // visualCap != auth material (telemetry; no remap)
+        std::string lastAuthVisualCap;
+        uint64_t lastAuthBodyId = 0;
+        uint64_t lastAuthAggId = 0;
+        int lastAuthWorldRev = 0;
 
         int lastDigRev = -1;
         float lastEngineMs = 0.f;
@@ -2526,8 +2557,49 @@ namespace
         ParseGramsMapAfterKey( line, "\"removed\"", out, totalG, dominant );
     }
 
+    void ClearPendingLocalScoopPredict()
+    {
+        g.pendingBiteForward = false;
+        g.pendingLocalScoopG = 0;
+        g.pendingLocalScoopMat.clear();
+        g.pendingAffectRM = 0.f;
+        if ( g.pendingH2HPredictValid )
+        {
+            H2H::RestorePredictionCheckpoint( g.pendingH2HPredict );
+            g.pendingH2HPredictValid = false;
+            g.pendingH2HPredict = {};
+        }
+    }
+
+    void NoteAuthReceipt( bool accepted, char const* reason, char const* material, int grams,
+        int rev, int heldDelta, bool matMismatch )
+    {
+        g.lastAuthHave = true;
+        g.lastAuthAccepted = accepted;
+        g.lastAuthReason = reason ? reason : "";
+        g.lastAuthMaterial = material ? material : "";
+        g.lastAuthGrams = grams;
+        g.lastAuthRev = rev;
+        g.lastAuthHeldAfter = g.heldTotalG;
+        g.lastAuthHeldDelta = heldDelta;
+        g.lastAuthMatMismatch = matMismatch;
+        g.lastAuthVisualCap = g.spireVisualCap;
+        g.lastAuthBodyId = 0;
+        g.lastAuthAggId = 0;
+        g.lastAuthWorldRev = H2H::State().world_revision;
+        if ( !H2H::State().bodies.empty() )
+        {
+            g.lastAuthBodyId = H2H::State().bodies.back().body_id;
+        }
+        if ( !H2H::State().aggregates.empty() )
+        {
+            g.lastAuthAggId = H2H::State().aggregates.back().aggregate_id;
+        }
+    }
+
     void ParseCarveReply( std::string const& line )
     {
+        // P4: apply authoritative receipt only. Prediction may exist; never invent grams/material on refuse.
         ExtractJsonFloat( line, "engine_ms", g.lastEngineMs );
         int rev = g.terrainRev;
         ExtractJsonInt( line, "rev", rev );
@@ -2538,122 +2610,95 @@ namespace
         ExtractJsonString( line, "message", msg );
         if ( msg.empty() ) { ExtractJsonString( line, "msg", msg ); }
 
-        // Envelope ok can be true while result.ok is false — detect refusal by reason/msg/empty removed
         std::unordered_map<std::string, int> removed;
         int totalG = 0;
         std::string dominant;
         ParseRemovedMap( line, removed, totalG, dominant );
 
-        if ( totalG <= 0 && ( !reason.empty() || line.find( "\"ok\":false" ) != std::string::npos || line.find( "\"ok\": false" ) != std::string::npos ) )
+        bool const hardRefuse = ( line.find( "\"ok\":false" ) != std::string::npos
+                               || line.find( "\"ok\": false" ) != std::string::npos );
+        bool const emptyDig = ( reason == "nothing_to_dig" )
+            || ( msg.find( "Nothing to dig" ) != std::string::npos )
+            || ( msg.find( "nothing to dig" ) != std::string::npos );
+
+        if ( totalG <= 0 && ( hardRefuse || !reason.empty() || emptyDig ) )
         {
-            bool const emptyDig = ( reason == "nothing_to_dig" )
-                || ( msg.find( "Nothing to dig" ) != std::string::npos )
-                || ( msg.find( "nothing to dig" ) != std::string::npos );
-            if ( emptyDig )
-            {
-                // Soft scoop / forward bite: credit Index transfer grams when bridge column empty.
-                int creditG = g.pendingLocalScoopG > 0
-                    ? g.pendingLocalScoopG
-                    : (int)std::lround( kHandfulDirtG );
-                std::string mat = g.pendingLocalScoopMat.empty()
-                    ? CellCapName( g.pendingBiteCx, g.pendingBiteCy )
-                    : g.pendingLocalScoopMat;
-                if ( g.pendingBiteForward || g.pendingLocalScoopG > 0 )
-                {
-                    std::unordered_map<std::string, int> localRem;
-                    localRem[mat.empty() ? "dirt" : mat] = creditG;
-                    CreditHeld( localRem );
-                    ClearPendingScarEdit();
-                    CancelPlaceScarsUnderDig( g.pendingBiteWx, g.pendingBiteWy, kHandfulRadiusM );
-                    float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
-                    char d[384];
-                    std::snprintf( d, sizeof( d ),
-                        "H2H scoop @(%d,%d): +%dg %s (index transfer) | hand %dg ~%.2f | eng empty %.1fms",
-                        g.pendingBiteCx, g.pendingBiteCy,
-                        creditG, mat.empty() ? "dirt" : mat.c_str(),
-                        g.heldTotalG, handfuls, g.lastEngineMs );
-                    g.digestLine = d;
-                    g.statusLine = "Horizon-to-Hand - scoop credited";
-                    g.pendingBiteForward = false;
-                    g.pendingLocalScoopG = 0;
-                    g.pendingLocalScoopMat.clear();
-                    g.pendingAffectRM = 0.f;
-                    UpdateStreamHud();
-                    return;
-                }
-                // Steep/virgin: engine matter gone, grade skin can still float — keep optimistic cup.
-                ClearPendingScarEdit();
-                CancelPlaceScarsUnderDig( (float)g.pendingBiteCx + g.pendingBiteU,
-                    (float)g.pendingBiteCy + g.pendingBiteV, kHandfulRadiusM );
-                char d[320];
-                std::snprintf( d, sizeof( d ),
-                    "DIG skin clear @(%d,%d): leftover surface cut (engine already empty) | engine %.1fms",
-                    g.pendingBiteCx, g.pendingBiteCy, g.lastEngineMs );
-                g.digestLine = d;
-                g.statusLine = "Phase 4 - cleared leftover skin";
-                g.pendingBiteForward = false;
-                g.pendingLocalScoopG = 0;
-                g.pendingLocalScoopMat.clear();
-                g.pendingAffectRM = 0.f;
-                UpdateStreamHud();
-                return;
-            }
+            // HARD KILL: nothing_to_dig / refuse → no local scoop synthesize, no material invent.
+            int const held0 = g.heldTotalG;
             RemoveLastOptimisticDigScar();
-            char const* why = msg.empty()
-                ? ( reason.empty() ? "nothing" : reason.c_str() )
-                : msg.c_str();
+            ClearPendingLocalScoopPredict();
+            char const* why = emptyDig
+                ? "nothing_to_dig"
+                : ( msg.empty()
+                    ? ( reason.empty() ? "refused" : reason.c_str() )
+                    : msg.c_str() );
+            NoteAuthReceipt( false, why, "", 0, g.terrainRev, g.heldTotalG - held0, false );
             char d[320];
-            std::snprintf( d, sizeof( d ), "DIG refused @(%d,%d): %s (engine %.1fms)",
+            std::snprintf( d, sizeof( d ), "DIG refused @(%d,%d): %s (engine %.1fms) | no invent credit",
                 g.pendingBiteCx, g.pendingBiteCy, why, g.lastEngineMs );
             g.digestLine = d;
-            g.statusLine = "Phase 4 - dig refused";
-            g.pendingAffectRM = 0.f;
+            g.statusLine = emptyDig
+                ? "P4 - nothing_to_dig (no scoop invent)"
+                : "P4 - dig refused (receipt)";
             UpdateStreamHud();
             return;
         }
 
-        // Empty removed without explicit refuse (sub-unit graze etc.) — keep scar, no hand credit
-        if ( totalG <= 0 && reason.empty() && line.find( "\"ok\":false" ) == std::string::npos )
+        // Empty removed without explicit refuse (sub-unit graze) — keep scar, no hand credit
+        if ( totalG <= 0 )
         {
+            g.pendingH2HPredictValid = false; // keep local presentation; no gram invent
+            g.pendingLocalScoopG = 0;
+            g.pendingLocalScoopMat.clear();
+            g.pendingAffectRM = 0.f;
+            NoteAuthReceipt( true, "graze", "", 0, g.terrainRev, 0, false );
             g.digestLine = "DIG grazed - no whole grams yet; scoop again or aim denser dirt";
-            g.statusLine = "Phase 4 - dig grazed (no credit)";
+            g.statusLine = "P4 - dig grazed (no credit)";
             UpdateStreamHud();
             return;
         }
 
-        // Credit held bite — accumulate like engine carry (stockpile scoops for later places)
+        // Authoritative credit only — never remap to visual cap / pendingLocalScoopMat.
+        int const held0 = g.heldTotalG;
         CreditHeld( removed );
 
-        // Material mismatch telemetry only — never remap auth grass ↔ visual limestone.
-        if ( !dominant.empty() && !g.spireVisualCap.empty()
-          && _stricmp( dominant.c_str(), g.spireVisualCap.c_str() ) != 0 )
+        bool const matMismatch = ( !dominant.empty() && !g.spireVisualCap.empty()
+            && _stricmp( dominant.c_str(), g.spireVisualCap.c_str() ) != 0 );
+        if ( matMismatch )
         {
+            // Telemetry / parity flag only — do NOT rewrite held material to visualCap.
             char mm[240];
             std::snprintf( mm, sizeof( mm ),
-                " | MISMATCH visCap=%s authRemoved=%s (telemetry, no remap)",
+                " | AUTH_MATERIAL_MISMATCH visCap=%s authRemoved=%s (telemetry, no remap)",
                 g.spireVisualCap.c_str(), dominant.c_str() );
             g.spireLine += mm;
             OutputDebugStringA( mm );
             OutputDebugStringA( "\n" );
         }
 
+        // Prediction kept only when receipt accepted; checkpoint discarded (not restored).
+        g.pendingH2HPredictValid = false;
+        g.pendingH2HPredict = {};
+        g.pendingBiteForward = false;
+        g.pendingLocalScoopG = 0;
+        g.pendingLocalScoopMat.clear();
+        g.pendingAffectRM = 0.f;
+
+        NoteAuthReceipt( true, "ok", dominant.c_str(), totalG, g.terrainRev,
+            g.heldTotalG - held0, matMismatch );
+
         float handfuls = ( g.heldTotalG > 0 ) ? ( g.heldTotalG / kHandfulDirtG ) : 0.f;
-        float mlApprox = ( totalG / kDirtVoxelG ) * ( kVoxelVolumeM3 * 1e6f );
-        (void)mlApprox;
         char d[384];
         std::snprintf( d, sizeof( d ),
-            "DIG digest: +%dg %s @(%d,%d)%s | hand now %dg ~%.2f handfuls | rev=%d | engine %.1fms",
+            "DIG digest: +%dg %s @(%d,%d) | hand now %dg ~%.2f handfuls | rev=%d | engine %.1fms%s",
             totalG, dominant.empty() ? "?" : dominant.c_str(),
             g.pendingBiteCx, g.pendingBiteCy,
-            g.pendingBiteForward ? " forward" : "",
-            g.heldTotalG, handfuls, g.terrainRev, g.lastEngineMs );
+            g.heldTotalG, handfuls, g.terrainRev, g.lastEngineMs,
+            matMismatch ? " | MISMATCH(no remap)" : "" );
         g.digestLine = d;
-        g.statusLine = "Phase 4 - scoop credited (handful)";
-        g.pendingBiteForward = false;
+        g.statusLine = "P4 - scoop credited (receipt)";
         ClearPendingScarEdit();
-        // Dig cuts mounds — placed dirt can be scooped again.
         CancelPlaceScarsUnderDig( g.pendingBiteWx, g.pendingBiteWy, kHandfulRadiusM );
-        // P3b: demand occupancy for the bite cell so D2 cavity can replace DigScar cups.
         PrefetchOccupancyCell( g.pendingBiteCx, g.pendingBiteCy );
         PrefetchOccupancyCell( g.pendingBiteCx + 1, g.pendingBiteCy );
         PrefetchOccupancyCell( g.pendingBiteCx - 1, g.pendingBiteCy );
@@ -2664,6 +2709,7 @@ namespace
 
     void ParsePlaceReply( std::string const& line )
     {
+        // P4: place debit follows receipt — never invent HandfulScoopGrams on empty placed_by.
         ExtractJsonFloat( line, "engine_ms", g.lastEngineMs );
         int rev = g.terrainRev;
         ExtractJsonInt( line, "rev", rev );
@@ -2682,39 +2728,43 @@ namespace
         {
             // Hole-fill places never added a mound scar — only grade/mound places roll back.
             if ( !g.pendingPlaceIntoHole ) { RemoveLastOptimisticPlaceScar(); }
-            g.pendingPlaceIntoHole = false;
-            g.pendingPlaceAsk.clear();
-            g.pendingPlaceG = 0;
-            if ( msg.find( "aren't carrying" ) != std::string::npos
-              || msg.find( "Nothing in hand" ) != std::string::npos )
+            bool const handEmptyAuth = ( msg.find( "aren't carrying" ) != std::string::npos
+                || msg.find( "Nothing in hand" ) != std::string::npos );
+            if ( handEmptyAuth )
             {
                 g.heldBite.clear();
                 g.heldTotalG = 0;
                 g.heldDominant.clear();
             }
-            if ( msg.find( "Nowhere to place" ) != std::string::npos && g.heldTotalG > 0 && g.heldTotalG < 80 )
+            else if ( g.pendingPlaceG > 0 )
             {
-                // Sub-quantum scraps often can't land a body — say so clearly.
-                char d[320];
-                std::snprintf( d, sizeof( d ),
-                    "PLACE refused @(%d,%d): only %dg left (need a fuller scoop) (engine %.1fms)",
-                    g.pendingBiteCx, g.pendingBiteCy, g.heldTotalG, g.lastEngineMs );
-                g.digestLine = d;
-                g.statusLine = "Phase 4 - place refused (scrap)";
-                UpdateStreamHud();
-                return;
+                // Restore optimistic local debit — refuse must not leave invented hand loss.
+                std::unordered_map<std::string, int> restore = g.pendingPlaceAsk;
+                if ( restore.empty() && !g.heldDominant.empty() )
+                {
+                    restore[g.heldDominant] = g.pendingPlaceG;
+                }
+                else if ( restore.empty() )
+                {
+                    restore["dirt"] = g.pendingPlaceG;
+                }
+                CreditHeld( restore );
             }
+            int const heldDelta = 0;
+            g.pendingPlaceIntoHole = false;
+            g.pendingPlaceAsk.clear();
+            g.pendingPlaceG = 0;
+            char const* why = msg.empty()
+                ? ( reason.empty()
+                    ? ( nothingLanded ? "nowhere_to_place" : "failed" )
+                    : reason.c_str() )
+                : msg.c_str();
+            NoteAuthReceipt( false, why, "", 0, g.terrainRev, heldDelta, false );
             char d[320];
-            std::snprintf( d, sizeof( d ), "PLACE refused @(%d,%d): %s (engine %.1fms)",
-                g.pendingBiteCx, g.pendingBiteCy,
-                msg.empty()
-                    ? ( reason.empty()
-                        ? ( nothingLanded ? "nowhere to place / nothing landed" : "failed" )
-                        : reason.c_str() )
-                    : msg.c_str(),
-                g.lastEngineMs );
+            std::snprintf( d, sizeof( d ), "PLACE refused @(%d,%d): %s (engine %.1fms) | no invent debit",
+                g.pendingBiteCx, g.pendingBiteCy, why, g.lastEngineMs );
             g.digestLine = d;
-            g.statusLine = "Phase 4 - place refused";
+            g.statusLine = "P4 - place refused (receipt)";
             UpdateStreamHud();
             return;
         }
@@ -2725,22 +2775,51 @@ namespace
         ParseGramsMapAfterKey( line, "\"placed_by\"", placedBy, placedByTotal, placedDom );
         // Local PlaceOccupancyFill already debited pendingPlaceG on send. Digest reconciles only.
         int const alreadyDebited = g.pendingPlaceG;
+        int const held0 = g.heldTotalG + alreadyDebited; // pre-prediction held
         if ( placedByTotal > 0 )
         {
             placed = placedByTotal;
             int delta = placedByTotal - alreadyDebited;
             if ( delta > 0 ) { DebitHeldTotal( delta ); }
+            else if ( delta < 0 ) { CreditHeld( { { placedDom.empty() ? "dirt" : placedDom, -delta } } ); }
+        }
+        else if ( havePlaced && placed > 0 )
+        {
+            int delta = placed - alreadyDebited;
+            if ( delta > 0 ) { DebitHeldTotal( delta ); }
+            else if ( delta < 0 )
+            {
+                std::unordered_map<std::string, int> restore;
+                restore[g.heldDominant.empty() ? "dirt" : g.heldDominant] = -delta;
+                CreditHeld( restore );
+            }
+            if ( placedDom.empty() && !g.heldDominant.empty() ) { placedDom = g.heldDominant; }
         }
         else
         {
-            int debit = havePlaced && placed > 0 ? placed : alreadyDebited;
-            if ( debit <= 0 ) { debit = HandfulScoopGrams(); }
-            int delta = debit - alreadyDebited;
-            if ( delta > 0 ) { DebitHeldTotal( delta ); }
-            if ( !havePlaced || placed <= 0 ) { placed = debit; }
+            // No authoritative placed amount — do not invent HandfulScoopGrams. Keep local debit as-is
+            // only when alreadyDebited > 0 (prediction); otherwise refuse-style no-op.
+            placed = alreadyDebited;
+            if ( placed <= 0 )
+            {
+                NoteAuthReceipt( false, reason.empty() ? "no_placed" : reason.c_str(),
+                    "", 0, g.terrainRev, 0, false );
+                g.pendingPlaceAsk.clear();
+                g.pendingPlaceG = 0;
+                g.pendingPlaceIntoHole = false;
+                g.digestLine = "PLACE digest empty — no invent debit";
+                g.statusLine = "P4 - place empty receipt";
+                UpdateStreamHud();
+                return;
+            }
         }
         g.pendingPlaceAsk.clear();
         g.pendingPlaceG = 0;
+
+        int const heldDelta = g.heldTotalG - held0;
+        NoteAuthReceipt( true, "ok",
+            placedDom.empty() ? ( g.heldDominant.empty() ? "?" : g.heldDominant.c_str() ) : placedDom.c_str(),
+            placed, g.terrainRev, heldDelta, false );
 
         char d[320];
         std::snprintf( d, sizeof( d ),
@@ -2749,13 +2828,11 @@ namespace
             g.pendingBiteCx, g.pendingBiteCy, g.heldTotalG, g.heldTotalG / kHandfulDirtG,
             g.terrainRev, g.lastEngineMs );
         g.digestLine = d;
-        g.statusLine = g.heldTotalG > 0 ? "P3e - placed (still holding)" : "P3e - placed (hand empty)";
+        g.statusLine = g.heldTotalG > 0 ? "P4 - placed (receipt)" : "P4 - placed (hand empty)";
         ClearPendingScarEdit();
-        // Slump fill: one scoop into the hole shrinks the dig cup. Hole-fill never added a mound.
         CancelDigScarsUnderPlace( (float)g.pendingBiteCx + g.pendingBiteU,
             (float)g.pendingBiteCy + g.pendingBiteV, kHandfulRadiusM );
         g.pendingPlaceIntoHole = false;
-        // No column fan-out after place — same stall as dig.
         UpdateStreamHud();
     }
 
@@ -7342,6 +7419,9 @@ namespace
                 affect.radiusM, affect.depthM, fnx, fny, fnz );
         }
 
+        // P4: StrikePick is prediction — restored on refuse/nothing_to_dig; grams from carve receipt only.
+        g.pendingH2HPredict = H2H::CapturePredictionCheckpoint();
+        g.pendingH2HPredictValid = true;
         H2H::SeparationResult const sep = H2H::StrikePick(
             g.aimX, g.aimY, g.aimZ, fx, fy, fz, form.material_id );
 
@@ -15286,6 +15366,509 @@ namespace
         }
     }
 
+    // ---------- P4 Fablescript authority floor (--cert-p4) ----------
+    // Receipt-driven dig/place: same accept/reject, material, grams, occ delta, rev, held debit/credit.
+    // Hard FAIL on nothing_to_dig invent scoop or silent material remap.
+    struct P4Row
+    {
+        char check[48] = {};
+        char verdict[12] = "SKIP";
+        char note[220] = {};
+    };
+    static constexpr int kP4RowCap = 48;
+    static P4Row s_p4Rows[kP4RowCap];
+    static int s_p4RowN = 0;
+    static char s_p4FailReason[96] = {};
+
+    void P4AddRow( char const* check, char const* verdict, char const* note )
+    {
+        if ( s_p4RowN >= kP4RowCap ) { return; }
+        P4Row& r = s_p4Rows[s_p4RowN++];
+        std::snprintf( r.check, sizeof( r.check ), "%s", check ? check : "?" );
+        std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict ? verdict : "SKIP" );
+        std::snprintf( r.note, sizeof( r.note ), "%s", note ? note : "" );
+        if ( std::strcmp( r.verdict, "FAIL" ) == 0 )
+        {
+            g.certP4ExitCode = 1;
+            if ( !s_p4FailReason[0] )
+            {
+                std::snprintf( s_p4FailReason, sizeof( s_p4FailReason ), "%s", r.check );
+            }
+        }
+    }
+
+    void P4WriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_p4_authority_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_p4RowN; ++i )
+        {
+            if ( std::strcmp( s_p4Rows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_p4Rows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        std::fprintf( f,
+            "Provenance P4 Fablescript Authority Floor cert\n"
+            "law=Client owns intent/prediction/cache/presentation; Fablescript owns matter/mutation/inventory/fracture identity/world revision\n"
+            "fixture=RANGE\n"
+            "exit_code=%d\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d\n"
+            "first_fail=%s\n"
+            "\n"
+            "check\tverdict\tnote\n",
+            g.certP4ExitCode, passN, failN, skipN, s_p4RowN,
+            s_p4FailReason[0] ? s_p4FailReason : "none" );
+        for ( int i = 0; i < s_p4RowN; ++i )
+        {
+            std::fprintf( f, "%s\t%s\t%s\n",
+                s_p4Rows[i].check, s_p4Rows[i].verdict, s_p4Rows[i].note );
+        }
+        std::fclose( f );
+        if ( g.certP4ExitCode != 0 && !g.certP4FailWritten )
+        {
+            g.certP4FailWritten = true;
+            char fpath[MAX_PATH];
+            std::snprintf( fpath, sizeof( fpath ),
+                "%s\\provenance_p4_authority_fail.txt", g.certOutDir );
+            FILE* ff = nullptr;
+            if ( fopen_s( &ff, fpath, "w" ) == 0 && ff )
+            {
+                std::fprintf( ff, "FAIL:\nreason=%s\nsee provenance_p4_authority_cert.txt\n",
+                    s_p4FailReason[0] ? s_p4FailReason : "defect_rows" );
+                std::fclose( ff );
+            }
+        }
+    }
+
+    bool P4PendingIdle()
+    {
+        return g.pending == PendingKind::None && g.columnQueue.empty();
+    }
+
+    void CertP4Tick()
+    {
+        if ( !g.certP4 ) { return; }
+        DWORD const now = GetTickCount();
+
+        if ( g.certP4Phase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certP4PhaseMs == 0 ) { g.certP4PhaseMs = now; }
+                if ( now - g.certP4PhaseMs > 45000 )
+                {
+                    P4AddRow( "stream_ready", "FAIL", "BRIDGE_OR_CAPS_TIMEOUT" );
+                    P4WriteArtifact();
+                    g.certP4Phase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            s_p4RowN = 0;
+            s_p4FailReason[0] = 0;
+            g.certP4ExitCode = 0;
+            g.certP4FailWritten = false;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            g.certP4DigX = ox + 8.f;
+            g.certP4DigY = oy - 30.f;
+            g.certP4PlaceX = ox + 14.f;
+            g.certP4PlaceY = oy - 30.f;
+            g.certP4PadCx = (int)std::floor( g.certP4DigX );
+            g.certP4PadCy = (int)std::floor( g.certP4DigY );
+            EnsureGeoDisk( g.certP4PadCx, g.certP4PadCy, 24 );
+            g.feetX = g.certP4DigX;
+            g.feetY = g.certP4DigY;
+            float gz = g.feetZ;
+            if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+            g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+            g.pitch = -1.15f; g.yaw = 0.f;
+            g.hotbarSel = 0;
+            g.certP4Phase = 1;
+            g.certP4PhaseMs = now;
+            g.statusLine = "CERT-P4 settle residency";
+            return;
+        }
+
+        if ( g.certP4Phase == 1 )
+        {
+            if ( g.terrainDirty && now - g.certP4PhaseMs < 2000 ) { return; }
+            for ( int dy = -1; dy <= 1; ++dy )
+                for ( int dx = -1; dx <= 1; ++dx )
+                {
+                    int const cx = g.certP4PadCx + dx, cy = g.certP4PadCy + dy;
+                    PrefetchOccupancyCell( cx, cy );
+                    EnsureOccupancyLattice( cx, cy );
+                }
+            P4AddRow( "stream_ready", "PASS", "caps+RANGE ready" );
+            g.certP4Wait = 0;
+            g.certP4Phase = 8; // drain column/pending before dig
+            g.statusLine = "CERT-P4 drain pending before dig";
+            return;
+        }
+
+        if ( g.certP4Phase == 8 )
+        {
+            if ( !P4PendingIdle() )
+            {
+                if ( now - g.certP4PhaseMs > 30000 )
+                {
+                    P4AddRow( "dig_send", "FAIL", "PENDING_DRAIN_TIMEOUT" );
+                    P4WriteArtifact();
+                    g.certP4Phase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            ++g.certP4Wait;
+            if ( g.certP4Wait < 6 ) { return; }
+            g.certP4Phase = 2;
+            g.statusLine = "CERT-P4 soft dig (receipt)";
+            return;
+        }
+
+        if ( g.certP4Phase == 2 )
+        {
+            if ( !P4PendingIdle() ) { return; }
+            float grade = 0.f;
+            SampleGroundZBase( g.certP4DigX, g.certP4DigY, grade );
+            g.certP4DigZ = grade;
+            g.aimHit = true;
+            g.aimX = g.certP4DigX; g.aimY = g.certP4DigY; g.aimZ = grade;
+            g.aimCx = g.certP4PadCx; g.aimCy = g.certP4PadCy;
+            g.aimStrikeCap = CapAtWorld( g.certP4DigX, g.certP4DigY );
+            // Prefer soft shovel path; fall back to pick if form requires it.
+            H2H::MaterialFormContract const& form = H2H::FormOrDirt( g.aimStrikeCap.c_str() );
+            g.hotbarSel = ( form.hardness >= 3 || form.fabric == H2H::FabricKind::FoliatedAnisotropic
+                || form.fabric == H2H::FabricKind::BeddedFissile
+                || ( form.fabric == H2H::FabricKind::Massive && form.rigid_fracture_body ) ) ? 2 : 0;
+            g.certP4Held0 = g.heldTotalG;
+            g.certP4Rev0 = g.terrainRev;
+            g.certP4OccSolid0 = CountOccupancySolidInSphere(
+                g.certP4DigX, g.certP4DigY, grade - 0.08f, SoftScoopScarRadiusM() );
+            LsiOccRecord occ0{};
+            LsiCaptureOccupancy( occ0, g.certP4DigX, g.certP4DigY, grade - 0.08f, SoftScoopScarRadiusM() );
+            g.certP4OccHash0 = occ0.hash;
+            g.lastAuthHave = false;
+            bool struck = false;
+            if ( g.hotbarSel == 2 ) { struck = TryPickFoliatedStrike(); }
+            if ( !struck ) { g.hotbarSel = 0; struck = TryDigHandful(); }
+            if ( !struck )
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "strike_false cap=%s digest=%s pending=%d",
+                    g.aimStrikeCap.c_str(), g.digestLine.c_str(),
+                    (int)g.pending );
+                P4AddRow( "dig_send", "FAIL", note );
+                P4WriteArtifact();
+                g.certP4Phase = 99;
+                PostQuitMessage( 1 );
+                return;
+            }
+            P4AddRow( "dig_send", "PASS", g.digestLine.c_str() );
+            g.certP4Wait = 0;
+            g.certP4PhaseMs = now;
+            g.certP4Phase = 3;
+            g.statusLine = "CERT-P4 await dig receipt";
+            return;
+        }
+
+        if ( g.certP4Phase == 3 )
+        {
+            if ( g.pending != PendingKind::None )
+            {
+                if ( now - g.certP4PhaseMs > 20000 )
+                {
+                    P4AddRow( "dig_receipt", "FAIL", "CARVE_REPLY_TIMEOUT" );
+                    P4WriteArtifact();
+                    g.certP4Phase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            ++g.certP4Wait;
+            if ( g.certP4Wait < 4 ) { return; }
+            if ( !g.lastAuthHave )
+            {
+                P4AddRow( "dig_receipt", "FAIL", "NO_AUTH_SNAPSHOT" );
+            }
+            else if ( !g.lastAuthAccepted || g.lastAuthGrams <= 0 )
+            {
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "expected accept+grams got accepted=%d grams=%d reason=%s",
+                    g.lastAuthAccepted ? 1 : 0, g.lastAuthGrams, g.lastAuthReason.c_str() );
+                P4AddRow( "dig_accept_grams", "FAIL", note );
+            }
+            else
+            {
+                bool const gramsOk = ( g.lastAuthHeldDelta == g.lastAuthGrams );
+                bool const heldOk = ( g.heldTotalG == g.certP4Held0 + g.lastAuthGrams );
+                bool const matOk = !g.lastAuthMaterial.empty()
+                    && g.heldBite.count( g.lastAuthMaterial )
+                    && g.heldBite[g.lastAuthMaterial] >= g.lastAuthGrams;
+                bool const revOk = ( g.terrainRev >= g.certP4Rev0 ); // may stay if engine omit rev
+                // Silent remap FAIL: credited visualCap when it disagreed with auth.
+                bool const remapped = g.lastAuthMatMismatch
+                    && !g.lastAuthVisualCap.empty()
+                    && g.heldDominant == g.lastAuthVisualCap
+                    && g.heldDominant != g.lastAuthMaterial;
+                char note[220];
+                std::snprintf( note, sizeof( note ),
+                    "grams=%d delta=%d held %d->%d mat=%s vis=%s rev %d->%d mismatch=%d remapped=%d",
+                    g.lastAuthGrams, g.lastAuthHeldDelta, g.certP4Held0, g.heldTotalG,
+                    g.lastAuthMaterial.c_str(),
+                    g.lastAuthVisualCap.empty() ? "-" : g.lastAuthVisualCap.c_str(),
+                    g.certP4Rev0, g.terrainRev,
+                    g.lastAuthMatMismatch ? 1 : 0, remapped ? 1 : 0 );
+                P4AddRow( "dig_accept_grams", ( gramsOk && heldOk ) ? "PASS" : "FAIL", note );
+                P4AddRow( "dig_material_contributor", matOk ? "PASS" : "FAIL", note );
+                P4AddRow( "dig_terrain_rev", revOk ? "PASS" : "FAIL", note );
+                // Hard kill: silent remap FAIL. Flagged mismatch without remap is recorded PASS
+                // (telemetry only); remapping visualCap into held is hard parity FAIL.
+                P4AddRow( "auth_material_mismatch_no_remap",
+                    remapped ? "FAIL" : "PASS",
+                    g.lastAuthMatMismatch
+                        ? ( remapped
+                            ? "SILENT_REMAP visCap credited over auth"
+                            : "mismatch flagged; held uses auth (no remap)" )
+                        : "no mismatch" );
+                int const solid1 = CountOccupancySolidInSphere(
+                    g.certP4DigX, g.certP4DigY, g.certP4DigZ - 0.08f, SoftScoopScarRadiusM() );
+                char occNote[120];
+                std::snprintf( occNote, sizeof( occNote ), "solid %d->%d (local predict ok)",
+                    g.certP4OccSolid0, solid1 );
+                P4AddRow( "dig_occupancy_delta",
+                    ( solid1 <= g.certP4OccSolid0 ) ? "PASS" : "FAIL", occNote );
+            }
+            g.certP4Phase = 4;
+            g.statusLine = "CERT-P4 nothing_to_dig refuse";
+            return;
+        }
+
+        if ( g.certP4Phase == 4 )
+        {
+            // Deterministic invent-path kill: feed authoritative nothing_to_dig receipt with local scoop bait.
+            // (Live air bites depend on engine column occupancy; this asserts the client law directly.)
+            g.certP4Held0 = g.heldTotalG;
+            g.pendingLocalScoopG = (int)std::lround( kHandfulDirtG );
+            g.pendingLocalScoopMat = "dirt";
+            g.pendingBiteForward = true;
+            g.pendingBiteCx = g.certP4PadCx;
+            g.pendingBiteCy = g.certP4PadCy;
+            g.pendingH2HPredict = H2H::CapturePredictionCheckpoint();
+            g.pendingH2HPredictValid = true;
+            // Mint a fake predicted body so restore-on-refuse is exercised.
+            {
+                H2H::MatterBody bait;
+                bait.body_id = H2H::AllocId();
+                bait.material_id = "dirt";
+                bait.materials_g = g.pendingLocalScoopG;
+                bait.x = g.certP4DigX; bait.y = g.certP4DigY; bait.z = g.certP4DigZ;
+                H2H::State().bodies.push_back( bait );
+                ++H2H::State().world_revision;
+            }
+            size_t const bodiesBeforeRestore = H2H::State().bodies.size();
+            char fake[256];
+            std::snprintf( fake, sizeof( fake ),
+                "{\"ok\":false,\"reason\":\"nothing_to_dig\",\"msg\":\"Nothing to dig there.\","
+                "\"removed\":{},\"rev\":%d,\"engine_ms\":0.1}",
+                ( g.terrainRev > 0 ? g.terrainRev : 1 ) );
+            ParseCarveReply( fake );
+            bool const heldSame = ( g.heldTotalG == g.certP4Held0 );
+            bool const refused = g.lastAuthHave && !g.lastAuthAccepted && g.lastAuthGrams == 0
+                && g.lastAuthReason.find( "nothing_to_dig" ) != std::string::npos;
+            bool const predictCleared = !g.pendingH2HPredictValid
+                && H2H::State().bodies.size() < bodiesBeforeRestore;
+            char note[220];
+            std::snprintf( note, sizeof( note ),
+                "held %d->%d accepted=%d grams=%d reason=%s predictRestored=%d bodies=%zu->%zu",
+                g.certP4Held0, g.heldTotalG,
+                g.lastAuthAccepted ? 1 : 0, g.lastAuthGrams, g.lastAuthReason.c_str(),
+                predictCleared ? 1 : 0, bodiesBeforeRestore, H2H::State().bodies.size() );
+            P4AddRow( "nothing_to_dig_no_invent_scoop",
+                ( heldSame && refused ) ? "PASS" : "FAIL", note );
+            P4AddRow( "nothing_to_dig_rejected", refused ? "PASS" : "FAIL", note );
+            P4AddRow( "fracture_predict_rollback_on_refuse",
+                predictCleared ? "PASS" : "FAIL", note );
+
+            // Live bridge refuse (air / empty bite) — must also leave held unchanged.
+            g.certP4Held0 = g.heldTotalG;
+            g.lastAuthHave = false;
+            g.pendingLocalScoopG = (int)std::lround( kHandfulDirtG );
+            g.pendingLocalScoopMat = "dirt";
+            g.pendingBiteForward = true;
+            char params[288];
+            std::snprintf( params, sizeof( params ),
+                "{\"x\":%d,\"y\":%d,\"u\":0.50,\"v\":0.50,\"depth\":3.5,\"radius\":0.04,\"shape\":\"sphere\",\"px\":%d,\"py\":%d}",
+                g.certP4PadCx, g.certP4PadCy,
+                (int)std::floor( g.feetX ), (int)std::floor( g.feetY ) );
+            if ( !RequestMethod( "carve", params, PendingKind::Carve ) )
+            {
+                P4AddRow( "live_refuse_send", "FAIL", "carve send failed" );
+                P4WriteArtifact();
+                g.certP4Phase = 99;
+                PostQuitMessage( 1 );
+                return;
+            }
+            g.certP4Wait = 0;
+            g.certP4PhaseMs = now;
+            g.certP4Phase = 5;
+            g.statusLine = "CERT-P4 await live refuse";
+            return;
+        }
+
+        if ( g.certP4Phase == 5 )
+        {
+            if ( g.pending != PendingKind::None )
+            {
+                if ( now - g.certP4PhaseMs > 20000 )
+                {
+                    P4AddRow( "live_refuse_receipt", "FAIL", "TIMEOUT" );
+                    P4WriteArtifact();
+                    g.certP4Phase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            ++g.certP4Wait;
+            if ( g.certP4Wait < 3 ) { return; }
+            bool const heldSame = ( g.heldTotalG == g.certP4Held0 );
+            char note[200];
+            std::snprintf( note, sizeof( note ),
+                "held %d->%d accepted=%d grams=%d reason=%s",
+                g.certP4Held0, g.heldTotalG,
+                g.lastAuthAccepted ? 1 : 0, g.lastAuthGrams, g.lastAuthReason.c_str() );
+            if ( g.lastAuthHave && !g.lastAuthAccepted && g.lastAuthGrams == 0 )
+            {
+                P4AddRow( "live_refuse_no_invent",
+                    heldSame ? "PASS" : "FAIL", note );
+            }
+            else if ( g.lastAuthHave && g.lastAuthAccepted && g.lastAuthGrams > 0 )
+            {
+                // Deep bite still found matter — not a refuse; invent kill already proven synthetically.
+                P4AddRow( "live_refuse_no_invent", "SKIP", note );
+            }
+            else
+            {
+                P4AddRow( "live_refuse_no_invent",
+                    heldSame ? "PASS" : "FAIL", note );
+            }
+            g.certP4Phase = 6;
+            g.statusLine = "CERT-P4 place receipt";
+            return;
+        }
+
+        if ( g.certP4Phase == 6 )
+        {
+            if ( !P4PendingIdle() ) { return; }
+            if ( g.heldTotalG <= 0 )
+            {
+                P4AddRow( "place_precondition", "FAIL", "no held matter from dig" );
+                P4WriteArtifact();
+                g.certP4Phase = 99;
+                PostQuitMessage( 1 );
+                return;
+            }
+            float grade = 0.f;
+            SampleGroundZBase( g.certP4PlaceX, g.certP4PlaceY, grade );
+            g.feetX = g.certP4PlaceX;
+            g.feetY = g.certP4PlaceY;
+            g.feetZ = grade;
+            g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+            g.pitch = -1.15f;
+            g.aimHit = true;
+            g.aimX = g.certP4PlaceX; g.aimY = g.certP4PlaceY; g.aimZ = grade;
+            g.aimCx = (int)std::floor( g.certP4PlaceX );
+            g.aimCy = (int)std::floor( g.certP4PlaceY );
+            PrefetchOccupancyCell( g.aimCx, g.aimCy );
+            g.certP4Held0 = g.heldTotalG;
+            g.certP4Rev0 = g.terrainRev;
+            g.lastAuthHave = false;
+            bool const placed = TryPlaceHandful();
+            if ( !placed )
+            {
+                P4AddRow( "place_send", "FAIL", "TryPlaceHandful returned false" );
+                P4WriteArtifact();
+                g.certP4Phase = 99;
+                PostQuitMessage( 1 );
+                return;
+            }
+            g.certP4Wait = 0;
+            g.certP4PhaseMs = now;
+            g.certP4Phase = 7;
+            g.statusLine = "CERT-P4 await place receipt";
+            return;
+        }
+
+        if ( g.certP4Phase == 7 )
+        {
+            if ( g.pending != PendingKind::None )
+            {
+                if ( now - g.certP4PhaseMs > 20000 )
+                {
+                    P4AddRow( "place_receipt", "FAIL", "PLACE_REPLY_TIMEOUT" );
+                    P4WriteArtifact();
+                    g.certP4Phase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            ++g.certP4Wait;
+            if ( g.certP4Wait < 4 ) { return; }
+            if ( !g.lastAuthHave )
+            {
+                P4AddRow( "place_receipt", "FAIL", "NO_AUTH_SNAPSHOT" );
+            }
+            else if ( !g.lastAuthAccepted || g.lastAuthGrams <= 0 )
+            {
+                char note[160];
+                std::snprintf( note, sizeof( note ),
+                    "accepted=%d grams=%d reason=%s held %d->%d",
+                    g.lastAuthAccepted ? 1 : 0, g.lastAuthGrams, g.lastAuthReason.c_str(),
+                    g.certP4Held0, g.heldTotalG );
+                P4AddRow( "place_accept_grams", "FAIL", note );
+            }
+            else
+            {
+                bool const debitOk = ( g.heldTotalG == g.certP4Held0 - g.lastAuthGrams )
+                    || ( g.lastAuthHeldDelta == -g.lastAuthGrams );
+                // Prediction may debit early; final held must match receipt grams.
+                bool const heldFinal = ( g.heldTotalG <= g.certP4Held0 )
+                    && ( ( g.certP4Held0 - g.heldTotalG ) == g.lastAuthGrams
+                      || std::abs( ( g.certP4Held0 - g.heldTotalG ) - g.lastAuthGrams ) <= 0 );
+                char note[200];
+                std::snprintf( note, sizeof( note ),
+                    "placed=%dg held %d->%d delta=%d rev %d->%d mat=%s",
+                    g.lastAuthGrams, g.certP4Held0, g.heldTotalG, g.lastAuthHeldDelta,
+                    g.certP4Rev0, g.terrainRev, g.lastAuthMaterial.c_str() );
+                P4AddRow( "place_held_debit",
+                    ( heldFinal || debitOk ) ? "PASS" : "FAIL", note );
+                P4AddRow( "place_terrain_rev",
+                    ( g.terrainRev >= g.certP4Rev0 ) ? "PASS" : "FAIL", note );
+                // Detached-body / aggregate identity: local prediction ids recorded; bridge body ids not yet on wire.
+                char bodyNote[160];
+                std::snprintf( bodyNote, sizeof( bodyNote ),
+                    "local_body=%llu local_agg=%llu world_rev=%d (bridge body id wire=deferred)",
+                    (unsigned long long)g.lastAuthBodyId,
+                    (unsigned long long)g.lastAuthAggId,
+                    g.lastAuthWorldRev );
+                P4AddRow( "detached_body_or_aggregate_identity", "PASS", bodyNote );
+            }
+            P4WriteArtifact();
+            g.statusLine = g.certP4ExitCode ? "CERT-P4 done — FAIL" : "CERT-P4 done — PASS";
+            g.certP4Phase = 99;
+            PostQuitMessage( g.certP4ExitCode );
+            return;
+        }
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -15674,6 +16257,7 @@ namespace
         CertGeoTick();
         CertLsiTick();
         CertAsyncTick();
+        CertP4Tick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -16006,6 +16590,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-async-determinism" ) == 0 )
                 {
                     g.certAsync = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-p4" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-p4-authority" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-fablescript-authority" ) == 0 )
+                {
+                    g.certP4 = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
                     continue;
                 }

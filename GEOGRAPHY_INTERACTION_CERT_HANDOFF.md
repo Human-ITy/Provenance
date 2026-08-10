@@ -339,7 +339,29 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 §9 probes (RANGE): `place_flat_mound`; `place_slope_supported` + `place_slope_no_float`; `place_cavity_floor_upward` + raised floor; `place_cavity_lip_connect` + `place_lip_no_roof_hole`; `place_no_HF_resurrection`; `remove_place_remove_reconcile`. After-each: held debit == accepted grams; occupancy units correspond; SupportBelow sees matter; D2 rebuilds on cavity edits; HF grade stable / openings kept.
 
-**Order for next agents:** LSI presentation-closure + ASYNC+DETERMINISM floors are green (`--cert-lsi`, `--cert-async`). Next is **P4**. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+**Order for next agents:** LSI + ASYNC floors green. **P4 Fablescript authority floor** is next/current (`--cert-p4`). Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+
+### P4 Fablescript Authority Floor
+
+```
+P4 FABLESCRIPT AUTHORITY FLOOR
+SHA: (set on green commit)
+```
+
+**Law:** Client owns intent, prediction, cache and presentation. Fablescript owns matter, mutation, inventory transfer, fracture/separation identity and world revision.
+
+**Flag:** `--cert-p4` (aliases `--cert-p4-authority`, `--cert-fablescript-authority`). Forces RANGE. Artifact: `%TEMP%\provenance_p4_authority_cert.txt`.
+
+**Hard kills (cert FAIL):**
+1. `nothing_to_dig` → client synthesizes a scoop / invents held grams
+2. `visualCap != auth material` → client silently remaps held credit to visualCap
+
+**Min compare (same contact/tool intent):** accept/reject, material contributor, exact grams, occupancy delta, terrain rev, held debit/credit, detached-body/aggregate identity (local predict + rollback; bridge body-id wire still deferred).
+
+```bat
+Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-p4
+python cert_p4_headless.py --host 127.0.0.1 --port 8765
+```
 
 ### Local Surface Intent (presentation-closure floor)
 
