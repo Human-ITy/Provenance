@@ -52,6 +52,12 @@ REM or F8 in-client to cycle
 Also: `RunProvenanceClient.bat --cert-geo` (picks newest `Build\x64_Release*\ProvenanceClient.exe`).
 Both `x64_Release_geocert` and `x64_Release_georange` are valid; rebuild geocert via §10 if that OutDir is missing.
 
+```bat
+REM Local Surface Intent (read-only dig/place geometry capture — expect FAIL defect rows OK)
+Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-lsi
+REM alias: --cert-local-surface-intent → %TEMP%\provenance_local_surface_intent_cert.txt
+```
+
 | Fixture | Code | Role |
 |---------|------|------|
 | **RANGE** | `GeoFixture::Range` | Cert transect + default play |
@@ -333,7 +339,44 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 §9 probes (RANGE): `place_flat_mound`; `place_slope_supported` + `place_slope_no_float`; `place_cavity_floor_upward` + raised floor; `place_cavity_lip_connect` + `place_lip_no_roof_hole`; `place_no_HF_resurrection`; `remove_place_remove_reconcile`. After-each: held debit == accepted grams; occupancy units correspond; SupportBelow sees matter; D2 rebuilds on cavity edits; HF grade stable / openings kept.
 
-**Order for next agents:** ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+**Order for next agents:** Local Surface Intent capture (read-only) sits under `--cert-lsi` before ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+
+### Local Surface Intent (read-only capture/cert)
+
+```
+LSI CAPTURE / CERT (read-only)
+SHA: (pinned after commit — see PROVENANCE_PIN.md)
+```
+
+**Flag:** `--cert-lsi` (alias `--cert-local-surface-intent`). Forces RANGE. Does **not** change D2 / occupancy / EditedRegion / SupportBelow / `PlaceOccupancyFill` / chips — observation + certification only. Floors P3b–P3e stay intact.
+
+**What it captures** (around dig cavity + place into cavity):
+1. Actual local HF mesh before (live adaptive tessellation via `SampleTerrainDrawZ` / mouth tip-6 — not an idealized grid)
+2. Exact world-space action sphere + HF/D2 intersection counts
+3. Occupancy before/after (fill hashes + solid-in-sphere; dig before-snapshot seeds virgin lattice for fair hash — same seed Carve would do)
+4. Surviving HF + published D2 tris afterward (canonical world-space POD, FNV hashes, bounds)
+
+**Cert checks:** coverage, continuity (void inventory), tool-scale, boundary closure (mouth-rim open edges expected; unexplained open edges FAIL), triangle validity, outside dirty+halo identity. Present defects → **FAIL rows + DEFECT inventory** (do not weaken until green).
+
+**Artifacts:** `%TEMP%\provenance_local_surface_intent_cert.txt` (+ optional `provenance_local_surface_intent_fail.txt`). Exit non-zero when FAIL rows exist — expected while boundary tears remain; harness is still the instrumentation floor.
+
+Live `--cert-lsi` (RANGE, instrumentation floor): `exit_code=1`, `PASS_rows=14 FAIL_rows=2 SKIP_rows=0`, `defects=2`.
+
+| Check | dig_cavity | place_into_cavity |
+|-------|------------|-------------------|
+| coverage | PASS (75/75, voids=0) | PASS (45/45, voids=0) |
+| continuity | PASS | PASS |
+| tool_scale | PASS | PASS |
+| boundary_closure | **FAIL** unexplainedOpen=35 (mouthRim=23) | **FAIL** unexplainedOpen=46 (mouthRim=12) |
+| triangle_validity | PASS | PASS |
+| outside_identity | PASS (bit-identical) | PASS (bit-identical) |
+| occupancy_delta | PASS (solid 26→0) | PASS (solid 2→3) |
+
+Defect inventory: `BOUNDARY_OPEN` on both actions (D2 open edges not explained as mouth-rim / dirty rim). No unexplained HF voids in these two pads under current coverage probe.
+
+```bat
+Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-lsi
+```
 
 ---
 

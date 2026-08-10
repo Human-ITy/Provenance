@@ -297,6 +297,12 @@ namespace
         int certGeoWalkCells0 = 0;
         int certGeoWalkSample0 = 0;
         bool certGeoFailWritten = false;
+        // --cert-lsi: read-only Local Surface Intent capture/cert (dig+place geometry).
+        bool certLsi = false;
+        int certLsiPhase = 0; // 0 wait → 1 settle → 2 run → 3 write/quit
+        DWORD certLsiPhaseMs = 0;
+        int certLsiExitCode = 0; // 0 harness complete with no FAIL rows; 1 = defect FAIL rows
+        bool certLsiFailWritten = false;
         // Startup / subsystem counters — prove virgin path does zero D2.
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
@@ -13468,6 +13474,1027 @@ namespace
         }
     }
 
+    // ---------- Local Surface Intent (--cert-lsi) ----------
+    // Read-only observation + certification around dig/place. Capture present defects.
+    // Do NOT change D2 / occupancy / EditedRegion / SupportBelow / place / chips to greenwash.
+    struct LsiVec3 { float x = 0.f, y = 0.f, z = 0.f; };
+    struct LsiTri { LsiVec3 a{}, b{}, c{}; };
+    struct LsiMeshRecord
+    {
+        std::vector<LsiTri> tris;
+        float bmin[3] = { 1e9f, 1e9f, 1e9f };
+        float bmax[3] = { -1e9f, -1e9f, -1e9f };
+        uint32_t hash = 0;
+        int triCount = 0;
+        int invalidTris = 0;
+        int degenerateTris = 0;
+    };
+    struct LsiOccRecord
+    {
+        uint32_t hash = 0;
+        int solidCount = 0;
+        int cellCount = 0;
+        int fillBytes = 0;
+    };
+    struct LsiActionVolume
+    {
+        float cx = 0.f, cy = 0.f, cz = 0.f, r = 0.f;
+        float openX = 0.f, openY = 0.f, openZ = 0.f;
+        int hfIntersectBefore = 0;
+        int hfIntersectAfter = 0;
+        int d2IntersectAfter = 0;
+        float toolScaleR = 0.f;
+    };
+    struct LsiDefect
+    {
+        char kind[48] = {};
+        char note[160] = {};
+        float x = 0.f, y = 0.f, z = 0.f;
+    };
+    struct LsiRow
+    {
+        char action[32] = {};
+        char check[40] = {};
+        char verdict[12] = "SKIP";
+        char note[200] = {};
+        float x = 0.f, y = 0.f, z = 0.f;
+        uint32_t hashA = 0, hashB = 0;
+        int nA = 0, nB = 0;
+    };
+    struct LsiCapture
+    {
+        char actionId[40] = {};
+        char kind[16] = {}; // dig / place
+        LsiActionVolume vol{};
+        LsiMeshRecord hfBefore{};
+        LsiMeshRecord hfAfter{};
+        LsiMeshRecord d2After{};
+        LsiMeshRecord hfOutsideBefore{};
+        LsiMeshRecord hfOutsideAfter{};
+        LsiOccRecord occBefore{};
+        LsiOccRecord occAfter{};
+        float dirtyMinX = 0.f, dirtyMinY = 0.f, dirtyMaxX = 0.f, dirtyMaxY = 0.f;
+        bool haveDirty = false;
+        int voidSamples = 0;
+        int intentSamples = 0;
+        int coveredSamples = 0;
+        int openBoundaryEdges = 0; // unexplained open edges (mouth-rim excluded)
+        int mouthRimEdges = 0;
+        int boundaryEdgesTotal = 0;
+    };
+
+    static constexpr int kLsiRowCap = 64;
+    static constexpr int kLsiDefectCap = 48;
+    static LsiRow s_lsiRows[kLsiRowCap];
+    static int s_lsiRowN = 0;
+    static LsiDefect s_lsiDefects[kLsiDefectCap];
+    static int s_lsiDefectN = 0;
+    static char s_lsiFailReason[96] = {};
+
+    void LsiAddRow( LsiRow const& r )
+    {
+        if ( s_lsiRowN >= kLsiRowCap ) { return; }
+        s_lsiRows[s_lsiRowN++] = r;
+        if ( std::strcmp( r.verdict, "FAIL" ) == 0 )
+        {
+            g.certLsiExitCode = 1;
+            if ( !s_lsiFailReason[0] )
+            {
+                std::snprintf( s_lsiFailReason, sizeof( s_lsiFailReason ), "%s/%s", r.action, r.check );
+            }
+        }
+    }
+
+    void LsiAddDefect( char const* kind, char const* note, float x, float y, float z )
+    {
+        if ( s_lsiDefectN >= kLsiDefectCap ) { return; }
+        LsiDefect& d = s_lsiDefects[s_lsiDefectN++];
+        std::snprintf( d.kind, sizeof( d.kind ), "%s", kind ? kind : "?" );
+        std::snprintf( d.note, sizeof( d.note ), "%s", note ? note : "" );
+        d.x = x; d.y = y; d.z = z;
+    }
+
+    uint32_t LsiFnv1a( void const* data, size_t n, uint32_t h = 2166136261u )
+    {
+        uint8_t const* p = (uint8_t const*)data;
+        for ( size_t i = 0; i < n; ++i )
+        {
+            h ^= p[i];
+            h *= 16777619u;
+        }
+        return h;
+    }
+
+    void LsiExpandBounds( LsiMeshRecord& m, LsiVec3 const& v )
+    {
+        m.bmin[0] = (std::min)( m.bmin[0], v.x );
+        m.bmin[1] = (std::min)( m.bmin[1], v.y );
+        m.bmin[2] = (std::min)( m.bmin[2], v.z );
+        m.bmax[0] = (std::max)( m.bmax[0], v.x );
+        m.bmax[1] = (std::max)( m.bmax[1], v.y );
+        m.bmax[2] = (std::max)( m.bmax[2], v.z );
+    }
+
+    float LsiTriArea( LsiTri const& t )
+    {
+        float ax = t.b.x - t.a.x, ay = t.b.y - t.a.y, az = t.b.z - t.a.z;
+        float bx = t.c.x - t.a.x, by = t.c.y - t.a.y, bz = t.c.z - t.a.z;
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        return 0.5f * std::sqrt( nx * nx + ny * ny + nz * nz );
+    }
+
+    bool LsiTriFinite( LsiTri const& t )
+    {
+        auto fin = []( LsiVec3 const& v ) {
+            return std::isfinite( v.x ) && std::isfinite( v.y ) && std::isfinite( v.z );
+        };
+        return fin( t.a ) && fin( t.b ) && fin( t.c );
+    }
+
+    void LsiFinalizeMesh( LsiMeshRecord& m )
+    {
+        m.triCount = (int)m.tris.size();
+        m.invalidTris = 0;
+        m.degenerateTris = 0;
+        uint32_t h = 2166136261u;
+        for ( LsiTri const& t : m.tris )
+        {
+            if ( !LsiTriFinite( t ) ) { ++m.invalidTris; }
+            else if ( LsiTriArea( t ) < 1e-10f ) { ++m.degenerateTris; }
+            float v[9] = {
+                t.a.x, t.a.y, t.a.z,
+                t.b.x, t.b.y, t.b.z,
+                t.c.x, t.c.y, t.c.z
+            };
+            h = LsiFnv1a( v, sizeof( v ), h );
+            LsiExpandBounds( m, t.a );
+            LsiExpandBounds( m, t.b );
+            LsiExpandBounds( m, t.c );
+        }
+        uint32_t const n = (uint32_t)m.tris.size();
+        h = LsiFnv1a( &n, sizeof( n ), h );
+        m.hash = h;
+        if ( m.tris.empty() )
+        {
+            m.bmin[0] = m.bmin[1] = m.bmin[2] = 0.f;
+            m.bmax[0] = m.bmax[1] = m.bmax[2] = 0.f;
+        }
+    }
+
+    void LsiPushTri( LsiMeshRecord& m, float x0, float y0, float z0,
+        float x1, float y1, float z1, float x2, float y2, float z2 )
+    {
+        LsiTri t{};
+        t.a = { x0, y0, z0 };
+        t.b = { x1, y1, z1 };
+        t.c = { x2, y2, z2 };
+        m.tris.push_back( t );
+    }
+
+    // Mirror production EmitTerrainQuadAdaptive tessellation into POD (no GL, no behavior change).
+    void LsiCollectTerrainQuad( LsiMeshRecord& m, float x0, float y0, float x1, float y1, int depth )
+    {
+        float minDist = 0.f, needR = 0.08f;
+        bool const nearMouth = !g.editedRegions.empty()
+            && QuadHitsMouthCollar( x0, y0, x1, y1, minDist, needR );
+        float const span = (std::max)( x1 - x0, y1 - y0 );
+        float const target = (std::max)( 0.04f, needR / 6.f );
+        if ( nearMouth && span > target && depth < 5 )
+        {
+            float const xm = 0.5f * ( x0 + x1 );
+            float const ym = 0.5f * ( y0 + y1 );
+            LsiCollectTerrainQuad( m, x0, y0, xm, ym, depth + 1 );
+            LsiCollectTerrainQuad( m, xm, y0, x1, ym, depth + 1 );
+            LsiCollectTerrainQuad( m, x0, ym, xm, y1, depth + 1 );
+            LsiCollectTerrainQuad( m, xm, ym, x1, y1, depth + 1 );
+            return;
+        }
+        float z00 = 0.f, z10 = 0.f, z01 = 0.f, z11 = 0.f;
+        bool const ok00 = SampleTerrainDrawZ( x0, y0, z00 );
+        bool const ok10 = SampleTerrainDrawZ( x1, y0, z10 );
+        bool const ok01 = SampleTerrainDrawZ( x0, y1, z01 );
+        bool const ok11 = SampleTerrainDrawZ( x1, y1, z11 );
+        int const nOk = ( ok00 ? 1 : 0 ) + ( ok10 ? 1 : 0 ) + ( ok01 ? 1 : 0 ) + ( ok11 ? 1 : 0 );
+        if ( nOk == 0 ) { return; }
+        if ( nOk < 4 )
+        {
+            if ( span > 0.035f && depth < 6 )
+            {
+                float const xm = 0.5f * ( x0 + x1 );
+                float const ym = 0.5f * ( y0 + y1 );
+                LsiCollectTerrainQuad( m, x0, y0, xm, ym, depth + 1 );
+                LsiCollectTerrainQuad( m, xm, y0, x1, ym, depth + 1 );
+                LsiCollectTerrainQuad( m, x0, ym, xm, y1, depth + 1 );
+                LsiCollectTerrainQuad( m, xm, ym, x1, y1, depth + 1 );
+            }
+            return;
+        }
+        if ( ok00 && ok10 && ok01 )
+        {
+            LsiPushTri( m, x0, y0, z00, x1, y0, z10, x0, y1, z01 );
+        }
+        if ( ok10 && ok11 && ok01 )
+        {
+            LsiPushTri( m, x1, y0, z10, x1, y1, z11, x0, y1, z01 );
+        }
+    }
+
+    void LsiFilterOutsideDirty( LsiMeshRecord const& src, LsiMeshRecord& dst,
+        float excludeMinX, float excludeMinY, float excludeMaxX, float excludeMaxY )
+    {
+        dst = {};
+        dst.tris.reserve( src.tris.size() );
+        for ( LsiTri const& t : src.tris )
+        {
+            float const tcx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+            float const tcy = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+            if ( tcx < excludeMinX || tcx > excludeMaxX
+              || tcy < excludeMinY || tcy > excludeMaxY )
+            {
+                dst.tris.push_back( t );
+            }
+        }
+        LsiFinalizeMesh( dst );
+    }
+
+    void LsiCaptureLocalHf( LsiMeshRecord& out, float cx, float cy, float radiusM,
+        float excludeMinX, float excludeMinY, float excludeMaxX, float excludeMaxY,
+        bool useExclude )
+    {
+        out = {};
+        int const x0 = (int)std::floor( cx - radiusM - 0.5f );
+        int const x1 = (int)std::ceil( cx + radiusM + 0.5f );
+        int const y0 = (int)std::floor( cy - radiusM - 0.5f );
+        int const y1 = (int)std::ceil( cy + radiusM + 0.5f );
+        constexpr int kBase = 2;
+        for ( int y = y0; y < y1; ++y )
+        {
+            for ( int x = x0; x < x1; ++x )
+            {
+                if ( !GetCell( x, y ) || !GetCell( x + 1, y )
+                  || !GetCell( x, y + 1 ) || !GetCell( x + 1, y + 1 ) )
+                {
+                    continue;
+                }
+                for ( int j = 0; j < kBase; ++j )
+                {
+                    for ( int i = 0; i < kBase; ++i )
+                    {
+                        float const u0 = (float)i / (float)kBase;
+                        float const v0 = (float)j / (float)kBase;
+                        float const u1 = (float)( i + 1 ) / (float)kBase;
+                        float const v1 = (float)( j + 1 ) / (float)kBase;
+                        float const qx0 = (float)x + u0, qy0 = (float)y + v0;
+                        float const qx1 = (float)x + u1, qy1 = (float)y + v1;
+                        float const mx = 0.5f * ( qx0 + qx1 );
+                        float const my = 0.5f * ( qy0 + qy1 );
+                        if ( useExclude
+                          && mx >= excludeMinX && mx <= excludeMaxX
+                          && my >= excludeMinY && my <= excludeMaxY )
+                        {
+                            continue; // outside-identity capture skips dirty+halo
+                        }
+                        if ( !useExclude )
+                        {
+                            float const dx = mx - cx, dy = my - cy;
+                            if ( dx * dx + dy * dy > ( radiusM + 0.75f ) * ( radiusM + 0.75f ) )
+                            {
+                                continue;
+                            }
+                        }
+                        size_t const before = out.tris.size();
+                        LsiCollectTerrainQuad( out, qx0, qy0, qx1, qy1, 0 );
+                        if ( useExclude )
+                        {
+                            // Keep only tris whose centroid is outside exclude rect.
+                            size_t w = before;
+                            for ( size_t ti = before; ti < out.tris.size(); ++ti )
+                            {
+                                LsiTri const& t = out.tris[ti];
+                                float const tcx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+                                float const tcy = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+                                if ( tcx < excludeMinX || tcx > excludeMaxX
+                                  || tcy < excludeMinY || tcy > excludeMaxY )
+                                {
+                                    out.tris[w++] = t;
+                                }
+                            }
+                            out.tris.resize( w );
+                        }
+                    }
+                }
+            }
+        }
+        LsiFinalizeMesh( out );
+    }
+
+    void LsiCapturePublishedD2( LsiMeshRecord& out, float cx, float cy, float radiusM )
+    {
+        out = {};
+        int const x0 = (int)std::floor( cx - radiusM - 1.5f );
+        int const x1 = (int)std::ceil( cx + radiusM + 1.5f );
+        int const y0 = (int)std::floor( cy - radiusM - 1.5f );
+        int const y1 = (int)std::ceil( cy + radiusM + 1.5f );
+        float const R2 = ( radiusM + 1.25f ) * ( radiusM + 1.25f );
+        for ( int y = y0; y <= y1; ++y )
+        {
+            for ( int x = x0; x <= x1; ++x )
+            {
+                CellSample const* cell = GetCell( x, y );
+                if ( !cell || !cell->hasCavity || cell->cavityTris.empty() ) { continue; }
+                for ( DualContourQef::Tri const& t : cell->cavityTris )
+                {
+                    float const mx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+                    float const my = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+                    float const dx = mx - cx, dy = my - cy;
+                    if ( dx * dx + dy * dy > R2 ) { continue; }
+                    LsiPushTri( out, t.a.x, t.a.y, t.a.z, t.b.x, t.b.y, t.b.z, t.c.x, t.c.y, t.c.z );
+                }
+            }
+        }
+        LsiFinalizeMesh( out );
+    }
+
+    void LsiCaptureOccupancy( LsiOccRecord& out, float cx, float cy, float cz, float radiusM )
+    {
+        out = {};
+        int const x0 = (int)std::floor( cx - radiusM - 1.f );
+        int const x1 = (int)std::ceil( cx + radiusM + 1.f );
+        int const y0 = (int)std::floor( cy - radiusM - 1.f );
+        int const y1 = (int)std::ceil( cy + radiusM + 1.f );
+        uint32_t h = 2166136261u;
+        for ( int y = y0; y <= y1; ++y )
+        {
+            for ( int x = x0; x <= x1; ++x )
+            {
+                CellSample const* cell = GetCell( x, y );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                ++out.cellCount;
+                out.fillBytes += (int)cell->fill.size();
+                h = LsiFnv1a( cell->fill.data(), cell->fill.size(), h );
+                int xy[2] = { x, y };
+                h = LsiFnv1a( xy, sizeof( xy ), h );
+            }
+        }
+        out.hash = h;
+        out.solidCount = CountOccupancySolidInSphere( cx, cy, cz, radiusM );
+    }
+
+    bool LsiTriIntersectsSphere( LsiTri const& t, float cx, float cy, float cz, float r )
+    {
+        auto nearV = [&]( LsiVec3 const& v ) {
+            float const dx = v.x - cx, dy = v.y - cy, dz = v.z - cz;
+            return dx * dx + dy * dy + dz * dz <= r * r;
+        };
+        if ( nearV( t.a ) || nearV( t.b ) || nearV( t.c ) ) { return true; }
+        float const mx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+        float const my = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+        float const mz = ( t.a.z + t.b.z + t.c.z ) * ( 1.f / 3.f );
+        float const dx = mx - cx, dy = my - cy, dz = mz - cz;
+        return dx * dx + dy * dy + dz * dz <= r * r;
+    }
+
+    int LsiCountMeshSphereHits( LsiMeshRecord const& m, float cx, float cy, float cz, float r )
+    {
+        int n = 0;
+        for ( LsiTri const& t : m.tris )
+        {
+            if ( LsiTriIntersectsSphere( t, cx, cy, cz, r ) ) { ++n; }
+        }
+        return n;
+    }
+
+    bool LsiPointCoveredByD2( LsiMeshRecord const& d2, float x, float y, float z, float tol )
+    {
+        for ( LsiTri const& t : d2.tris )
+        {
+            float const minx = (std::min)( t.a.x, (std::min)( t.b.x, t.c.x ) ) - tol;
+            float const maxx = (std::max)( t.a.x, (std::max)( t.b.x, t.c.x ) ) + tol;
+            float const miny = (std::min)( t.a.y, (std::min)( t.b.y, t.c.y ) ) - tol;
+            float const maxy = (std::max)( t.a.y, (std::max)( t.b.y, t.c.y ) ) + tol;
+            if ( x < minx || x > maxx || y < miny || y > maxy ) { continue; }
+            float const mx = ( t.a.x + t.b.x + t.c.x ) * ( 1.f / 3.f );
+            float const my = ( t.a.y + t.b.y + t.c.y ) * ( 1.f / 3.f );
+            float const mz = ( t.a.z + t.b.z + t.c.z ) * ( 1.f / 3.f );
+            float const dx = mx - x, dy = my - y, dz = mz - z;
+            if ( dx * dx + dy * dy + dz * dz <= tol * tol * 4.f ) { return true; }
+            // XY proximity + Z band (published cavity wall near intent sample).
+            if ( dx * dx + dy * dy <= tol * tol && std::fabs( mz - z ) <= tol * 3.f ) { return true; }
+        }
+        return false;
+    }
+
+    // Boundary edges on an open dig mouth are expected. Count only unexplained tears:
+    // open edges that are neither near a crest/mouth opening nor on the dirty XY rim.
+    int LsiCountUnexplainedOpenEdges( LsiMeshRecord const& m, float dirtyMinX, float dirtyMinY,
+        float dirtyMaxX, float dirtyMaxY, float openX, float openY, float openZ, float openR,
+        int& totalBoundary, int& mouthRimEdges )
+    {
+        totalBoundary = 0;
+        mouthRimEdges = 0;
+        struct EdgeKey
+        {
+            int ax, ay, az, bx, by, bz;
+            bool operator==( EdgeKey const& o ) const
+            {
+                return ax == o.ax && ay == o.ay && az == o.az
+                    && bx == o.bx && by == o.by && bz == o.bz;
+            }
+        };
+        struct EdgeHash
+        {
+            size_t operator()( EdgeKey const& k ) const
+            {
+                size_t h = (size_t)k.ax * 73856093u ^ (size_t)k.ay * 19349663u
+                    ^ (size_t)k.az * 83492791u ^ (size_t)k.bx * 50331653u
+                    ^ (size_t)k.by * 12582917u ^ (size_t)k.bz * 2654435761u;
+                return h;
+            }
+        };
+        auto q = []( float v ) -> int { return (int)std::lround( v * 1000.f ); };
+        auto pack = [&]( LsiVec3 const& a, LsiVec3 const& b ) -> EdgeKey
+        {
+            EdgeKey e{};
+            int ax = q( a.x ), ay = q( a.y ), az = q( a.z );
+            int bx = q( b.x ), by = q( b.y ), bz = q( b.z );
+            if ( ax < bx || ( ax == bx && ay < by ) || ( ax == bx && ay == by && az <= bz ) )
+            {
+                e = { ax, ay, az, bx, by, bz };
+            }
+            else
+            {
+                e = { bx, by, bz, ax, ay, az };
+            }
+            return e;
+        };
+        std::unordered_map<EdgeKey, int, EdgeHash> counts;
+        counts.reserve( m.tris.size() * 3 );
+        for ( LsiTri const& t : m.tris )
+        {
+            EdgeKey e0 = pack( t.a, t.b );
+            EdgeKey e1 = pack( t.b, t.c );
+            EdgeKey e2 = pack( t.c, t.a );
+            ++counts[e0]; ++counts[e1]; ++counts[e2];
+        }
+        int unexplained = 0;
+        float const pad = 0.08f;
+        float const mouthR = (std::max)( openR, 0.12f ) + 0.10f;
+        float const mouthR2 = mouthR * mouthR;
+        for ( auto const& kv : counts )
+        {
+            if ( kv.second != 1 ) { continue; }
+            ++totalBoundary;
+            float const mx = 0.0005f * (float)( kv.first.ax + kv.first.bx );
+            float const my = 0.0005f * (float)( kv.first.ay + kv.first.by );
+            float const mz = 0.0005f * (float)( kv.first.az + kv.first.bz );
+            bool const onDirtyRim =
+                mx <= dirtyMinX + pad || mx >= dirtyMaxX - pad
+                || my <= dirtyMinY + pad || my >= dirtyMaxY - pad;
+            float const dx = mx - openX, dy = my - openY;
+            bool const nearMouthXy = ( dx * dx + dy * dy ) <= mouthR2;
+            bool const nearCrestZ = std::fabs( mz - openZ ) <= 0.35f;
+            bool const nearOpening = NearOpeningMouthAt( mx, my ) || ( nearMouthXy && nearCrestZ );
+            if ( nearOpening || onDirtyRim )
+            {
+                ++mouthRimEdges;
+                continue;
+            }
+            ++unexplained;
+        }
+        return unexplained;
+    }
+
+    void LsiResolveDirtyHalo( LsiCapture& cap, float fallbackX, float fallbackY, float fallbackR )
+    {
+        cap.haveDirty = false;
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            if ( !er.hasOwnBounds ) { continue; }
+            float const dx = 0.5f * ( er.ownMinX + er.ownMaxX ) - fallbackX;
+            float const dy = 0.5f * ( er.ownMinY + er.ownMaxY ) - fallbackY;
+            if ( dx * dx + dy * dy > ( fallbackR + 3.f ) * ( fallbackR + 3.f ) ) { continue; }
+            float const halo = 1.0f + 0.35f; // +1 cell halo + tip/6 spill collar
+            cap.dirtyMinX = er.ownMinX - halo;
+            cap.dirtyMinY = er.ownMinY - halo;
+            cap.dirtyMaxX = er.ownMaxX + halo;
+            cap.dirtyMaxY = er.ownMaxY + halo;
+            cap.haveDirty = true;
+            break;
+        }
+        if ( !cap.haveDirty )
+        {
+            float const halo = fallbackR + 1.35f;
+            cap.dirtyMinX = fallbackX - halo;
+            cap.dirtyMinY = fallbackY - halo;
+            cap.dirtyMaxX = fallbackX + halo;
+            cap.dirtyMaxY = fallbackY + halo;
+            cap.haveDirty = true;
+        }
+    }
+
+    void LsiProbeCoverageContinuity( LsiCapture& cap )
+    {
+        // Intent samples over the action XY disk. Dig: grade/skin band. Place: action Z band
+        // (cavity floor may sit well below grade — do not require grade∈sphere).
+        float const R = cap.vol.r;
+        float const step = (std::max)( 0.04f, R / 5.f );
+        bool const isPlace = ( std::strcmp( cap.kind, "place" ) == 0 );
+        cap.voidSamples = 0;
+        cap.intentSamples = 0;
+        cap.coveredSamples = 0;
+        for ( float y = cap.vol.cy - R; y <= cap.vol.cy + R + 1e-4f; y += step )
+        {
+            for ( float x = cap.vol.cx - R; x <= cap.vol.cx + R + 1e-4f; x += step )
+            {
+                float const dx = x - cap.vol.cx, dy = y - cap.vol.cy;
+                if ( dx * dx + dy * dy > R * R ) { continue; }
+                float zGrade = cap.vol.openZ;
+                SampleGroundZBase( x, y, zGrade );
+                float zIntent = zGrade;
+                if ( isPlace )
+                {
+                    zIntent = cap.vol.cz;
+                }
+                else
+                {
+                    float const dz = zGrade - cap.vol.cz;
+                    if ( dx * dx + dy * dy + dz * dz > ( R * 1.15f ) * ( R * 1.15f ) ) { continue; }
+                }
+                ++cap.intentSamples;
+                float zDraw = 0.f;
+                bool const hfOk = SampleTerrainDrawZ( x, y, zDraw );
+                bool const mouth = CrestMouthStencilAt( x, y ) || NearOpeningMouthAt( x, y );
+                bool const d2Ok = LsiPointCoveredByD2( cap.d2After, x, y, zIntent, 0.22f );
+                bool const occSolid = OccupancySolidAt( x, y, zIntent );
+                if ( hfOk || d2Ok || ( isPlace && occSolid ) )
+                {
+                    ++cap.coveredSamples;
+                }
+                else if ( mouth || !hfOk )
+                {
+                    ++cap.voidSamples;
+                    if ( s_lsiDefectN < kLsiDefectCap )
+                    {
+                        char note[120];
+                        std::snprintf( note, sizeof( note ),
+                            "void hf=%d mouth=%d d2=%d occ=%d",
+                            hfOk ? 1 : 0, mouth ? 1 : 0, d2Ok ? 1 : 0, occSolid ? 1 : 0 );
+                        LsiAddDefect( "UNEXPLAINED_VOID", note, x, y, zIntent );
+                    }
+                }
+            }
+        }
+    }
+
+    void LsiCertifyCapture( LsiCapture& cap )
+    {
+        auto row = [&]( char const* check, char const* verdict, char const* note,
+            uint32_t ha = 0, uint32_t hb = 0, int na = 0, int nb = 0 )
+        {
+            LsiRow r{};
+            std::snprintf( r.action, sizeof( r.action ), "%s", cap.actionId );
+            std::snprintf( r.check, sizeof( r.check ), "%s", check );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            r.x = cap.vol.cx; r.y = cap.vol.cy; r.z = cap.vol.cz;
+            r.hashA = ha; r.hashB = hb;
+            r.nA = na; r.nB = nb;
+            LsiAddRow( r );
+        };
+
+        // Coverage: dig removes/intersects surface; surviving publish must cover intent samples.
+        {
+            float coverRatio = ( cap.intentSamples > 0 )
+                ? (float)cap.coveredSamples / (float)cap.intentSamples : 0.f;
+            char note[200];
+            std::snprintf( note, sizeof( note ),
+                "intent=%d covered=%d voids=%d hfHit %d->%d d2Hit=%d ratio=%.2f",
+                cap.intentSamples, cap.coveredSamples, cap.voidSamples,
+                cap.vol.hfIntersectBefore, cap.vol.hfIntersectAfter, cap.vol.d2IntersectAfter,
+                coverRatio );
+            bool const ok = ( cap.intentSamples > 0 ) && ( cap.voidSamples == 0 )
+                && ( coverRatio >= 0.95f );
+            row( "coverage", ok ? "PASS" : "FAIL", note,
+                cap.hfBefore.hash, cap.d2After.hash,
+                cap.vol.hfIntersectBefore, cap.vol.d2IntersectAfter );
+            if ( !ok )
+            {
+                LsiAddDefect( "COVERAGE_GAP", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
+            }
+        }
+
+        // Continuity: unexplained gaps relative to intent (void inventory).
+        {
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "voidSamples=%d intent=%d (record gaps; do not greenwash)",
+                cap.voidSamples, cap.intentSamples );
+            bool const ok = ( cap.voidSamples == 0 ) && ( cap.intentSamples > 0 );
+            row( "continuity", ok ? "PASS" : "FAIL", note, 0, 0, cap.voidSamples, cap.intentSamples );
+        }
+
+        // Tool-scale agreement: committed volume radius vs handful / tip mouth.
+        {
+            float const handful = kHandfulRadiusM;
+            float const tipMax = 0.12f;
+            float const used = cap.vol.toolScaleR > 1e-6f ? cap.vol.toolScaleR : cap.vol.r;
+            bool const ok = ( used >= handful * 0.5f ) && ( used <= (std::max)( tipMax, handful * 8.f ) );
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "R=%.4f tool=%.4f handful=%.4f tipMax=%.2f",
+                cap.vol.r, used, handful, tipMax );
+            row( "tool_scale", ok ? "PASS" : "FAIL", note );
+        }
+
+        // Boundary closure: open mouth-rim edges expected; unexplained tears are defects.
+        {
+            char note[180];
+            std::snprintf( note, sizeof( note ),
+                "unexplainedOpen=%d mouthRim=%d boundaryTotal=%d d2Tris=%d",
+                cap.openBoundaryEdges, cap.mouthRimEdges, cap.boundaryEdgesTotal, cap.d2After.triCount );
+            bool const ok = ( cap.d2After.triCount > 0 ) && ( cap.openBoundaryEdges == 0 );
+            row( "boundary_closure", ok ? "PASS" : "FAIL", note,
+                0, 0, cap.openBoundaryEdges, cap.mouthRimEdges );
+            if ( !ok )
+            {
+                LsiAddDefect( "BOUNDARY_OPEN", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
+            }
+        }
+
+        // Triangle validity on published HF after + D2.
+        {
+            int inv = cap.hfAfter.invalidTris + cap.d2After.invalidTris;
+            int deg = cap.hfAfter.degenerateTris + cap.d2After.degenerateTris;
+            char note[160];
+            std::snprintf( note, sizeof( note ),
+                "invalid=%d degenerate=%d hfTris=%d d2Tris=%d",
+                inv, deg, cap.hfAfter.triCount, cap.d2After.triCount );
+            bool const ok = ( inv == 0 && deg == 0 );
+            row( "triangle_validity", ok ? "PASS" : "FAIL", note );
+        }
+
+        // Outside-region identity: geometry outside dirty+halo bit-identical.
+        {
+            bool const ok = ( cap.hfOutsideBefore.hash == cap.hfOutsideAfter.hash )
+                && ( cap.hfOutsideBefore.triCount == cap.hfOutsideAfter.triCount );
+            char note[180];
+            std::snprintf( note, sizeof( note ),
+                "outside tris %d->%d hash %08x->%08x dirty=[%.2f..%.2f,%.2f..%.2f]",
+                cap.hfOutsideBefore.triCount, cap.hfOutsideAfter.triCount,
+                (unsigned)cap.hfOutsideBefore.hash, (unsigned)cap.hfOutsideAfter.hash,
+                cap.dirtyMinX, cap.dirtyMaxX, cap.dirtyMinY, cap.dirtyMaxY );
+            row( "outside_identity", ok ? "PASS" : "FAIL", note,
+                cap.hfOutsideBefore.hash, cap.hfOutsideAfter.hash,
+                cap.hfOutsideBefore.triCount, cap.hfOutsideAfter.triCount );
+            if ( !ok )
+            {
+                LsiAddDefect( "OUTSIDE_MUTATION", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
+            }
+        }
+
+        // Occupancy delta bookkeeping (observation). Dig may leave solidCount==0 in the
+        // air sphere; hash change still proves the edit when before was seeded.
+        {
+            char note[180];
+            std::snprintf( note, sizeof( note ),
+                "solid %d->%d hash %08x->%08x cells=%d",
+                cap.occBefore.solidCount, cap.occAfter.solidCount,
+                (unsigned)cap.occBefore.hash, (unsigned)cap.occAfter.hash,
+                cap.occAfter.cellCount );
+            bool const hashChanged = ( cap.occBefore.hash != cap.occAfter.hash );
+            bool const digOk = ( std::strcmp( cap.kind, "dig" ) == 0 )
+                && hashChanged
+                && ( cap.occAfter.solidCount <= cap.occBefore.solidCount );
+            bool const placeOk = ( std::strcmp( cap.kind, "place" ) == 0 )
+                && ( cap.occAfter.solidCount > cap.occBefore.solidCount || hashChanged );
+            bool const ok = digOk || placeOk;
+            row( "occupancy_delta", ok ? "PASS" : "FAIL", note,
+                cap.occBefore.hash, cap.occAfter.hash,
+                cap.occBefore.solidCount, cap.occAfter.solidCount );
+        }
+    }
+
+    void LsiWriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_local_surface_intent_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_lsiRowN; ++i )
+        {
+            if ( std::strcmp( s_lsiRows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_lsiRows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        std::fprintf( f,
+            "Provenance Local Surface Intent cert\n"
+            "read_only=1 freeze=D2,occ,ER,SupportBelow,PlaceOccupancyFill,chips\n"
+            "fixture=RANGE\n"
+            "exit_code=%d\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d defects=%d\n"
+            "first_fail=%s\n"
+            "note=FAIL rows document present defects; do not greenwash terrain systems\n"
+            "\n",
+            g.certLsiExitCode, passN, failN, skipN, s_lsiRowN, s_lsiDefectN,
+            s_lsiFailReason[0] ? s_lsiFailReason : "none" );
+        std::fprintf( f,
+            "action\tcheck\tverdict\tx\ty\tz\thashA\thashB\tnA\tnB\tnote\n" );
+        for ( int i = 0; i < s_lsiRowN; ++i )
+        {
+            LsiRow const& r = s_lsiRows[i];
+            std::fprintf( f, "%s\t%s\t%s\t%.3f\t%.3f\t%.3f\t%08x\t%08x\t%d\t%d\t%s\n",
+                r.action, r.check, r.verdict, r.x, r.y, r.z,
+                (unsigned)r.hashA, (unsigned)r.hashB, r.nA, r.nB, r.note );
+        }
+        std::fprintf( f, "\n# defect inventory\n" );
+        for ( int i = 0; i < s_lsiDefectN; ++i )
+        {
+            LsiDefect const& d = s_lsiDefects[i];
+            std::fprintf( f, "DEFECT\t%s\t(%.3f,%.3f,%.3f)\t%s\n",
+                d.kind, d.x, d.y, d.z, d.note );
+        }
+        std::fclose( f );
+
+        if ( g.certLsiExitCode != 0 && !g.certLsiFailWritten )
+        {
+            g.certLsiFailWritten = true;
+            char fpath[MAX_PATH];
+            std::snprintf( fpath, sizeof( fpath ),
+                "%s\\provenance_local_surface_intent_fail.txt", g.certOutDir );
+            FILE* ff = nullptr;
+            if ( fopen_s( &ff, fpath, "w" ) == 0 && ff )
+            {
+                std::fprintf( ff,
+                    "FAIL:\n"
+                    "reason=%s\n"
+                    "defects=%d\n"
+                    "note=see provenance_local_surface_intent_cert.txt; observation only\n",
+                    s_lsiFailReason[0] ? s_lsiFailReason : "defect_rows",
+                    s_lsiDefectN );
+                std::fclose( ff );
+            }
+        }
+    }
+
+    void LsiRunActionDigCavity( LsiCapture& cap )
+    {
+        std::snprintf( cap.actionId, sizeof( cap.actionId ), "dig_cavity" );
+        std::snprintf( cap.kind, sizeof( cap.kind ), "dig" );
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        float const x = ox + 8.f;
+        float const y = oy - 30.f;
+        float grade = 0.f;
+        SampleGroundZBase( x, y, grade );
+        float const R = 0.24f;
+        float const carveZ = grade - R * 0.40f;
+        cap.vol.cx = x; cap.vol.cy = y; cap.vol.cz = carveZ; cap.vol.r = R;
+        cap.vol.openX = x; cap.vol.openY = y; cap.vol.openZ = grade;
+        cap.vol.toolScaleR = (std::min)( R, 0.12f );
+
+        EnsureGeoDisk( (int)std::floor( x ), (int)std::floor( y ), 8 );
+        PrefetchOccupancyCell( (int)std::floor( x ), (int)std::floor( y ) );
+        for ( int dy = -1; dy <= 1; ++dy )
+            for ( int dx = -1; dx <= 1; ++dx )
+                PrefetchOccupancyCell( (int)std::floor( x ) + dx, (int)std::floor( y ) + dy );
+
+        // Seed occupancy for a fair before-snapshot (CarveOccupancySphere also seeds — observation only).
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                int const cx = (int)std::floor( x ) + dx;
+                int const cy = (int)std::floor( y ) + dy;
+                EnsureOccupancyLattice( cx, cy );
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( cell && !cell->carved && !cell->fill.empty() )
+                {
+                    SeedOccupancyFromVirginSurface( cx, cy );
+                }
+            }
+        }
+
+        // Full neighborhood HF before action (same adaptive tessellation as live mesh).
+        LsiMeshRecord hfHoodBefore{};
+        LsiCaptureLocalHf( hfHoodBefore, x, y, 3.5f, 0, 0, 0, 0, false );
+        LsiCaptureLocalHf( cap.hfBefore, x, y, R + 1.25f, 0, 0, 0, 0, false );
+        LsiCaptureOccupancy( cap.occBefore, x, y, carveZ, R );
+        cap.vol.hfIntersectBefore = LsiCountMeshSphereHits( cap.hfBefore, x, y, carveZ, R );
+
+        bool const carved = CarveOccupancySphere( x, y, carveZ, R, x, y, grade );
+        if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+
+        LsiResolveDirtyHalo( cap, x, y, R );
+        // Outside identity uses the same post-action dirty+halo rect on before/after.
+        LsiFilterOutsideDirty( hfHoodBefore, cap.hfOutsideBefore,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY );
+        LsiCaptureLocalHf( cap.hfAfter, x, y, R + 1.25f, 0, 0, 0, 0, false );
+        LsiMeshRecord hfHoodAfter{};
+        LsiCaptureLocalHf( hfHoodAfter, x, y, 3.5f, 0, 0, 0, 0, false );
+        LsiFilterOutsideDirty( hfHoodAfter, cap.hfOutsideAfter,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY );
+        LsiCapturePublishedD2( cap.d2After, x, y, R + 1.25f );
+        LsiCaptureOccupancy( cap.occAfter, x, y, carveZ, R );
+        cap.vol.hfIntersectAfter = LsiCountMeshSphereHits( cap.hfAfter, x, y, carveZ, R );
+        cap.vol.d2IntersectAfter = LsiCountMeshSphereHits( cap.d2After, x, y, carveZ, R );
+        cap.openBoundaryEdges = LsiCountUnexplainedOpenEdges( cap.d2After,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY,
+            x, y, grade, (std::min)( R, 0.12f ),
+            cap.boundaryEdgesTotal, cap.mouthRimEdges );
+        LsiProbeCoverageContinuity( cap );
+
+        if ( !carved )
+        {
+            LsiAddDefect( "DIG_NO_EFFECT", "CarveOccupancySphere returned false", x, y, grade );
+            LsiRow r{};
+            std::snprintf( r.action, sizeof( r.action ), "dig_cavity" );
+            std::snprintf( r.check, sizeof( r.check ), "action_commit" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "CARVE_FALSE" );
+            r.x = x; r.y = y; r.z = carveZ;
+            LsiAddRow( r );
+        }
+        LsiCertifyCapture( cap );
+    }
+
+    void LsiRunActionPlaceIntoCavity( LsiCapture& cap )
+    {
+        std::snprintf( cap.actionId, sizeof( cap.actionId ), "place_into_cavity" );
+        std::snprintf( cap.kind, sizeof( cap.kind ), "place" );
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        float const x = ox + 12.f;
+        float const y = oy - 30.f;
+        float grade = 0.f;
+        SampleGroundZBase( x, y, grade );
+        float const digR = 0.22f;
+        float const carveZ = grade - digR * 0.40f;
+        float const placeR = (std::max)( kHandfulRadiusM * 1.8f, kVoxelEdgeM * 1.25f );
+
+        EnsureGeoDisk( (int)std::floor( x ), (int)std::floor( y ), 8 );
+        PrefetchOccupancyCell( (int)std::floor( x ), (int)std::floor( y ) );
+        for ( int dy = -1; dy <= 1; ++dy )
+            for ( int dx = -1; dx <= 1; ++dx )
+                PrefetchOccupancyCell( (int)std::floor( x ) + dx, (int)std::floor( y ) + dy );
+
+        bool const carved = CarveOccupancySphere( x, y, carveZ, digR, x, y, grade );
+        if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+        if ( !carved )
+        {
+            LsiRow r{};
+            std::snprintf( r.action, sizeof( r.action ), "place_into_cavity" );
+            std::snprintf( r.check, sizeof( r.check ), "pre_dig" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "PRE_DIG_FAILED" );
+            r.x = x; r.y = y; r.z = grade;
+            LsiAddRow( r );
+            return;
+        }
+
+        SupportHit const floor0 = SupportBelow( x, y, grade + 0.5f );
+        float placeZ = carveZ;
+        if ( floor0.hit ) { placeZ = floor0.position.z + kVoxelEdgeM * 0.35f; }
+
+        cap.vol.cx = x; cap.vol.cy = y; cap.vol.cz = placeZ; cap.vol.r = placeR;
+        cap.vol.openX = x; cap.vol.openY = y; cap.vol.openZ = grade;
+        cap.vol.toolScaleR = placeR;
+
+        LsiMeshRecord hfHoodBefore{};
+        LsiCaptureLocalHf( hfHoodBefore, x, y, 3.5f, 0, 0, 0, 0, false );
+        LsiCaptureLocalHf( cap.hfBefore, x, y, placeR + 1.25f, 0, 0, 0, 0, false );
+        LsiCaptureOccupancy( cap.occBefore, x, y, placeZ, placeR );
+        cap.vol.hfIntersectBefore = LsiCountMeshSphereHits( cap.hfBefore, x, y, placeZ, placeR );
+
+        std::unordered_map<std::string, int> credit;
+        credit["dirt"] = (int)std::lround( kDirtVoxelG );
+        CreditHeld( credit );
+        PlaceFillResult const pr = PlaceOccupancyFill( x, y, placeZ, placeR, credit["dirt"] );
+        if ( pr.ok ) { DebitHeldTotal( pr.acceptedGrams ); }
+        if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+
+        LsiResolveDirtyHalo( cap, x, y, placeR );
+        LsiFilterOutsideDirty( hfHoodBefore, cap.hfOutsideBefore,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY );
+        LsiCaptureLocalHf( cap.hfAfter, x, y, placeR + 1.25f, 0, 0, 0, 0, false );
+        LsiMeshRecord hfHoodAfter{};
+        LsiCaptureLocalHf( hfHoodAfter, x, y, 3.5f, 0, 0, 0, 0, false );
+        LsiFilterOutsideDirty( hfHoodAfter, cap.hfOutsideAfter,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY );
+        LsiCapturePublishedD2( cap.d2After, x, y, placeR + 1.25f );
+        LsiCaptureOccupancy( cap.occAfter, x, y, placeZ, placeR );
+        cap.vol.hfIntersectAfter = LsiCountMeshSphereHits( cap.hfAfter, x, y, placeZ, placeR );
+        cap.vol.d2IntersectAfter = LsiCountMeshSphereHits( cap.d2After, x, y, placeZ, placeR );
+        cap.openBoundaryEdges = LsiCountUnexplainedOpenEdges( cap.d2After,
+            cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY,
+            x, y, grade, (std::min)( digR, 0.12f ),
+            cap.boundaryEdgesTotal, cap.mouthRimEdges );
+        LsiProbeCoverageContinuity( cap );
+
+        if ( !pr.ok || pr.acceptedGrams <= 0 )
+        {
+            LsiAddDefect( "PLACE_NO_MATTER", "PlaceOccupancyFill accepted nothing", x, y, placeZ );
+            LsiRow r{};
+            std::snprintf( r.action, sizeof( r.action ), "place_into_cavity" );
+            std::snprintf( r.check, sizeof( r.check ), "action_commit" );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+            std::snprintf( r.note, sizeof( r.note ), "PLACE_FILL_NO_MATTER" );
+            r.x = x; r.y = y; r.z = placeZ;
+            LsiAddRow( r );
+        }
+        LsiCertifyCapture( cap );
+    }
+
+    void CertLsiTick()
+    {
+        if ( !g.certLsi ) { return; }
+        DWORD const now = GetTickCount();
+
+        if ( g.certLsiPhase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certLsiPhaseMs == 0 ) { g.certLsiPhaseMs = now; }
+                if ( now - g.certLsiPhaseMs > 45000 )
+                {
+                    LsiRow r{};
+                    std::snprintf( r.action, sizeof( r.action ), "connect" );
+                    std::snprintf( r.check, sizeof( r.check ), "stream_ready" );
+                    std::snprintf( r.verdict, sizeof( r.verdict ), "FAIL" );
+                    std::snprintf( r.note, sizeof( r.note ), "BRIDGE_OR_CAPS_TIMEOUT" );
+                    LsiAddRow( r );
+                    LsiWriteArtifact();
+                    g.certLsiPhase = 3;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            SnapVirginPerfIfNeeded();
+            s_lsiRowN = 0;
+            s_lsiDefectN = 0;
+            s_lsiFailReason[0] = 0;
+            g.certLsiExitCode = 0;
+            g.certLsiFailWritten = false;
+            EnsureGeoDisk(
+                (int)ProvenanceGeo::kRangeOriginX + 10,
+                (int)ProvenanceGeo::kRangeOriginY - 30,
+                24 );
+            g.certLsiPhase = 1;
+            g.certLsiPhaseMs = now;
+            g.statusLine = "CERT-LSI settle residency";
+            return;
+        }
+
+        if ( g.certLsiPhase == 1 )
+        {
+            if ( g.terrainDirty && now - g.certLsiPhaseMs < 2000 ) { return; }
+            g.certLsiPhase = 2;
+            g.certLsiPhaseMs = now;
+            g.statusLine = "CERT-LSI capture dig+place";
+            return;
+        }
+
+        if ( g.certLsiPhase == 2 )
+        {
+            LsiCapture digCap{};
+            LsiRunActionDigCavity( digCap );
+            LsiCapture placeCap{};
+            LsiRunActionPlaceIntoCavity( placeCap );
+
+            // Capture summary rows (geometry record sizes/hashes).
+            auto summary = [&]( LsiCapture const& c )
+            {
+                LsiRow r{};
+                std::snprintf( r.action, sizeof( r.action ), "%s", c.actionId );
+                std::snprintf( r.check, sizeof( r.check ), "capture_summary" );
+                std::snprintf( r.verdict, sizeof( r.verdict ), "PASS" );
+                std::snprintf( r.note, sizeof( r.note ),
+                    "hf %d->%d d2=%d occSolid %d->%d outsideHash %08x->%08x",
+                    c.hfBefore.triCount, c.hfAfter.triCount, c.d2After.triCount,
+                    c.occBefore.solidCount, c.occAfter.solidCount,
+                    (unsigned)c.hfOutsideBefore.hash, (unsigned)c.hfOutsideAfter.hash );
+                r.x = c.vol.cx; r.y = c.vol.cy; r.z = c.vol.cz;
+                r.hashA = c.hfBefore.hash; r.hashB = c.d2After.hash;
+                r.nA = c.hfBefore.triCount; r.nB = c.d2After.triCount;
+                LsiAddRow( r );
+            };
+            summary( digCap );
+            summary( placeCap );
+
+            LsiWriteArtifact();
+            g.statusLine = g.certLsiExitCode
+                ? "CERT-LSI done — FAIL defects captured (read-only)"
+                : "CERT-LSI done — PASS";
+            g.certLsiPhase = 3;
+            PostQuitMessage( g.certLsiExitCode );
+            return;
+        }
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -13854,6 +14881,7 @@ namespace
         SnapVirginPerfIfNeeded();
         CertDigTick();
         CertGeoTick();
+        CertLsiTick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -14172,6 +15200,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-geography" ) == 0 )
                 {
                     g.certGeo = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-lsi" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-local-surface-intent" ) == 0 )
+                {
+                    g.certLsi = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
                     continue;
                 }

@@ -69,6 +69,8 @@ Code: `ProvenanceGeography.h` (`Range*` / `Torture*`); virgin load remains HF-on
 
 **Geography interaction cert (Horizon-to-Hand transect):** see `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — run with `--cert-geo` / `--cert-geography` (forces RANGE).
 
+**Local Surface Intent (read-only dig/place geometry):** `--cert-lsi` / `--cert-local-surface-intent` → `%TEMP%\provenance_local_surface_intent_cert.txt`. Capture + defect inventory only; does not greenwash D2/occ/ER/support/place/chips. See handoff §Local Surface Intent.
+
 ```
 P3b D2 CORE FLOOR
 SHA: 523e796eba8c3f1f67559caadb27e76957645f4e
@@ -113,7 +115,13 @@ Reverse matter transfer: attached → remove → carried → place → attached 
 
 **Scalability (place):** Placed matter does not automatically require an expensive permanent object. Dump dirt → occupancy/aggregate → cheap settled representation. Meaningful quartz/block may stay explicit MatterBody. `representation changes; matter does not`.
 
-Cert §9: flat mound, slope supported/no float, cavity floor upward, lip no roof, remove→place→remove reconcile. **STOP before async/determinism.**
+Cert §9: flat mound, slope supported/no float, cavity floor upward, lip no roof, remove→place→remove reconcile.
+
+```
+LSI CAPTURE / CERT (read-only)
+```
+
+`--cert-lsi` instruments dig cavity + place-into-cavity: local HF before/after, action volume, occ before/after, published D2, cert rows for coverage/continuity/tool-scale/boundary/tri-validity/outside-identity. FAIL rows document present voids/gaps — do not change terrain systems to force green. **STOP before async/determinism.**
 
 ### Standing scalability rule
 
