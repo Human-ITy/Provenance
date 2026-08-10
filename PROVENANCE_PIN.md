@@ -149,7 +149,7 @@ SHA: 5d669758f1c853a88a543c341f9377a7c689b417
 
 ```
 P4.1 PREDICTION ROLLBACK FLOOR
-SHA: <filled on commit>
+SHA: 67790cf7b08acd845644e34b72d8b600a4d7c34d
 ```
 
 Adversarial: capture pre-intent → optimistic dig/place prediction → REFUSE / `nothing_to_dig` → exact restore of occupancy bytes, EditedRegion membership/bounds/revision, local D2 publication, HF ownership/openings, SupportBelow, held grams, and no surviving predicted chip/body. Delay permutations (0/4/18 frames) must still reverse.

@@ -361,7 +361,7 @@ Live `--cert-p4` (RANGE): `exit_code=0`, `PASS_rows=14 FAIL_rows=0`. Headless `c
 
 ```
 P4.1 PREDICTION ROLLBACK FLOOR
-SHA: <filled on commit>
+SHA: 67790cf7b08acd845644e34b72d8b600a4d7c34d
 ```
 
 **P4.1 adversarial:** pre-intent hashes → optimistic dig/place → REFUSE/`nothing_to_dig` → occupancy/ER/D2/HF-ownership/SupportBelow/held/bodies exact match; delays 0/4/18 frames. Live `--cert-p4` must keep these rows PASS.
