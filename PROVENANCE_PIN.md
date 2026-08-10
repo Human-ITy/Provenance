@@ -140,7 +140,7 @@ SHA: faa8b9fcefddf1037f467cd7458a7eb2b32908dd
 
 ```
 P4 FABLESCRIPT AUTHORITY FLOOR
-SHA: (set on green commit)
+SHA: 5d669758f1c853a88a543c341f9377a7c689b417
 ```
 
 **Law:** Client owns intent, prediction, cache and presentation. Fablescript owns matter, mutation, inventory transfer, fracture/separation identity and world revision.

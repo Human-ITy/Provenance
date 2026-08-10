@@ -345,8 +345,9 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 ```
 P4 FABLESCRIPT AUTHORITY FLOOR
-SHA: (set on green commit)
+SHA: 5d669758f1c853a88a543c341f9377a7c689b417
 ```
+Live `--cert-p4` (RANGE): `exit_code=0`, `PASS_rows=14 FAIL_rows=0`. Headless `cert_p4_headless.py`: exit 0.
 
 **Law:** Client owns intent, prediction, cache and presentation. Fablescript owns matter, mutation, inventory transfer, fracture/separation identity and world revision.
 
