@@ -241,6 +241,9 @@ Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morpho
 **P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
 **P5b remains CLOSED** — STOP; do not open terrain–water coupling.
 
+**Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
+Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**

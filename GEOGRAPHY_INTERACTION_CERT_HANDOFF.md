@@ -514,6 +514,23 @@ If bridge is down, client may sit in connect retry — still compile/ship harnes
 
 ---
 
+## Pick / surface gate — continued testing
+
+**Cold resume:** `PICK_FRACTURE_HANDOFF.md` (not this transect file).
+
+| Item | Truth |
+|------|--------|
+| Tip | `fa73dd2` / pin `56260ca` (sky/clear hard-gate) |
+| Prior fracture floor | `434a565` / pin `3d11771` |
+| Build | Prefer `Build\x64_Release_pickcov\ProvenanceClient.exe` |
+| P5a | FREEZE `8e09e77` / `ee58393` — `--cert-p5a` must stay 15/0 |
+| P5b | CLOSED |
+
+Flags: `--cert-pick-fracture` · `--cert-p5a` · `--cert-lsi` / `--cert-geo` as relevant.  
+Law: sky/clear in|around strike hole = FAIL; deform past fracture+min recon halo = FAIL.
+
+---
+
 ## Related docs for review (do not overwrite)
 
 Gameplay / worldbuilding + material **appearance** refs live outside this cert lane. Review when folding material correctness (§8) / presentation polish — **do not merge them into geo cert or dig-cert law**, and **do not overwrite the heightfield object palette**.
