@@ -119,9 +119,10 @@ Cert §9: flat mound, slope supported/no float, cavity floor upward, lip no roof
 
 ```
 LSI CAPTURE / CERT (read-only)
+SHA: 78f9ea0e1e20fc223b944348cbb5910faa6dd079
 ```
 
-`--cert-lsi` instruments dig cavity + place-into-cavity: local HF before/after, action volume, occ before/after, published D2, cert rows for coverage/continuity/tool-scale/boundary/tri-validity/outside-identity. FAIL rows document present voids/gaps — do not change terrain systems to force green. **STOP before async/determinism.**
+`--cert-lsi` instruments dig cavity + place-into-cavity: local HF before/after, action volume, occ before/after, published D2, cert rows for coverage/continuity/tool-scale/boundary/tri-validity/outside-identity. FAIL rows document present boundary-open defects — do not change terrain systems to force green. **STOP before async/determinism.**
 
 ### Standing scalability rule
 

@@ -345,7 +345,7 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 ```
 LSI CAPTURE / CERT (read-only)
-SHA: (pinned after commit — see PROVENANCE_PIN.md)
+SHA: 78f9ea0e1e20fc223b944348cbb5910faa6dd079
 ```
 
 **Flag:** `--cert-lsi` (alias `--cert-local-surface-intent`). Forces RANGE. Does **not** change D2 / occupancy / EditedRegion / SupportBelow / `PlaceOccupancyFill` / chips — observation + certification only. Floors P3b–P3e stay intact.
