@@ -200,7 +200,7 @@ SHA: ceddd13697c7936852f2398cd0f12be6057daac6
 
 ```
 P5a WATER LEDGER / SETTLE FLOOR (REPAIR — foundation-ready)
-SHA: (pending commit)
+SHA: 8e09e77249fb5ff7d3afb897d6c5bb320445a60e
 ```
 
 **Law:** Water should wake from causality, not from time passing. Conserved occupancy-aware body; settle → dormant; unrelated receipts → zero water work. Contract: `Docs/P5A_WATER_LEDGER.md`.
