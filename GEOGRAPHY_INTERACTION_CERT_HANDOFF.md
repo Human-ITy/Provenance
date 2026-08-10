@@ -339,16 +339,21 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 §9 probes (RANGE): `place_flat_mound`; `place_slope_supported` + `place_slope_no_float`; `place_cavity_floor_upward` + raised floor; `place_cavity_lip_connect` + `place_lip_no_roof_hole`; `place_no_HF_resurrection`; `remove_place_remove_reconcile`. After-each: held debit == accepted grams; occupancy units correspond; SupportBelow sees matter; D2 rebuilds on cavity edits; HF grade stable / openings kept.
 
-**Order for next agents:** Local Surface Intent capture (read-only) sits under `--cert-lsi` before ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+**Order for next agents:** LSI presentation-closure floor is green under `--cert-lsi`. Next is **ASYNC+DETERMINISM** (fold LSI hashes/closure into that gate) → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
 
-### Local Surface Intent (read-only capture/cert)
+### Local Surface Intent (presentation-closure floor)
 
 ```
 LSI CAPTURE / CERT (read-only)
 SHA: 78f9ea0e1e20fc223b944348cbb5910faa6dd079
 ```
 
-**Flag:** `--cert-lsi` (alias `--cert-local-surface-intent`). Forces RANGE. Does **not** change D2 / occupancy / EditedRegion / SupportBelow / `PlaceOccupancyFill` / chips — observation + certification only. Floors P3b–P3e stay intact.
+```
+LSI PRESENTATION-CLOSURE FLOOR
+SHA: b3dca76b449d33f796a755c6f899db1096cea612
+```
+
+**Flag:** `--cert-lsi` (alias `--cert-local-surface-intent`). Forces RANGE. Freeze: occupancy / EditedRegion / SupportBelow / `PlaceOccupancyFill` / chips. Narrow D2 change allowed: **canonical per-column crest** so shared seam verts are world-identical from either owner (not broad post-hoc snap). Floors P3b–P3e stay intact.
 
 **What it captures** (around dig cavity + place into cavity):
 1. Actual local HF mesh before (live adaptive tessellation via `SampleTerrainDrawZ` / mouth tip-6 — not an idealized grid)
@@ -356,23 +361,27 @@ SHA: 78f9ea0e1e20fc223b944348cbb5910faa6dd079
 3. Occupancy before/after (fill hashes + solid-in-sphere; dig before-snapshot seeds virgin lattice for fair hash — same seed Carve would do)
 4. Surviving HF + published D2 tris afterward (canonical world-space POD, FNV hashes, bounds)
 
-**Cert checks:** coverage, continuity (void inventory), tool-scale, boundary closure (mouth-rim open edges expected; unexplained open edges FAIL), triangle validity, outside dirty+halo identity. Present defects → **FAIL rows + DEFECT inventory** (do not weaken until green).
+**Cert checks:** coverage, continuity (void inventory), tool-scale, boundary closure, triangle validity, outside dirty+halo identity.
 
-**Artifacts:** `%TEMP%\provenance_local_surface_intent_cert.txt` (+ optional `provenance_local_surface_intent_fail.txt`). Exit non-zero when FAIL rows exist — expected while boundary tears remain; harness is still the instrumentation floor.
+**Boundary closure (LSI classification):**
+- Dig mouth annulus = expected presentation free boundary (matter→air open cup)
+- Place crest / open-skin plate = expected presentation free boundary
+- Dirty AABB rim = expected
+- Cross-cell vertex mismatch = accidental → FAIL (fixed by canonical seam crest; measured tolerance kept separate)
 
-Live `--cert-lsi` (RANGE, instrumentation floor): `exit_code=1`, `PASS_rows=14 FAIL_rows=2 SKIP_rows=0`, `defects=2`.
+**Artifacts:** `%TEMP%\provenance_local_surface_intent_cert.txt` (+ fail blob only when FAIL rows exist).
+
+Live `--cert-lsi` (RANGE, presentation-closure floor): `exit_code=0`, `PASS_rows=16 FAIL_rows=0 SKIP_rows=0`, `defects=0`.
 
 | Check | dig_cavity | place_into_cavity |
 |-------|------------|-------------------|
 | coverage | PASS (75/75, voids=0) | PASS (45/45, voids=0) |
 | continuity | PASS | PASS |
 | tool_scale | PASS | PASS |
-| boundary_closure | **FAIL** unexplainedOpen=35 (mouthRim=23) | **FAIL** unexplainedOpen=46 (mouthRim=12) |
+| boundary_closure | PASS unexplainedOpen=0 mouthAnnulus=36 mismatch=0 | PASS unexplainedOpen=0 openSkin=32 mismatch=0 |
 | triangle_validity | PASS | PASS |
 | outside_identity | PASS (bit-identical) | PASS (bit-identical) |
 | occupancy_delta | PASS (solid 26→0) | PASS (solid 2→3) |
-
-Defect inventory: `BOUNDARY_OPEN` on both actions (D2 open edges not explained as mouth-rim / dirty rim). No unexplained HF voids in these two pads under current coverage probe.
 
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-lsi

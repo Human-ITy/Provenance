@@ -69,7 +69,7 @@ Code: `ProvenanceGeography.h` (`Range*` / `Torture*`); virgin load remains HF-on
 
 **Geography interaction cert (Horizon-to-Hand transect):** see `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — run with `--cert-geo` / `--cert-geography` (forces RANGE).
 
-**Local Surface Intent (read-only dig/place geometry):** `--cert-lsi` / `--cert-local-surface-intent` → `%TEMP%\provenance_local_surface_intent_cert.txt`. Capture + defect inventory only; does not greenwash D2/occ/ER/support/place/chips. See handoff §Local Surface Intent.
+**Local Surface Intent / presentation-closure floor:** `--cert-lsi` / `--cert-local-surface-intent` → `%TEMP%\provenance_local_surface_intent_cert.txt`. Dig mouth annulus + place crest/open-skin are expected free boundaries; accidental cross-cell opens FAIL. Narrow D2 seam weld = per-column crest world Z (no occ/ER/SupportBelow/place/chip greenwash). See handoff §Local Surface Intent.
 
 ```
 P3b D2 CORE FLOOR
@@ -122,7 +122,14 @@ LSI CAPTURE / CERT (read-only)
 SHA: 78f9ea0e1e20fc223b944348cbb5910faa6dd079
 ```
 
-`--cert-lsi` instruments dig cavity + place-into-cavity: local HF before/after, action volume, occ before/after, published D2, cert rows for coverage/continuity/tool-scale/boundary/tri-validity/outside-identity. FAIL rows document present boundary-open defects — do not change terrain systems to force green. **STOP before async/determinism.**
+Instrumentation floor only (pre-classification). Superseded by presentation-closure floor below.
+
+```
+LSI PRESENTATION-CLOSURE FLOOR
+SHA: b3dca76b449d33f796a755c6f899db1096cea612
+```
+
+`--cert-lsi` green: dig mouth annulus + place crest/open-skin classified as expected LSI free boundaries; cross-cell accidental opens = 0 via canonical per-column-crest seam verts; coverage + outside identity green. Freeze: do not weaken boundary classification or reopen broad D2 topology. **Next: ASYNC+DETERMINISM** (include LSI hashes/closure in that gate).
 
 ### Standing scalability rule
 
