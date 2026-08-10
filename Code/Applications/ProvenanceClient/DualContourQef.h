@@ -72,6 +72,13 @@ namespace DualContourQef
         virtual ~IFillField() = default;
         // Lattice indices relative to home column origin (may be outside 0..w-1 for halo).
         virtual bool TrySample( int c, int r, int k, int& outFill ) const = 0;
+        // Crest Z for the column that owns lattice (c,r). NaN → ExtractCell home crestZ.
+        // Required for cross-cell seam identity: each column's layer-k world Z follows its own crest.
+        virtual float CrestAtLattice( int c, int r, int w, int h ) const
+        {
+            (void)c; (void)r; (void)w; (void)h;
+            return std::numeric_limits<float>::quiet_NaN();
+        }
     };
 
     inline Vec3 LatticeWorld( int c, int r, int k,
@@ -103,11 +110,29 @@ namespace DualContourQef
 
     struct Hermite { Vec3 p, n; };
 
+    inline float ResolveCrest( IFillField const& field, int c, int r, int w, int h, float homeCrest )
+    {
+        float const cr = field.CrestAtLattice( c, r, w, h );
+        return std::isfinite( cr ) ? cr : homeCrest;
+    }
+
+    inline Vec3 LatticeWorldOwned( IFillField const& field,
+        int c, int r, int k,
+        float originX, float originY, float homeCrest,
+        float du, float dv, float edge, int kz, int w, int h )
+    {
+        // X/Y from home-origin lattice (negative indices reach neighbor columns).
+        // Z from the owning column crest so both seam owners agree on world-space.
+        float const crest = ResolveCrest( field, c, r, w, h, homeCrest );
+        return LatticeWorld( c, r, k, originX, originY, crest, du, dv, edge, kz );
+    }
+
     inline bool EdgeHermite( IFillField const& field,
         int c0, int r0, int k0, int c1, int r1, int k1,
         float originX, float originY, float crestZ,
         float du, float dv, float edge, int kz, int iso,
-        Hermite& out, ExtractStats& st )
+        Hermite& out, ExtractStats& st,
+        int w = 0, int h = 0 )
     {
         float const d0 = SampleDensity( field, c0, r0, k0, iso, st );
         float const d1 = SampleDensity( field, c1, r1, k1, iso, st );
@@ -117,8 +142,12 @@ namespace DualContourQef
         float const den = d0 - d1;
         if ( std::fabs( den ) > 1e-6f ) { t = d0 / den; }
         t = std::clamp( t, 0.02f, 0.98f );
-        Vec3 const p0 = LatticeWorld( c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz );
-        Vec3 const p1 = LatticeWorld( c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz );
+        Vec3 const p0 = ( w > 0 && h > 0 )
+            ? LatticeWorldOwned( field, c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz, w, h )
+            : LatticeWorld( c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz );
+        Vec3 const p1 = ( w > 0 && h > 0 )
+            ? LatticeWorldOwned( field, c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz, w, h )
+            : LatticeWorld( c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz );
         out.p = p0 + ( p1 - p0 ) * t;
 
         // Central-difference gradient on density (points toward air / out of solid).
@@ -316,10 +345,21 @@ namespace DualContourQef
                         { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
                         { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
                     };
-                    Vec3 cellCentre = LatticeWorld( c, r, k, originX, originY, crestZ, du, dv, edge, kz );
-                    // Approximate dual centre.
-                    Vec3 cellMax = LatticeWorld( c + 1, r + 1, k + 1, originX, originY, crestZ, du, dv, edge, kz );
-                    Vec3 mid = ( cellCentre + cellMax ) * 0.5f;
+                    // Canonical world corners: Z from owning-column crest (seam-identical).
+                    Vec3 corners[8];
+                    Vec3 cellMin{ 1e9f, 1e9f, 1e9f }, cellMax{ -1e9f, -1e9f, -1e9f };
+                    for ( int i = 0; i < 8; ++i )
+                    {
+                        corners[i] = LatticeWorldOwned( field,
+                            cc[i], rr[i], kk[i], originX, originY, crestZ, du, dv, edge, kz, w, h );
+                        cellMin.x = (std::min)( cellMin.x, corners[i].x );
+                        cellMin.y = (std::min)( cellMin.y, corners[i].y );
+                        cellMin.z = (std::min)( cellMin.z, corners[i].z );
+                        cellMax.x = (std::max)( cellMax.x, corners[i].x );
+                        cellMax.y = (std::max)( cellMax.y, corners[i].y );
+                        cellMax.z = (std::max)( cellMax.z, corners[i].z );
+                    }
+                    Vec3 mid = ( cellMin + cellMax ) * 0.5f;
 
                     bool anyAir = false, anySolid = false, anyUnknown = false;
                     for ( int i = 0; i < 8; ++i )
@@ -340,8 +380,7 @@ namespace DualContourQef
                         {
                             for ( int i = 0; i < 8 && !keep; ++i )
                             {
-                                Vec3 const p = LatticeWorld( cc[i], rr[i], kk[i], originX, originY, crestZ, du, dv, edge, kz );
-                                keep = InFocus( p, focusX, focusY, focusZ, focusRM );
+                                keep = InFocus( corners[i], focusX, focusY, focusZ, focusRM );
                             }
                         }
                         if ( !keep ) { continue; }
@@ -350,16 +389,16 @@ namespace DualContourQef
                     for ( int e = 0; e < 12; ++e )
                     {
                         int const i0 = edges[e][0], i1 = edges[e][1];
-                        Hermite h{};
+                        Hermite herm{};
                         if ( EdgeHermite( field,
                             cc[i0], rr[i0], kk[i0], cc[i1], rr[i1], kk[i1],
-                            originX, originY, crestZ, du, dv, edge, kz, iso, h, stats ) )
+                            originX, originY, crestZ, du, dv, edge, kz, iso, herm, stats, w, h ) )
                         {
-                            if ( nH < 12 ) { H[nH++] = h; }
+                            if ( nH < 12 ) { H[nH++] = herm; }
                         }
                     }
                     Vec3 feature{};
-                    if ( !SolveQef( H, nH, cellCentre, cellMax, feature, stats ) ) { continue; }
+                    if ( !SolveQef( H, nH, cellMin, cellMax, feature, stats ) ) { continue; }
                     int const id = idx( c, r, k );
                     hasVert[(size_t)id] = 1;
                     vert[(size_t)id] = feature;
@@ -411,8 +450,8 @@ namespace DualContourQef
             {
                 if ( !vertAt( oc[i], orr[i], ok[i], v[i] ) ) { return; }
             }
-            Vec3 const p0 = LatticeWorld( c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz );
-            Vec3 const p1 = LatticeWorld( c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz );
+            Vec3 const p0 = LatticeWorldOwned( field, c0, r0, k0, originX, originY, crestZ, du, dv, edge, kz, w, h );
+            Vec3 const p1 = LatticeWorldOwned( field, c1, r1, k1, originX, originY, crestZ, du, dv, edge, kz, w, h );
             Vec3 towardAir = Solid( d0 ) ? ( p1 - p0 ) : ( p0 - p1 );
             int const edgesBefore = stats.edgesEmitted;
             EmitQuad( v[0], v[1], v[2], v[3], towardAir, maxEdge, stats, outTris );

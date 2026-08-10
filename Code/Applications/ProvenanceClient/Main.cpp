@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -2990,6 +2991,28 @@ namespace
         int homeCx = 0, homeCy = 0;
         CellSample const* home = nullptr;
 
+        bool ResolveColumn( int c, int r, int w, int h,
+            int& outLc, int& outLr, CellSample const*& outCell ) const
+        {
+            outLc = c; outLr = r;
+            int cellDx = 0, cellDy = 0;
+            while ( outLc < 0 ) { outLc += w; --cellDx; }
+            while ( outLc >= w ) { outLc -= w; ++cellDx; }
+            while ( outLr < 0 ) { outLr += h; --cellDy; }
+            while ( outLr >= h ) { outLr -= h; ++cellDy; }
+            outCell = home;
+            if ( cellDx != 0 || cellDy != 0 )
+            {
+                outCell = GetCell( homeCx + cellDx, homeCy + cellDy );
+                if ( !outCell || outCell->fill.empty()
+                    || outCell->fillW != w || outCell->fillH != h || outCell->fillK != home->fillK )
+                {
+                    return false;
+                }
+            }
+            return outCell != nullptr;
+        }
+
         bool TrySample( int c, int r, int k, int& outFill ) const override
         {
             outFill = 0;
@@ -2998,25 +3021,25 @@ namespace
             // Column Z domain boundary (not a missing neighbor): below = solid, above = air.
             if ( k < 0 ) { outFill = kFillFull; return true; }
             if ( k >= kz ) { outFill = 0; return true; }
-            int cellDx = 0, cellDy = 0;
-            int lc = c, lr = r;
-            while ( lc < 0 ) { lc += w; --cellDx; }
-            while ( lc >= w ) { lc -= w; ++cellDx; }
-            while ( lr < 0 ) { lr += h; --cellDy; }
-            while ( lr >= h ) { lr -= h; ++cellDy; }
-            CellSample const* cell = home;
-            if ( cellDx != 0 || cellDy != 0 )
-            {
-                cell = GetCell( homeCx + cellDx, homeCy + cellDy );
-                if ( !cell || cell->fill.empty()
-                    || cell->fillW != w || cell->fillH != h || cell->fillK != kz )
-                {
-                    // Unknown halo — never synthesize solid or air. Caller must fetch or refuse.
-                    return false;
-                }
-            }
+            int lc = 0, lr = 0;
+            CellSample const* cell = nullptr;
+            if ( !ResolveColumn( c, r, w, h, lc, lr, cell ) ) { return false; }
             outFill = FillAt( *cell, lc, lr, k );
             return true;
+        }
+
+        // Canonical seam: world Z for lattice (c,r) follows the owning column crest.
+        float CrestAtLattice( int c, int r, int w, int h ) const override
+        {
+            if ( !home || home->fill.empty() || w <= 0 || h <= 0 ) {
+                return std::numeric_limits<float>::quiet_NaN();
+            }
+            int lc = 0, lr = 0;
+            CellSample const* cell = nullptr;
+            if ( !ResolveColumn( c, r, w, h, lc, lr, cell ) || !cell ) {
+                return std::numeric_limits<float>::quiet_NaN();
+            }
+            return CellOccCrest( *cell );
         }
     };
 
@@ -13475,8 +13498,10 @@ namespace
     }
 
     // ---------- Local Surface Intent (--cert-lsi) ----------
-    // Read-only observation + certification around dig/place. Capture present defects.
-    // Do NOT change D2 / occupancy / EditedRegion / SupportBelow / place / chips to greenwash.
+    // Certify dig/place presentation closure. Classification teaches expected free boundaries
+    // (dig mouth annulus, place crest/open-skin). Accidental cross-cell opens FAIL.
+    // D2 seam weld (canonical per-column crest) is the only geometry change allowed here —
+    // do NOT greenwash via occ / EditedRegion / SupportBelow / place / chips.
     struct LsiVec3 { float x = 0.f, y = 0.f, z = 0.f; };
     struct LsiTri { LsiVec3 a{}, b{}, c{}; };
     struct LsiMeshRecord
@@ -13538,9 +13563,12 @@ namespace
         int voidSamples = 0;
         int intentSamples = 0;
         int coveredSamples = 0;
-        int openBoundaryEdges = 0; // unexplained open edges (mouth-rim excluded)
-        int mouthRimEdges = 0;
+        int openBoundaryEdges = 0; // unexplained accidental opens only
+        int mouthRimEdges = 0;     // dig mouth annulus (expected LSI free boundary)
+        int openSkinEdges = 0;     // place crest / open-skin (expected LSI free boundary)
+        int dirtyRimEdges = 0;     // dirty AABB rim (expected)
         int boundaryEdgesTotal = 0;
+        int crossCellMismatchEdges = 0; // measured seam epsilon tears (should be 0 after weld)
     };
 
     static constexpr int kLsiRowCap = 64;
@@ -13886,14 +13914,43 @@ namespace
         return false;
     }
 
-    // Boundary edges on an open dig mouth are expected. Count only unexplained tears:
-    // open edges that are neither near a crest/mouth opening nor on the dirty XY rim.
+    // Unexplained open-edge dump (accidental tears only). Expected LSI free boundaries omitted.
+    struct LsiOpenEdgeDump
+    {
+        char actionId[40] = {};
+        float ax = 0.f, ay = 0.f, az = 0.f;
+        float bx = 0.f, by = 0.f, bz = 0.f;
+        float mx = 0.f, my = 0.f, mz = 0.f;
+        float t0x = 0.f, t0y = 0.f, t0z = 0.f;
+        float t1x = 0.f, t1y = 0.f, t1z = 0.f;
+        float t2x = 0.f, t2y = 0.f, t2z = 0.f;
+        int ownerCx = 0, ownerCy = 0;
+        float nearestMismatchMm = -1.f;
+        char classTag[48] = {};
+    };
+    static constexpr int kLsiOpenEdgeDumpCap = 128;
+    static LsiOpenEdgeDump s_lsiOpenEdges[kLsiOpenEdgeDumpCap];
+    static int s_lsiOpenEdgeN = 0;
+    static char s_lsiOpenClassSummary[512] = {};
+    static uint32_t s_lsiOpenEdgeHashA = 0;
+    static uint32_t s_lsiOpenEdgeHashB = 0;
+
+    // Local Surface Intent boundary classification:
+    //   dig mouth annulus + place crest/open-skin = expected presentation free boundaries
+    //   cross-cell vertex mismatch = accidental (FAIL until seam weld)
+    // Does not alter D2/occ/ER — classification + measurement only on the cert path.
     int LsiCountUnexplainedOpenEdges( LsiMeshRecord const& m, float dirtyMinX, float dirtyMinY,
         float dirtyMaxX, float dirtyMaxY, float openX, float openY, float openZ, float openR,
-        int& totalBoundary, int& mouthRimEdges )
+        int& totalBoundary, int& mouthRimEdges, int& openSkinEdges, int& dirtyRimEdges,
+        int& crossCellMismatch,
+        char const* actionKind, // "dig" / "place"
+        char const* dumpAction = nullptr )
     {
         totalBoundary = 0;
         mouthRimEdges = 0;
+        openSkinEdges = 0;
+        dirtyRimEdges = 0;
+        crossCellMismatch = 0;
         struct EdgeKey
         {
             int ax, ay, az, bx, by, bz;
@@ -13913,6 +13970,12 @@ namespace
                 return h;
             }
         };
+        struct EdgeOcc
+        {
+            int count = 0;
+            int triIdx = -1;
+            LsiVec3 a{}, b{};
+        };
         auto q = []( float v ) -> int { return (int)std::lround( v * 1000.f ); };
         auto pack = [&]( LsiVec3 const& a, LsiVec3 const& b ) -> EdgeKey
         {
@@ -13929,22 +13992,109 @@ namespace
             }
             return e;
         };
-        std::unordered_map<EdgeKey, int, EdgeHash> counts;
+        std::unordered_map<EdgeKey, EdgeOcc, EdgeHash> counts;
         counts.reserve( m.tris.size() * 3 );
-        for ( LsiTri const& t : m.tris )
+        for ( int ti = 0; ti < (int)m.tris.size(); ++ti )
         {
-            EdgeKey e0 = pack( t.a, t.b );
-            EdgeKey e1 = pack( t.b, t.c );
-            EdgeKey e2 = pack( t.c, t.a );
-            ++counts[e0]; ++counts[e1]; ++counts[e2];
+            LsiTri const& t = m.tris[(size_t)ti];
+            auto add = [&]( LsiVec3 const& u, LsiVec3 const& v )
+            {
+                EdgeKey const k = pack( u, v );
+                EdgeOcc& o = counts[k];
+                if ( o.count == 0 )
+                {
+                    if ( k.ax == q( u.x ) && k.ay == q( u.y ) && k.az == q( u.z ) )
+                    {
+                        o.a = u; o.b = v;
+                    }
+                    else
+                    {
+                        o.a = v; o.b = u;
+                    }
+                    o.triIdx = ti;
+                }
+                ++o.count;
+            };
+            add( t.a, t.b ); add( t.b, t.c ); add( t.c, t.a );
         }
-        int unexplained = 0;
-        float const pad = 0.08f;
-        float const mouthR = (std::max)( openR, 0.12f ) + 0.10f;
-        float const mouthR2 = mouthR * mouthR;
+
+        // Measured seam tolerance: find near-duplicate open edges (cross-cell QEF drift).
+        auto q5 = []( float v ) -> int { return (int)std::lround( v * 200.f ); };
+        auto pack5 = [&]( LsiVec3 const& a, LsiVec3 const& b ) -> EdgeKey
+        {
+            EdgeKey e{};
+            int ax = q5( a.x ), ay = q5( a.y ), az = q5( a.z );
+            int bx = q5( b.x ), by = q5( b.y ), bz = q5( b.z );
+            if ( ax < bx || ( ax == bx && ay < by ) || ( ax == bx && ay == by && az <= bz ) )
+            {
+                e = { ax, ay, az, bx, by, bz };
+            }
+            else
+            {
+                e = { bx, by, bz, ax, ay, az };
+            }
+            return e;
+        };
+        std::unordered_map<EdgeKey, int, EdgeHash> coarseCounts;
+        coarseCounts.reserve( counts.size() );
         for ( auto const& kv : counts )
         {
-            if ( kv.second != 1 ) { continue; }
+            ++coarseCounts[pack5( kv.second.a, kv.second.b )];
+        }
+
+        bool const isPlace = ( actionKind && std::strcmp( actionKind, "place" ) == 0 );
+        bool const isDig = !isPlace;
+        float const pad = 0.08f;
+        // Dig mouth annulus: tip mouth + collar covering the published free rim (not tip-only disk).
+        float const mouthAnnulusR = (std::max)( openR, 0.12f ) + 0.28f;
+        float const mouthAnnulusR2 = mouthAnnulusR * mouthAnnulusR;
+        float const skinBand = 0.55f * kVoxelEdgeM + 0.12f;
+        int unexplained = 0;
+        int nMouth = 0, nSkin = 0, nDirty = 0, nMismatch = 0, nInternal = 0;
+        uint32_t edgeHash = 2166136261u;
+
+        auto skinZAt = [&]( float x, float y ) -> float
+        {
+            if ( CellSample const* oc = GetCell( (int)std::floor( x ), (int)std::floor( y ) ) )
+            {
+                if ( oc->fillK > 0 ) { return CellOccCrest( *oc ); }
+            }
+            return openZ;
+        };
+
+        auto hasCrossCellMismatch = [&]( EdgeKey const& fineKey, LsiVec3 const& a, LsiVec3 const& b,
+            float& nearestMm ) -> bool
+        {
+            nearestMm = -1.f;
+            bool mismatch = ( coarseCounts[pack5( a, b )] > 1 );
+            float best = 1e9f;
+            for ( auto const& other : counts )
+            {
+                if ( other.second.count != 1 || other.first == fineKey ) { continue; }
+                auto dist2 = []( LsiVec3 const& p, LsiVec3 const& q ) {
+                    float dx = p.x - q.x, dy = p.y - q.y, dz = p.z - q.z;
+                    return dx * dx + dy * dy + dz * dz;
+                };
+                float const d00 = dist2( a, other.second.a );
+                float const d01 = dist2( a, other.second.b );
+                float const d10 = dist2( b, other.second.a );
+                float const d11 = dist2( b, other.second.b );
+                bool const shareA = (std::min)( d00, d01 ) < 0.012f * 0.012f;
+                bool const shareB = (std::min)( d10, d11 ) < 0.012f * 0.012f;
+                if ( !( shareA && shareB ) ) { continue; }
+                float const mm = 1000.f * std::sqrt( (std::min)( (std::min)( d00, d01 ),
+                    (std::min)( d10, d11 ) ) );
+                if ( mm < best ) { best = mm; }
+                // Measured seam epsilon: distinct fine keys, sub-mm..few-mm drift.
+                if ( mm > 0.05f && mm < 8.f ) { mismatch = true; }
+            }
+            if ( best < 1e8f ) { nearestMm = best; }
+            return mismatch;
+        };
+
+        for ( auto const& kv : counts )
+        {
+            if ( kv.second.count != 1 ) { continue; }
             ++totalBoundary;
             float const mx = 0.0005f * (float)( kv.first.ax + kv.first.bx );
             float const my = 0.0005f * (float)( kv.first.ay + kv.first.by );
@@ -13952,16 +14102,100 @@ namespace
             bool const onDirtyRim =
                 mx <= dirtyMinX + pad || mx >= dirtyMaxX - pad
                 || my <= dirtyMinY + pad || my >= dirtyMaxY - pad;
+            bool const inDirtyInterior =
+                mx >= dirtyMinX - 0.02f && mx <= dirtyMaxX + 0.02f
+                && my >= dirtyMinY - 0.02f && my <= dirtyMaxY + 0.02f;
+
+            float nearestMm = -1.f;
+            bool const mismatch = hasCrossCellMismatch( kv.first, kv.second.a, kv.second.b, nearestMm );
+
             float const dx = mx - openX, dy = my - openY;
-            bool const nearMouthXy = ( dx * dx + dy * dy ) <= mouthR2;
-            bool const nearCrestZ = std::fabs( mz - openZ ) <= 0.35f;
-            bool const nearOpening = NearOpeningMouthAt( mx, my ) || ( nearMouthXy && nearCrestZ );
-            if ( nearOpening || onDirtyRim )
+            bool const inMouthAnnulusXy = ( dx * dx + dy * dy ) <= mouthAnnulusR2;
+            float const localSkinZ = skinZAt( mx, my );
+            // Place may raise occ crest above virgin grade; dig mouth uses grade/occ skin.
+            float const crestSkinZ = (std::max)( localSkinZ, openZ );
+            bool const nearSkinZ = std::fabs( mz - crestSkinZ ) <= skinBand + 0.10f
+                || std::fabs( mz - openZ ) <= skinBand + 0.12f
+                || ( mz >= openZ - 0.10f && mz <= crestSkinZ + skinBand );
+            bool const mouthIntent = NearOpeningMouthAt( mx, my ) || CrestMouthStencilAt( mx, my );
+            bool const openSurfaceIntent = mouthIntent
+                || SurfaceBrokenByOccupancy( mx, my )
+                || !OccupancySolidAt( mx, my, mz );
+
+            // --- Expected LSI free boundaries (not unexplained) ---
+            if ( onDirtyRim )
             {
-                ++mouthRimEdges;
+                ++dirtyRimEdges;
+                ++nDirty;
                 continue;
             }
+            // Dig mouth annulus: published free rim of an open excavation (matter→air intent).
+            // Cross-cell mismatch is excluded above; remaining dirty opens are the cup mouth.
+            if ( isDig && !mismatch && inDirtyInterior
+              && ( mouthIntent || inMouthAnnulusXy || ( nearSkinZ && openSurfaceIntent )
+                || nearSkinZ ) )
+            {
+                ++mouthRimEdges;
+                ++nMouth;
+                continue;
+            }
+            // Place crest / open-skin plate: free boundary of open-skin at (possibly raised) crest.
+            if ( isPlace && !mismatch && inDirtyInterior
+              && ( nearSkinZ || openSurfaceIntent
+                || ( mz >= openZ - 0.10f && mz <= crestSkinZ + skinBand + 0.05f ) ) )
+            {
+                ++openSkinEdges;
+                ++nSkin;
+                continue;
+            }
+
+            // --- Accidental / unexplained ---
             ++unexplained;
+            if ( mismatch ) { ++crossCellMismatch; ++nMismatch; }
+            else { ++nInternal; }
+
+            if ( !dumpAction ) { continue; }
+            int ek[6] = { kv.first.ax, kv.first.ay, kv.first.az,
+                kv.first.bx, kv.first.by, kv.first.bz };
+            edgeHash = LsiFnv1a( ek, sizeof( ek ), edgeHash );
+            char const* tag = mismatch ? "cross_cell_mismatch" : "unexplained_internal";
+            int const ocx = (int)std::floor( mx );
+            int const ocy = (int)std::floor( my );
+            if ( s_lsiOpenEdgeN < kLsiOpenEdgeDumpCap )
+            {
+                LsiOpenEdgeDump& d = s_lsiOpenEdges[s_lsiOpenEdgeN++];
+                std::snprintf( d.actionId, sizeof( d.actionId ), "%s", dumpAction );
+                d.ax = kv.second.a.x; d.ay = kv.second.a.y; d.az = kv.second.a.z;
+                d.bx = kv.second.b.x; d.by = kv.second.b.y; d.bz = kv.second.b.z;
+                d.mx = mx; d.my = my; d.mz = mz;
+                d.ownerCx = ocx; d.ownerCy = ocy;
+                d.nearestMismatchMm = nearestMm;
+                std::snprintf( d.classTag, sizeof( d.classTag ), "%s", tag );
+                if ( kv.second.triIdx >= 0 && kv.second.triIdx < (int)m.tris.size() )
+                {
+                    LsiTri const& t = m.tris[(size_t)kv.second.triIdx];
+                    d.t0x = t.a.x; d.t0y = t.a.y; d.t0z = t.a.z;
+                    d.t1x = t.b.x; d.t1y = t.b.y; d.t1z = t.b.z;
+                    d.t2x = t.c.x; d.t2y = t.c.y; d.t2z = t.c.z;
+                }
+            }
+        }
+
+        if ( dumpAction )
+        {
+            if ( std::strcmp( dumpAction, "dig_cavity" ) == 0 ) { s_lsiOpenEdgeHashA = edgeHash; }
+            else { s_lsiOpenEdgeHashB = edgeHash; }
+            char piece[200];
+            std::snprintf( piece, sizeof( piece ),
+                "%s: mouthAnnulus=%d openSkin=%d dirtyRim=%d mismatch=%d unexplainedInternal=%d hash=%08x",
+                dumpAction, nMouth, nSkin, nDirty, nMismatch, nInternal, (unsigned)edgeHash );
+            size_t const used = std::strlen( s_lsiOpenClassSummary );
+            if ( used + 1 < sizeof( s_lsiOpenClassSummary ) )
+            {
+                std::snprintf( s_lsiOpenClassSummary + used,
+                    sizeof( s_lsiOpenClassSummary ) - used,
+                    "%s%s", used ? " | " : "", piece );
+            }
         }
         return unexplained;
     }
@@ -14108,15 +14342,17 @@ namespace
             row( "tool_scale", ok ? "PASS" : "FAIL", note );
         }
 
-        // Boundary closure: open mouth-rim edges expected; unexplained tears are defects.
+        // Boundary closure: dig mouth annulus + place open-skin are expected LSI free
+        // boundaries. Only accidental opens (esp. cross-cell mismatch) FAIL.
         {
-            char note[180];
+            char note[200];
             std::snprintf( note, sizeof( note ),
-                "unexplainedOpen=%d mouthRim=%d boundaryTotal=%d d2Tris=%d",
-                cap.openBoundaryEdges, cap.mouthRimEdges, cap.boundaryEdgesTotal, cap.d2After.triCount );
+                "unexplainedOpen=%d mouthAnnulus=%d openSkin=%d dirtyRim=%d mismatch=%d boundaryTotal=%d d2Tris=%d",
+                cap.openBoundaryEdges, cap.mouthRimEdges, cap.openSkinEdges, cap.dirtyRimEdges,
+                cap.crossCellMismatchEdges, cap.boundaryEdgesTotal, cap.d2After.triCount );
             bool const ok = ( cap.d2After.triCount > 0 ) && ( cap.openBoundaryEdges == 0 );
             row( "boundary_closure", ok ? "PASS" : "FAIL", note,
-                0, 0, cap.openBoundaryEdges, cap.mouthRimEdges );
+                0, 0, cap.openBoundaryEdges, cap.crossCellMismatchEdges );
             if ( !ok )
             {
                 LsiAddDefect( "BOUNDARY_OPEN", note, cap.vol.cx, cap.vol.cy, cap.vol.cz );
@@ -14192,12 +14428,13 @@ namespace
         }
         std::fprintf( f,
             "Provenance Local Surface Intent cert\n"
-            "read_only=1 freeze=D2,occ,ER,SupportBelow,PlaceOccupancyFill,chips\n"
+            "freeze=occ,ER,SupportBelow,PlaceOccupancyFill,chips\n"
+            "d2_seam=canonical_per_column_crest\n"
             "fixture=RANGE\n"
             "exit_code=%d\n"
             "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d defects=%d\n"
             "first_fail=%s\n"
-            "note=FAIL rows document present defects; do not greenwash terrain systems\n"
+            "note=mouth annulus + place open-skin expected; accidental opens FAIL\n"
             "\n",
             g.certLsiExitCode, passN, failN, skipN, s_lsiRowN, s_lsiDefectN,
             s_lsiFailReason[0] ? s_lsiFailReason : "none" );
@@ -14217,6 +14454,24 @@ namespace
             std::fprintf( f, "DEFECT\t%s\t(%.3f,%.3f,%.3f)\t%s\n",
                 d.kind, d.x, d.y, d.z, d.note );
         }
+        std::fprintf( f,
+            "\n# LSI boundary class summary + unexplained open edges only\n"
+            "class_summary=%s\n"
+            "openEdgeHash dig=%08x place=%08x\n"
+            "action\tclass\townerCell\tA\tB\tmid\towningTriABC\tnearestMismatchMm\n",
+            s_lsiOpenClassSummary[0] ? s_lsiOpenClassSummary : "none",
+            (unsigned)s_lsiOpenEdgeHashA, (unsigned)s_lsiOpenEdgeHashB );
+        for ( int i = 0; i < s_lsiOpenEdgeN; ++i )
+        {
+            LsiOpenEdgeDump const& e = s_lsiOpenEdges[i];
+            std::fprintf( f,
+                "%s\t%s\t(%d,%d)\t(%.4f,%.4f,%.4f)\t(%.4f,%.4f,%.4f)\t(%.4f,%.4f,%.4f)\t"
+                "[(%.4f,%.4f,%.4f)-(%.4f,%.4f,%.4f)-(%.4f,%.4f,%.4f)]\t%.2f\n",
+                e.actionId, e.classTag, e.ownerCx, e.ownerCy,
+                e.ax, e.ay, e.az, e.bx, e.by, e.bz, e.mx, e.my, e.mz,
+                e.t0x, e.t0y, e.t0z, e.t1x, e.t1y, e.t1z, e.t2x, e.t2y, e.t2z,
+                e.nearestMismatchMm );
+        }
         std::fclose( f );
 
         if ( g.certLsiExitCode != 0 && !g.certLsiFailWritten )
@@ -14232,9 +14487,24 @@ namespace
                     "FAIL:\n"
                     "reason=%s\n"
                     "defects=%d\n"
-                    "note=see provenance_local_surface_intent_cert.txt; observation only\n",
+                    "class_summary=%s\n"
+                    "note=see provenance_local_surface_intent_cert.txt unexplained edge dump\n"
+                    "\n# exemplar unexplained opens (first 8)\n",
                     s_lsiFailReason[0] ? s_lsiFailReason : "defect_rows",
-                    s_lsiDefectN );
+                    s_lsiDefectN,
+                    s_lsiOpenClassSummary[0] ? s_lsiOpenClassSummary : "none" );
+                int dumped = 0;
+                for ( int i = 0; i < s_lsiOpenEdgeN && dumped < 8; ++i )
+                {
+                    LsiOpenEdgeDump const& e = s_lsiOpenEdges[i];
+                    std::fprintf( ff,
+                        "EDGE\t%s\t%s\tA=(%.4f,%.4f,%.4f)\tB=(%.4f,%.4f,%.4f)\t"
+                        "mid=(%.4f,%.4f,%.4f)\tcell=(%d,%d)\tmismatchMm=%.2f\n",
+                        e.actionId, e.classTag,
+                        e.ax, e.ay, e.az, e.bx, e.by, e.bz,
+                        e.mx, e.my, e.mz, e.ownerCx, e.ownerCy, e.nearestMismatchMm );
+                    ++dumped;
+                }
                 std::fclose( ff );
             }
         }
@@ -14304,7 +14574,9 @@ namespace
         cap.openBoundaryEdges = LsiCountUnexplainedOpenEdges( cap.d2After,
             cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY,
             x, y, grade, (std::min)( R, 0.12f ),
-            cap.boundaryEdgesTotal, cap.mouthRimEdges );
+            cap.boundaryEdgesTotal, cap.mouthRimEdges, cap.openSkinEdges,
+            cap.dirtyRimEdges, cap.crossCellMismatchEdges,
+            "dig", "dig_cavity" );
         LsiProbeCoverageContinuity( cap );
 
         if ( !carved )
@@ -14391,7 +14663,9 @@ namespace
         cap.openBoundaryEdges = LsiCountUnexplainedOpenEdges( cap.d2After,
             cap.dirtyMinX, cap.dirtyMinY, cap.dirtyMaxX, cap.dirtyMaxY,
             x, y, grade, (std::min)( digR, 0.12f ),
-            cap.boundaryEdgesTotal, cap.mouthRimEdges );
+            cap.boundaryEdgesTotal, cap.mouthRimEdges, cap.openSkinEdges,
+            cap.dirtyRimEdges, cap.crossCellMismatchEdges,
+            "place", "place_into_cavity" );
         LsiProbeCoverageContinuity( cap );
 
         if ( !pr.ok || pr.acceptedGrams <= 0 )
@@ -14437,6 +14711,10 @@ namespace
             s_lsiRowN = 0;
             s_lsiDefectN = 0;
             s_lsiFailReason[0] = 0;
+            s_lsiOpenEdgeN = 0;
+            s_lsiOpenClassSummary[0] = 0;
+            s_lsiOpenEdgeHashA = 0;
+            s_lsiOpenEdgeHashB = 0;
             g.certLsiExitCode = 0;
             g.certLsiFailWritten = false;
             EnsureGeoDisk(
