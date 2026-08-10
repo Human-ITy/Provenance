@@ -147,6 +147,19 @@ namespace
         Column,
     };
 
+    // P4.3 — terrain presentation wakes only on terrain-relevant affect (orthogonal to scope).
+    // affect=0 ⇒ no client-visible terrain channel; must not remesh/refetch/rebuild.
+    enum TerrainAffect : uint32_t
+    {
+        TerrainAffect_None             = 0,
+        TerrainAffect_Occupancy        = 1u << 0,
+        TerrainAffect_Material         = 1u << 1,
+        TerrainAffect_Water            = 1u << 2,
+        TerrainAffect_Structure        = 1u << 3,
+        TerrainAffect_ExplicitMutation = 1u << 4,
+        TerrainAffect_ResidencyExpand  = 1u << 5,
+    };
+
     enum class IntentKind
     {
         None,
@@ -366,6 +379,36 @@ namespace
         int certP4PadCx = 0, certP4PadCy = 0;
         int certP4RollbackDelayIdx = 0;
         int certP4RollbackDelayLeft = 0;
+        // --cert-residency: P4.3 terrain residency / invalidation floor.
+        bool certResidency = false;
+        int certResidencyPhase = 0;
+        DWORD certResidencyPhaseMs = 0;
+        int certResidencyExitCode = 0;
+        bool certResidencyFailWritten = false;
+        int certResidencyWait = 0;
+        int certResidencyBurstLeft = 0;
+        int certResidencyPadCx = 0;
+        int certResidencyPadCy = 0;
+        float certResidencyX = 0.f, certResidencyY = 0.f, certResidencyZ = 0.f;
+        int certResBaseD2 = 0;
+        int certResBaseHf = 0;
+        int certResBaseOcc = 0;
+        int certResBaseRefetch = 0;
+        int certResBaseEr = 0;
+        int certResBaseCells = 0;
+        int certResBaseIgnored = 0;
+        int certResIdleD2 = 0;
+        int certResIdleHf = 0;
+        int certResIdleOcc = 0;
+        int certResIdleRefetch = 0;
+        int certResIdleEr = 0;
+        int certResIdleIgnored = 0;
+        int certResMutD2 = 0;
+        int certResMutHf = 0;
+        int certResMutOcc = 0;
+        int certResMutEr = 0;
+        int certResMutCells = 0;
+        int certResDirtyCells = 0; // D2 RebuildCavityMesh cells only
         // Startup / subsystem counters — prove virgin path does zero D2.
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
@@ -381,6 +424,16 @@ namespace
         float perfD2MsTotal = 0.f;
         int perfVirginD2Rebuilds = -1; // snapshot at first stream-complete before any dig
         bool perfVirginSnapDone = false;
+        int perfOccRebuilds = 0;       // EnsureOccupancyLattice seeds (new lattice only)
+        int perfTerrainRefetches = 0;  // QueueColumn when occupancy already present
+        int perfEditedRegionChanges = 0;
+        int residencyReceiptsSeen = 0;
+        int residencyIgnoredReceipts = 0;
+        int residencyTerrainReceipts = 0;
+        int residencySuppressedWakes = 0;
+        char lastTerrainWakeReason[96] = {};
+        bool residencyTrackDirtyCells = false;
+        std::unordered_set<uint64_t> residencyDirtyCellKeys;
         char certOutDir[MAX_PATH] = {};
 
         // terrain_caps
@@ -773,6 +826,7 @@ namespace
     SupportHit SupportBelow( float x, float y, float queryZ );
     bool SupportAt( float x, float y, float& outZ ); // thin XY adapter → SupportBelow
     bool OccupancySolidAt( float x, float y, float z );
+    bool CellHasOccupancy( int cx, int cy );
     void PrefetchOccupancyCell( int cx, int cy );
     void SetFillAt( CellSample& cell, int c, int r, int k, uint8_t v );
     void SeedOccupancyFromVirginSurface( int cx, int cy );
@@ -1172,9 +1226,138 @@ namespace
         return PlaceLiftAt( x, y ) - DigDepAt( x, y );
     }
 
-    void InvalidateTerrainMesh()
+    void InvalidateTerrainMesh( char const* reason = "terrain" )
     {
+        // P4.3: only terrain-relevant callers should reach here. Informational/world activity
+        // must go through ApplyActivityReceipt (affect=0 → no wake).
         g.terrainDirty = true;
+        if ( reason && reason[0] )
+        {
+            std::snprintf( g.lastTerrainWakeReason, sizeof( g.lastTerrainWakeReason ), "%s", reason );
+        }
+    }
+
+    void NoteEditedRegionChange()
+    {
+        ++g.perfEditedRegionChanges;
+    }
+
+    void NoteResidencyDirtyCell( int cx, int cy )
+    {
+        if ( !g.residencyTrackDirtyCells ) { return; }
+        g.residencyDirtyCellKeys.insert( CellKey( cx, cy ) );
+    }
+
+    uint32_t ClassifyTerrainAffect( std::string const& line )
+    {
+        // Orthogonal affect mask. Prefer explicit wire "affect"; else classify by kind/payload.
+        int affect = 0;
+        if ( ExtractJsonInt( line, "affect", affect ) )
+        {
+            return (uint32_t)(std::max)( 0, affect );
+        }
+
+        std::string kind;
+        ExtractJsonString( line, "kind", kind );
+        if ( kind.empty() ) { ExtractJsonString( line, "type", kind ); }
+        if ( kind.empty() ) { ExtractJsonString( line, "channel", kind ); }
+
+        auto eq = []( std::string const& a, char const* b ) {
+            return _stricmp( a.c_str(), b ) == 0;
+        };
+        // Explicit non-terrain channels — ignore even if other keys present.
+        if ( eq( kind, "world_tick" ) || eq( kind, "world_revision" ) || eq( kind, "info" )
+          || eq( kind, "informational" ) || eq( kind, "npc" ) || eq( kind, "npc_update" )
+          || eq( kind, "inventory" ) || eq( kind, "held" ) || eq( kind, "combat" )
+          || eq( kind, "spell_tick" ) || eq( kind, "weather" ) || eq( kind, "weather_info" )
+          || eq( kind, "ai" ) || eq( kind, "body_move" ) || eq( kind, "body_movement" )
+          || eq( kind, "network_chatter" ) )
+        {
+            return TerrainAffect_None;
+        }
+
+        uint32_t mask = TerrainAffect_None;
+        if ( eq( kind, "carve" ) || eq( kind, "place" ) || eq( kind, "terrain_mutate" )
+          || eq( kind, "dig" ) || eq( kind, "excavation" ) )
+        {
+            mask |= TerrainAffect_ExplicitMutation | TerrainAffect_Occupancy;
+        }
+        if ( eq( kind, "occupancy" ) || line.find( "\"occupancy\"" ) != std::string::npos )
+        {
+            mask |= TerrainAffect_Occupancy;
+        }
+        if ( eq( kind, "material" ) || line.find( "\"material_changed\"" ) != std::string::npos )
+        {
+            mask |= TerrainAffect_Material;
+        }
+        if ( eq( kind, "water" ) || line.find( "\"water\"" ) != std::string::npos
+          || line.find( "water_terrain_rev" ) != std::string::npos )
+        {
+            mask |= TerrainAffect_Water;
+        }
+        if ( eq( kind, "structure" ) || line.find( "\"structure\"" ) != std::string::npos )
+        {
+            mask |= TerrainAffect_Structure;
+        }
+        // Payload evidence for mutation receipts without kind.
+        if ( line.find( "\"removed\"" ) != std::string::npos
+          || line.find( "\"placed\"" ) != std::string::npos
+          || line.find( "\"placed_by\"" ) != std::string::npos )
+        {
+            mask |= TerrainAffect_ExplicitMutation | TerrainAffect_Occupancy;
+        }
+        return mask;
+    }
+
+    // World activity receipt path — terrain sleeps unless affect marks a terrain-visible channel.
+    void ApplyActivityReceipt( std::string const& line )
+    {
+        ++g.residencyReceiptsSeen;
+        uint32_t const affect = ClassifyTerrainAffect( line );
+        if ( affect == TerrainAffect_None )
+        {
+            ++g.residencyIgnoredReceipts;
+            // Non-terrain side effects only (inventory/held display) — never remesh/refetch.
+            int held = 0;
+            if ( ExtractJsonInt( line, "held_g", held ) && held >= 0 )
+            {
+                // Cert may bump held display; do not touch occupancy / ER / HF / D2.
+                g.heldTotalG = held;
+                if ( held <= 0 ) { g.heldDominant.clear(); g.heldBite.clear(); }
+            }
+            std::string mat;
+            if ( ExtractJsonString( line, "held_mat", mat ) && !mat.empty() )
+            {
+                g.heldDominant = mat;
+            }
+            // world_revision / NPC pose / weather-as-info: intentionally ignored for terrain.
+            return;
+        }
+
+        ++g.residencyTerrainReceipts;
+        // Fail-closed for true terrain affect with unknown scope remains global HF dirty.
+        // Scoped dig/place still go through CarveOccupancySphere / PlaceOccupancyFill.
+        int minX = 0, minY = 0, maxX = 0, maxY = 0;
+        bool const haveBounds =
+            ExtractJsonInt( line, "min_x", minX ) && ExtractJsonInt( line, "min_y", minY )
+         && ExtractJsonInt( line, "max_x", maxX ) && ExtractJsonInt( line, "max_y", maxY )
+         && ( maxX >= minX ) && ( maxY >= minY );
+        if ( haveBounds )
+        {
+            for ( int cy = minY; cy <= maxY; ++cy )
+            {
+                for ( int cx = minX; cx <= maxX; ++cx )
+                {
+                    NoteResidencyDirtyCell( cx, cy );
+                    PrefetchOccupancyCell( cx, cy );
+                }
+            }
+            InvalidateTerrainMesh( "terrain_affect_scoped" );
+        }
+        else
+        {
+            InvalidateTerrainMesh( "terrain_affect_unknown_scope" );
+        }
     }
 
     EditedRegion* FindEditedRegion( uint32_t id )
@@ -1224,6 +1407,7 @@ namespace
             er.ownMaxY = (std::max)( er.ownMaxY, y + r );
         }
         ++er.dirtyRev;
+        NoteEditedRegionChange();
     }
 
     bool NearRegionOpenings( EditedRegion const& er, float xc, float yc, float zc, float collarM )
@@ -1459,7 +1643,10 @@ namespace
                 any = true;
             }
         }
-        if ( any ) { InvalidateTerrainMesh(); }
+        if ( any )
+        {
+            InvalidateTerrainMesh( "residency_expand" );
+        }
     }
 
     void ClearPendingScarEdit()
@@ -1995,6 +2182,11 @@ namespace
         for ( auto const& p : g.columnQueue )
         {
             if ( p.first == cx && p.second == cy ) { return; }
+        }
+        // P4.3: refetch of already-resident occupancy is a terrain wake — count it.
+        if ( CellHasOccupancy( cx, cy ) )
+        {
+            ++g.perfTerrainRefetches;
         }
         g.columnQueue.push_back( { cx, cy } );
     }
@@ -3850,6 +4042,8 @@ namespace
         cell->hasFillZ = true;
         cell->fillZ = GradeToZ( cell->grade );
         SeedOccupancyFromVirginSurface( cx, cy );
+        ++g.perfOccRebuilds;
+        // Occupancy seed is terrain-relevant but not a D2 dirty-scope cell by itself.
     }
 
     void RetirePresentationScarsNear( float wx, float wy, float radiusM )
@@ -4159,7 +4353,7 @@ namespace
         if ( EditedRegion* er = FindEditedRegion( rid ) )
         {
             // Cavity re-fill: openings stay (remove-only). Always bump support rev.
-            if ( anyEr ) { ++er->dirtyRev; }
+            if ( anyEr ) { ++er->dirtyRev; NoteEditedRegionChange(); }
             er->actionX = wx; er->actionY = wy; er->actionZ = wz; er->actionR = R;
             er->hasAction = true;
         }
@@ -4404,7 +4598,7 @@ namespace
                     }
                 }
             }
-            if ( remeshHf ) { InvalidateTerrainMesh(); }
+            if ( remeshHf ) { InvalidateTerrainMesh( "explicit_mutation_hf" ); }
         }
         int const bx = (int)std::floor( wx );
         int const by = (int)std::floor( wy );
@@ -4425,6 +4619,7 @@ namespace
 
     void RebuildCavityMesh( int cx, int cy )
     {
+        NoteResidencyDirtyCell( cx, cy );
         // D2 on accumulated EditedRegion occupancy for this cell.
         // ACTION is bite-local; DIRTY = union(openings,carve)+halo; publish ONE coherent cavity.
         // Not tip-patch A/B/C hopping. HF aperture stays separate (NearOpeningMouthAt).
@@ -8248,9 +8443,10 @@ namespace
         if ( cx == g.playerX && cy == g.playerY ) { return; }
         g.playerX = cx;
         g.playerY = cy;
-        // --cert-geo walk/dig: residency frozen after transect prefetch so walk can assert
-        // HF remesh=0 / no disk growth. Play path still expands below.
-        if ( g.certGeo && g.certGeoPhase >= 1 && g.certGeoPhase <= 3 )
+        // --cert-geo / --cert-residency: freeze disk expand so walk can assert remesh=0.
+        // Play path still expands below.
+        if ( ( g.certGeo && g.certGeoPhase >= 1 && g.certGeoPhase <= 3 )
+          || ( g.certResidency && g.certResidencyPhase >= 1 && g.certResidencyPhase <= 5 ) )
         {
             return;
         }
@@ -8812,13 +9008,15 @@ namespace
     {
         int const ax = (int)std::floor( g.feetX );
         int const ay = (int)std::floor( g.feetY );
-        // --cert-geo walk: freeze 8-cell vista recenters so remesh=0 is measurable without
-        // residency growth. Play path still recenters for streaming LOD.
-        bool const freezeVistaRecenter = g.certGeo && g.certGeoPhase == 1 && g.certGeoDigArmed == 1;
+        // --cert-geo / --cert-residency: freeze 8-cell vista recenters so remesh=0 is measurable.
+        // Play path still recenters for streaming LOD.
+        bool const freezeVistaRecenter =
+            ( g.certGeo && g.certGeoPhase == 1 && g.certGeoDigArmed == 1 )
+         || ( g.certResidency && g.certResidencyPhase >= 2 && g.certResidencyPhase <= 5 );
         if ( !freezeVistaRecenter
           && ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 ) )
         {
-            g.terrainDirty = true;
+            InvalidateTerrainMesh( "vista_recenter" );
         }
 
         if ( g.terrainDirty || !g.terrainList )
@@ -16673,6 +16871,379 @@ namespace
         }
     }
 
+    // ---------- P4.3 Terrain residency / invalidation floor (--cert-residency) ----------
+    struct ResRow
+    {
+        char check[64];
+        char verdict[12];
+        char note[240];
+    };
+    ResRow s_resRows[48] = {};
+    int s_resRowN = 0;
+    char s_resFailReason[240] = {};
+
+    void ResAddRow( char const* check, char const* verdict, char const* note )
+    {
+        if ( s_resRowN >= (int)( sizeof( s_resRows ) / sizeof( s_resRows[0] ) ) ) { return; }
+        ResRow& r = s_resRows[s_resRowN++];
+        std::snprintf( r.check, sizeof( r.check ), "%s", check ? check : "?" );
+        std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict ? verdict : "?" );
+        std::snprintf( r.note, sizeof( r.note ), "%s", note ? note : "" );
+        if ( verdict && std::strcmp( verdict, "FAIL" ) == 0 )
+        {
+            g.certResidencyExitCode = 1;
+            if ( !s_resFailReason[0] )
+            {
+                std::snprintf( s_resFailReason, sizeof( s_resFailReason ), "%s", r.check );
+            }
+        }
+    }
+
+    void ResWriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_residency_invalidation_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_resRowN; ++i )
+        {
+            if ( std::strcmp( s_resRows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_resRows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        std::fprintf( f,
+            "Provenance P4.3 Terrain Residency / Invalidation Floor cert\n"
+            "law=World activity does not imply terrain activity. Terrain presentation wakes only when terrain-relevant state changes.\n"
+            "fixture=RANGE\n"
+            "exit_code=%d\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d\n"
+            "first_fail=%s\n"
+            "idle_D2=%d idle_HF=%d idle_occ=%d idle_refetch=%d idle_ER=%d\n"
+            "ignored_receipts=%d terrain_receipts=%d\n"
+            "mut_D2=%d mut_HF=%d mut_occ=%d mut_ER=%d dirty_cells=%d\n"
+            "last_wake=%s\n"
+            "\n"
+            "check\tverdict\tnote\n",
+            g.certResidencyExitCode, passN, failN, skipN, s_resRowN,
+            s_resFailReason[0] ? s_resFailReason : "none",
+            g.certResIdleD2, g.certResIdleHf, g.certResIdleOcc, g.certResIdleRefetch, g.certResIdleEr,
+            g.certResIdleIgnored, g.residencyTerrainReceipts,
+            g.certResMutD2, g.certResMutHf, g.certResMutOcc, g.certResMutEr, g.certResDirtyCells,
+            g.lastTerrainWakeReason[0] ? g.lastTerrainWakeReason : "-" );
+        for ( int i = 0; i < s_resRowN; ++i )
+        {
+            std::fprintf( f, "%s\t%s\t%s\n",
+                s_resRows[i].check, s_resRows[i].verdict, s_resRows[i].note );
+        }
+        std::fclose( f );
+        if ( g.certResidencyExitCode != 0 && !g.certResidencyFailWritten )
+        {
+            g.certResidencyFailWritten = true;
+            char fpath[MAX_PATH];
+            std::snprintf( fpath, sizeof( fpath ),
+                "%s\\provenance_residency_invalidation_fail.txt", g.certOutDir );
+            FILE* ff = nullptr;
+            if ( fopen_s( &ff, fpath, "w" ) == 0 && ff )
+            {
+                std::fprintf( ff, "FAIL:\nreason=%s\nsee provenance_residency_invalidation_cert.txt\n",
+                    s_resFailReason[0] ? s_resFailReason : "defect_rows" );
+                std::fclose( ff );
+            }
+        }
+    }
+
+    void ResInjectUnrelatedBurst()
+    {
+        // Simulated minutes of non-terrain activity compressed into a burst.
+        char buf[320];
+        static int s_burstSeq = 0;
+        ++s_burstSeq;
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"world_tick\",\"affect\":0,\"world_revision\":%d,\"info\":\"heartbeat\"}",
+            1000 + s_burstSeq );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"npc_update\",\"affect\":0,\"npc_id\":%d,\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}",
+            40 + ( s_burstSeq % 7 ),
+            g.certResidencyX + 12.f, g.certResidencyY - 8.f, g.certResidencyZ + 1.f );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"inventory\",\"affect\":0,\"held_g\":%d,\"held_mat\":\"flint\"}",
+            10 + ( s_burstSeq % 5 ) );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"combat\",\"affect\":0,\"hit\":1,\"damage\":3,\"target\":\"npc_%d\"}",
+            s_burstSeq % 9 );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"spell_tick\",\"affect\":0,\"spell\":\"ward\",\"tick\":%d}",
+            s_burstSeq );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"weather_info\",\"affect\":0,\"sky\":\"overcast\",\"wind\":%.2f}",
+            0.1f * (float)( s_burstSeq % 11 ) );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"ai\",\"affect\":0,\"agent\":%d,\"state\":\"patrol\"}",
+            s_burstSeq % 4 );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"body_move\",\"affect\":0,\"body_id\":%llu,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
+            (unsigned long long)( 9000ull + (unsigned)( s_burstSeq % 13 ) ),
+            g.certResidencyX + 0.4f * (float)( s_burstSeq % 3 ),
+            g.certResidencyY + 0.3f * (float)( s_burstSeq % 5 ),
+            g.certResidencyZ + 0.2f );
+        ApplyActivityReceipt( buf );
+
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"informational\",\"affect\":0,\"channel\":\"network_chatter\",\"seq\":%d}",
+            s_burstSeq );
+        ApplyActivityReceipt( buf );
+
+        // world_revision alone must never wake terrain.
+        ++H2H::State().world_revision;
+
+        // Walk on already-resident terrain (disk frozen in cert phases 1–5).
+        float const step = 0.35f;
+        float const ang = 0.37f * (float)s_burstSeq;
+        g.feetX = g.certResidencyX + std::cos( ang ) * step * (float)( 1 + s_burstSeq % 4 );
+        g.feetY = g.certResidencyY + std::sin( ang ) * step * (float)( 1 + s_burstSeq % 3 );
+        float gz = g.feetZ;
+        if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+        g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+        g.yaw += 0.05f;
+        UpdateAim();
+        FollowStreamCenter(); // frozen — must not expand / remesh
+    }
+
+    void CertResidencyTick()
+    {
+        if ( !g.certResidency ) { return; }
+        DWORD const now = GetTickCount();
+
+        if ( g.certResidencyPhase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certResidencyPhaseMs == 0 ) { g.certResidencyPhaseMs = now; }
+                if ( now - g.certResidencyPhaseMs > 45000 )
+                {
+                    ResAddRow( "stream_ready", "FAIL", "BRIDGE_OR_CAPS_TIMEOUT" );
+                    ResWriteArtifact();
+                    g.certResidencyPhase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            s_resRowN = 0;
+            s_resFailReason[0] = 0;
+            g.certResidencyExitCode = 0;
+            g.certResidencyFailWritten = false;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            g.certResidencyX = ox + 10.f;
+            g.certResidencyY = oy - 28.f;
+            g.certResidencyPadCx = (int)std::floor( g.certResidencyX );
+            g.certResidencyPadCy = (int)std::floor( g.certResidencyY );
+            EnsureGeoDisk( g.certResidencyPadCx, g.certResidencyPadCy, 28 );
+            g.feetX = g.certResidencyX;
+            g.feetY = g.certResidencyY;
+            float gz = g.feetZ;
+            if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+            g.certResidencyZ = g.feetZ;
+            g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+            g.pitch = -1.10f; g.yaw = 0.f;
+            g.terrainAnchorX = (int)std::floor( g.feetX );
+            g.terrainAnchorY = (int)std::floor( g.feetY );
+            g.certResidencyPhase = 1;
+            g.certResidencyPhaseMs = now;
+            g.statusLine = "CERT-RESIDENCY settle";
+            return;
+        }
+
+        if ( g.certResidencyPhase == 1 )
+        {
+            if ( g.terrainDirty && now - g.certResidencyPhaseMs < 2500 ) { return; }
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            ResAddRow( "stream_ready", "PASS", "caps+RANGE resident" );
+            g.certResBaseD2 = g.perfD2Rebuilds;
+            g.certResBaseHf = g.perfHfRebuilds;
+            g.certResBaseOcc = g.perfOccRebuilds;
+            g.certResBaseRefetch = g.perfTerrainRefetches;
+            g.certResBaseEr = g.perfEditedRegionChanges;
+            g.certResBaseCells = g.cellsLoaded;
+            g.certResBaseIgnored = g.residencyIgnoredReceipts;
+            g.certResidencyBurstLeft = 240; // ~4s at 16ms — compressed unrelated activity
+            g.certResidencyPhase = 2;
+            g.certResidencyPhaseMs = now;
+            g.statusLine = "CERT-RESIDENCY unrelated burst";
+            return;
+        }
+
+        if ( g.certResidencyPhase == 2 )
+        {
+            // Several injects per tick → simulate dense world chatter without terrain edits.
+            for ( int i = 0; i < 4 && g.certResidencyBurstLeft > 0; ++i )
+            {
+                ResInjectUnrelatedBurst();
+                --g.certResidencyBurstLeft;
+            }
+            if ( g.certResidencyBurstLeft > 0 ) { return; }
+            g.certResidencyPhase = 3;
+            g.certResidencyWait = 0;
+            g.statusLine = "CERT-RESIDENCY assert idle zeros";
+            return;
+        }
+
+        if ( g.certResidencyPhase == 3 )
+        {
+            ++g.certResidencyWait;
+            if ( g.certResidencyWait < 4 ) { return; }
+
+            g.certResIdleD2 = g.perfD2Rebuilds - g.certResBaseD2;
+            g.certResIdleHf = g.perfHfRebuilds - g.certResBaseHf;
+            g.certResIdleOcc = g.perfOccRebuilds - g.certResBaseOcc;
+            g.certResIdleRefetch = g.perfTerrainRefetches - g.certResBaseRefetch;
+            g.certResIdleEr = g.perfEditedRegionChanges - g.certResBaseEr;
+            int const dCells = g.cellsLoaded - g.certResBaseCells;
+            g.certResIdleIgnored = g.residencyIgnoredReceipts - g.certResBaseIgnored;
+
+            char note[240];
+            std::snprintf( note, sizeof( note ),
+                "D2=%d HF=%d occ=%d refetch=%d ER=%d dCells=%d ignored=%d",
+                g.certResIdleD2, g.certResIdleHf, g.certResIdleOcc, g.certResIdleRefetch,
+                g.certResIdleEr, dCells, g.certResIdleIgnored );
+            ResAddRow( "idle_D2_zero", g.certResIdleD2 == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "idle_HF_zero", g.certResIdleHf == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "idle_occ_zero", g.certResIdleOcc == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "idle_refetch_zero", g.certResIdleRefetch == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "idle_ER_zero", g.certResIdleEr == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "idle_no_residency_growth", dCells == 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "unrelated_receipts_ignored",
+                ( g.certResIdleIgnored >= 100 && g.residencyTerrainReceipts == 0 ) ? "PASS" : "FAIL", note );
+            ResAddRow( "world_revision_no_wake",
+                ( g.certResIdleD2 == 0 && g.certResIdleHf == 0 && g.certResIdleEr == 0 ) ? "PASS" : "FAIL",
+                "world_revision bumps during burst" );
+
+            // Classifier unit checks (affect=0 vs terrain).
+            uint32_t const a0 = ClassifyTerrainAffect( "{\"kind\":\"world_tick\",\"affect\":0}" );
+            uint32_t const aNpc = ClassifyTerrainAffect(
+                "{\"kind\":\"npc_update\",\"x\":1,\"y\":2}" );
+            uint32_t const aMut = ClassifyTerrainAffect(
+                "{\"kind\":\"carve\",\"removed\":{\"dirt\":10},\"min_x\":1,\"min_y\":1,\"max_x\":1,\"max_y\":1}" );
+            ResAddRow( "classify_affect0_none",
+                a0 == TerrainAffect_None ? "PASS" : "FAIL", "world_tick affect=0" );
+            ResAddRow( "classify_npc_none",
+                aNpc == TerrainAffect_None ? "PASS" : "FAIL", "npc_update" );
+            ResAddRow( "classify_carve_terrain",
+                ( aMut & TerrainAffect_ExplicitMutation ) != 0 ? "PASS" : "FAIL", "carve+removed" );
+
+            // Real mutation — scoped dirty.
+            g.certResBaseD2 = g.perfD2Rebuilds;
+            g.certResBaseHf = g.perfHfRebuilds;
+            g.certResBaseOcc = g.perfOccRebuilds;
+            g.certResBaseEr = g.perfEditedRegionChanges;
+            g.residencyDirtyCellKeys.clear();
+            g.residencyTrackDirtyCells = true;
+            g.feetX = g.certResidencyX;
+            g.feetY = g.certResidencyY;
+            float gz = g.feetZ;
+            if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+            g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+            g.aimHit = true;
+            g.aimX = g.certResidencyX; g.aimY = g.certResidencyY; g.aimZ = gz;
+            g.aimCx = g.certResidencyPadCx; g.aimCy = g.certResidencyPadCy;
+            g.aimStrikeCap = CapAtWorld( g.certResidencyX, g.certResidencyY );
+            g.hotbarSel = 0;
+            g.certResidencyPhase = 4;
+            g.certResidencyPhaseMs = now;
+            g.statusLine = "CERT-RESIDENCY mutate once";
+            return;
+        }
+
+        if ( g.certResidencyPhase == 4 )
+        {
+            // Local occupancy mutation only — avoid in-flight wire refuse rolling back the scope proof.
+            float grade = g.certResidencyZ;
+            SampleGroundZBase( g.certResidencyX, g.certResidencyY, grade );
+            float const R = (std::max)( SoftScoopScarRadiusM(), 0.28f );
+            bool const carved = CarveOccupancySphere(
+                g.certResidencyX, g.certResidencyY, grade - R * 0.55f, R,
+                g.certResidencyX, g.certResidencyY, grade );
+            char mnote[160];
+            std::snprintf( mnote, sizeof( mnote ),
+                "CarveOccupancySphere carved=%d R=%.3f", carved ? 1 : 0, R );
+            ResAddRow( "mutation_applied", carved ? "PASS" : "FAIL", mnote );
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            g.residencyTrackDirtyCells = false;
+            g.certResMutD2 = g.perfD2Rebuilds - g.certResBaseD2;
+            g.certResMutHf = g.perfHfRebuilds - g.certResBaseHf;
+            g.certResMutOcc = g.perfOccRebuilds - g.certResBaseOcc;
+            g.certResMutEr = g.perfEditedRegionChanges - g.certResBaseEr;
+            g.certResDirtyCells = (int)g.residencyDirtyCellKeys.size();
+            g.certResidencyPhase = 5;
+            g.certResidencyWait = 0;
+            g.statusLine = "CERT-RESIDENCY assert scoped dirty";
+            return;
+        }
+
+        if ( g.certResidencyPhase == 5 )
+        {
+            ++g.certResidencyWait;
+            if ( g.certResidencyWait < 3 ) { return; }
+
+            char note[240];
+            std::snprintf( note, sizeof( note ),
+                "D2=%d HF=%d occ=%d ER=%d dirtyCells=%d",
+                g.certResMutD2, g.certResMutHf, g.certResMutOcc, g.certResMutEr, g.certResDirtyCells );
+            // Necessary work happened.
+            ResAddRow( "mutation_D2_work",
+                g.certResMutD2 > 0 ? "PASS" : "FAIL", note );
+            ResAddRow( "mutation_ER_change",
+                g.certResMutEr > 0 ? "PASS" : "FAIL", note );
+            // Scoped: dirty cells within bite cell + 1-cell halo (max 9), never whole disk.
+            bool const scoped = g.certResDirtyCells >= 1 && g.certResDirtyCells <= 9;
+            ResAddRow( "mutation_scoped_dirty", scoped ? "PASS" : "FAIL", note );
+            // Halo-only neighbors: D2 rebuilds should not explode (touched+halo ≤ ~18 with retries).
+            ResAddRow( "mutation_D2_bounded",
+                ( g.certResMutD2 > 0 && g.certResMutD2 <= 24 ) ? "PASS" : "FAIL", note );
+            // Cached remainder: cell count unchanged (no broad residency rebuild).
+            ResAddRow( "mutation_no_disk_rebuild",
+                ( g.cellsLoaded == g.certResBaseCells ) ? "PASS" : "FAIL", note );
+
+            // affect=0 after mutation still sleeps.
+            int const d2b = g.perfD2Rebuilds;
+            int const hfb = g.perfHfRebuilds;
+            int const erb = g.perfEditedRegionChanges;
+            ApplyActivityReceipt( "{\"kind\":\"world_tick\",\"affect\":0,\"seq\":9999}" );
+            ApplyActivityReceipt( "{\"kind\":\"npc_update\",\"affect\":0,\"npc_id\":1}" );
+            bool const stillSleep =
+                g.perfD2Rebuilds == d2b && g.perfHfRebuilds == hfb
+             && g.perfEditedRegionChanges == erb;
+            ResAddRow( "post_mutation_affect0_sleep",
+                stillSleep ? "PASS" : "FAIL", "world_tick+npc after dig" );
+
+            ResWriteArtifact();
+            g.statusLine = g.certResidencyExitCode
+                ? "CERT-RESIDENCY done — FAIL"
+                : "CERT-RESIDENCY done — PASS";
+            g.certResidencyPhase = 99;
+            PostQuitMessage( g.certResidencyExitCode );
+            return;
+        }
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -17062,6 +17633,7 @@ namespace
         CertLsiTick();
         CertAsyncTick();
         CertP4Tick();
+        CertResidencyTick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -17402,6 +17974,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-fablescript-authority" ) == 0 )
                 {
                     g.certP4 = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-residency" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-terrain-residency" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-invalidation" ) == 0 )
+                {
+                    g.certResidency = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
                     continue;
                 }

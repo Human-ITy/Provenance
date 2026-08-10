@@ -385,6 +385,23 @@ Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-p4
 python cert_p4_headless.py --host 127.0.0.1 --port 8765
 ```
 
+```
+P4.3 TERRAIN RESIDENCY / INVALIDATION FLOOR
+SHA: PENDING_COMMIT
+```
+
+**Law:** World activity ≠ terrain activity. `ClassifyTerrainAffect` / `ApplyActivityReceipt` ignore world_tick, NPC, inventory, combat, spell ticks, weather-info, AI, body movement alone (`affect=0`). Terrain-relevant → scoped dirty. Contract: `Docs/P4_3_TERRAIN_RESIDENCY.md`.
+
+**Flag:** `--cert-residency` (aliases `--cert-terrain-residency`, `--cert-invalidation`). Forces RANGE. Artifact: `%TEMP%\provenance_residency_invalidation_cert.txt`.
+
+Live `--cert-residency`: `exit_code=0`, idle D2/HF/occ/refetch/ER = 0 with 2160 ignored unrelated receipts; one mutation scoped dirty_cells=4, mut_D2=4, mut_ER=1.
+
+```bat
+Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-residency
+```
+
+**Next (not started):** upstream Fablescript body-id wire → gameplay-scale stress → P5 water.
+
 ### Local Surface Intent (presentation-closure floor)
 
 ```

@@ -168,6 +168,17 @@ SHA: 248cbcd2cd1eb8937d8449b3a0e2997eaab7d5cf
 
 P4 authority holes closed: receipt-driven dig/place (no invent), prediction rollback floor (P4.1), authoritative body/aggregate identity on the wire (P4.2). No known exceptions on `--cert-p4`.
 
+```
+P4.3 TERRAIN RESIDENCY / INVALIDATION FLOOR
+SHA: PENDING_COMMIT
+```
+
+**Law:** World activity does not imply terrain activity. Terrain presentation wakes only when terrain-relevant state changes (`affect` / classifier). Contract: `Docs/P4_3_TERRAIN_RESIDENCY.md`.
+
+`--cert-residency` / `--cert-terrain-residency` → `%TEMP%\provenance_residency_invalidation_cert.txt`. Idle unrelated burst: D2/HF/occ/refetch/ER = 0. One mutation: scoped D2 dirty + bounded work; remainder cached. Continuity-before-cull: invalidation must not open voids.
+
+**Not started here:** upstream Fablescript body-id land, gameplay-scale stress gate, P5 water.
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**

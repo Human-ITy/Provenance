@@ -40,6 +40,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P3d.1 Chip quiescence** | Hysteretic ACTIVE→SETTLED; steep-static sleep; wake on supportRev | **Floor** @ `0a8867a`; **stop before place** |
 | **P3d.2 Chip vibrate/cycle halt** | Limit-cycle / orbit detect + tangential damp → SETTLED | **Floor** @ `6afec51`; **stop before place** |
 | **P4** Fablescript authority floor | Receipt-driven dig/place; no invent on refuse; `--cert-p4` | Done @ `5d66975` |
+| **P4.3** Terrain residency / invalidation | Terrain wakes only on terrain-relevant affect; `--cert-residency` | See `PROVENANCE_PIN.md` |
 | **P5** Water | Deferred until hydrology contract certified | Deferred |
 
 ### The voxel-form gate (user law)
