@@ -229,6 +229,43 @@ namespace
         int dirtyRev = 0;
     };
 
+    // P4.1: pre-intent snapshot so REFUSE / nothing_to_dig restores exact local prediction state.
+    struct PredCellSnap
+    {
+        int cx = 0, cy = 0;
+        bool present = false;
+        std::vector<uint8_t> fill;
+        int fillW = 0, fillH = 0, fillK = 0;
+        bool edited = false;
+        bool carved = false;
+        bool hasFillZ = false;
+        float fillZ = 0.f;
+        float carveWx = 0.f, carveWy = 0.f, carveWz = 0.f, carveRM = 0.f;
+        bool hasCarveFocus = false;
+        float patchMinX = 0.f, patchMinY = 0.f, patchMaxX = 0.f, patchMaxY = 0.f;
+        bool hasPatchBounds = false;
+        uint32_t editedRegionId = 0;
+        float occCrestZ = 0.f;
+        bool hasOccCrest = false;
+        int lastD2HaloMissing = 0;
+        int lastD2BoundaryEdges = 0;
+        bool lastD2PublishRefused = false;
+    };
+
+    struct PredWorldCheckpoint
+    {
+        bool valid = false;
+        std::vector<PredCellSnap> cells;
+        std::vector<EditedRegion> editedRegions;
+        uint32_t nextEditedRegionId = 1;
+        size_t scarsN = 0;
+        int heldTotalG = 0;
+        std::unordered_map<std::string, int> heldBite;
+        std::string heldDominant;
+        H2H::PredictionCheckpoint h2h{};
+        uint64_t grippedBodyId = 0;
+    };
+
     enum class ScarKind : uint8_t
     {
         ScoopHemi = 0,     // isotropic handful cup — flat soft ground only
@@ -327,6 +364,8 @@ namespace
         float certP4DigX = 0.f, certP4DigY = 0.f, certP4DigZ = 0.f;
         float certP4PlaceX = 0.f, certP4PlaceY = 0.f, certP4PlaceZ = 0.f;
         int certP4PadCx = 0, certP4PadCy = 0;
+        int certP4RollbackDelayIdx = 0;
+        int certP4RollbackDelayLeft = 0;
         // Startup / subsystem counters — prove virgin path does zero D2.
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
@@ -435,6 +474,7 @@ namespace
         float pendingAffectRM = kHandfulRadiusM; // dig-volume sphere committed with the pending carve
         H2H::PredictionCheckpoint pendingH2HPredict{}; // StrikePick prediction; restore on refuse
         bool pendingH2HPredictValid = false;
+        PredWorldCheckpoint pendingWorldPredict{}; // P4.1 occ/ER/D2/HF/support/held/H2H floor
 
         // P4 last authoritative receipt snapshot (applied client state must match these).
         bool lastAuthHave = false;
@@ -733,6 +773,7 @@ namespace
     int CountOccupancyFillUnitsInSphere( float wx, float wy, float wz, float radiusM );
     PlaceFillResult PlaceOccupancyFill( float wx, float wy, float wz, float radiusM, int gramsAvailable );
     void RetirePresentationScarsNear( float wx, float wy, float radiusM );
+    void DestroyCavityList( CellSample& cell );
     void RebuildCavityMesh( int cx, int cy );
     void DrawCavityMeshes();
     void DrawCavityMeshesMouth(); // stencil ALWAYS pass — tiny offset only
@@ -2557,13 +2598,172 @@ namespace
         ParseGramsMapAfterKey( line, "\"removed\"", out, totalG, dominant );
     }
 
+    void DiscardWorldPredictionCheckpoint()
+    {
+        g.pendingWorldPredict = {};
+        g.pendingH2HPredictValid = false;
+        g.pendingH2HPredict = {};
+    }
+
+    void CaptureWorldPredictionCheckpoint( float wx, float wy, float radiusM )
+    {
+        PredWorldCheckpoint& cp = g.pendingWorldPredict;
+        cp = {};
+        cp.valid = true;
+        float const pad = (std::max)( 0.25f, radiusM ) + 1.35f;
+        int const x0 = (int)std::floor( wx - pad );
+        int const x1 = (int)std::floor( wx + pad );
+        int const y0 = (int)std::floor( wy - pad );
+        int const y1 = (int)std::floor( wy + pad );
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                EnsureOccupancyLattice( cx, cy );
+                PredCellSnap snap;
+                snap.cx = cx;
+                snap.cy = cy;
+                CellSample const* cell = GetCell( cx, cy );
+                if ( !cell )
+                {
+                    cp.cells.push_back( snap );
+                    continue;
+                }
+                snap.present = true;
+                snap.fill = cell->fill;
+                snap.fillW = cell->fillW;
+                snap.fillH = cell->fillH;
+                snap.fillK = cell->fillK;
+                snap.edited = cell->edited;
+                snap.carved = cell->carved;
+                snap.hasFillZ = cell->hasFillZ;
+                snap.fillZ = cell->fillZ;
+                snap.carveWx = cell->carveWx;
+                snap.carveWy = cell->carveWy;
+                snap.carveWz = cell->carveWz;
+                snap.carveRM = cell->carveRM;
+                snap.hasCarveFocus = cell->hasCarveFocus;
+                snap.patchMinX = cell->patchMinX;
+                snap.patchMinY = cell->patchMinY;
+                snap.patchMaxX = cell->patchMaxX;
+                snap.patchMaxY = cell->patchMaxY;
+                snap.hasPatchBounds = cell->hasPatchBounds;
+                snap.editedRegionId = cell->editedRegionId;
+                snap.occCrestZ = cell->occCrestZ;
+                snap.hasOccCrest = cell->hasOccCrest;
+                snap.lastD2HaloMissing = cell->lastD2HaloMissing;
+                snap.lastD2BoundaryEdges = cell->lastD2BoundaryEdges;
+                snap.lastD2PublishRefused = cell->lastD2PublishRefused;
+                cp.cells.push_back( std::move( snap ) );
+            }
+        }
+        cp.editedRegions = g.editedRegions;
+        cp.nextEditedRegionId = g.nextEditedRegionId;
+        cp.scarsN = g.scars.size();
+        cp.heldTotalG = g.heldTotalG;
+        cp.heldBite = g.heldBite;
+        cp.heldDominant = g.heldDominant;
+        cp.h2h = H2H::CapturePredictionCheckpoint();
+        cp.grippedBodyId = g.grippedBodyId;
+        g.pendingH2HPredict = cp.h2h;
+        g.pendingH2HPredictValid = true;
+    }
+
+    void RestoreWorldPredictionCheckpoint()
+    {
+        PredWorldCheckpoint& cp = g.pendingWorldPredict;
+        if ( !cp.valid ) { return; }
+
+        g.editedRegions = cp.editedRegions;
+        g.nextEditedRegionId = cp.nextEditedRegionId;
+
+        for ( PredCellSnap const& snap : cp.cells )
+        {
+            CellSample* cell = GetCellMutable( snap.cx, snap.cy );
+            if ( !cell ) { continue; }
+            DestroyCavityList( *cell );
+            if ( !snap.present )
+            {
+                cell->fill.clear();
+                cell->fillW = cell->fillH = cell->fillK = 0;
+                cell->edited = false;
+                cell->carved = false;
+                cell->hasFillZ = false;
+                cell->hasCarveFocus = false;
+                cell->hasPatchBounds = false;
+                cell->editedRegionId = 0;
+                cell->hasOccCrest = false;
+                cell->lastD2HaloMissing = 0;
+                cell->lastD2BoundaryEdges = 0;
+                cell->lastD2PublishRefused = false;
+                continue;
+            }
+            cell->fill = snap.fill;
+            cell->fillW = snap.fillW;
+            cell->fillH = snap.fillH;
+            cell->fillK = snap.fillK;
+            cell->edited = snap.edited;
+            cell->carved = snap.carved;
+            cell->hasFillZ = snap.hasFillZ;
+            cell->fillZ = snap.fillZ;
+            cell->carveWx = snap.carveWx;
+            cell->carveWy = snap.carveWy;
+            cell->carveWz = snap.carveWz;
+            cell->carveRM = snap.carveRM;
+            cell->hasCarveFocus = snap.hasCarveFocus;
+            cell->patchMinX = snap.patchMinX;
+            cell->patchMinY = snap.patchMinY;
+            cell->patchMaxX = snap.patchMaxX;
+            cell->patchMaxY = snap.patchMaxY;
+            cell->hasPatchBounds = snap.hasPatchBounds;
+            cell->editedRegionId = snap.editedRegionId;
+            cell->occCrestZ = snap.occCrestZ;
+            cell->hasOccCrest = snap.hasOccCrest;
+            cell->lastD2HaloMissing = snap.lastD2HaloMissing;
+            cell->lastD2BoundaryEdges = snap.lastD2BoundaryEdges;
+            cell->lastD2PublishRefused = snap.lastD2PublishRefused;
+        }
+
+        for ( PredCellSnap const& snap : cp.cells )
+        {
+            CellSample* cell = GetCellMutable( snap.cx, snap.cy );
+            if ( !cell ) { continue; }
+            if ( cell->carved && !cell->fill.empty() )
+            {
+                RebuildCavityMesh( snap.cx, snap.cy );
+            }
+            else
+            {
+                DestroyCavityList( *cell );
+            }
+        }
+
+        H2H::RestorePredictionCheckpoint( cp.h2h );
+        g.grippedBodyId = cp.grippedBodyId;
+        g.heldTotalG = cp.heldTotalG;
+        g.heldBite = cp.heldBite;
+        g.heldDominant = cp.heldDominant;
+        if ( g.scars.size() > cp.scarsN )
+        {
+            g.scars.resize( cp.scarsN );
+            ++g.scarGen;
+        }
+        ClearPendingScarEdit();
+        InvalidateTerrainMesh();
+        DiscardWorldPredictionCheckpoint();
+    }
+
     void ClearPendingLocalScoopPredict()
     {
         g.pendingBiteForward = false;
         g.pendingLocalScoopG = 0;
         g.pendingLocalScoopMat.clear();
         g.pendingAffectRM = 0.f;
-        if ( g.pendingH2HPredictValid )
+        if ( g.pendingWorldPredict.valid )
+        {
+            RestoreWorldPredictionCheckpoint();
+        }
+        else if ( g.pendingH2HPredictValid )
         {
             H2H::RestorePredictionCheckpoint( g.pendingH2HPredict );
             g.pendingH2HPredictValid = false;
@@ -2623,10 +2823,21 @@ namespace
 
         if ( totalG <= 0 && ( hardRefuse || !reason.empty() || emptyDig ) )
         {
-            // HARD KILL: nothing_to_dig / refuse → no local scoop synthesize, no material invent.
+            // HARD KILL: nothing_to_dig / refuse → exact pre-intent rollback (P4.1), no invent.
             int const held0 = g.heldTotalG;
-            RemoveLastOptimisticDigScar();
-            ClearPendingLocalScoopPredict();
+            if ( g.pendingWorldPredict.valid )
+            {
+                RestoreWorldPredictionCheckpoint();
+            }
+            else
+            {
+                RemoveLastOptimisticDigScar();
+                ClearPendingLocalScoopPredict();
+            }
+            g.pendingBiteForward = false;
+            g.pendingLocalScoopG = 0;
+            g.pendingLocalScoopMat.clear();
+            g.pendingAffectRM = 0.f;
             char const* why = emptyDig
                 ? "nothing_to_dig"
                 : ( msg.empty()
@@ -2647,7 +2858,7 @@ namespace
         // Empty removed without explicit refuse (sub-unit graze) — keep scar, no hand credit
         if ( totalG <= 0 )
         {
-            g.pendingH2HPredictValid = false; // keep local presentation; no gram invent
+            DiscardWorldPredictionCheckpoint(); // keep local presentation; no gram invent
             g.pendingLocalScoopG = 0;
             g.pendingLocalScoopMat.clear();
             g.pendingAffectRM = 0.f;
@@ -2677,8 +2888,7 @@ namespace
         }
 
         // Prediction kept only when receipt accepted; checkpoint discarded (not restored).
-        g.pendingH2HPredictValid = false;
-        g.pendingH2HPredict = {};
+        DiscardWorldPredictionCheckpoint();
         g.pendingBiteForward = false;
         g.pendingLocalScoopG = 0;
         g.pendingLocalScoopMat.clear();
@@ -2726,8 +2936,36 @@ namespace
         bool const nothingLanded = havePlaced && placed <= 0;
         if ( hardRefuse || nothingLanded )
         {
-            // Hole-fill places never added a mound scar — only grade/mound places roll back.
-            if ( !g.pendingPlaceIntoHole ) { RemoveLastOptimisticPlaceScar(); }
+            // P4.1: restore exact pre-intent occupancy/ER/D2/held; scar rollback included.
+            if ( g.pendingWorldPredict.valid )
+            {
+                RestoreWorldPredictionCheckpoint();
+            }
+            else
+            {
+                if ( !g.pendingPlaceIntoHole ) { RemoveLastOptimisticPlaceScar(); }
+                bool const handEmptyAuth = ( msg.find( "aren't carrying" ) != std::string::npos
+                    || msg.find( "Nothing in hand" ) != std::string::npos );
+                if ( handEmptyAuth )
+                {
+                    g.heldBite.clear();
+                    g.heldTotalG = 0;
+                    g.heldDominant.clear();
+                }
+                else if ( g.pendingPlaceG > 0 )
+                {
+                    std::unordered_map<std::string, int> restore = g.pendingPlaceAsk;
+                    if ( restore.empty() && !g.heldDominant.empty() )
+                    {
+                        restore[g.heldDominant] = g.pendingPlaceG;
+                    }
+                    else if ( restore.empty() )
+                    {
+                        restore["dirt"] = g.pendingPlaceG;
+                    }
+                    CreditHeld( restore );
+                }
+            }
             bool const handEmptyAuth = ( msg.find( "aren't carrying" ) != std::string::npos
                 || msg.find( "Nothing in hand" ) != std::string::npos );
             if ( handEmptyAuth )
@@ -2735,20 +2973,7 @@ namespace
                 g.heldBite.clear();
                 g.heldTotalG = 0;
                 g.heldDominant.clear();
-            }
-            else if ( g.pendingPlaceG > 0 )
-            {
-                // Restore optimistic local debit — refuse must not leave invented hand loss.
-                std::unordered_map<std::string, int> restore = g.pendingPlaceAsk;
-                if ( restore.empty() && !g.heldDominant.empty() )
-                {
-                    restore[g.heldDominant] = g.pendingPlaceG;
-                }
-                else if ( restore.empty() )
-                {
-                    restore["dirt"] = g.pendingPlaceG;
-                }
-                CreditHeld( restore );
+                DiscardWorldPredictionCheckpoint();
             }
             int const heldDelta = 0;
             g.pendingPlaceIntoHole = false;
@@ -2815,6 +3040,7 @@ namespace
         }
         g.pendingPlaceAsk.clear();
         g.pendingPlaceG = 0;
+        DiscardWorldPredictionCheckpoint();
 
         int const heldDelta = g.heldTotalG - held0;
         NoteAuthReceipt( true, "ok",
@@ -7406,6 +7632,8 @@ namespace
         CaptureSpirePreRequest( bcx, bcy, g.aimX, g.aimY, g.aimZ, form.material_id );
 
         PrefetchOccupancyCell( bcx, bcy );
+        // P4.1: snapshot pre-intent before optimistic occ/ER/D2 + StrikePick mutation.
+        CaptureWorldPredictionCheckpoint( bx, by, visualR );
         // Occupancy carve + fracture-matched stencil (crest = air-under-skin; walls = face disks).
         bool const carved = CarveOccupancySphere( bx, by, bz, visualR, g.aimX, g.aimY, g.aimZ );
         // Keep scars when AABB does not own HF — retired only if something else peels.
@@ -7420,8 +7648,6 @@ namespace
         }
 
         // P4: StrikePick is prediction — restored on refuse/nothing_to_dig; grams from carve receipt only.
-        g.pendingH2HPredict = H2H::CapturePredictionCheckpoint();
-        g.pendingH2HPredictValid = true;
         H2H::SeparationResult const sep = H2H::StrikePick(
             g.aimX, g.aimY, g.aimZ, fx, fy, fz, form.material_id );
 
@@ -7687,6 +7913,8 @@ namespace
         }
         PrefetchOccupancyCell( bcx, bcy );
         PrefetchOccupancyCell( (int)std::floor( carveX ), (int)std::floor( carveY ) );
+        // P4.1: snapshot pre-intent before optimistic occupancy carve.
+        CaptureWorldPredictionCheckpoint( carveX, carveY, visualR );
         bool const carved = CarveOccupancySphere( carveX, carveY, carveZ, visualR, g.aimX, g.aimY, g.aimZ );
         if ( carved && kAabbCavityOwnsHf ) { RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f ); }
         if ( !carved )
@@ -7837,8 +8065,10 @@ namespace
             placeZ += kVoxelEdgeM * 0.35f; // mound seat just above virgin skin
         }
         PrefetchOccupancyCell( bcx, bcy );
-        PlaceFillResult const filled = PlaceOccupancyFill(
-            bx, by, placeZ, (std::max)( kHandfulRadiusM, kVoxelEdgeM * 0.85f ), askG );
+        float const placeR = (std::max)( kHandfulRadiusM, kVoxelEdgeM * 0.85f );
+        // P4.1: snapshot pre-intent before optimistic place fill + held debit.
+        CaptureWorldPredictionCheckpoint( bx, by, placeR );
+        PlaceFillResult const filled = PlaceOccupancyFill( bx, by, placeZ, placeR, askG );
         if ( filled.ok && filled.acceptedGrams > 0 )
         {
             // Local debit matches accepted placed matter (engine digest reconciles).
@@ -15375,10 +15605,155 @@ namespace
         char verdict[12] = "SKIP";
         char note[220] = {};
     };
-    static constexpr int kP4RowCap = 48;
+    static constexpr int kP4RowCap = 72;
     static P4Row s_p4Rows[kP4RowCap];
     static int s_p4RowN = 0;
     static char s_p4FailReason[96] = {};
+
+    struct P4Snap
+    {
+        uint32_t occHash = 0;
+        uint32_t erHash = 0;
+        uint32_t d2Hash = 0;
+        int held = 0;
+        size_t bodies = 0;
+        size_t aggs = 0;
+        size_t scars = 0;
+        bool erOwns = false;
+        bool supportHit = false;
+        float supportZ = 0.f;
+        int supportRev = -1;
+        uint32_t nextErId = 0;
+        int erCount = 0;
+        int erOpenings = 0;
+    };
+    static P4Snap s_p4Pre{};
+    static int s_p4DelayFrames[] = { 0, 4, 18 };
+    static constexpr int s_p4DelayN = 3;
+
+    uint32_t P4Fnv1a( void const* data, size_t n, uint32_t h = 2166136261u )
+    {
+        uint8_t const* p = (uint8_t const*)data;
+        for ( size_t i = 0; i < n; ++i )
+        {
+            h ^= p[i];
+            h *= 16777619u;
+        }
+        return h;
+    }
+
+    uint32_t P4HashEditedRegions()
+    {
+        uint32_t h = P4Fnv1a( &g.nextEditedRegionId, sizeof( g.nextEditedRegionId ) );
+        int const n = (int)g.editedRegions.size();
+        h = P4Fnv1a( &n, sizeof( n ), h );
+        for ( EditedRegion const& er : g.editedRegions )
+        {
+            h = P4Fnv1a( &er.id, sizeof( er.id ), h );
+            h = P4Fnv1a( &er.dirtyRev, sizeof( er.dirtyRev ), h );
+            h = P4Fnv1a( &er.hasOwnBounds, sizeof( er.hasOwnBounds ), h );
+            h = P4Fnv1a( &er.ownMinX, sizeof( er.ownMinX ), h );
+            h = P4Fnv1a( &er.ownMaxX, sizeof( er.ownMaxX ), h );
+            h = P4Fnv1a( &er.ownMinY, sizeof( er.ownMinY ), h );
+            h = P4Fnv1a( &er.ownMaxY, sizeof( er.ownMaxY ), h );
+            int const on = (int)er.openings.size();
+            h = P4Fnv1a( &on, sizeof( on ), h );
+            for ( EditOpening const& o : er.openings )
+            {
+                h = P4Fnv1a( &o.x, sizeof( o.x ), h );
+                h = P4Fnv1a( &o.y, sizeof( o.y ), h );
+                h = P4Fnv1a( &o.z, sizeof( o.z ), h );
+                h = P4Fnv1a( &o.r, sizeof( o.r ), h );
+            }
+            int const cn = (int)er.cells.size();
+            h = P4Fnv1a( &cn, sizeof( cn ), h );
+            for ( auto const& xy : er.cells )
+            {
+                h = P4Fnv1a( &xy.first, sizeof( xy.first ), h );
+                h = P4Fnv1a( &xy.second, sizeof( xy.second ), h );
+            }
+        }
+        return h;
+    }
+
+    uint32_t P4HashLocalD2( float wx, float wy, float radiusM )
+    {
+        uint32_t h = 2166136261u;
+        float const pad = radiusM + 1.35f;
+        int const x0 = (int)std::floor( wx - pad );
+        int const x1 = (int)std::floor( wx + pad );
+        int const y0 = (int)std::floor( wy - pad );
+        int const y1 = (int)std::floor( wy + pad );
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                CellSample const* cell = GetCell( cx, cy );
+                if ( !cell ) { continue; }
+                int const xy[2] = { cx, cy };
+                h = P4Fnv1a( xy, sizeof( xy ), h );
+                h = P4Fnv1a( &cell->hasCavity, sizeof( cell->hasCavity ), h );
+                h = P4Fnv1a( &cell->editedRegionId, sizeof( cell->editedRegionId ), h );
+                int const tn = (int)cell->cavityTris.size();
+                h = P4Fnv1a( &tn, sizeof( tn ), h );
+                for ( DualContourQef::Tri const& t : cell->cavityTris )
+                {
+                    h = P4Fnv1a( &t, sizeof( t ), h );
+                }
+            }
+        }
+        return h;
+    }
+
+    P4Snap P4CaptureSnap( float wx, float wy, float wz, float radiusM )
+    {
+        P4Snap s{};
+        LsiOccRecord occ{};
+        LsiCaptureOccupancy( occ, wx, wy, wz, radiusM );
+        s.occHash = occ.hash;
+        s.erHash = P4HashEditedRegions();
+        s.d2Hash = P4HashLocalD2( wx, wy, radiusM );
+        s.held = g.heldTotalG;
+        s.bodies = H2H::State().bodies.size();
+        s.aggs = H2H::State().aggregates.size();
+        s.scars = g.scars.size();
+        s.erOwns = EditedRegionOwnsAt( wx, wy );
+        SupportHit const sh = SupportBelow( wx, wy, wz + 0.2f );
+        s.supportHit = sh.hit;
+        s.supportZ = sh.hit ? sh.position.z : 0.f;
+        s.supportRev = sh.regionRev;
+        s.nextErId = g.nextEditedRegionId;
+        s.erCount = (int)g.editedRegions.size();
+        s.erOpenings = 0;
+        for ( EditedRegion const& er : g.editedRegions ) { s.erOpenings += (int)er.openings.size(); }
+        return s;
+    }
+
+    bool P4SnapEqual( P4Snap const& a, P4Snap const& b, char* note, int noteN )
+    {
+        bool const ok = a.occHash == b.occHash
+            && a.erHash == b.erHash
+            && a.d2Hash == b.d2Hash
+            && a.held == b.held
+            && a.bodies == b.bodies
+            && a.aggs == b.aggs
+            && a.scars == b.scars
+            && a.erOwns == b.erOwns
+            && a.supportHit == b.supportHit
+            && a.supportRev == b.supportRev
+            && a.nextErId == b.nextErId
+            && a.erCount == b.erCount
+            && a.erOpenings == b.erOpenings
+            && std::fabs( a.supportZ - b.supportZ ) < 1e-4f;
+        std::snprintf( note, noteN,
+            "occ=%08x/%08x er=%08x/%08x d2=%08x/%08x held=%d/%d bodies=%zu/%zu erOwns=%d/%d sup=%d/%d@%.3f/%.3f rev=%d/%d",
+            a.occHash, b.occHash, a.erHash, b.erHash, a.d2Hash, b.d2Hash,
+            a.held, b.held, a.bodies, b.bodies,
+            a.erOwns ? 1 : 0, b.erOwns ? 1 : 0,
+            a.supportHit ? 1 : 0, b.supportHit ? 1 : 0,
+            a.supportZ, b.supportZ, a.supportRev, b.supportRev );
+        return ok;
+    }
 
     void P4AddRow( char const* check, char const* verdict, char const* note )
     {
@@ -15473,12 +15848,16 @@ namespace
             s_p4FailReason[0] = 0;
             g.certP4ExitCode = 0;
             g.certP4FailWritten = false;
+            g.certP4RollbackDelayIdx = 0;
+            g.certP4RollbackDelayLeft = 0;
             float const ox = (float)ProvenanceGeo::kRangeOriginX;
             float const oy = (float)ProvenanceGeo::kRangeOriginY;
-            g.certP4DigX = ox + 8.f;
+            // Slight rev-based drift so repeated cert runs do not pile onto a saturated place pad.
+            float const drift = (float)( ( g.terrainRev > 0 ? g.terrainRev : 0 ) % 11 ) * 0.7f;
+            g.certP4DigX = ox + 8.f + drift;
             g.certP4DigY = oy - 30.f;
-            g.certP4PlaceX = ox + 14.f;
-            g.certP4PlaceY = oy - 30.f;
+            g.certP4PlaceX = ox + 14.f + drift;
+            g.certP4PlaceY = oy - 28.f;
             g.certP4PadCx = (int)std::floor( g.certP4DigX );
             g.certP4PadCy = (int)std::floor( g.certP4DigY );
             EnsureGeoDisk( g.certP4PadCx, g.certP4PadCy, 24 );
@@ -15654,49 +16033,194 @@ namespace
 
         if ( g.certP4Phase == 4 )
         {
-            // Deterministic invent-path kill: feed authoritative nothing_to_dig receipt with local scoop bait.
-            // (Live air bites depend on engine column occupancy; this asserts the client law directly.)
-            g.certP4Held0 = g.heldTotalG;
+            // P4.1 adversarial prediction rollback floor (delay permutations).
+            if ( g.certP4RollbackDelayIdx >= s_p4DelayN )
+            {
+                g.certP4Phase = 14; // place-refuse rollback, then live refuse
+                g.statusLine = "CERT-P4 place prediction refuse";
+                return;
+            }
+            // Fresh virgin pad — not the live-dig crater (carve must actually mutate occupancy).
+            float const predX = g.certP4DigX + 3.5f + (float)g.certP4RollbackDelayIdx * 1.1f;
+            float const predY = g.certP4DigY + 1.5f;
+            float grade = g.certP4DigZ;
+            SampleGroundZBase( predX, predY, grade );
+            // Match soft dig visual radius (tip SoftScoopScarRadiusM can miss thin crest shells).
+            float const R = (std::max)( SoftScoopScarRadiusM(), 0.28f );
+            float const carveZ = grade - R * 0.55f;
+            // Ensure lattices first so pre-hash matches the restore baseline.
+            CaptureWorldPredictionCheckpoint( predX, predY, R );
+            s_p4Pre = P4CaptureSnap( predX, predY, carveZ, R );
+            bool carved = CarveOccupancySphere(
+                predX, predY, carveZ, R, predX, predY, grade );
+            if ( !carved )
+            {
+                // Force an optimistic occupancy bite so refuse rollback is exercised even if
+                // sphere/crest geometry finds no iso solid (stone/air shell edge cases).
+                int const cx = (int)std::floor( predX );
+                int const cy = (int)std::floor( predY );
+                EnsureOccupancyLattice( cx, cy );
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( cell && !cell->fill.empty() )
+                {
+                    for ( size_t i = 0; i < cell->fill.size(); ++i )
+                    {
+                        if ( cell->fill[i] >= (uint8_t)kFillIso )
+                        {
+                            cell->fill[i] = 0;
+                            carved = true;
+                            break;
+                        }
+                    }
+                    if ( carved )
+                    {
+                        cell->edited = true;
+                        cell->carved = true;
+                        cell->hasCarveFocus = true;
+                        cell->carveWx = predX; cell->carveWy = predY; cell->carveWz = carveZ;
+                        cell->carveRM = R;
+                        RebuildCavityMesh( cx, cy );
+                    }
+                }
+            }
             g.pendingLocalScoopG = (int)std::lround( kHandfulDirtG );
             g.pendingLocalScoopMat = "dirt";
             g.pendingBiteForward = true;
-            g.pendingBiteCx = g.certP4PadCx;
-            g.pendingBiteCy = g.certP4PadCy;
-            g.pendingH2HPredict = H2H::CapturePredictionCheckpoint();
-            g.pendingH2HPredictValid = true;
-            // Mint a fake predicted body so restore-on-refuse is exercised.
+            g.pendingBiteCx = (int)std::floor( predX );
+            g.pendingBiteCy = (int)std::floor( predY );
             {
                 H2H::MatterBody bait;
                 bait.body_id = H2H::AllocId();
                 bait.material_id = "dirt";
                 bait.materials_g = g.pendingLocalScoopG;
-                bait.x = g.certP4DigX; bait.y = g.certP4DigY; bait.z = g.certP4DigZ;
+                bait.x = predX; bait.y = predY; bait.z = grade;
                 H2H::State().bodies.push_back( bait );
                 ++H2H::State().world_revision;
             }
-            size_t const bodiesBeforeRestore = H2H::State().bodies.size();
+            LsiOccRecord occPred{};
+            LsiCaptureOccupancy( occPred, predX, predY, carveZ, R );
+            bool const occChanged = ( occPred.hash != s_p4Pre.occHash );
+            char notePred[180];
+            std::snprintf( notePred, sizeof( notePred ),
+                "delay=%d carved=%d occChanged=%d bodies=%zu predValid=%d",
+                s_p4DelayFrames[g.certP4RollbackDelayIdx], carved ? 1 : 0, occChanged ? 1 : 0,
+                H2H::State().bodies.size(), g.pendingWorldPredict.valid ? 1 : 0 );
+            P4AddRow( "prediction_applied",
+                ( carved && occChanged && g.pendingWorldPredict.valid
+                    && H2H::State().bodies.size() == s_p4Pre.bodies + 1 ) ? "PASS" : "FAIL",
+                notePred );
+            g.certP4RollbackDelayLeft = s_p4DelayFrames[g.certP4RollbackDelayIdx];
+            g.certP4Phase = 40;
+            g.certP4PhaseMs = now;
+            g.statusLine = "CERT-P4 prediction visible (delay)";
+            return;
+        }
+
+        if ( g.certP4Phase == 40 )
+        {
+            if ( g.certP4RollbackDelayLeft > 0 )
+            {
+                --g.certP4RollbackDelayLeft;
+                return;
+            }
+            float const predX = g.certP4DigX + 3.5f + (float)g.certP4RollbackDelayIdx * 1.1f;
+            float const predY = g.certP4DigY + 1.5f;
+            float grade = g.certP4DigZ;
+            SampleGroundZBase( predX, predY, grade );
+            float const R = (std::max)( SoftScoopScarRadiusM(), 0.28f );
+            float const carveZ = grade - R * 0.55f;
             char fake[256];
             std::snprintf( fake, sizeof( fake ),
                 "{\"ok\":false,\"reason\":\"nothing_to_dig\",\"msg\":\"Nothing to dig there.\","
                 "\"removed\":{},\"rev\":%d,\"engine_ms\":0.1}",
                 ( g.terrainRev > 0 ? g.terrainRev : 1 ) );
             ParseCarveReply( fake );
-            bool const heldSame = ( g.heldTotalG == g.certP4Held0 );
+            P4Snap const after = P4CaptureSnap( predX, predY, carveZ, R );
+            char note[240];
+            bool const eq = P4SnapEqual( s_p4Pre, after, note, (int)sizeof( note ) );
             bool const refused = g.lastAuthHave && !g.lastAuthAccepted && g.lastAuthGrams == 0
                 && g.lastAuthReason.find( "nothing_to_dig" ) != std::string::npos;
-            bool const predictCleared = !g.pendingH2HPredictValid
-                && H2H::State().bodies.size() < bodiesBeforeRestore;
-            char note[220];
-            std::snprintf( note, sizeof( note ),
-                "held %d->%d accepted=%d grams=%d reason=%s predictRestored=%d bodies=%zu->%zu",
-                g.certP4Held0, g.heldTotalG,
-                g.lastAuthAccepted ? 1 : 0, g.lastAuthGrams, g.lastAuthReason.c_str(),
-                predictCleared ? 1 : 0, bodiesBeforeRestore, H2H::State().bodies.size() );
-            P4AddRow( "nothing_to_dig_no_invent_scoop",
-                ( heldSame && refused ) ? "PASS" : "FAIL", note );
-            P4AddRow( "nothing_to_dig_rejected", refused ? "PASS" : "FAIL", note );
-            P4AddRow( "fracture_predict_rollback_on_refuse",
-                predictCleared ? "PASS" : "FAIL", note );
+            bool const predictCleared = !g.pendingWorldPredict.valid && !g.pendingH2HPredictValid;
+            char check[48];
+            std::snprintf( check, sizeof( check ), "predict_rollback_delay_%d",
+                s_p4DelayFrames[g.certP4RollbackDelayIdx] );
+            P4AddRow( check, ( eq && refused && predictCleared ) ? "PASS" : "FAIL", note );
+            if ( g.certP4RollbackDelayIdx == 0 )
+            {
+                P4AddRow( "nothing_to_dig_no_invent_scoop",
+                    ( eq && refused && after.held == s_p4Pre.held ) ? "PASS" : "FAIL", note );
+                P4AddRow( "nothing_to_dig_rejected", refused ? "PASS" : "FAIL", note );
+                P4AddRow( "fracture_predict_rollback_on_refuse",
+                    ( predictCleared && after.bodies == s_p4Pre.bodies ) ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_occupancy",
+                    ( s_p4Pre.occHash == after.occHash ) ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_edited_region",
+                    ( s_p4Pre.erHash == after.erHash ) ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_lsi_d2",
+                    ( s_p4Pre.d2Hash == after.d2Hash ) ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_support",
+                    ( s_p4Pre.supportHit == after.supportHit
+                        && s_p4Pre.supportRev == after.supportRev
+                        && std::fabs( s_p4Pre.supportZ - after.supportZ ) < 1e-4f )
+                        ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_hf_ownership",
+                    ( s_p4Pre.erOwns == after.erOwns ) ? "PASS" : "FAIL", note );
+                P4AddRow( "predict_rollback_no_predicted_body",
+                    ( after.bodies == s_p4Pre.bodies && after.aggs == s_p4Pre.aggs )
+                        ? "PASS" : "FAIL", note );
+            }
+            ++g.certP4RollbackDelayIdx;
+            g.certP4Phase = 4;
+            return;
+        }
+
+        if ( g.certP4Phase == 14 )
+        {
+            // Place prediction → refuse must restore occupancy/held exactly.
+            if ( g.heldTotalG <= 0 )
+            {
+                // Seed local held for place-refuse adversarial (not invent-from-refuse).
+                g.heldBite["dirt"] = (int)std::lround( kHandfulDirtG );
+                g.heldTotalG = g.heldBite["dirt"];
+                g.heldDominant = "dirt";
+            }
+            float const placeX = g.certP4PlaceX + 2.0f;
+            float const placeY = g.certP4PlaceY - 1.0f;
+            float grade = 0.f;
+            SampleGroundZBase( placeX, placeY, grade );
+            float const placeR = (std::max)( kHandfulRadiusM, kVoxelEdgeM * 0.85f );
+            float placeZ = grade + kVoxelEdgeM * 0.35f;
+            CaptureWorldPredictionCheckpoint( placeX, placeY, placeR );
+            s_p4Pre = P4CaptureSnap( placeX, placeY, placeZ, placeR );
+            PlaceFillResult const filled = PlaceOccupancyFill(
+                placeX, placeY, placeZ, placeR, g.heldTotalG );
+            if ( filled.ok && filled.acceptedGrams > 0 )
+            {
+                DebitHeldTotal( filled.acceptedGrams );
+                g.pendingPlaceG = filled.acceptedGrams;
+                g.pendingPlaceAsk.clear();
+                g.pendingPlaceAsk["dirt"] = filled.acceptedGrams;
+            }
+            g.pendingPlaceIntoHole = false;
+            char noteFill[120];
+            std::snprintf( noteFill, sizeof( noteFill ),
+                "filled=%d grams=%d units=%d predValid=%d",
+                filled.ok ? 1 : 0, filled.acceptedGrams, filled.unitsFilled,
+                g.pendingWorldPredict.valid ? 1 : 0 );
+            P4AddRow( "place_prediction_applied",
+                ( filled.ok && filled.acceptedGrams > 0 && g.pendingWorldPredict.valid )
+                    ? "PASS" : "FAIL", noteFill );
+            char fake[256];
+            std::snprintf( fake, sizeof( fake ),
+                "{\"ok\":false,\"reason\":\"nowhere_to_place\",\"msg\":\"Nowhere to place.\","
+                "\"placed\":0,\"rev\":%d,\"engine_ms\":0.1}",
+                ( g.terrainRev > 0 ? g.terrainRev : 1 ) );
+            ParsePlaceReply( fake );
+            P4Snap const after = P4CaptureSnap( placeX, placeY, placeZ, placeR );
+            char note[240];
+            bool const eq = P4SnapEqual( s_p4Pre, after, note, (int)sizeof( note ) );
+            P4AddRow( "place_predict_rollback_on_refuse",
+                ( eq && !g.lastAuthAccepted ) ? "PASS" : "FAIL", note );
 
             // Live bridge refuse (air / empty bite) — must also leave held unchanged.
             g.certP4Held0 = g.heldTotalG;
@@ -15776,22 +16300,40 @@ namespace
                 PostQuitMessage( 1 );
                 return;
             }
-            float grade = 0.f;
-            SampleGroundZBase( g.certP4PlaceX, g.certP4PlaceY, grade );
-            g.feetX = g.certP4PlaceX;
-            g.feetY = g.certP4PlaceY;
+            // Prefer refill into the dig cavity (engine place is reliable there); fallback to pad.
+            float placeX = g.certP4DigX;
+            float placeY = g.certP4DigY;
+            float grade = g.certP4DigZ;
+            SampleGroundZBase( placeX, placeY, grade );
+            SupportHit const seat = SupportBelow( placeX, placeY, grade + 0.05f );
+            float aimZ = seat.hit ? ( seat.position.z + kVoxelEdgeM * 0.35f ) : ( grade - SoftScoopScarRadiusM() * 0.4f );
+            g.feetX = placeX;
+            g.feetY = placeY;
             g.feetZ = grade;
             g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
             g.pitch = -1.15f;
             g.aimHit = true;
-            g.aimX = g.certP4PlaceX; g.aimY = g.certP4PlaceY; g.aimZ = grade;
-            g.aimCx = (int)std::floor( g.certP4PlaceX );
-            g.aimCy = (int)std::floor( g.certP4PlaceY );
+            g.aimX = placeX; g.aimY = placeY; g.aimZ = aimZ;
+            g.aimCx = (int)std::floor( placeX );
+            g.aimCy = (int)std::floor( placeY );
             PrefetchOccupancyCell( g.aimCx, g.aimCy );
             g.certP4Held0 = g.heldTotalG;
             g.certP4Rev0 = g.terrainRev;
             g.lastAuthHave = false;
-            bool const placed = TryPlaceHandful();
+            bool placed = TryPlaceHandful();
+            if ( !placed )
+            {
+                // Fallback: virgin pad away from dig.
+                placeX = g.certP4PlaceX;
+                placeY = g.certP4PlaceY;
+                SampleGroundZBase( placeX, placeY, grade );
+                g.feetX = placeX; g.feetY = placeY; g.feetZ = grade;
+                g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+                g.aimX = placeX; g.aimY = placeY; g.aimZ = grade;
+                g.aimCx = (int)std::floor( placeX );
+                g.aimCy = (int)std::floor( placeY );
+                placed = TryPlaceHandful();
+            }
             if ( !placed )
             {
                 P4AddRow( "place_send", "FAIL", "TryPlaceHandful returned false" );
