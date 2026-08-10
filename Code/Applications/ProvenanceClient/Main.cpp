@@ -24,6 +24,7 @@
 #include "HorizonToHand.h"
 #include "DualContourQef.h"
 #include "WaterLedger.h"
+#include "PickFracture.h"
 
 #include <algorithm>
 #include <cmath>
@@ -404,6 +405,11 @@ namespace
         int certWaterPhase = 0;
         int certWaterExitCode = 0;
         bool certWaterFailWritten = false;
+        // --cert-pick-fracture: P5 side-gate material-true pick + closed local surface.
+        bool certPickFracture = false;
+        int certPickFracturePhase = 0;
+        int certPickFractureExitCode = 0;
+        bool certPickFractureFailWritten = false;
         // Live P5a water ledger (Esoterica-local until Fablescript water authority wires in).
         WaterLedger::World waterWorld;
         int certStressWait = 0;
@@ -887,6 +893,8 @@ namespace
     void EnsureOccupancyLattice( int cx, int cy );
     bool CarveOccupancySphere( float carveX, float carveY, float carveZ, float radiusM,
         float openX, float openY, float openZ );
+    // P5 side-gate: material-true contact-frame fracture → occupancy → local closed recon.
+    bool CarveOccupancyFracture( PickFracture::FractureEvent const& ev );
     // P3e: place / re-fill — reverse matter transfer into occupancy (not DigScar mound).
     struct PlaceFillResult
     {
@@ -4713,6 +4721,190 @@ namespace
         return true;
     }
 
+    bool CarveOccupancyFracture( PickFracture::FractureEvent const& ev )
+    {
+        // Material-true pick: subtract contact-frame fracture envelope only — never sphere/cup law.
+        // HF/D2 reconstruct remaining boundary inside fracture AABB + min recon halo.
+        if ( !ev.ok || !ev.frame.valid ) { return false; }
+
+        float minX, minY, minZ, maxX, maxY, maxZ;
+        PickFracture::WorldAabb( ev, minX, minY, minZ, maxX, maxY, maxZ );
+        float const fracR = (std::max)( 0.02f, ev.fractureExtentRM );
+        // Physical changed region only — do NOT enlarge to contact/query radius.
+        int const x0 = (int)std::floor( minX - 0.02f );
+        int const x1 = (int)std::floor( maxX + 0.02f );
+        int const y0 = (int)std::floor( minY - 0.02f );
+        int const y1 = (int)std::floor( maxY + 0.02f );
+
+        bool any = false;
+        std::vector<std::pair<int, int>> touchedCells;
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                EnsureOccupancyLattice( cx, cy );
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                if ( !cell->carved )
+                {
+                    SeedOccupancyFromVirginSurface( cx, cy );
+                }
+                int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+                float const edge = kVoxelEdgeM;
+                float const crest = CellOccCrest( *cell );
+                float const du = 1.f / (float)w, dv = 1.f / (float)h;
+                bool touched = false;
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    for ( int r = 0; r < h; ++r )
+                    {
+                        float const yc = (float)cy + ( (float)r + 0.5f ) * dv;
+                        for ( int c = 0; c < w; ++c )
+                        {
+                            float const xc = (float)cx + ( (float)c + 0.5f ) * du;
+                            if ( !PickFracture::PointInEnvelopeWorld( ev, xc, yc, zc ) ) { continue; }
+                            if ( FillAt( *cell, c, r, k ) < kFillIso ) { continue; }
+                            SetFillAt( *cell, c, r, k, 0 );
+                            touched = true;
+                        }
+                    }
+                }
+                if ( touched )
+                {
+                    cell->edited = true;
+                    cell->carved = true;
+                    cell->carveWx = ev.frame.origin.x;
+                    cell->carveWy = ev.frame.origin.y;
+                    cell->carveWz = ev.frame.origin.z;
+                    cell->carveRM = fracR;
+                    cell->hasCarveFocus = true;
+                    float occZ = crest;
+                    SampleOccupancyZ( (float)cx + 0.5f, (float)cy + 0.5f, occZ );
+                    cell->fillZ = (std::min)( cell->hasFillZ ? cell->fillZ : crest, occZ );
+                    cell->hasFillZ = true;
+                    touchedCells.push_back( { cx, cy } );
+                    any = true;
+                }
+            }
+        }
+        if ( !any ) { return false; }
+
+        float const ox = ev.frame.origin.x;
+        float const oy = ev.frame.origin.y;
+        float const oz = ev.frame.origin.z;
+        float openNx = ev.frame.N.x, openNy = ev.frame.N.y, openNz = ev.frame.N.z;
+        bool surfaceStrike = false;
+        {
+            float skinZ = oz;
+            SampleGroundZBase( ox, oy, skinZ );
+            float hnx = 0.f, hny = 0.f, hnz = 1.f;
+            CaptureFaceNormalAt( ox, oy, hnx, hny, hnz );
+            surfaceStrike = ( std::fabs( oz - skinZ ) < 0.45f && hnz >= 0.40f );
+            if ( surfaceStrike )
+            {
+                openNx = hnx; openNy = hny; openNz = hnz;
+            }
+        }
+        // Tip-scale mouth from fracture event (never contact/query radius).
+        float openR = (std::min)( PickFracture::kMouthOpenMaxM,
+            (std::max)( 0.05f, ev.mouthOpenRM ) );
+
+        uint32_t const rid = MergeOrCreateEditedRegion( ox, oy, oz, openR, touchedCells,
+            openNx, openNy, openNz );
+        EditedRegion* er = FindEditedRegion( rid );
+
+        // D2 rebuild: touched cells + neighbors that intersect recon halo only.
+        float haloMinX, haloMinY, haloMaxX, haloMaxY;
+        PickFracture::ReconHaloAabb( ev, haloMinX, haloMinY, haloMaxX, haloMaxY );
+        for ( auto const& xy : touchedCells )
+        {
+            RebuildCavityMesh( xy.first, xy.second );
+            CellSample* cell = GetCellMutable( xy.first, xy.second );
+            if ( !cell ) { continue; }
+            if ( cell->hasCavity && er && er->hasOwnBounds )
+            {
+                cell->patchMinX = er->ownMinX;
+                cell->patchMaxX = er->ownMaxX;
+                cell->patchMinY = er->ownMinY;
+                cell->patchMaxY = er->ownMaxY;
+                cell->hasPatchBounds = true;
+            }
+        }
+        if ( er )
+        {
+            for ( auto const& t : touchedCells )
+            {
+                for ( int dy = -1; dy <= 1; ++dy )
+                {
+                    for ( int dx = -1; dx <= 1; ++dx )
+                    {
+                        if ( dx == 0 && dy == 0 ) { continue; }
+                        int const nx = t.first + dx, ny = t.second + dy;
+                        float const cx = (float)nx + 0.5f, cy = (float)ny + 0.5f;
+                        if ( cx < haloMinX || cx > haloMaxX || cy < haloMinY || cy > haloMaxY )
+                        {
+                            continue; // outside recon halo — leave published D2 untouched
+                        }
+                        bool already = false;
+                        for ( auto const& u : touchedCells )
+                        {
+                            if ( u.first == nx && u.second == ny ) { already = true; break; }
+                        }
+                        if ( already ) { continue; }
+                        CellSample* cell = GetCellMutable( nx, ny );
+                        if ( !cell || !cell->carved ) { continue; }
+                        RebuildCavityMesh( nx, ny );
+                    }
+                }
+            }
+        }
+
+        if ( kAabbCavityOwnsHf )
+        {
+            RetirePresentationScarsNear( ox, oy, fracR );
+        }
+        // HF refine only when this strike opens virgin skin / surface break — scoped invalidate.
+        {
+            bool remeshHf = surfaceStrike || SurfaceBrokenByOccupancy( ox, oy );
+            if ( !remeshHf )
+            {
+                for ( auto const& xy : touchedCells )
+                {
+                    if ( SurfaceBrokenByOccupancy( (float)xy.first + 0.5f, (float)xy.second + 0.5f ) )
+                    {
+                        remeshHf = true;
+                        break;
+                    }
+                }
+            }
+            if ( remeshHf ) { InvalidateTerrainMesh( "pick_fracture_hf" ); }
+        }
+        int const bx = (int)std::floor( ox );
+        int const by = (int)std::floor( oy );
+        for ( int dy = -1; dy <= 1; ++dy )
+        {
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                QueueColumn( bx + dx, by + dy );
+            }
+        }
+        ++g.perfOccupancyMutations;
+        // P5a minimal hook unchanged — dig wakes local water only (P5b still CLOSED).
+        {
+            for ( auto const& t : touchedCells )
+            {
+                if ( !WaterLedger::GetContainer( g.waterWorld, t.first, t.second ) )
+                {
+                    WaterLedger::SetBasin( g.waterWorld, t.first, t.second,
+                        oz - fracR, WaterLedger::kCellCapacityUnits );
+                }
+            }
+            WaterLedger::OnTerrainDig( g.waterWorld, bx, by, 1 );
+        }
+        return true;
+    }
+
     bool SurfaceOpenedByOccupancy( float x, float y )
     {
         return EditedRegionOwnsAt( x, y );
@@ -8011,18 +8203,33 @@ namespace
         float fx = sy * cp, fy = cyw * cp, fz = sp;
 
         DigAffectSpec const affect = AimDigAffect();
-        // Carve INTO the matter face. Side/dark ridge walls need look-into, not crest-up HF N.
+        // Contact-frame N from face (into-carve), pry T from look projected on tangent — never world-up law.
         float fnx = 0.f, fny = 0.f, fnz = 1.f;
         ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, fx, fy, fz, fnx, fny, fnz );
-        // Tip-only carve is invisible on HF after handoff — use readable radius on surface
-        // and contact radius on cliffs / downward chops.
-        float visualR = (std::max)( affect.radiusM, kVoxelEdgeM * 0.85f );
-        visualR = (std::max)( visualR, ActiveAimRadiusM() * 0.55f );
-        if ( fnz < 0.72f || g.pitch < -0.28f )
+        PickFracture::Vec3 const hit{ g.aimX, g.aimY, g.aimZ };
+        PickFracture::Vec3 const surfN{ fnx, fny, fnz };
+        PickFracture::Vec3 const pry{ fx, fy, fz };
+        uint64_t const fracSeed = (uint64_t)( (int)std::floor( g.aimX * 100.f ) )
+            ^ ( (uint64_t)(int)std::floor( g.aimY * 100.f ) << 16 )
+            ^ ( (uint64_t)g.perfOccupancyMutations << 32 )
+            ^ 0x000051CFull;
+        RockStruct::Foliation const fol = RockStruct::FoliationAt( (double)g.aimX, (double)g.aimY );
+        bool const useFol = ( form.fabric == H2H::FabricKind::FoliatedAnisotropic
+            || form.fabric == H2H::FabricKind::BeddedFissile
+            || CapUsesFoliation( form.material_id ) );
+        PickFracture::FractureEvent const fev = PickFracture::BuildEvent(
+            hit, surfN, pry, form.material_id, fracSeed, useFol ? &fol : nullptr );
+        if ( !fev.ok )
         {
-            visualR = (std::max)( visualR, ActiveAimRadiusM() );
+            char d[200];
+            std::snprintf( d, sizeof( d ), "PICK fracture refuse: %s", fev.fail );
+            g.digestLine = d;
+            UpdateStreamHud();
+            return false;
         }
-        float const into = visualR * 0.70f;
+        // Engine carve receipt — tip-scale fracture extent (NOT contact/query radius).
+        float const fracR = fev.fractureExtentRM;
+        float const into = (std::min)( fracR, fev.env.nInto ) * 0.55f;
         float const bx = g.aimX - fnx * into;
         float const by = g.aimY - fny * into;
         float const bz = g.aimZ - fnz * into;
@@ -8031,9 +8238,8 @@ namespace
         float const bu = bx - (float)bcx;
         float const bv = by - (float)bcy;
 
-        // Engine carve receipt — tip affect (authority grams); presentation uses visualR.
-        float const radEng = WorldToEngDepth( affect.radiusM );
-        float const depthEng = WorldToEngDepth( affect.depthM );
+        float const radEng = WorldToEngDepth( fracR );
+        float const depthEng = WorldToEngDepth( (std::max)( affect.depthM, fev.env.nInto ) );
         int px = (int)std::floor( g.feetX );
         int py = (int)std::floor( g.feetY );
         char params[288];
@@ -8041,9 +8247,11 @@ namespace
             "{\"x\":%d,\"y\":%d,\"u\":%.5f,\"v\":%.5f,\"depth\":%.5f,\"radius\":%.5f,\"shape\":\"sphere\",\"px\":%d,\"py\":%d}",
             bcx, bcy, bu, bv, depthEng, radEng, px, py );
         g.intent = IntentKind::Dig;
-        g.pendingLocalScoopG = AffectAcceptedGrams( form, affect );
+        g.pendingLocalScoopG = fev.releasedGrams > 0
+            ? fev.releasedGrams
+            : AffectAcceptedGrams( form, affect );
         g.pendingLocalScoopMat = form.material_id;
-        g.pendingAffectRM = affect.radiusM;
+        g.pendingAffectRM = fracR;
         if ( !RequestMethod( "carve", params, PendingKind::Carve ) )
         {
             g.digestLine = "PICK send failed";
@@ -8063,18 +8271,17 @@ namespace
 
         PrefetchOccupancyCell( bcx, bcy );
         // P4.1: snapshot pre-intent before optimistic occ/ER/D2 + StrikePick mutation.
-        CaptureWorldPredictionCheckpoint( bx, by, visualR );
-        // Occupancy carve + fracture-matched stencil (crest = air-under-skin; walls = face disks).
-        bool const carved = CarveOccupancySphere( bx, by, bz, visualR, g.aimX, g.aimY, g.aimZ );
-        // Keep scars when AABB does not own HF — retired only if something else peels.
+        CaptureWorldPredictionCheckpoint( g.aimX, g.aimY, fracR + fev.d2ReconHaloRM );
+        // Occupancy loses exactly the contact-frame fracture volume (not sphere/cup).
+        bool const carved = CarveOccupancyFracture( fev );
         if ( carved && kAabbCavityOwnsHf )
         {
-            RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f );
+            RetirePresentationScarsNear( g.aimX, g.aimY, fracR * 2.5f );
         }
         if ( !carved )
         {
             AddFacePunctureScar( g.aimX, g.aimY, g.aimZ, bcx, bcy,
-                affect.radiusM, affect.depthM, fnx, fny, fnz );
+                fracR, fev.env.nInto, fnx, fny, fnz );
         }
 
         // P4: StrikePick is prediction — restored on refuse/nothing_to_dig; grams from carve receipt only.
@@ -8088,13 +8295,19 @@ namespace
         }
         if ( sep.detached )
         {
-            float strikeX = 1.f, strikeY = 0.f;
-            StrikeAxesFromLook( fnx, fny, fnz, fx, fy, fz, strikeX, strikeY );
+            // Same separation event: detached body inherits contact-frame fracture morphology.
+            float strikeX = fev.frame.T.x, strikeY = fev.frame.T.y;
+            float const sl = std::sqrt( strikeX * strikeX + strikeY * strikeY );
+            if ( sl > 1e-5f ) { strikeX /= sl; strikeY /= sl; }
+            else { StrikeAxesFromLook( fnx, fny, fnz, fx, fy, fz, strikeX, strikeY ); }
             for ( H2H::MatterBody& body : H2H::State().bodies )
             {
                 if ( body.body_id != sep.body_id ) { continue; }
-                body.nx = fnx; body.ny = fny; body.nz = fnz;
+                body.nx = fev.frame.N.x; body.ny = fev.frame.N.y; body.nz = fev.frame.N.z;
                 body.strikeX = strikeX; body.strikeY = strikeY;
+                body.alongM = fev.plateAlongM;
+                body.acrossM = fev.plateAcrossM;
+                body.thickM = fev.plateThickM;
                 body.x = g.aimX + fx * 0.08f - fnx * 0.04f;
                 body.y = g.aimY + fy * 0.08f - fny * 0.04f;
                 body.z = g.aimZ + fz * 0.08f - fnz * 0.04f;
@@ -8111,22 +8324,22 @@ namespace
         if ( sep.detached )
         {
             std::snprintf( d, sizeof( d ),
-                "H2H %s %s D2=%s sep=%llu body=%llu | plate %dg | visualR=%.3f | [G] grip",
+                "H2H %s %s D2=%s sep=%llu body=%llu | %s fracR=%.3f | [G] grip",
                 sep.act, sep.material_id.c_str(), carved ? "yes" : "miss",
                 (unsigned long long)sep.separation_id, (unsigned long long)sep.body_id,
-                sep.plate_g, visualR );
-            g.statusLine = "P3b pick - plate + occupancy cavity";
+                fev.morphology, fracR );
+            g.statusLine = "P5 pick - fracture plate + closed local surface";
         }
         else
         {
             float attach = patch ? patch->attachment : 1.f;
             std::snprintf( d, sizeof( d ),
-                "H2H %s %s D2=%s patch=%llu attach=%.2f | visualR=%.3fm tipR=%.3fm | await digest",
+                "H2H %s %s D2=%s patch=%llu attach=%.2f | %s fracR=%.3fm mouth=%.3f | await digest",
                 sep.act, sep.material_id.c_str(), carved ? "yes" : "miss",
-                (unsigned long long)sep.patch_id, attach, visualR, affect.radiusM );
+                (unsigned long long)sep.patch_id, attach, fev.morphology, fracR, fev.mouthOpenRM );
             g.statusLine = carved
-                ? "P3b pick - occupancy cavity (matter face)"
-                : "P3b pick - carve missed lattice (check column)";
+                ? "P5 pick - contact-frame fracture (matter face)"
+                : "P5 pick - fracture missed lattice (check column)";
         }
         g.digestLine = d;
         UpdateStreamHud();
@@ -17847,6 +18060,41 @@ namespace
         PostQuitMessage( g.certWaterExitCode );
     }
 
+    // ---------- P5 side-gate: pick fracture + closed local surface (--cert-pick-fracture) ----------
+    // Headless: contact-frame rotation equivalence, material morphology, two-strike gravel.
+    // Does not touch WaterLedger / P5a. P5b remains CLOSED.
+    void CertPickFractureTick()
+    {
+        if ( !g.certPickFracture ) { return; }
+        if ( g.certPickFracturePhase != 0 ) { return; }
+        g.certPickFracturePhase = 1;
+
+        PickFracture::CertResult const R = PickFracture::RunHeadlessCert();
+        g.certPickFractureExitCode = R.exitCode;
+
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char certPath[MAX_PATH];
+        char failPath[MAX_PATH];
+        std::snprintf( certPath, sizeof( certPath ),
+            "%s\\provenance_pick_fracture_cert.txt", g.certOutDir );
+        std::snprintf( failPath, sizeof( failPath ),
+            "%s\\provenance_pick_fracture_fail.txt", g.certOutDir );
+        PickFracture::WriteCertArtifact( R, certPath, failPath );
+        // Mirror into Docs when writable (checkpoint artifact).
+        {
+            char docsPath[MAX_PATH];
+            std::snprintf( docsPath, sizeof( docsPath ),
+                "Docs\\provenance_pick_fracture_cert.txt" );
+            PickFracture::WriteCertArtifact( R, docsPath, nullptr );
+        }
+        g.certPickFractureFailWritten = ( R.exitCode != 0 );
+        g.statusLine = g.certPickFractureExitCode
+            ? "CERT-PICK-FRACTURE done — FAIL"
+            : "CERT-PICK-FRACTURE done — PASS";
+        g.certPickFracturePhase = 99;
+        PostQuitMessage( g.certPickFractureExitCode );
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -18239,6 +18487,7 @@ namespace
         CertResidencyTick();
         CertStressTick();
         CertWaterTick();
+        CertPickFractureTick();
         // P5a: settle only awake water; dormant pond costs an idle skip check only.
         if ( !g.certWater )
         {
@@ -18608,6 +18857,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-water-ledger" ) == 0 )
                 {
                     g.certWater = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-pick-fracture" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-p5-pick" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-pick-fracture-closed" ) == 0 )
+                {
+                    g.certPickFracture = true;
                     continue;
                 }
                 if ( _wcsnicmp( argv[i], L"--geo-fixture=", 14 ) == 0 )

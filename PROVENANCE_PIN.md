@@ -221,6 +221,22 @@ Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34,
 **P5a status:** foundation-ready for later gates (settle/units/solid/determinism green).  
 **P5b remains CLOSED** — do not open terrain–water coupling depth. Also closed: P5c presentation · P5d flow stress.
 
+```
+P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
+SHA: (set on commit)
+```
+
+**Law:** Pick is not sphere/cup/cell deform. Contact frame `(T,B,N)` at hit owns tip/penetration/pry/fracture envelope; material structure (aggregate / compact angular / foliation) determines releasable connected volume; occupancy loses exactly that material; HF/D2 reconstruct the remaining local boundary (canonical mouth). Four distinct radii: contact/query ≠ fracture ≠ D2 recon halo ≠ HF refine. Outside physical changed + min recon halo → pre-strike surface bit-identical.
+
+Contract: `Docs/P5_PICK_FRACTURE.md`.  
+`--cert-pick-fracture` / `--cert-p5-pick` → `%TEMP%\provenance_pick_fracture_cert.txt`  
+Committed artifact: `Docs/provenance_pick_fracture_cert.txt` — **PASS 7/0**.
+
+Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morphology`, `rotation_equivalence` (gravel/granite/mica_schist 0°…90°), `two_strike_gravel`, `outside_recon_halo_identity`, `no_world_up_fracture_law`.
+
+**P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
+**P5b remains CLOSED** — STOP; do not open terrain–water coupling.
+
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**
