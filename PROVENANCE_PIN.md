@@ -191,7 +191,7 @@ Live proof (clean committed bridge, no patch apply): `--cert-p4` PASS 36/0; head
 
 ```
 P4.5 GAMEPLAY-SCALE STRESS FLOOR
-SHA: PENDING
+SHA: ceddd13697c7936852f2398cd0f12be6057daac6
 ```
 
 **Law:** Increasing historical world complexity must not proportionally increase recurring frame cost. Contract: `Docs/P4_5_GAMEPLAY_STRESS.md`.
