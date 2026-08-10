@@ -156,10 +156,17 @@ Adversarial: capture pre-intent → optimistic dig/place prediction → REFUSE /
 
 ```
 P4.2 AUTHORITATIVE BODY IDENTITY FLOOR
-SHA: <filled on commit>
+SHA: 248cbcd2cd1eb8937d8449b3a0e2997eaab7d5cf
 ```
 
 Wire contract: `Docs/P4_BODY_IDENTITY_WIRE.md`. Fablescript issues `body_id` / `aggregate_id` (+ form/fracture seeds, parent, provenance, revision). Clients present the receipt id (e.g. `body 18472`); never invent from local H2H.
+
+```
+P4 FULLY CLOSED
+SHA: 248cbcd2cd1eb8937d8449b3a0e2997eaab7d5cf
+```
+
+P4 authority holes closed: receipt-driven dig/place (no invent), prediction rollback floor (P4.1), authoritative body/aggregate identity on the wire (P4.2). No known exceptions on `--cert-p4`.
 
 ### Standing scalability rule
 

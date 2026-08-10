@@ -368,10 +368,17 @@ SHA: 67790cf7b08acd845644e34b72d8b600a4d7c34d
 
 ```
 P4.2 AUTHORITATIVE BODY IDENTITY FLOOR
-SHA: <filled on commit>
+SHA: 248cbcd2cd1eb8937d8449b3a0e2997eaab7d5cf
 ```
 
 **P4.2:** same receipt → same `body_id`/`aggregate_id`/grams/material/revision/provenance under normal/reverse/delayed reply order; refuse issues no identity. Contract: `Docs/P4_BODY_IDENTITY_WIRE.md`.
+
+```
+P4 FULLY CLOSED
+SHA: 248cbcd2cd1eb8937d8449b3a0e2997eaab7d5cf
+```
+
+Live `--cert-p4` (final gate): `exit_code=0`, all P4/P4.1/P4.2 rows PASS including body/agg identity under order/delay permutations.
 
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-p4
