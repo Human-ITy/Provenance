@@ -31,7 +31,7 @@ Branches:
 - **P3** partial: standable + wall capsule; not occupancy collision.
 - **P3b voxel-form gate — client land:** dig/pick subtract affect sphere from occupancy → D2 matter-face cavity (VisualMaterial interior); heightfield opens where matter is gone; DigScar cups/chips are flash-only. Authoritative grams still from carve digest + column reconcile.
 - **P4 Fablescript authority floor** — see pin block below (`--cert-p4`).
-- **P5 water** deferred.
+- **P5a water ledger / settle floor** — see pin block below (`--cert-water`).
 
 ## Dig / tunnel ruling (locked)
 
@@ -198,7 +198,18 @@ SHA: ceddd13697c7936852f2398cd0f12be6057daac6
 
 `--cert-stress` / `--cert-gameplay-stress` → `%TEMP%\provenance_gameplay_stress_cert.txt`. Seeds 200 historical ERs + 500 sleeping chips + 8 active; walk + unrelated ticks under that history must keep D2/HF/occ/refetch/ER/wakes = 0; burst 50 unrelated → no wake; 1 scoped explosion bounded; 10 simultaneous scoped → dirty ∪ coalesced (one wake).
 
-**Not started here:** P5 water.
+```
+P5a WATER LEDGER / SETTLE FLOOR
+SHA: (pending commit)
+```
+
+**Law:** Water should wake from causality, not from time passing. Conserved occupancy-aware body; settle → dormant; unrelated receipts → zero water work. Contract: `Docs/P5A_WATER_LEDGER.md`.
+
+`--cert-water` / `--cert-p5a` / `--cert-water-ledger` → `%TEMP%\provenance_p5a_water_ledger_cert.txt`.
+
+**Authority note:** Esoterica-local `WaterLedger.h` for this floor. Fablescript `engine/water.py` remains the intended long-term ledger authority; P5a may stay client-local until that wire is consumed here.
+
+**Not started here:** P5b dig/place coupling depth · P5c presentation · P5d flow stress.
 
 ### Standing scalability rule
 

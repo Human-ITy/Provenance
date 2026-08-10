@@ -23,6 +23,7 @@
 #include "RockStructure.h"
 #include "HorizonToHand.h"
 #include "DualContourQef.h"
+#include "WaterLedger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -398,6 +399,13 @@ namespace
         DWORD certStressPhaseMs = 0;
         int certStressExitCode = 0;
         bool certStressFailWritten = false;
+        // --cert-water / --cert-p5a: P5a water ledger / settle floor.
+        bool certWater = false;
+        int certWaterPhase = 0;
+        int certWaterExitCode = 0;
+        bool certWaterFailWritten = false;
+        // Live P5a water ledger (Esoterica-local until Fablescript water authority wires in).
+        WaterLedger::World waterWorld;
         int certStressWait = 0;
         int certStressBurstLeft = 0;
         int certStressPadCx = 0;
@@ -1389,6 +1397,21 @@ namespace
             ExtractJsonInt( line, "min_x", minX ) && ExtractJsonInt( line, "min_y", minY )
          && ExtractJsonInt( line, "max_x", maxX ) && ExtractJsonInt( line, "max_y", maxY )
          && ( maxX >= minX ) && ( maxY >= minY );
+
+        // P5a: water channel wakes only scoped water bodies (never a global water tick).
+        if ( ( affect & TerrainAffect_Water ) != 0 )
+        {
+            if ( haveBounds )
+            {
+                WaterLedger::OnWaterReceipt( g.waterWorld, minX, minY, maxX, maxY );
+            }
+            else
+            {
+                // Unknown water scope: wake nothing globally — wait for bounds (fail-closed quiet).
+                ++g.waterWorld.workUnits;
+            }
+        }
+
         if ( haveBounds )
         {
             for ( int cy = minY; cy <= maxY; ++cy )
@@ -4450,6 +4473,19 @@ namespace
         out.unitsFilled = unitsFilled;
         out.voxelsTouched = voxelsTouched;
         ++g.perfOccupancyMutations;
+        // P5a: place into water displaces/reconfigures — never deletes ledger grams.
+        {
+            int const bx = (int)std::floor( wx );
+            int const by = (int)std::floor( wy );
+            if ( !WaterLedger::GetContainer( g.waterWorld, bx, by ) )
+            {
+                WaterLedger::SetBasin( g.waterWorld, bx, by, wz, WaterLedger::kCellCapacityGrams );
+            }
+            // Map dirt grams → water-capacity units (ledger cell capacity = 100).
+            int64_t const fillU = (std::max)( (int64_t)1,
+                (int64_t)std::lround( (double)acceptedGrams * 100.0 / (double)kDirtVoxelG ) );
+            WaterLedger::OnTerrainPlace( g.waterWorld, bx, by, fillU );
+        }
         return out;
     }
 
@@ -4659,6 +4695,20 @@ namespace
             }
         }
         ++g.perfOccupancyMutations;
+        // P5a minimal hook: dig wakes only water bodies touching the carved neighborhood.
+        {
+            int const bx = (int)std::floor( wx );
+            int const by = (int)std::floor( wy );
+            // Ensure container cells exist for touched coords (open basin from dig).
+            for ( auto const& t : touchedCells )
+            {
+                if ( !WaterLedger::GetContainer( g.waterWorld, t.first, t.second ) )
+                {
+                    WaterLedger::SetBasin( g.waterWorld, t.first, t.second, wz - R, WaterLedger::kCellCapacityGrams );
+                }
+            }
+            WaterLedger::OnTerrainDig( g.waterWorld, bx, by, 1 );
+        }
         return true;
     }
 
@@ -17770,6 +17820,32 @@ namespace
         }
     }
 
+    // ---------- P5a Water ledger / settle floor (--cert-water / --cert-p5a) ----------
+    void CertWaterTick()
+    {
+        if ( !g.certWater ) { return; }
+        if ( g.certWaterPhase != 0 ) { return; }
+        g.certWaterPhase = 1;
+
+        WaterLedger::CertResult const R = WaterLedger::RunP5aCert();
+        g.certWaterExitCode = R.exitCode;
+
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char certPath[MAX_PATH];
+        char failPath[MAX_PATH];
+        std::snprintf( certPath, sizeof( certPath ),
+            "%s\\provenance_p5a_water_ledger_cert.txt", g.certOutDir );
+        std::snprintf( failPath, sizeof( failPath ),
+            "%s\\provenance_p5a_water_ledger_fail.txt", g.certOutDir );
+        WaterLedger::WriteCertArtifact( R, certPath, failPath );
+        g.certWaterFailWritten = ( R.exitCode != 0 );
+        g.statusLine = g.certWaterExitCode
+            ? "CERT-WATER done — FAIL"
+            : "CERT-WATER done — PASS";
+        g.certWaterPhase = 99;
+        PostQuitMessage( g.certWaterExitCode );
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -18161,6 +18237,12 @@ namespace
         CertP4Tick();
         CertResidencyTick();
         CertStressTick();
+        CertWaterTick();
+        // P5a: settle only awake water; dormant pond costs an idle skip check only.
+        if ( !g.certWater )
+        {
+            WaterLedger::TickSettle( g.waterWorld );
+        }
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -18518,6 +18600,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     g.certStress = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-water" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-p5a" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-water-ledger" ) == 0 )
+                {
+                    g.certWater = true;
                     continue;
                 }
                 if ( _wcsnicmp( argv[i], L"--geo-fixture=", 14 ) == 0 )
