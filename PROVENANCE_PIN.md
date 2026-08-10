@@ -189,7 +189,16 @@ Upstream land: `plaintxt-decoded` `client-terrain-residency` @ `5a69afb` — car
 
 Live proof (clean committed bridge, no patch apply): `--cert-p4` PASS 36/0; headless PASS (refuse no id, place aggregate); `--cert-async` PASS 9/0; `--cert-lsi` PASS 16/0. Save/reconnect identity fetch: SKIP (path absent).
 
-**Not started here:** gameplay-scale stress gate, P5 water.
+```
+P4.5 GAMEPLAY-SCALE STRESS FLOOR
+SHA: PENDING
+```
+
+**Law:** Increasing historical world complexity must not proportionally increase recurring frame cost. Contract: `Docs/P4_5_GAMEPLAY_STRESS.md`.
+
+`--cert-stress` / `--cert-gameplay-stress` → `%TEMP%\provenance_gameplay_stress_cert.txt`. Seeds 200 historical ERs + 500 sleeping chips + 8 active; walk + unrelated ticks under that history must keep D2/HF/occ/refetch/ER/wakes = 0; burst 50 unrelated → no wake; 1 scoped explosion bounded; 10 simultaneous scoped → dirty ∪ coalesced (one wake).
+
+**Not started here:** P5 water.
 
 ### Standing scalability rule
 

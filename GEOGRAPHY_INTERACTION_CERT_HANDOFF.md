@@ -405,6 +405,16 @@ FABLESCRIPT_SHA: 5a69afb3bc65690041f7c2fab69182df8db3bbda
 
 Live (clean `_engine_truth_lane3` @ `5a69afb`): `--cert-p4` PASS 36/0; headless PASS (accepted body_id, refuse no id, place aggregate_id); `--cert-async` PASS 9/0; `--cert-lsi` PASS 16/0. Save/reconnect identity fetch: SKIP (not on wire yet).
 
+```
+P4.5 GAMEPLAY-SCALE STRESS FLOOR
+```
+
+**Law:** Historical complexity must not proportionally raise recurring frame cost. Flag: `--cert-stress`. Artifact: `%TEMP%\provenance_gameplay_stress_cert.txt`. Contract: `Docs/P4_5_GAMEPLAY_STRESS.md`.
+
+Live: `exit_code=0`, PASS 19/0 — hist idle D2/HF/occ/refetch/ER/wakes=0 with ER=200 sleep=500 active=8; burst50 wakes=0; explode dirty=4 D2=4; union10 dirty=18 wakes=1.
+
+**STOP before P5 water.**
+
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-residency
 ```

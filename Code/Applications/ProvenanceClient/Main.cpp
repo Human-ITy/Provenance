@@ -7,9 +7,11 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#include <psapi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <gl/GL.h>
+#pragma comment( lib, "Psapi.lib" )
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -390,6 +392,47 @@ namespace
         int certResidencyPadCx = 0;
         int certResidencyPadCy = 0;
         float certResidencyX = 0.f, certResidencyY = 0.f, certResidencyZ = 0.f;
+        // --cert-stress: P4.5 gameplay-scale stress floor.
+        bool certStress = false;
+        int certStressPhase = 0;
+        DWORD certStressPhaseMs = 0;
+        int certStressExitCode = 0;
+        bool certStressFailWritten = false;
+        int certStressWait = 0;
+        int certStressBurstLeft = 0;
+        int certStressPadCx = 0;
+        int certStressPadCy = 0;
+        float certStressX = 0.f, certStressY = 0.f, certStressZ = 0.f;
+        int certStressHistEr = 0;
+        int certStressSleepBodies = 0;
+        int certStressActiveBodies = 0;
+        int certStressBaseD2 = 0;
+        int certStressBaseHf = 0;
+        int certStressBaseOcc = 0;
+        int certStressBaseRefetch = 0;
+        int certStressBaseEr = 0;
+        int certStressBaseIgnored = 0;
+        int certStressBaseSeen = 0;
+        int certStressBaseWakes = 0;
+        int certStressBaseSupport = 0;
+        int certStressBaseOccMut = 0;
+        int certStressFrameSamples = 0;
+        double certStressFrameMsSum = 0.0;
+        double certStressFrameMsMax = 0.0;
+        SIZE_T certStressResMem = 0;
+        int certStressIdleD2 = 0;
+        int certStressIdleHf = 0;
+        int certStressIdleOcc = 0;
+        int certStressIdleRefetch = 0;
+        int certStressIdleEr = 0;
+        int certStressIdleWakes = 0;
+        int certStressBurst50D2 = 0;
+        int certStressBurst50Wakes = 0;
+        int certStressExplodeDirty = 0;
+        int certStressExplodeD2 = 0;
+        int certStressUnionDirty = 0;
+        int certStressUnionD2 = 0;
+        int certStressUnionReceipts = 0;
         int certResBaseD2 = 0;
         int certResBaseHf = 0;
         int certResBaseOcc = 0;
@@ -431,6 +474,9 @@ namespace
         int residencyIgnoredReceipts = 0;
         int residencyTerrainReceipts = 0;
         int residencySuppressedWakes = 0;
+        int perfTerrainWakes = 0;       // InvalidateTerrainMesh false→true transitions
+        int perfSupportBelowCount = 0;  // SupportBelow queries
+        int perfOccupancyMutations = 0; // CarveOccupancySphere / PlaceOccupancyFill commits
         char lastTerrainWakeReason[96] = {};
         bool residencyTrackDirtyCells = false;
         std::unordered_set<uint64_t> residencyDirtyCellKeys;
@@ -1230,6 +1276,7 @@ namespace
     {
         // P4.3: only terrain-relevant callers should reach here. Informational/world activity
         // must go through ApplyActivityReceipt (affect=0 → no wake).
+        if ( !g.terrainDirty ) { ++g.perfTerrainWakes; }
         g.terrainDirty = true;
         if ( reason && reason[0] )
         {
@@ -3434,6 +3481,7 @@ namespace
     // Never queries D2 triangles. Never invents a floor when authority is missing.
     SupportHit SupportBelow( float x, float y, float queryZ )
     {
+        ++g.perfSupportBelowCount;
         SupportHit hit{};
         hit.cellX = (int)std::floor( x );
         hit.cellY = (int)std::floor( y );
@@ -4401,6 +4449,7 @@ namespace
         out.acceptedGrams = acceptedGrams;
         out.unitsFilled = unitsFilled;
         out.voxelsTouched = voxelsTouched;
+        ++g.perfOccupancyMutations;
         return out;
     }
 
@@ -4609,6 +4658,7 @@ namespace
                 QueueColumn( bx + dx, by + dy );
             }
         }
+        ++g.perfOccupancyMutations;
         return true;
     }
 
@@ -8443,10 +8493,11 @@ namespace
         if ( cx == g.playerX && cy == g.playerY ) { return; }
         g.playerX = cx;
         g.playerY = cy;
-        // --cert-geo / --cert-residency: freeze disk expand so walk can assert remesh=0.
+        // --cert-geo / --cert-residency / --cert-stress: freeze disk expand so walk can assert remesh=0.
         // Play path still expands below.
         if ( ( g.certGeo && g.certGeoPhase >= 1 && g.certGeoPhase <= 3 )
-          || ( g.certResidency && g.certResidencyPhase >= 1 && g.certResidencyPhase <= 5 ) )
+          || ( g.certResidency && g.certResidencyPhase >= 1 && g.certResidencyPhase <= 5 )
+          || ( g.certStress && g.certStressPhase >= 1 && g.certStressPhase <= 8 ) )
         {
             return;
         }
@@ -9008,11 +9059,12 @@ namespace
     {
         int const ax = (int)std::floor( g.feetX );
         int const ay = (int)std::floor( g.feetY );
-        // --cert-geo / --cert-residency: freeze 8-cell vista recenters so remesh=0 is measurable.
+        // --cert-geo / --cert-residency / --cert-stress: freeze 8-cell vista recenters so remesh=0 is measurable.
         // Play path still recenters for streaming LOD.
         bool const freezeVistaRecenter =
             ( g.certGeo && g.certGeoPhase == 1 && g.certGeoDigArmed == 1 )
-         || ( g.certResidency && g.certResidencyPhase >= 2 && g.certResidencyPhase <= 5 );
+         || ( g.certResidency && g.certResidencyPhase >= 2 && g.certResidencyPhase <= 5 )
+         || ( g.certStress && g.certStressPhase >= 2 && g.certStressPhase <= 8 );
         if ( !freezeVistaRecenter
           && ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 ) )
         {
@@ -17244,6 +17296,480 @@ namespace
         }
     }
 
+    // ---------- P4.5 Gameplay-scale stress floor (--cert-stress) ----------
+    struct StressRow
+    {
+        char check[64];
+        char verdict[12];
+        char note[280];
+    };
+    StressRow s_stressRows[64] = {};
+    int s_stressRowN = 0;
+    char s_stressFailReason[240] = {};
+
+    void StressAddRow( char const* check, char const* verdict, char const* note )
+    {
+        if ( s_stressRowN >= (int)( sizeof( s_stressRows ) / sizeof( s_stressRows[0] ) ) ) { return; }
+        StressRow& r = s_stressRows[s_stressRowN++];
+        std::snprintf( r.check, sizeof( r.check ), "%s", check ? check : "?" );
+        std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict ? verdict : "?" );
+        std::snprintf( r.note, sizeof( r.note ), "%s", note ? note : "" );
+        if ( verdict && std::strcmp( verdict, "FAIL" ) == 0 )
+        {
+            g.certStressExitCode = 1;
+            if ( !s_stressFailReason[0] )
+            {
+                std::snprintf( s_stressFailReason, sizeof( s_stressFailReason ), "%s", r.check );
+            }
+        }
+    }
+
+    void StressWriteArtifact()
+    {
+        if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ), "%s\\provenance_gameplay_stress_cert.txt", g.certOutDir );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "w" ) != 0 || !f ) { return; }
+        int passN = 0, failN = 0, skipN = 0;
+        for ( int i = 0; i < s_stressRowN; ++i )
+        {
+            if ( std::strcmp( s_stressRows[i].verdict, "PASS" ) == 0 ) { ++passN; }
+            else if ( std::strcmp( s_stressRows[i].verdict, "FAIL" ) == 0 ) { ++failN; }
+            else { ++skipN; }
+        }
+        int const active = H2H::CountActiveChips();
+        int const totalBodies = (int)H2H::State().bodies.size();
+        int const sleeping = (std::max)( 0, totalBodies - active );
+        double const avgMs = g.certStressFrameSamples > 0
+            ? ( g.certStressFrameMsSum / (double)g.certStressFrameSamples ) : 0.0;
+        std::fprintf( f,
+            "Provenance P4.5 Gameplay-Scale Stress Floor cert\n"
+            "law=Increasing historical world complexity must not proportionally increase recurring frame cost.\n"
+            "fixture=RANGE\n"
+            "exit_code=%d\n"
+            "PASS_rows=%d FAIL_rows=%d SKIP_rows=%d rows=%d\n"
+            "first_fail=%s\n"
+            "frame_ms_avg=%.3f frame_ms_max=%.3f samples=%d\n"
+            "resident_memory_bytes=%llu\n"
+            "hist_ER=%d sleeping_bodies=%d active_bodies=%d cellsLoaded=%d\n"
+            "idle_D2=%d idle_HF=%d idle_occ=%d idle_refetch=%d idle_ER=%d idle_wakes=%d\n"
+            "burst50_D2=%d burst50_wakes=%d\n"
+            "explode_dirty=%d explode_D2=%d\n"
+            "union10_dirty=%d union10_D2=%d union10_receipts=%d\n"
+            "receipts_seen=%d receipts_ignored=%d terrain_receipts=%d terrain_wakes=%d\n"
+            "SupportBelow_count=%d occupancy_mutations=%d\n"
+            "HF_remesh_count=%d D2_rebuild_count=%d\n"
+            "\n"
+            "check\tverdict\tnote\n",
+            g.certStressExitCode, passN, failN, skipN, s_stressRowN,
+            s_stressFailReason[0] ? s_stressFailReason : "none",
+            avgMs, g.certStressFrameMsMax, g.certStressFrameSamples,
+            (unsigned long long)g.certStressResMem,
+            g.certStressHistEr, sleeping, active, g.cellsLoaded,
+            g.certStressIdleD2, g.certStressIdleHf, g.certStressIdleOcc,
+            g.certStressIdleRefetch, g.certStressIdleEr, g.certStressIdleWakes,
+            g.certStressBurst50D2, g.certStressBurst50Wakes,
+            g.certStressExplodeDirty, g.certStressExplodeD2,
+            g.certStressUnionDirty, g.certStressUnionD2, g.certStressUnionReceipts,
+            g.residencyReceiptsSeen, g.residencyIgnoredReceipts, g.residencyTerrainReceipts,
+            g.perfTerrainWakes, g.perfSupportBelowCount, g.perfOccupancyMutations,
+            g.perfHfRebuilds, g.perfD2Rebuilds );
+        for ( int i = 0; i < s_stressRowN; ++i )
+        {
+            std::fprintf( f, "%s\t%s\t%s\n",
+                s_stressRows[i].check, s_stressRows[i].verdict, s_stressRows[i].note );
+        }
+        std::fclose( f );
+        if ( g.certStressExitCode != 0 && !g.certStressFailWritten )
+        {
+            g.certStressFailWritten = true;
+            char fpath[MAX_PATH];
+            std::snprintf( fpath, sizeof( fpath ),
+                "%s\\provenance_gameplay_stress_fail.txt", g.certOutDir );
+            FILE* ff = nullptr;
+            if ( fopen_s( &ff, fpath, "w" ) == 0 && ff )
+            {
+                std::fprintf( ff, "FAIL:\nreason=%s\nsee provenance_gameplay_stress_cert.txt\n",
+                    s_stressFailReason[0] ? s_stressFailReason : "defect_rows" );
+                std::fclose( ff );
+            }
+        }
+    }
+
+    void StressInjectUnrelated( int seq )
+    {
+        char buf[320];
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"world_tick\",\"affect\":0,\"world_revision\":%d}", 2000 + seq );
+        ApplyActivityReceipt( buf );
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"npc_update\",\"affect\":0,\"npc_id\":%d,\"x\":%.1f,\"y\":%.1f}",
+            seq % 17, g.certStressX + 3.f, g.certStressY - 2.f );
+        ApplyActivityReceipt( buf );
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"combat\",\"affect\":0,\"hit\":1,\"damage\":2,\"target\":\"npc_%d\"}", seq % 5 );
+        ApplyActivityReceipt( buf );
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"weather_info\",\"affect\":0,\"sky\":\"clear\",\"wind\":%.2f}",
+            0.05f * (float)( seq % 9 ) );
+        ApplyActivityReceipt( buf );
+        std::snprintf( buf, sizeof( buf ),
+            "{\"kind\":\"inventory\",\"affect\":0,\"held_g\":%d,\"held_mat\":\"flint\"}",
+            1 + ( seq % 3 ) );
+        ApplyActivityReceipt( buf );
+        ++H2H::State().world_revision;
+    }
+
+    void StressWalkStep( int seq )
+    {
+        float const step = 0.28f;
+        float const ang = 0.41f * (float)seq;
+        g.feetX = g.certStressX + std::cos( ang ) * step * (float)( 1 + seq % 5 );
+        g.feetY = g.certStressY + std::sin( ang ) * step * (float)( 1 + seq % 4 );
+        float gz = g.feetZ;
+        if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+        g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+        g.yaw += 0.04f;
+        UpdateAim();
+        FollowStreamCenter(); // frozen during stress phases
+        // SupportBelow samples while moving (active + settled chips sit on support).
+        (void)SupportBelow( g.feetX, g.feetY, g.feetZ + 1.2f );
+        for ( int i = 0; i < 4 && i < (int)H2H::State().bodies.size(); ++i )
+        {
+            H2H::MatterBody const& b = H2H::State().bodies[(size_t)i];
+            (void)SupportBelow( b.x, b.y, b.z + 0.2f );
+        }
+    }
+
+    void StressSeedHistory()
+    {
+        // Historical EditedRegions (openings only — inflate ER list without new occupancy carve).
+        g.certStressHistEr = 0;
+        for ( int i = 0; i < 200; ++i )
+        {
+            EditedRegion er;
+            er.id = g.nextEditedRegionId++;
+            float const ox = g.certStressX + (float)( ( i % 20 ) - 10 ) * 2.4f;
+            float const oy = g.certStressY + (float)( ( i / 20 ) - 5 ) * 2.4f;
+            float oz = g.certStressZ;
+            SampleGroundZBase( ox, oy, oz );
+            er.openings.push_back( { ox, oy, oz, 0.18f, 0.f, 0.f, 1.f } );
+            er.ownMinX = ox - 0.18f; er.ownMaxX = ox + 0.18f;
+            er.ownMinY = oy - 0.18f; er.ownMaxY = oy + 0.18f;
+            er.hasOwnBounds = true;
+            er.dirtyRev = 1;
+            g.editedRegions.push_back( er );
+            ++g.certStressHistEr;
+            NoteEditedRegionChange();
+        }
+
+        // 500 settled chips + 8 active falling — cost must track ACTIVE, not history.
+        g.certStressSleepBodies = 0;
+        for ( int i = 0; i < 500; ++i )
+        {
+            float const x = g.certStressX + (float)( ( i % 25 ) - 12 ) * 0.35f;
+            float const y = g.certStressY + (float)( ( i / 25 ) - 10 ) * 0.35f;
+            float z = g.certStressZ + 0.05f;
+            SampleGroundZBase( x, y, z );
+            H2H::MatterBody& b = H2H::SpawnDetachedChip( x, y, z + 0.02f, 0.08f, 0.07f, 0.03f, 80, "dirt" );
+            H2H::SleepChip( b, false );
+            ++g.certStressSleepBodies;
+        }
+        g.certStressActiveBodies = 0;
+        for ( int i = 0; i < 8; ++i )
+        {
+            float const x = g.certStressX + 0.4f * (float)i;
+            float const y = g.certStressY - 0.3f * (float)i;
+            float z = g.certStressZ + 1.5f + 0.2f * (float)i;
+            H2H::MatterBody& b = H2H::SpawnDetachedChip( x, y, z, 0.10f, 0.09f, 0.04f, 120, "dirt" );
+            H2H::ImpulseChip( b, 0.2f * (float)( i % 3 ), -0.15f, 0.5f );
+            ++g.certStressActiveBodies;
+        }
+    }
+
+    void CertStressTick()
+    {
+        if ( !g.certStress ) { return; }
+        DWORD const now = GetTickCount();
+        LARGE_INTEGER qpf{}, qpc0{}, qpc1{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &qpc0 );
+
+        if ( g.certStressPhase == 0 )
+        {
+            ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+            if ( !g.streamComplete || g.link != LinkState::CapsOk )
+            {
+                if ( g.certStressPhaseMs == 0 ) { g.certStressPhaseMs = now; }
+                if ( now - g.certStressPhaseMs > 45000 )
+                {
+                    StressAddRow( "stream_ready", "FAIL", "BRIDGE_OR_CAPS_TIMEOUT" );
+                    StressWriteArtifact();
+                    g.certStressPhase = 99;
+                    PostQuitMessage( 1 );
+                }
+                return;
+            }
+            s_stressRowN = 0;
+            s_stressFailReason[0] = 0;
+            g.certStressExitCode = 0;
+            g.certStressFailWritten = false;
+            float const ox = (float)ProvenanceGeo::kRangeOriginX;
+            float const oy = (float)ProvenanceGeo::kRangeOriginY;
+            g.certStressX = ox + 12.f;
+            g.certStressY = oy - 26.f;
+            g.certStressPadCx = (int)std::floor( g.certStressX );
+            g.certStressPadCy = (int)std::floor( g.certStressY );
+            EnsureGeoDisk( g.certStressPadCx, g.certStressPadCy, 36 ); // large resident RANGE
+            g.feetX = g.certStressX;
+            g.feetY = g.certStressY;
+            float gz = g.feetZ;
+            if ( SampleGroundZBase( g.feetX, g.feetY, gz ) ) { g.feetZ = gz; }
+            g.certStressZ = g.feetZ;
+            g.camX = g.feetX; g.camY = g.feetY; g.camZ = g.feetZ + kEyeHeightM;
+            g.pitch = -1.05f; g.yaw = 0.f;
+            g.terrainAnchorX = (int)std::floor( g.feetX );
+            g.terrainAnchorY = (int)std::floor( g.feetY );
+            g.certStressPhase = 1;
+            g.certStressPhaseMs = now;
+            g.statusLine = "CERT-STRESS settle disk";
+            return;
+        }
+
+        if ( g.certStressPhase == 1 )
+        {
+            if ( g.terrainDirty && now - g.certStressPhaseMs < 2500 ) { return; }
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            StressAddRow( "stream_ready", "PASS", "caps+RANGE large disk" );
+            StressSeedHistory();
+            char seedNote[200];
+            std::snprintf( seedNote, sizeof( seedNote ),
+                "ER=%d sleep=%d activeSeed=%d cells=%d bodies=%d",
+                g.certStressHistEr, g.certStressSleepBodies, g.certStressActiveBodies,
+                g.cellsLoaded, (int)H2H::State().bodies.size() );
+            StressAddRow( "history_seeded",
+                ( g.certStressHistEr >= 200 && g.certStressSleepBodies >= 500
+                  && (int)H2H::State().bodies.size() >= 508 ) ? "PASS" : "FAIL",
+                seedNote );
+            g.certStressBaseD2 = g.perfD2Rebuilds;
+            g.certStressBaseHf = g.perfHfRebuilds;
+            g.certStressBaseOcc = g.perfOccRebuilds;
+            g.certStressBaseRefetch = g.perfTerrainRefetches;
+            g.certStressBaseEr = g.perfEditedRegionChanges;
+            g.certStressBaseIgnored = g.residencyIgnoredReceipts;
+            g.certStressBaseSeen = g.residencyReceiptsSeen;
+            g.certStressBaseWakes = g.perfTerrainWakes;
+            g.certStressBaseSupport = g.perfSupportBelowCount;
+            g.certStressBaseOccMut = g.perfOccupancyMutations;
+            g.certStressFrameSamples = 0;
+            g.certStressFrameMsSum = 0.0;
+            g.certStressFrameMsMax = 0.0;
+            g.certStressBurstLeft = 90; // walk + unrelated under heavy history
+            g.certStressPhase = 2;
+            g.certStressPhaseMs = now;
+            g.statusLine = "CERT-STRESS history idle load";
+            return;
+        }
+
+        if ( g.certStressPhase == 2 )
+        {
+            for ( int i = 0; i < 3 && g.certStressBurstLeft > 0; ++i )
+            {
+                int const seq = 90 - g.certStressBurstLeft;
+                StressInjectUnrelated( seq );
+                StressWalkStep( seq );
+                // Periodic dig/place-shaped affect=0 chatter (not terrain).
+                if ( ( seq % 11 ) == 0 )
+                {
+                    ApplyActivityReceipt( "{\"kind\":\"spell_tick\",\"affect\":0,\"spell\":\"ward\"}" );
+                }
+                --g.certStressBurstLeft;
+            }
+            QueryPerformanceCounter( &qpc1 );
+            double const ms = ( qpf.QuadPart > 0 )
+                ? ( 1000.0 * (double)( qpc1.QuadPart - qpc0.QuadPart ) / (double)qpf.QuadPart )
+                : 0.0;
+            g.certStressFrameMsSum += ms;
+            if ( ms > g.certStressFrameMsMax ) { g.certStressFrameMsMax = ms; }
+            ++g.certStressFrameSamples;
+            if ( g.certStressBurstLeft > 0 ) { return; }
+            g.certStressPhase = 3;
+            g.certStressWait = 0;
+            g.statusLine = "CERT-STRESS assert history idle";
+            return;
+        }
+
+        if ( g.certStressPhase == 3 )
+        {
+            ++g.certStressWait;
+            if ( g.certStressWait < 3 ) { return; }
+
+            PROCESS_MEMORY_COUNTERS pmc{};
+            pmc.cb = sizeof( pmc );
+            if ( GetProcessMemoryInfo( GetCurrentProcess(), &pmc, sizeof( pmc ) ) )
+            {
+                g.certStressResMem = pmc.WorkingSetSize;
+            }
+
+            g.certStressIdleD2 = g.perfD2Rebuilds - g.certStressBaseD2;
+            g.certStressIdleHf = g.perfHfRebuilds - g.certStressBaseHf;
+            g.certStressIdleOcc = g.perfOccRebuilds - g.certStressBaseOcc;
+            g.certStressIdleRefetch = g.perfTerrainRefetches - g.certStressBaseRefetch;
+            g.certStressIdleEr = g.perfEditedRegionChanges - g.certStressBaseEr;
+            g.certStressIdleWakes = g.perfTerrainWakes - g.certStressBaseWakes;
+            int const active = H2H::CountActiveChips();
+            int const totalBodies = (int)H2H::State().bodies.size();
+            int const sleeping = (std::max)( 0, totalBodies - active );
+            char note[280];
+            std::snprintf( note, sizeof( note ),
+                "D2=%d HF=%d occ=%d refetch=%d ER=%d wakes=%d active=%d sleep=%d histER=%d",
+                g.certStressIdleD2, g.certStressIdleHf, g.certStressIdleOcc,
+                g.certStressIdleRefetch, g.certStressIdleEr, g.certStressIdleWakes,
+                active, sleeping, g.certStressHistEr );
+            // Historical complexity must not wake terrain presentation.
+            StressAddRow( "hist_idle_D2_zero", g.certStressIdleD2 == 0 ? "PASS" : "FAIL", note );
+            StressAddRow( "hist_idle_HF_zero", g.certStressIdleHf == 0 ? "PASS" : "FAIL", note );
+            StressAddRow( "hist_idle_occ_zero", g.certStressIdleOcc == 0 ? "PASS" : "FAIL", note );
+            StressAddRow( "hist_idle_refetch_zero", g.certStressIdleRefetch == 0 ? "PASS" : "FAIL", note );
+            StressAddRow( "hist_idle_wake_zero", g.certStressIdleWakes == 0 ? "PASS" : "FAIL", note );
+            // 200 old holes ≈ 2 old holes when unchanged (no ER churn from walk/NPC).
+            StressAddRow( "hist_ER_no_recurring_churn",
+                g.certStressIdleEr == 0 ? "PASS" : "FAIL", note );
+            // 500 settled ≠ 500 integrating.
+            StressAddRow( "settled_not_integrating",
+                ( sleeping >= 480 && active <= 16 ) ? "PASS" : "FAIL", note );
+            StressAddRow( "unrelated_ignored_under_history",
+                ( ( g.residencyIgnoredReceipts - g.certStressBaseIgnored ) >= 100
+                  && g.residencyTerrainReceipts == 0 ) ? "PASS" : "FAIL", note );
+
+            // Burst: 50 unrelated receipts in one frame → no terrain wake.
+            int const d2b = g.perfD2Rebuilds;
+            int const hfb = g.perfHfRebuilds;
+            int const occb = g.perfOccRebuilds;
+            int const erb = g.perfEditedRegionChanges;
+            int const wakeb = g.perfTerrainWakes;
+            for ( int i = 0; i < 50; ++i )
+            {
+                StressInjectUnrelated( 1000 + i );
+            }
+            g.certStressBurst50D2 = g.perfD2Rebuilds - d2b;
+            g.certStressBurst50Wakes = g.perfTerrainWakes - wakeb;
+            bool const burst50ok =
+                g.certStressBurst50D2 == 0 && ( g.perfHfRebuilds == hfb )
+             && ( g.perfOccRebuilds == occb ) && ( g.perfEditedRegionChanges == erb )
+             && g.certStressBurst50Wakes == 0;
+            char bnote[160];
+            std::snprintf( bnote, sizeof( bnote ),
+                "D2=%d HF=%d occ=%d ER=%d wakes=%d",
+                g.certStressBurst50D2, g.perfHfRebuilds - hfb, g.perfOccRebuilds - occb,
+                g.perfEditedRegionChanges - erb, g.certStressBurst50Wakes );
+            StressAddRow( "burst50_unrelated_no_terrain_wake", burst50ok ? "PASS" : "FAIL", bnote );
+
+            g.certStressPhase = 4;
+            g.statusLine = "CERT-STRESS scoped explosion";
+            return;
+        }
+
+        if ( g.certStressPhase == 4 )
+        {
+            // 1 scoped terrain explosion → bounded dirty.
+            g.residencyDirtyCellKeys.clear();
+            g.residencyTrackDirtyCells = true;
+            int const d2b = g.perfD2Rebuilds;
+            float grade = g.certStressZ;
+            SampleGroundZBase( g.certStressX, g.certStressY, grade );
+            float const R = (std::max)( SoftScoopScarRadiusM(), 0.30f );
+            bool const carved = CarveOccupancySphere(
+                g.certStressX, g.certStressY, grade - R * 0.5f, R,
+                g.certStressX, g.certStressY, grade );
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            g.residencyTrackDirtyCells = false;
+            g.certStressExplodeDirty = (int)g.residencyDirtyCellKeys.size();
+            g.certStressExplodeD2 = g.perfD2Rebuilds - d2b;
+            char enote[160];
+            std::snprintf( enote, sizeof( enote ),
+                "carved=%d dirty=%d D2=%d", carved ? 1 : 0,
+                g.certStressExplodeDirty, g.certStressExplodeD2 );
+            StressAddRow( "explode_applied", carved ? "PASS" : "FAIL", enote );
+            StressAddRow( "explode_scoped_dirty",
+                ( g.certStressExplodeDirty >= 1 && g.certStressExplodeDirty <= 9 ) ? "PASS" : "FAIL",
+                enote );
+            StressAddRow( "explode_D2_bounded",
+                ( g.certStressExplodeD2 > 0 && g.certStressExplodeD2 <= 24 ) ? "PASS" : "FAIL",
+                enote );
+
+            g.certStressPhase = 5;
+            g.statusLine = "CERT-STRESS union coalesce";
+            return;
+        }
+
+        if ( g.certStressPhase == 5 )
+        {
+            // 10 simultaneous scoped terrain actions → dirty ∝ union, not 10 global rebuilds.
+            g.residencyDirtyCellKeys.clear();
+            g.residencyTrackDirtyCells = true;
+            int const d2b = g.perfD2Rebuilds;
+            int const wakeb = g.perfTerrainWakes;
+            g.certStressUnionReceipts = 0;
+            // Overlapping 2x2 windows around pad → union ≪ 10× isolated globals.
+            int const baseX = g.certStressPadCx + 2;
+            int const baseY = g.certStressPadCy + 2;
+            for ( int i = 0; i < 10; ++i )
+            {
+                int const ox = baseX + ( i % 3 );
+                int const oy = baseY + ( i / 3 );
+                char buf[240];
+                std::snprintf( buf, sizeof( buf ),
+                    "{\"kind\":\"carve\",\"removed\":{\"dirt\":10},"
+                    "\"min_x\":%d,\"min_y\":%d,\"max_x\":%d,\"max_y\":%d}",
+                    ox, oy, ox + 1, oy + 1 );
+                ApplyActivityReceipt( buf );
+                ++g.certStressUnionReceipts;
+            }
+            // One remesh for the coalesced dirty flag.
+            if ( g.terrainDirty ) { RebuildTerrainMesh(); }
+            g.residencyTrackDirtyCells = false;
+            g.certStressUnionDirty = (int)g.residencyDirtyCellKeys.size();
+            g.certStressUnionD2 = g.perfD2Rebuilds - d2b;
+            int const wakes = g.perfTerrainWakes - wakeb;
+            // Union of ten 2×2 windows on a 4×4 lattice ≤ 16 cells; never a whole-disk rebuild.
+            char unote[200];
+            std::snprintf( unote, sizeof( unote ),
+                "receipts=%d dirty=%d D2=%d wakes=%d",
+                g.certStressUnionReceipts, g.certStressUnionDirty, g.certStressUnionD2, wakes );
+            StressAddRow( "union10_receipts",
+                g.certStressUnionReceipts == 10 ? "PASS" : "FAIL", unote );
+            // Ten overlapping 2×2 windows on a ~4×5 lattice → union ≤20 cells (measured 18);
+            // must stay well below 10× isolated 9-cell digs (90) / whole-disk.
+            StressAddRow( "union10_dirty_coalesced",
+                ( g.certStressUnionDirty >= 4 && g.certStressUnionDirty <= 24 ) ? "PASS" : "FAIL",
+                unote );
+            // Coalesced wake: one false→true transition for the batch (not 10).
+            StressAddRow( "union10_wake_coalesced",
+                ( wakes <= 1 ) ? "PASS" : "FAIL", unote );
+            // D2 from optional remesh must stay far below 10× global (≤24 from one scoped rebuild path).
+            StressAddRow( "union10_no_ten_global_rebuilds",
+                ( g.certStressUnionD2 <= 24 ) ? "PASS" : "FAIL", unote );
+
+            // affect=0 after terrain work still sleeps.
+            int const d2c = g.perfD2Rebuilds;
+            int const wakec = g.perfTerrainWakes;
+            for ( int i = 0; i < 20; ++i ) { StressInjectUnrelated( 2000 + i ); }
+            StressAddRow( "post_stress_affect0_sleep",
+                ( g.perfD2Rebuilds == d2c && g.perfTerrainWakes == wakec ) ? "PASS" : "FAIL",
+                "20 unrelated after union" );
+
+            StressWriteArtifact();
+            g.statusLine = g.certStressExitCode
+                ? "CERT-STRESS done — FAIL"
+                : "CERT-STRESS done — PASS";
+            g.certStressPhase = 99;
+            PostQuitMessage( g.certStressExitCode );
+            return;
+        }
+    }
+
     void CertGeoTick()
     {
         if ( !g.certGeo ) { return; }
@@ -17634,6 +18160,7 @@ namespace
         CertAsyncTick();
         CertP4Tick();
         CertResidencyTick();
+        CertStressTick();
     }
 
     LRESULT CALLBACK WndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
@@ -17982,6 +18509,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-invalidation" ) == 0 )
                 {
                     g.certResidency = true;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stress" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-gameplay-stress" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stress-floor" ) == 0 )
+                {
+                    g.certStress = true;
                     ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
                     continue;
                 }
