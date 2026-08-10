@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply P4.2 matter-identity fields to a local fablescript terrain_mutate.py (no Mygame git commit)."""
+"""DEPRECATED — P4.4 landed identity in upstream plaintxt-decoded (5a69afb).
+
+Kept only as a historical applicator if a stale checkout lacks the wire fields.
+Do not require this patch for --cert-p4; use committed terrain_mutate.py.
+"""
 from __future__ import annotations
 
 from pathlib import Path

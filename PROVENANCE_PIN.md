@@ -177,7 +177,19 @@ SHA: 3a53fdde3fda0f8b720d928b3f4d0f13ee48cfb0
 
 `--cert-residency` / `--cert-terrain-residency` → `%TEMP%\provenance_residency_invalidation_cert.txt`. Idle unrelated burst: D2/HF/occ/refetch/ER = 0. One mutation: scoped D2 dirty + bounded work; remainder cached. Continuity-before-cull: invalidation must not open voids.
 
-**Not started here:** upstream Fablescript body-id land, gameplay-scale stress gate, P5 water.
+```
+P4.4 UPSTREAM BODY ID WIRE
+SHA: PENDING
+FABLESCRIPT_SHA: 5a69afb3bc65690041f7c2fab69182df8db3bbda
+```
+
+**Law:** Same receipt keys as P4.2, issued by committed Fablescript `terrain_mutate.py` (not a local bridge patch). Esoterica consumes `body_id` / `aggregate_id` from production authority.
+
+Upstream land: `plaintxt-decoded` `client-terrain-residency` @ `5a69afb` — carve success → `body_id`; place success → `aggregate_id`; refuse → no identity. Contract: `Docs/P4_BODY_IDENTITY_WIRE.md`.
+
+Live proof (clean committed bridge, no patch apply): `--cert-p4` PASS 36/0; headless PASS (refuse no id, place aggregate); `--cert-async` PASS 9/0; `--cert-lsi` PASS 16/0. Save/reconnect identity fetch: SKIP (path absent).
+
+**Not started here:** gameplay-scale stress gate, P5 water.
 
 ### Standing scalability rule
 

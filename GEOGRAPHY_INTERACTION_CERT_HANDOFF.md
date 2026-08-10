@@ -396,6 +396,15 @@ SHA: 3a53fdde3fda0f8b720d928b3f4d0f13ee48cfb0
 
 Live `--cert-residency`: `exit_code=0`, idle D2/HF/occ/refetch/ER = 0 with 2160 ignored unrelated receipts; one mutation scoped dirty_cells=4, mut_D2=4, mut_ER=1.
 
+```
+P4.4 UPSTREAM BODY ID WIRE
+FABLESCRIPT_SHA: 5a69afb3bc65690041f7c2fab69182df8db3bbda
+```
+
+**Law:** Production Fablescript `terrain_mutate.py` issues `body_id` / `aggregate_id` on accepted carve/place; refuse issues none. Esoterica proves against the committed bridge (no local `p42_patch_*` apply). Contract: `Docs/P4_BODY_IDENTITY_WIRE.md`.
+
+Live (clean `_engine_truth_lane3` @ `5a69afb`): `--cert-p4` PASS 36/0; headless PASS (accepted body_id, refuse no id, place aggregate_id); `--cert-async` PASS 9/0; `--cert-lsi` PASS 16/0. Save/reconnect identity fetch: SKIP (not on wire yet).
+
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-residency
 ```

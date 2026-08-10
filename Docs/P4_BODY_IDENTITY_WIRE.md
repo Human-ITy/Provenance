@@ -1,4 +1,4 @@
-# P4.2 — Authoritative body / aggregate identity (wire contract)
+# P4.2 / P4.4 — Authoritative body / aggregate identity (wire contract)
 
 **Law:** Fablescript issues identity. Clients (Esoterica, Unreal) do **not** invent
 `lastAuthBodyId` / aggregate ids from local H2H prediction. Representation may sleep or
@@ -31,8 +31,17 @@ REFUSE / `nothing_to_dig` / empty place: no new identity. Client rolls back pred
 Fablescript owns a monotonic matter-identity allocator (floor may start at 18472 for
 readability). Clients never allocate authoritative ids.
 
-## Local cert note
+## Upstream land (P4.4)
 
-Live cert against `_engine_truth_lane3` may carry a local bridge patch that emits these
-fields. That patch is **not** committed to Mygame git; this contract is the Esoterica
-source of truth for Unreal + Esoterica parity.
+Landed in production authority:
+
+- Repo: `Human-ITy/plaintxt-decoded` branch `client-terrain-residency`
+- File: `fablescript/engine/terrain_mutate.py` (`_issue_matter_identity` on carve/place success)
+- SHA: `5a69afb3bc65690041f7c2fab69182df8db3bbda`
+
+Live `_engine_truth_lane3` certs prove against that committed path. The historical local
+bridge patch (`Docs/patches/p42_patch_terrain_mutate_body_identity.py`) is **deprecated**
+and must not be required for `--cert-p4` / headless probes.
+
+Save/reconnect matter-id fetch is not on the wire yet (`_next_matter_id` is process-local);
+headless records that as SKIP until a persistence path exists.

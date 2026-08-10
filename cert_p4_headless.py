@@ -130,6 +130,12 @@ def main() -> int:
         "PASS" if accepted and (int(body_id) > 0 or int(agg_id) > 0) else ("SKIP" if not accepted else "FAIL"),
         f"body_id={body_id} aggregate_id={agg_id} provenance={dig.get('provenance')}",
     )
+    # P4.4: accepted dig must carry authoritative body_id from upstream Fablescript (not a local patch).
+    add(
+        "headless_upstream_accepted_body_id",
+        "PASS" if accepted and int(body_id) > 0 else ("SKIP" if not accepted else "FAIL"),
+        f"body_id={body_id} provenance={dig.get('provenance')} rev={dig.get('rev')}",
+    )
 
     air = rpc(
         sock,
@@ -151,12 +157,15 @@ def main() -> int:
     rid += 1
     air_grams, _ = removed_grams(air)
     reason = str(air.get("reason") or "")
+    refuse_body = air.get("body_id")
+    refuse_agg = air.get("aggregate_id")
     if air_grams > 0:
         add(
             "headless_nothing_or_refuse",
             "SKIP",
             f"deep bite still removed grams={air_grams} rev={air.get('rev')}",
         )
+        add("headless_refuse_no_body_id", "SKIP", "bite removed matter")
     else:
         refused = (air.get("ok") is False) or reason in (
             "nothing_to_dig",
@@ -168,6 +177,64 @@ def main() -> int:
             "PASS" if refused else "FAIL",
             f"ok={air.get('ok')} grams={air_grams} reason={reason} msg={air.get('msg')}",
         )
+        # P4.4: refuse must not mint identity.
+        no_id = (refuse_body in (None, 0, "0")) and (refuse_agg in (None, 0, "0"))
+        add(
+            "headless_refuse_no_body_id",
+            "PASS" if refused and no_id else ("FAIL" if refused else "SKIP"),
+            f"body_id={refuse_body} aggregate_id={refuse_agg} reason={reason}",
+        )
+
+    # P4.4: place success → authoritative aggregate_id (requires carry from accepted dig).
+    place = rpc(
+        sock,
+        buf,
+        "place",
+        {
+            "x": px,
+            "y": py,
+            "u": 0.5,
+            "v": 0.5,
+            "radius": 0.16,
+            "px": px,
+            "py": py,
+        },
+        rid,
+    )
+    rid += 1
+    place_ok = bool(place.get("ok")) and int(place.get("placed") or 0) > 0
+    place_agg = int(place.get("aggregate_id") or 0)
+    place_body = int(place.get("body_id") or 0)
+    add(
+        "headless_place_aggregate_id",
+        "PASS" if place_ok and place_agg > 0 and place_body == 0 else ("SKIP" if not place_ok else "FAIL"),
+        f"ok={place.get('ok')} placed={place.get('placed')} aggregate_id={place_agg} "
+        f"body_id={place_body} provenance={place.get('provenance')}",
+    )
+    # Same identity on a second parse of the same receipt fields (order-insensitive keys).
+    if place_ok and place_agg > 0:
+        replay = {
+            "ok": True,
+            "rev": place.get("rev"),
+            "aggregate_id": place_agg,
+            "body_id": 0,
+            "placed": place.get("placed"),
+            "provenance": place.get("provenance"),
+        }
+        add(
+            "headless_place_identity_stable_replay",
+            "PASS" if int(replay["aggregate_id"]) == place_agg else "FAIL",
+            f"aggregate_id={replay['aggregate_id']} provenance={replay.get('provenance')}",
+        )
+    else:
+        add("headless_place_identity_stable_replay", "SKIP", "no place receipt")
+
+    # Save/reconnect matter-id fetch: allocator is in-process only today — document absence.
+    add(
+        "headless_save_reconnect_identity_path",
+        "SKIP",
+        "no persistent matter-id fetch on reconnect yet (_next_matter_id is process-local)",
+    )
 
     # Synthetic nothing_to_dig shape the client must honor (document expected refuse fields).
     add(
