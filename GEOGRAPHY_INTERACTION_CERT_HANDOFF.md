@@ -229,7 +229,7 @@ Then teleport the visual client to that XYZ and inspect.
 | §6 accumulated excavation | **Done** — flat + **moderate_rock** + **steep_face** 20-strike corridors (same ER/lip/cross-cell/0.85 gates; steep uses into-normal carve) |
 | §7 HF/D2 ownership masks | **Done** — action≠dirty≠HF aperture; prior opening triple owner; no uncovered void; D2 re-extract does not mutate HF ownership; far mouth=0 |
 | §8 material correctness | **Done (instrumented gates)** — `MaterialSlumpsOpen` soft/hard; presented cap vs `SampleSurface`; soft-roof omit/sink vs hard CrestMouth; no invented remapper |
-| §9 Placement | **Frozen / deferred** — after P3d (stash: `Build/_d2_floor_stash/`) |
+| §9 Placement | **Done (P3e)** — `PlaceOccupancyFill` occupancy re-fill; see live run below |
 | §10 Support/collision | **Done (P3c)** — SupportBelow occupancy floor; see live run below |
 | §11 chips | **Done (P3d)** — PHYS on SupportBelow + lifecycle; see live run below |
 | §12 / §14 | **Scaffold SKIP** |
@@ -318,7 +318,22 @@ Keep P3d.1 quiescence hysteresis (no flat-nz sleep gate). Add position-ring limi
 
 Live `--cert-geo` after vibrate/cycle halt: `exit_code=0`, `PASS_rows=102 FAIL_rows=0 SKIP_rows=5` (§9 placement still frozen SKIP).
 
-**Order for next agents:** PLACE/RE-FILL only after user asks; then ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not start placement in the same cut as P3d.2.
+### P3e PLACE / RE-FILL
+
+```
+P3e PLACE / RE-FILL
+SHA: f302856aa1599531b5e3a2d4ba66d7f7ab9b231b
+```
+
+**Path:** `PlaceOccupancyFill` — debit-budgeted fill units → occupancy air→solid (bottom-up, supported). Updates EditedRegion/`dirtyRev`, rebuilds D2 from occupancy; `TryPlaceHandful` seats into occupancy (cavity floor via `SupportBelow`, surface mound via headroom). Never D2-tri authority; never mutates virgin HF grade; never mints beyond carried grams.
+
+**Scalability:** Placed matter does not automatically require an expensive permanent object. Dump dirt → occupancy/aggregate → cheap settled representation. Meaningful quartz/block may stay explicit MatterBody. `representation changes; matter does not`.
+
+Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0 SKIP_rows=4` (§9 all PASS; §12/§14 still scaffold SKIP).
+
+§9 probes (RANGE): `place_flat_mound`; `place_slope_supported` + `place_slope_no_float`; `place_cavity_floor_upward` + raised floor; `place_cavity_lip_connect` + `place_lip_no_roof_hole`; `place_no_HF_resurrection`; `remove_place_remove_reconcile`. After-each: held debit == accepted grams; occupancy units correspond; SupportBelow sees matter; D2 rebuilds on cavity edits; HF grade stable / openings kept.
+
+**Order for next agents:** ASYNC+DETERMINISM → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
 
 ---
 

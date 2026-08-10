@@ -102,14 +102,26 @@ P3d.2 CHIP VIBRATE / CYCLE HALT
 SHA: 6afec516291bf908c9f88dfae277fada9196bda6
 ```
 
-Keep P3d.1 hysteresis. Add limit-cycle / orbit detection (position ring + vel sign flips) and tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest. Wake unchanged (speed / support loss / impulse / supportRev). Cert: cavity quiescence + vibrate/orbit + steep-kinetic regressions. **STOP before placement/re-fill.**
+Keep P3d.1 hysteresis. Add limit-cycle / orbit detection (position ring + vel sign flips) and tangential KE damp when supported near rest without slide progress → force SETTLED at SupportBelow rest. Wake unchanged (speed / support loss / impulse / supportRev). Cert: cavity quiescence + vibrate/orbit + steep-kinetic regressions.
+
+```
+P3e PLACE / RE-FILL
+SHA: f302856aa1599531b5e3a2d4ba66d7f7ab9b231b
+```
+
+Reverse matter transfer: attached → remove → carried → place → attached again. `PlaceOccupancyFill` debits carried grams into occupancy (bottom-up, supported), bumps EditedRegion/`dirtyRev`, rebuilds D2 from occupancy; `SupportBelow` sees new matter. Never D2-tri authority; never HF grade resurrection; never mint mass/volume beyond hand debit. Cavity re-fill seats on matter floor upward — not virgin HF skin restore.
+
+**Scalability (place):** Placed matter does not automatically require an expensive permanent object. Dump dirt → occupancy/aggregate → cheap settled representation. Meaningful quartz/block may stay explicit MatterBody. `representation changes; matter does not`.
+
+Cert §9: flat mound, slope supported/no float, cavity floor upward, lip no roof, remove→place→remove reconcile. **STOP before async/determinism.**
 
 ### Standing scalability rule
 
 > **Material vocabulary is cheap; instantiated representation is what costs.**
 > Buried/irrelevant stone, ore, mineral occurrences stay compact identity/structure data. Geometry, collision, physics, expensive optics wake only on exposure, detachment, proximity, or gameplay meaning.
 
-Apply to chips: not every fragment = permanent active rigid body forever.
+Apply to chips: not every fragment = permanent active rigid body forever.  
+Apply to place: dump dirt → occupancy aggregate; not a permanent rigid body per scoop.
 
 ## Material / appearance docs for review (keeper)
 
