@@ -1,0 +1,26 @@
+Provenance P5a Water Ledger / Settle Floor cert
+law=Water should wake from causality, not from time passing.
+authority=Esoterica-local WaterLedger (Fablescript wire deferred)
+units=capacity_units (100 = full cell); see Docs/P5A_WATER_LEDGER.md conversion
+settle=deterministic hydraulic head/level (not greedy fill)
+P5b=CLOSED
+exit_code=0
+PASS_rows=15 FAIL_rows=0 SKIP_rows=0 rows=15
+first_fail=none
+
+check	verdict	note
+pour_exact_mass	PASS	poured=100 total=100 units (not grams)
+no_solid_occupy	PASS	solid_accept=0 rejected=1
+level_equal_floor_share	PASS	split=34/33/33 max-min=1 total=100
+settled_dormant	PASS	dormant_ok
+dormant_zero_unrelated	PASS	dWork=0 dWake=0 skips=50 awake=0
+height_neq_grams	PASS	uA=100 uB=34 sA=0.3400 sB=0.3400 pourB=34 derived
+amount_eq_height_neq	PASS	uB=34 uC=34 sB=0.3400 sC=-0.6600 pourC=34
+dig_wakes_local_body	PASS	woken=1 dWake=1 aAwake=1 bAwake=0 cAwake=0 globalAttempts=0
+place_displaces_conserved	PASS	before=168 after=168 spill=0 solidSrc=1 wetSrc=0 viol=0
+no_water_in_solid_mutation	PASS	occupancy_ok
+presentation_rev_consistent	PASS	ok=1 bad=0 refusals=0 bodyT=3 globalT=3 wRev=10
+final_conserved_dormant	PASS	final=168 expected=168 dWork=0 spill=0 dormantBodies=3
+water_receipt_wakes_scoped	PASS	scoped water channel
+units_volume_mass_contract	PASS	fullCell_m3=1.0000 mass_kg=1000.0 roundtrip=100 density=1000
+settle_order_determinism	PASS	d1=96f06506b2fb6329 d2=96f06506b2fb6329 total1=100 total2=100

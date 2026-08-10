@@ -4473,17 +4473,18 @@ namespace
         out.unitsFilled = unitsFilled;
         out.voxelsTouched = voxelsTouched;
         ++g.perfOccupancyMutations;
-        // P5a: place into water displaces/reconfigures — never deletes ledger grams.
+        // P5a: place into water displaces/reconfigures — never deletes ledger capacity_units.
         {
             int const bx = (int)std::floor( wx );
             int const by = (int)std::floor( wy );
             if ( !WaterLedger::GetContainer( g.waterWorld, bx, by ) )
             {
-                WaterLedger::SetBasin( g.waterWorld, bx, by, wz, WaterLedger::kCellCapacityGrams );
+                WaterLedger::SetBasin( g.waterWorld, bx, by, wz, WaterLedger::kCellCapacityUnits );
             }
-            // Map dirt grams → water-capacity units (ledger cell capacity = 100).
+            // Dirt grams → water capacity_units (see Docs/P5A_WATER_LEDGER.md). Not water mass.
             int64_t const fillU = (std::max)( (int64_t)1,
-                (int64_t)std::lround( (double)acceptedGrams * 100.0 / (double)kDirtVoxelG ) );
+                (int64_t)std::lround( (double)acceptedGrams
+                    * (double)WaterLedger::kCellCapacityUnits / (double)kDirtVoxelG ) );
             WaterLedger::OnTerrainPlace( g.waterWorld, bx, by, fillU );
         }
         return out;
@@ -4704,7 +4705,7 @@ namespace
             {
                 if ( !WaterLedger::GetContainer( g.waterWorld, t.first, t.second ) )
                 {
-                    WaterLedger::SetBasin( g.waterWorld, t.first, t.second, wz - R, WaterLedger::kCellCapacityGrams );
+                    WaterLedger::SetBasin( g.waterWorld, t.first, t.second, wz - R, WaterLedger::kCellCapacityUnits );
                 }
             }
             WaterLedger::OnTerrainDig( g.waterWorld, bx, by, 1 );

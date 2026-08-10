@@ -199,17 +199,27 @@ SHA: ceddd13697c7936852f2398cd0f12be6057daac6
 `--cert-stress` / `--cert-gameplay-stress` → `%TEMP%\provenance_gameplay_stress_cert.txt`. Seeds 200 historical ERs + 500 sleeping chips + 8 active; walk + unrelated ticks under that history must keep D2/HF/occ/refetch/ER/wakes = 0; burst 50 unrelated → no wake; 1 scoped explosion bounded; 10 simultaneous scoped → dirty ∪ coalesced (one wake).
 
 ```
-P5a WATER LEDGER / SETTLE FLOOR
-SHA: 9da353427f5f4f5121a5fb18a81d8a922a305bb1
+P5a WATER LEDGER / SETTLE FLOOR (REPAIR — foundation-ready)
+SHA: (pending commit)
 ```
 
 **Law:** Water should wake from causality, not from time passing. Conserved occupancy-aware body; settle → dormant; unrelated receipts → zero water work. Contract: `Docs/P5A_WATER_LEDGER.md`.
 
-`--cert-water` / `--cert-p5a` / `--cert-water-ledger` → `%TEMP%\provenance_p5a_water_ledger_cert.txt`.
+**P5a REPAIR (closes implementation-floor defects on tip `9da3534` / pin `830c046`):**
+1. Deterministic hydraulic head/level settle (not greedy fill) — equal-floor share `34/33/33`
+2. No water in solid occupancy under mutation — displace to neighbors or `spillOutOfScopeUnits`
+3. Derived equal-level ≠ equal-units (and equal-units ≠ equal-level) from basin geometry — not assigned surfaces
+4. Honest `capacity_units` + volume/mass conversion contract (not fake “grams”)
+
+`--cert-water` / `--cert-p5a` / `--cert-water-ledger` → `%TEMP%\provenance_p5a_water_ledger_cert.txt`  
+Committed artifact: `Docs/provenance_p5a_water_ledger_cert.txt` — **PASS 15/0** (`exit_code=0`).
+
+Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34, uA=100≠uB=34), `amount_eq_height_neq`, `no_water_in_solid_mutation`, `units_volume_mass_contract`, `settle_order_determinism` digest `96f06506b2fb6329`, plus prior causality/dormant rows.
 
 **Authority note:** Esoterica-local `WaterLedger.h` for this floor. Fablescript `engine/water.py` remains the intended long-term ledger authority; P5a may stay client-local until that wire is consumed here.
 
-**Not started here:** P5b dig/place coupling depth · P5c presentation · P5d flow stress.
+**P5a status:** foundation-ready for later gates (settle/units/solid/determinism green).  
+**P5b remains CLOSED** — do not open terrain–water coupling depth. Also closed: P5c presentation · P5d flow stress.
 
 ### Standing scalability rule
 
