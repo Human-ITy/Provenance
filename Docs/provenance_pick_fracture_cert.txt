@@ -1,17 +1,31 @@
 P5 SIDE-GATE - MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
 law=impact->penetration->pry->material fracture->connected release->occupancy->local recon
 contact_frame=(T,B,N) angle-independent; P5a FREEZE; P5b CLOSED
-hard_gate=sky/clear in|around hole => PRESENTATION_COVERAGE_FAIL (no mouth exception)
+hard_gate=sky/clear in|around shallow hole => PRESENTATION_COVERAGE_FAIL; through-cut requires topology proof
 hard_gate=deform beyond fracture+min recon halo => HF_CHANGED_OUTSIDE_RECON_HALO
-pass=9 fail=0 skip=0 exit_code=0
-first_fail=- @ (0.000,0.000,0.000)
+pass=20 fail=3 skip=0 exit_code=1
+first_fail=exact_strike_volume_identity @ (0.000,0.000,0.000)
 
 contact_frame_orthonormal	PASS	flat/slope/vertical/overhang orthonormal	(0.000,0.000,0.000)
-radius_separation	PASS	frac=0.064 contact=0.180 d2=0.200 hf=0.160 mouth=0.067	(0.000,0.000,0.000)
-material_morphology	PASS	gravel(aggregate_recess t=0.056) granite(compact_angular t=0.074) schist(foliation_plate t=0.103 nInto=0.043)	(0.000,0.000,0.000)
+radius_separation	PASS	frac=0.061 contact=0.180 d2=0.200 hf=0.160 mouth=0.066	(0.000,0.000,0.000)
+material_morphology	PASS	gravel(aggregate_recess t=0.053) granite(compact_angular t=0.070) schist(foliation_plate t=0.116 nInto=0.040)	(0.000,0.000,0.000)
 rotation_equivalence	PASS	gravel/granite/mica_schist 0..90 local-equivalent	(0.000,0.000,0.000)
-two_strike_gravel	PASS	rem1=16 rem2=2 solid=5760->5744->5742 ext=0.057/0.050 deeper=1 priorMut=0	(0.000,0.000,-0.024)
-outside_recon_halo_identity	PASS	haloSpan=0.514 maxAllow=0.554 fracSpan=0.114 outsideClean=1	(0.000,0.000,0.000)
+two_strike_gravel	PASS	rem1=16 rem2=5 solid=5760->5744->5739 ext=0.057/0.057 deeper=1 priorMut=0	(0.000,0.000,-0.027)
+outside_recon_halo_identity	PASS	haloSpan=0.513 maxAllow=0.553 fracSpan=0.113 outsideClean=1	(0.000,0.000,0.000)
 no_world_up_fracture_law	PASS	vertical==flat local morph	(0.000,0.000,0.000)
-presentation_coverage_closed	PASS	rem=24 uncoveredMouth=0 mouthR=0.060 floorDepth=0.274 (sky/clear never excused)	(0.000,0.000,0.000)
+presentation_coverage_closed	PASS	rem=20 uncoveredMouth=0 mouthR=0.058 floorDepth=0.268 (sky/clear never excused)	(0.000,0.000,0.000)
 outside_strike_volume_deform	PASS	ok	(0.000,0.000,0.000)
+systematic_strike_matrix	PASS	materials=19 cases=3500 angles=7 impacts=5 pry=4 anisStruct=3 local-equivalent	(0.000,0.000,0.000)
+action_dimensions_causal	PASS	normal(t=0.066 n=0.060) oblique+pry(t=0.078 n=0.056)	(0.000,0.000,0.000)
+half_apple_mesh_generated	PASS	tris=3620 grid=18x18x10 spacing=0.0100	(0.000,0.000,0.000)
+half_apple_surface_accuracy	PASS	maxFieldResidual=0.003618 maxAllowed=0.017500	(0.000,0.000,0.000)
+exact_strike_volume_identity	FAIL	outsideDisplace=0.0023077 changedInside=1	(0.000,0.000,0.000)
+half_apple_watertight_interior	PASS	unexplained=0 perimeter=144 nonManifold=0	(0.000,0.000,0.000)
+shallow_bite_ray_coverage	PASS	covered=137/137 misses=0	(0.000,0.000,0.000)
+mesh_pose_contact_matrix	PASS	materials=19 rayHits=133/133 HF=0..75 D2wall=90 fail=-@0	(0.000,0.000,0.000)
+full_solid_shape_closure_continuity_matrix	FAIL	cases=993 solid=993 air=0 sweeps=5952/5952 edgeU=6 nonMan=0 normals=0 shapeMiss=0 approvedMismatch=0 maxShapeDelta=0.0148 expansion=0.0234 first=sandstone@75 edge u=6 n=0 z=-0.0404:-0.0312 ow	(0.000,0.000,0.000)
+progressive_mesh_recontact	PASS	acquired=1 interiorDepth=0.0556 tris=5812	(0.000,0.000,-0.056)
+adjacent_mesh_merge	PASS	overlapPatches=1 separatePatches=2	(0.000,0.000,0.000)
+consecutive_sparse_subdivision_load	PASS	events=17 patches=1 regions=17 expansion=0.0231 cells=9884 box=15708 fill=0.629 tris=17076 single=1008/1576	(0.000,0.000,0.000)
+progressive_24_no_reconstructed_roof	PASS	strikes=24 hit=1 monotonic=1 depth=1.436 minStep=0.0616 cells=14256 box=14256 tris=23028	(0.000,0.000,0.000)
+body_scale_arched_shelter_load_and_closure	FAIL	strikes=17623 cells=148876 tris=486179 footprint=20 box=154128 fill=0.966 ms=4422 air=3256 blocked=0 first=(0.00,0.00,0.00;0.000) rear=1 outside=1 edge=0.0353	(0.000,0.000,0.000)

@@ -25,6 +25,7 @@
 #include "DualContourQef.h"
 #include "WaterLedger.h"
 #include "PickFracture.h"
+#include "FractureSurface.h"
 
 #include <algorithm>
 #include <cmath>
@@ -246,6 +247,11 @@ namespace
         int dirtyRev = 0;
     };
 
+    struct MouthRefineDisk
+    {
+        float x = 0.f, y = 0.f, r = 0.f, nz = 1.f;
+    };
+
     // P4.1: pre-intent snapshot so REFUSE / nothing_to_dig restores exact local prediction state.
     struct PredCellSnap
     {
@@ -275,6 +281,10 @@ namespace
         std::vector<PredCellSnap> cells;
         std::vector<EditedRegion> editedRegions;
         uint32_t nextEditedRegionId = 1;
+        // Tool-scale pick presentation.  Coarse occupancy remains authority; these
+        // analytic events reconstruct the visible HF-minus-fracture boundary.
+        std::vector<PickFracture::FractureEvent> fractureEvents;
+        std::vector<FractureSurface::Patch> fracturePatches;
         size_t scarsN = 0;
         int heldTotalG = 0;
         std::unordered_map<std::string, int> heldBite;
@@ -408,8 +418,39 @@ namespace
         // --cert-pick-fracture: P5 side-gate material-true pick + closed local surface.
         bool certPickFracture = false;
         int certPickFracturePhase = 0;
+        int certPickFractureWait = 0;
+        float certPickVisualX = 0.f, certPickVisualY = 0.f, certPickVisualZ = 0.f;
         int certPickFractureExitCode = 0;
         bool certPickFractureFailWritten = false;
+        bool certPickFractureReloadOnly = false;
+        bool certShelterCleanBenchmark = false;
+        // --cert-single-pick-benchmark: pristine Range A/B around exactly one live pick wound.
+        bool certSinglePickBenchmark = false;
+        bool certPickMatrixOnly = false;
+        int singlePickPhase = 0;
+        int singlePickFrame = 0;
+        int singlePickStableFrames = 0;
+        long long singlePickLastQpc = 0;
+        std::vector<double> singlePickFrameMs;
+        double singlePickBaseMean = 0.0, singlePickBaseMedian = 0.0;
+        double singlePickBaseP95 = 0.0, singlePickBaseP99 = 0.0, singlePickBaseWorst = 0.0;
+        int singlePickBaseHf = 0, singlePickBaseD2 = 0, singlePickBaseOcc = 0;
+        int singlePickBaseWakes = 0, singlePickBaseMutations = 0;
+        int singlePickMeasureHf = 0, singlePickMeasureD2 = 0, singlePickMeasureOcc = 0;
+        int singlePickMeasureWakes = 0, singlePickMeasureMutations = 0;
+        int singlePickActionHf = 0, singlePickActionD2 = 0, singlePickActionOcc = 0;
+        int singlePickActionWakes = 0, singlePickActionMutations = 0;
+        float singlePickX = 0.f, singlePickY = 0.f, singlePickZ = 0.f;
+        float singlePickNx = 0.f, singlePickNy = 0.f, singlePickNz = 1.f;
+        float singlePickCamX = 0.f, singlePickCamY = 0.f, singlePickCamZ = 0.f;
+        float singlePickYaw = 0.f, singlePickPitch = 0.f;
+        long long singlePickStrikeQpc = 0;
+        double singlePickCommitMs = 0.0, singlePickFirstVisibleMs = 0.0;
+        int singlePickConsecutiveTarget = 8;
+        std::vector<double> singlePickConsecutiveCommitMs;
+        std::vector<double> singlePickConsecutiveVisibleMs;
+        std::vector<int> singlePickConsecutiveCells;
+        std::vector<int> singlePickConsecutiveTris;
         // Live P5a water ledger (Esoterica-local until Fablescript water authority wires in).
         WaterLedger::World waterWorld;
         int certStressWait = 0;
@@ -529,6 +570,42 @@ namespace
         std::unordered_set<uint64_t> fetchedBlocks;
         std::vector<EditedRegion> editedRegions;
         uint32_t nextEditedRegionId = 1;
+        std::vector<PickFracture::FractureEvent> fractureEvents;
+        std::vector<FractureSurface::Patch> fracturePatches;
+        bool shelterStampLoadAttempted = false;
+        bool shelterStampLoaded = false;
+        int shelterPhotoPending = 0;
+        float shelterPhotoCamX = 0.f;
+        float shelterPhotoCamY = 0.f;
+        float shelterPhotoCamZ = 0.f;
+        float shelterPhotoYaw = 0.f;
+        float shelterPhotoPitch = 0.f;
+        long long shelterPerfLastQpc = 0;
+        double shelterPerfMsSum = 0.0;
+        double shelterPerfMsMax = 0.0;
+        int shelterPerfSamples = 0;
+        bool shelterPerfBaseline = false;
+        double shelterPerfResidentAvg = 0.0;
+        double shelterPerfResidentMax = 0.0;
+        double shelterPerfResidentMedian = 0.0;
+        double shelterPerfResidentP95 = 0.0;
+        double shelterPerfResidentP99 = 0.0;
+        int shelterPerfResidentHf = 0;
+        int shelterPerfResidentD2 = 0;
+        int shelterPerfResidentOcc = 0;
+        int shelterPerfResidentWakes = 0;
+        int shelterPerfResidentMutations = 0;
+        bool shelterPerfCleanOnly = false;
+        std::vector<double> shelterPerfFrameMs;
+        int shelterPerfStartHf = 0;
+        int shelterPerfStartD2 = 0;
+        int shelterPerfStartOcc = 0;
+        int shelterPerfStartWakes = 0;
+        int shelterPerfStartMutations = 0;
+        // Rebuilt once per HF compile; avoids scanning every historical opening for
+        // every vista quad (work scales with local mouths, not world quads × history).
+        std::unordered_map<uint64_t, std::vector<MouthRefineDisk>> mouthRefineBuckets;
+        bool mouthRefineIndexReady = false;
         int cellsLoaded = 0;
         int blocksLoaded = 0;
         int blocksWanted = 0;
@@ -539,6 +616,8 @@ namespace
         int aimCx = 0, aimCy = 0;
         float aimU = 0.5f, aimV = 0.5f, aimDepth = kHandfulRadiusM;
         float aimX = 0.f, aimY = 0.f, aimZ = 0.f;
+        float aimNx = 0.f, aimNy = 0.f, aimNz = 1.f;
+        bool aimFromFractureSurface = false;
         // Crosshair identity — geography strike + biome; wire cap may differ (cover vs rock).
         std::string aimStrikeCap = "-";
         std::string aimWireCap = "-";
@@ -672,6 +751,7 @@ namespace
 
         // Cached terrain mesh — rebuild on dig/stream/move, never resample whole vista each frame
         GLuint terrainList = 0;
+        GLuint fractureSurfaceList = 0;
         bool terrainDirty = true;
         int terrainAnchorX = INT_MIN;
         int terrainAnchorY = INT_MIN;
@@ -895,6 +975,9 @@ namespace
         float openX, float openY, float openZ );
     // P5 side-gate: material-true contact-frame fracture → occupancy → local closed recon.
     bool CarveOccupancyFracture( PickFracture::FractureEvent const& ev );
+    void RebuildFractureSurfacePatches();
+    void DrawFracturePatchFootprints();
+    void DrawFractureSurfacePatches();
     // P3e: place / re-fill — reverse matter transfer into occupancy (not DigScar mound).
     struct PlaceFillResult
     {
@@ -920,7 +1003,6 @@ namespace
     bool CavityCoversXy( float x, float y, float tol = 0.10f ); // published D2 owns XY
     bool NearOpeningMouthAt( float x, float y ); // bite mouth disk — not whole occupancy cell
     bool CrestMouthStencilAt( float x, float y );
-    void DrawOpeningMouthPlugs(); // close clear/sky peeks when D2 XY cover missing
     void DrawCarveActionFootprints(); // occupancy crest + steep wall openings
     EditedRegion* FindEditedRegion( uint32_t id );
     void AddOpeningMonotonic( EditedRegion& er, float x, float y, float z, float r,
@@ -1119,7 +1201,12 @@ namespace
 
     void CaptureFaceNormalAt( float x, float y, float& nx, float& ny, float& nz )
     {
-        SampleAimNormal( x, y, nx, ny, nz );
+        float const adx=x-g.aimX,ady=y-g.aimY;
+        if(g.aimFromFractureSurface&&adx*adx+ady*ady<0.0025f*0.0025f)
+        {
+            nx=g.aimNx;ny=g.aimNy;nz=g.aimNz;
+        }
+        else { SampleAimNormal( x, y, nx, ny, nz ); }
         float const len = std::sqrt( nx * nx + ny * ny + nz * nz );
         if ( len > 1e-5f ) { nx /= len; ny /= len; nz /= len; }
         else { nx = 0.f; ny = 0.f; nz = 1.f; }
@@ -1296,6 +1383,7 @@ namespace
         // must go through ApplyActivityReceipt (affect=0 → no wake).
         if ( !g.terrainDirty ) { ++g.perfTerrainWakes; }
         g.terrainDirty = true;
+        g.mouthRefineIndexReady = false;
         if ( reason && reason[0] )
         {
             std::snprintf( g.lastTerrainWakeReason, sizeof( g.lastTerrainWakeReason ), "%s", reason );
@@ -2951,6 +3039,7 @@ namespace
         }
         cp.editedRegions = g.editedRegions;
         cp.nextEditedRegionId = g.nextEditedRegionId;
+        cp.fractureEvents = g.fractureEvents;
         cp.scarsN = g.scars.size();
         cp.heldTotalG = g.heldTotalG;
         cp.heldBite = g.heldBite;
@@ -2968,6 +3057,8 @@ namespace
 
         g.editedRegions = cp.editedRegions;
         g.nextEditedRegionId = cp.nextEditedRegionId;
+        g.fractureEvents = cp.fractureEvents;
+        RebuildFractureSurfacePatches();
 
         for ( PredCellSnap const& snap : cp.cells )
         {
@@ -4790,7 +4881,31 @@ namespace
                 }
             }
         }
-        if ( !any ) { return false; }
+        if ( !any )
+        {
+            // A centimeter-scale event can legitimately miss every 12.5 cm voxel
+            // center. The analytic boundary and authority receipt still exist; do not
+            // inflate the physical strike until a coarse center happens to disappear.
+            int const cx=(int)std::floor(ev.frame.origin.x);
+            int const cy=(int)std::floor(ev.frame.origin.y);
+            EnsureOccupancyLattice(cx,cy);
+            if(CellSample* cell=GetCellMutable(cx,cy))
+            {
+                cell->edited=true;cell->carved=true;
+                cell->carveWx=ev.frame.origin.x;cell->carveWy=ev.frame.origin.y;
+                cell->carveWz=ev.frame.origin.z;cell->carveRM=fracR;
+                cell->hasCarveFocus=true;
+                touchedCells.push_back({cx,cy});any=true;
+            }
+        }
+        if(!any)return false;
+
+        // The 12.5 cm occupancy lattice records matter loss, but cannot describe a
+        // 4-10 cm pick boundary.  Preserve the analytic event and rebuild a tool-scale
+        // local surface for presentation.  Overlapping strikes are reconstructed as
+        // one boolean union so a later hit cannot remount the earlier surface.
+        g.fractureEvents.push_back( ev );
+        RebuildFractureSurfacePatches();
 
         float const ox = ev.frame.origin.x;
         float const oy = ev.frame.origin.y;
@@ -4816,15 +4931,20 @@ namespace
             openNx, openNy, openNz );
         EditedRegion* er = FindEditedRegion( rid );
 
-        // D2 rebuild: touched cells + neighbors that intersect recon halo only.
+        // Coarse D2 is deliberately not published for a pick fracture.  Its lattice is
+        // larger than the physical event and previously produced block deletion, broad
+        // folds, and missing coverage.  The fine analytic patch owns the visible local
+        // boundary; occupancy remains available for authority/support bookkeeping.
         float haloMinX, haloMinY, haloMaxX, haloMaxY;
         PickFracture::ReconHaloAabb( ev, haloMinX, haloMinY, haloMaxX, haloMaxY );
         for ( auto const& xy : touchedCells )
         {
-            RebuildCavityMesh( xy.first, xy.second );
             CellSample* cell = GetCellMutable( xy.first, xy.second );
             if ( !cell ) { continue; }
-            if ( cell->hasCavity && er && er->hasOwnBounds )
+            DestroyCavityList( *cell );
+            cell->cavityTris.clear();
+            cell->hasCavity = false;
+            if ( er && er->hasOwnBounds )
             {
                 cell->patchMinX = er->ownMinX;
                 cell->patchMaxX = er->ownMaxX;
@@ -4854,9 +4974,9 @@ namespace
                             if ( u.first == nx && u.second == ny ) { already = true; break; }
                         }
                         if ( already ) { continue; }
-                        CellSample* cell = GetCellMutable( nx, ny );
-                        if ( !cell || !cell->carved ) { continue; }
-                        RebuildCavityMesh( nx, ny );
+                        // Fine patch rebuild above already includes connected overlapping
+                        // fracture events; neighboring coarse D2 publication is unnecessary.
+                        (void)nx; (void)ny;
                     }
                 }
             }
@@ -4905,6 +5025,32 @@ namespace
             WaterLedger::OnTerrainDig( g.waterWorld, bx, by, 1 );
         }
         return true;
+    }
+
+    void RebuildFractureSurfacePatches()
+    {
+        if(g.fractureSurfaceList)
+        {
+            glDeleteLists(g.fractureSurfaceList,1);
+            g.fractureSurfaceList=0;
+        }
+        auto ground = []( float x, float y ) -> float
+        {
+            float z = 0.f;
+            SampleGroundZBase( x, y, z );
+            return z;
+        };
+        g.fracturePatches.clear();
+        if ( !g.fractureEvents.empty() )
+        {
+            // One global subtraction field prevents a later/deeper component from
+            // reconstructing virgin matter over cavities removed by earlier strikes.
+            // BuildPatch is sparse over per-event regions, so global truth no longer
+            // implies meshing the aggregate bounding rectangle.
+            g.fracturePatches.push_back( FractureSurface::BuildPatch(
+                g.fractureEvents, ground,
+                g.fractureEvents.size() >= 1024 ? 0.025f : 0.015625f ) );
+        }
     }
 
     bool SurfaceOpenedByOccupancy( float x, float y )
@@ -5338,6 +5484,80 @@ namespace
     {
         DrawOccupancySurfaceBreaks();
         DrawEditedRegionOpenings();
+        DrawFracturePatchFootprints();
+    }
+
+    void DrawFracturePatchFootprints()
+    {
+        if(g.shelterPerfBaseline)return;
+        // Depth-tested atomic HF replacement mask over the sparse union of local
+        // strike regions.  Never punch the untouched interior of a connected group's
+        // aggregate bounding box.
+        // The mask is an ownership handoff, not a visible one-sided surface.  A
+        // camera standing in legitimately excavated air sees the underside of the
+        // height field; culling that winding prevents every replacement triangle
+        // from reaching the stencil and leaves only blue sky.  Make the handoff
+        // two-sided, then restore the caller's cull state.
+        GLboolean const cullWasEnabled = glIsEnabled( GL_CULL_FACE );
+        glDisable( GL_CULL_FACE );
+        for ( FractureSurface::Patch const& patch : g.fracturePatches )
+        {
+            if ( patch.tris.empty() ) { continue; }
+            float const step = (std::max)( 0.03125f, patch.spacing * 4.f );
+            std::vector<FractureSurface::Region> const& footprints =
+                patch.footprintRegions.empty() ? patch.regions : patch.footprintRegions;
+            for ( FractureSurface::Region const& region : footprints )
+            {
+            int const nx = (std::max)( 1, (int)std::ceil( ( region.maxX - region.minX ) / step ) );
+            int const ny = (std::max)( 1, (int)std::ceil( ( region.maxY - region.minY ) / step ) );
+            glBegin( GL_TRIANGLES );
+            for ( int j = 0; j < ny; ++j )
+            for ( int i = 0; i < nx; ++i )
+            {
+                float const x0 = region.minX + ( region.maxX - region.minX ) * (float)i / (float)nx;
+                float const x1 = region.minX + ( region.maxX - region.minX ) * (float)( i + 1 ) / (float)nx;
+                float const y0 = region.minY + ( region.maxY - region.minY ) * (float)j / (float)ny;
+                float const y1 = region.minY + ( region.maxY - region.minY ) * (float)( j + 1 ) / (float)ny;
+                float z00=0.f,z10=0.f,z01=0.f,z11=0.f;
+                SampleGroundZBase( x0,y0,z00 ); SampleGroundZBase( x1,y0,z10 );
+                SampleGroundZBase( x0,y1,z01 ); SampleGroundZBase( x1,y1,z11 );
+                glVertex3f( x0,y0,z00 ); glVertex3f( x1,y0,z10 ); glVertex3f( x0,y1,z01 );
+                glVertex3f( x1,y0,z10 ); glVertex3f( x1,y1,z11 ); glVertex3f( x0,y1,z01 );
+            }
+            glEnd();
+            }
+        }
+        if ( cullWasEnabled ) { glEnable( GL_CULL_FACE ); }
+    }
+
+    void DrawFractureSurfacePatches()
+    {
+        if(g.shelterPerfBaseline)return;
+        glDisable( GL_CULL_FACE );
+        if(!g.fractureSurfaceList&&!g.fracturePatches.empty())
+        {
+            g.fractureSurfaceList=AllocDisplayListOutsideFonts();
+            if(g.fractureSurfaceList)glNewList(g.fractureSurfaceList,GL_COMPILE);
+            glBegin( GL_TRIANGLES );
+            for ( FractureSurface::Patch const& patch : g.fracturePatches )
+            {
+                for ( FractureSurface::Tri const& t : patch.tris )
+                {
+                    float gz = 0.f;
+                    float const mx = ( t.a.x + t.b.x + t.c.x ) / 3.f;
+                    float const my = ( t.a.y + t.b.y + t.c.y ) / 3.f;
+                    float const mz = ( t.a.z + t.b.z + t.c.z ) / 3.f;
+                    SampleGroundZBase( mx, my, gz );
+                    float const cavity = ( mz < gz - patch.spacing * 0.35f ) ? 1.f : 0.f;
+                    EmitPhase3Tri( t.a.x,t.a.y,t.a.z, t.b.x,t.b.y,t.b.z,
+                        t.c.x,t.c.y,t.c.z, cavity );
+                }
+            }
+            glEnd();
+            if(g.fractureSurfaceList)glEndList();
+        }
+        if(g.fractureSurfaceList)glCallList(g.fractureSurfaceList);
+        glEnable( GL_CULL_FACE );
     }
 
     // ---- World sun + lit-material path (gallery, held, terrain share one frame) ----
@@ -6912,6 +7132,8 @@ namespace
         g.scars.clear();
         ++g.scarGen;
         g.editedRegions.clear();
+        g.fractureEvents.clear();
+        g.fracturePatches.clear();
         g.nextEditedRegionId = 1;
         g.cavityTrisTotal = 0;
         g.cavityEdgesEmitted = 0;
@@ -7976,6 +8198,31 @@ namespace
         return true;
     }
 
+    bool RayHitFractureSurface( float ox,float oy,float oz,float dx,float dy,float dz,
+        float maxT,float& outT,float& outX,float& outY,float& outZ,
+        float& outNx,float& outNy,float& outNz )
+    {
+        bool hit=false;float best=maxT;
+        for(FractureSurface::Patch const& patch:g.fracturePatches)
+        {
+            for(FractureSurface::Tri const&t:patch.tris)
+            {
+                float tt=0.f;
+                if(!RayHitTriangle(ox,oy,oz,dx,dy,dz,
+                    t.a.x,t.a.y,t.a.z,t.b.x,t.b.y,t.b.z,t.c.x,t.c.y,t.c.z,tt)||tt>=best)continue;
+                float const e1x=t.b.x-t.a.x,e1y=t.b.y-t.a.y,e1z=t.b.z-t.a.z;
+                float const e2x=t.c.x-t.a.x,e2y=t.c.y-t.a.y,e2z=t.c.z-t.a.z;
+                float nx=e1y*e2z-e1z*e2y,ny=e1z*e2x-e1x*e2z,nz=e1x*e2y-e1y*e2x;
+                float const nl=std::sqrt(nx*nx+ny*ny+nz*nz);if(nl<1e-8f)continue;
+                nx/=nl;ny/=nl;nz/=nl;
+                best=tt;hit=true;outNx=nx;outNy=ny;outNz=nz;
+            }
+        }
+        if(!hit)return false;
+        outT=best;outX=ox+dx*best;outY=oy+dy*best;outZ=oz+dz*best;
+        return true;
+    }
+
     bool RayHitDrawnSkin( float ox, float oy, float oz,
                           float fx, float fy, float fz,
                           float maxT,
@@ -8048,6 +8295,8 @@ namespace
         g.aimWireCap = "-";
         g.aimBiome = "-";
         g.aimFormId = "-";
+        g.aimFromFractureSurface = false;
+        g.aimNx=0.f;g.aimNy=0.f;g.aimNz=1.f;
         g.aimStrikeR = 128; g.aimStrikeG = 128; g.aimStrikeB = 128;
         float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
         float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
@@ -8058,9 +8307,16 @@ namespace
         float hitT = -1.f;
         float hitX = 0.f, hitY = 0.f, hitZ = 0.f;
 
+        // The rendered replacement surface is authoritative for subsequent contact.
+        // Testing it first prevents a later strike from remounting the retired virgin HF.
+        float fracNx=0.f,fracNy=0.f,fracNz=1.f;
+        bool const hitFracture=RayHitFractureSurface(ox,oy,oz,fx,fy,fz,maxT,
+            hitT,hitX,hitY,hitZ,fracNx,fracNy,fracNz);
+
         // Prefer occupancy aim only on cells we already carved (committed).
         // Aiming alone must NOT seed lattices, expand volume, or rebuild cavity/D2.
         bool hitOcc = false;
+        if(!hitFracture)
         {
             // Probe aim cell without prefetching / EnsureOccupancyLattice.
             float tProbe = 1.2f;
@@ -8072,7 +8328,7 @@ namespace
                 hitOcc = RayHitOccupancy( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ );
             }
         }
-        if ( !hitOcc )
+        if ( !hitOcc && !hitFracture )
         {
             hitT = -1.f;
             if ( !RayHitDrawnSkin( ox, oy, oz, fx, fy, fz, maxT, hitT, hitX, hitY, hitZ ) )
@@ -8136,7 +8392,7 @@ namespace
         // Only when firmly INSIDE a dig, slide deeper along the look ray.
         // Rim overlap (partial DigDep) must stay on solid so remaining dirt can still be carved.
         // Occupancy hits already sit on the matter face — skip DigDep slide when fill owns the cell.
-        if ( !hitOcc )
+        if ( !hitOcc && !hitFracture )
         {
             float const R = kHandfulRadiusM;
             if ( DigDepAt( hitX, hitY ) > R * 0.70f )
@@ -8165,6 +8421,15 @@ namespace
         g.aimX = hitX;
         g.aimY = hitY;
         g.aimZ = hitZ;
+        if(hitFracture)
+        {
+            g.aimFromFractureSurface=true;
+            g.aimNx=fracNx;g.aimNy=fracNy;g.aimNz=fracNz;
+        }
+        else
+        {
+            SampleAimNormal(hitX,hitY,g.aimNx,g.aimNy,g.aimNz);
+        }
         g.aimCx = (int)std::floor( hitX );
         g.aimCy = (int)std::floor( hitY );
         g.aimU = hitX - (float)g.aimCx;
@@ -8187,6 +8452,23 @@ namespace
             VisualMat::CapColor( g.aimStrikeCap.c_str(), g.aimStrikeR, g.aimStrikeG, g.aimStrikeB );
         }
         // HF contact refine only. Occupancy seed + cavity rebuild happen on dig/pick commit.
+    }
+
+    PickFracture::FractureEvent BuildProductionPickEvent(
+        DigAffectSpec const& affect,H2H::MaterialFormContract const& form,
+        float fnx,float fny,float fnz,float fx,float fy,float fz,uint64_t seed )
+    {
+        PickFracture::Vec3 const hit{g.aimX,g.aimY,g.aimZ};
+        PickFracture::Vec3 const surfN{fnx,fny,fnz};
+        PickFracture::Vec3 const pry{fx,fy,fz};
+        RockStruct::Foliation const fol=RockStruct::FoliationAt((double)g.aimX,(double)g.aimY);
+        bool const useFol=form.fabric==H2H::FabricKind::FoliatedAnisotropic
+            ||form.fabric==H2H::FabricKind::BeddedFissile||CapUsesFoliation(form.material_id);
+        // This is the single source of truth for the event-owned pick shape. Tests call
+        // this same constructor, so a generic scoop can never silently replace the
+        // compact-angular / bedding / foliation morphology again.
+        return PickFracture::BuildEventDetailed(hit,surfN,PickFracture::V3(fx,fy,fz),pry,
+            affect.depthM,0.f,0.020f,form.material_id,seed,useFol?&fol:nullptr);
     }
 
     bool TryPickFoliatedStrike()
@@ -8236,19 +8518,12 @@ namespace
         // Contact-frame N from face (into-carve), pry T from look projected on tangent — never world-up law.
         float fnx = 0.f, fny = 0.f, fnz = 1.f;
         ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, fx, fy, fz, fnx, fny, fnz );
-        PickFracture::Vec3 const hit{ g.aimX, g.aimY, g.aimZ };
-        PickFracture::Vec3 const surfN{ fnx, fny, fnz };
-        PickFracture::Vec3 const pry{ fx, fy, fz };
         uint64_t const fracSeed = (uint64_t)( (int)std::floor( g.aimX * 100.f ) )
             ^ ( (uint64_t)(int)std::floor( g.aimY * 100.f ) << 16 )
             ^ ( (uint64_t)g.perfOccupancyMutations << 32 )
             ^ 0x000051CFull;
-        RockStruct::Foliation const fol = RockStruct::FoliationAt( (double)g.aimX, (double)g.aimY );
-        bool const useFol = ( form.fabric == H2H::FabricKind::FoliatedAnisotropic
-            || form.fabric == H2H::FabricKind::BeddedFissile
-            || CapUsesFoliation( form.material_id ) );
-        PickFracture::FractureEvent const fev = PickFracture::BuildEvent(
-            hit, surfN, pry, form.material_id, fracSeed, useFol ? &fol : nullptr );
+        PickFracture::FractureEvent const fev=BuildProductionPickEvent(
+            affect,form,fnx,fny,fnz,fx,fy,fz,fracSeed);
         if ( !fev.ok )
         {
             char d[200];
@@ -8448,6 +8723,35 @@ namespace
         return true;
     }
 
+    PickFracture::FractureEvent BuildAnalyticDigEvent( DigAffectSpec const& affect,
+        H2H::MaterialFormContract const& form,float nx,float ny,float nz,
+        float lookX,float lookY,float lookZ,uint64_t seed )
+    {
+        PickFracture::Vec3 const hit=PickFracture::V3(g.aimX,g.aimY,g.aimZ);
+        PickFracture::Vec3 const N=PickFracture::V3(nx,ny,nz);
+        PickFracture::Vec3 const look=PickFracture::V3(lookX,lookY,lookZ);
+        PickFracture::FractureEvent ev=PickFracture::BuildEventDetailed(
+            hit,N,look,look,affect.depthM,0.f,
+            (std::min)(0.020f,affect.radiusM*0.35f),form.material_id,seed,nullptr);
+        // Live soft excavation is a tool-scale half-apple in the real contact frame.
+        // Never inflate it to a voxel center or publish a coarse D2 approximation.
+        ev.env.tHalf=affect.radiusM;
+        ev.env.bHalf=affect.radiusM;
+        ev.env.nInto=affect.depthM;
+        ev.env.nAir=0.001f;
+        ev.env.tipRM=0.f;
+        ev.env.foliationBias=0.f;
+        ev.env.angularSharp=form.fabric==H2H::FabricKind::Granular?0.18f:0.05f;
+        ev.fractureExtentRM=(std::max)(ev.env.tHalf,(std::max)(ev.env.bHalf,ev.env.nInto));
+        ev.mouthOpenRM=affect.radiusM;
+        ev.volumeM3=PickFracture::EnvelopeVolumeM3(ev.env);
+        ev.releasedGrams=H2H::VolumeToGramsFloor(ev.volumeM3,form.density_kg_m3);
+        ev.releasesRigidBody=false;
+        ev.ok=ev.frame.valid&&ev.fractureExtentRM<=PickFracture::kMaxFractureExtentM+1e-4f;
+        if(!ev.ok)std::snprintf(ev.fail,sizeof(ev.fail),"BAD_LIVE_DIG_EVENT");
+        return ev;
+    }
+
     bool TryDigHandful()
     {
         if ( g.link != LinkState::CapsOk ) { return false; }
@@ -8531,10 +8835,12 @@ namespace
 
         // Recompute steep at bite + final affect (slope may differ from aim cell).
         float fnx = 0.f, fny = 0.f, fnz = 1.f;
+        float lookX=0.f,lookY=1.f,lookZ=0.f;
         {
             float cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
             float cyw = std::cos( g.yaw ), sy = std::sin( g.yaw );
-            ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, sy * cp, cyw * cp, sp, fnx, fny, fnz );
+            lookX=sy*cp;lookY=cyw*cp;lookZ=sp;
+            ResolveCarveIntoNormal( g.aimX, g.aimY, g.aimZ, lookX,lookY,lookZ, fnx, fny, fnz );
         }
         bool const steepFace = IsSteepFaceAt( bx, by ) || fnz < 0.58f;
         DigAffectSpec const hitAffect = ComputeDigAffect( tool, form, steepFace );
@@ -8570,25 +8876,20 @@ namespace
             && ( -std::sin( g.pitch ) < 0.72f );
         CaptureSpirePreRequest( bcx, bcy, g.aimX, g.aimY, g.aimZ, form.material_id );
 
-        // P3b: occupancy sphere carve owns the hole; DigScar is flash only if carve misses.
-        float visualR = (std::max)( hitAffect.radiusM, kVoxelEdgeM * 0.85f );
-        if ( fnz < 0.72f || g.pitch < -0.28f )
-        {
-            visualR = (std::max)( visualR, ActiveAimRadiusM() );
-        }
-        float carveX = bx, carveY = by, carveZ = bz;
-        if ( hitAffect.mode != DigAffectMode::ScoopHemi )
-        {
-            // Face bites: centre into the matter along -N (same as pick).
-            carveX = g.aimX - fnx * visualR * 0.70f;
-            carveY = g.aimY - fny * visualR * 0.70f;
-            carveZ = g.aimZ - fnz * visualR * 0.70f;
-        }
+        // Exact live tool scale. The old max(voxel*0.85) enlarged a 4-5 cm action
+        // past 10 cm just to catch a coarse occupancy center.
+        float const visualR=hitAffect.radiusM;
+        float const carveX=g.aimX,carveY=g.aimY,carveZ=g.aimZ;
         PrefetchOccupancyCell( bcx, bcy );
         PrefetchOccupancyCell( (int)std::floor( carveX ), (int)std::floor( carveY ) );
         // P4.1: snapshot pre-intent before optimistic occupancy carve.
         CaptureWorldPredictionCheckpoint( carveX, carveY, visualR );
-        bool const carved = CarveOccupancySphere( carveX, carveY, carveZ, visualR, g.aimX, g.aimY, g.aimZ );
+        uint64_t const digSeed=(uint64_t)(int)std::floor(g.aimX*100.f)
+            ^((uint64_t)(int)std::floor(g.aimY*100.f)<<16)
+            ^((uint64_t)g.perfOccupancyMutations<<32)^0xD165C00Full;
+        PickFracture::FractureEvent const digEvent=BuildAnalyticDigEvent(
+            hitAffect,form,fnx,fny,fnz,lookX,lookY,lookZ,digSeed);
+        bool const carved=CarveOccupancyFracture(digEvent);
         if ( carved && kAabbCavityOwnsHf ) { RetirePresentationScarsNear( g.aimX, g.aimY, visualR * 2.5f ); }
         if ( !carved )
         {
@@ -8624,12 +8925,12 @@ namespace
         FireActionCue( false, false );
         char sent[280];
         std::snprintf( sent, sizeof( sent ),
-            "H2H %s %s via %s — D2=%s visualR=%.3fm tipR=%.3fm → ~%dg",
+            "H2H %s %s via %s — surface=%s visualR=%.3fm tipR=%.3fm → ~%dg",
             hitAffect.feel, form.material_id, tool.id,
-            carved ? "yes" : "flash", visualR, hitAffect.radiusM, acceptG );
+            carved ? "analytic" : "flash", visualR, hitAffect.radiusM, acceptG );
         g.digestLine = sent;
         g.statusLine = carved
-            ? "P3b - occupancy cavity (matter face)"
+            ? "P3b - tool-scale reconstructed cavity"
             : "P3b - scar flash until occupancy";
         UpdateStreamHud();
         return true;
@@ -8861,22 +9162,30 @@ namespace
             (void)onz;
             // Presentation refine target tip/6 — not matter resolution (12.5cm lattice).
             float const rad = (std::min)( (std::max)( 0.05f, orad ), 0.35f );
+            float const stitch = std::clamp( rad / 12.f, 0.004f, 0.012f );
             float const px = (std::min)( (std::max)( ox, x0 ), x1 );
             float const py = (std::min)( (std::max)( oy, y0 ), y1 );
             float const dx = px - ox, dy = py - oy;
             float const d = std::sqrt( dx * dx + dy * dy );
             outMinDist = (std::min)( outMinDist, d );
             outNeedR = (std::max)( outNeedR, rad );
-            if ( d <= rad + 0.04f ) { hit = true; }
+            if ( d <= rad + stitch ) { hit = true; }
         };
-        for ( EditedRegion const& er : g.editedRegions )
+        if ( g.mouthRefineIndexReady )
         {
-            for ( EditOpening const& o : er.openings )
+            int const qx = (int)std::floor( mx );
+            int const qy = (int)std::floor( my );
+            auto const it = g.mouthRefineBuckets.find( CellKey( qx, qy ) );
+            if ( it != g.mouthRefineBuckets.end() )
             {
-                consider( o.x, o.y, o.r, o.nz );
+                for ( MouthRefineDisk const& o : it->second ) { consider( o.x, o.y, o.r, o.nz ); }
             }
         }
-        (void)mx; (void)my;
+        else
+        {
+            for ( EditedRegion const& er : g.editedRegions )
+            for ( EditOpening const& o : er.openings ) { consider( o.x, o.y, o.r, o.nz ); }
+        }
         return hit;
     }
 
@@ -9079,6 +9388,25 @@ namespace
         float const feetX = g.feetX;
         float const feetY = g.feetY;
         (void)feetX; (void)feetY;
+
+        g.mouthRefineBuckets.clear();
+        for ( EditedRegion const& er : g.editedRegions )
+        for ( EditOpening const& o : er.openings )
+        {
+            float const rad = (std::min)( (std::max)( 0.05f, o.r ), 0.35f );
+            float const stitch = std::clamp( rad / 12.f, 0.004f, 0.012f );
+            int const bx0 = (int)std::floor( o.x - rad - stitch );
+            int const bx1 = (int)std::floor( o.x + rad + stitch );
+            int const by0 = (int)std::floor( o.y - rad - stitch );
+            int const by1 = (int)std::floor( o.y + rad + stitch );
+            MouthRefineDisk const disk{ o.x, o.y, o.r, o.nz };
+            for ( int by = by0; by <= by1; ++by )
+            for ( int bx = bx0; bx <= bx1; ++bx )
+            {
+                g.mouthRefineBuckets[CellKey( bx, by )].push_back( disk );
+            }
+        }
+        g.mouthRefineIndexReady = true;
 
         if ( g.terrainList )
         {
@@ -9342,56 +9670,6 @@ namespace
         glEnable( GL_CULL_FACE );
     }
 
-    void DrawOpeningMouthPlugs()
-    {
-        // Closed rock plug for pick/occupancy openings that lack D2 XY cover.
-        // Hard gate: sky/clear through a strike hole is always PRESENTATION_COVERAGE_FAIL —
-        // never leave stencil-punched pixels peeking glClear.
-        if ( g.editedRegions.empty() ) { return; }
-        constexpr int kSeg = 24;
-        glShadeModel( GL_FLAT );
-        glDisable( GL_CULL_FACE );
-        glBegin( GL_TRIANGLES );
-        for ( EditedRegion const& er : g.editedRegions )
-        {
-            for ( EditOpening const& o : er.openings )
-            {
-                if ( CavityCoversXy( o.x, o.y, 0.12f ) ) { continue; }
-                float const rad = (std::max)( 0.05f, o.r );
-                float gradeZ = o.z;
-                SampleGroundZBase( o.x, o.y, gradeZ );
-                float floorZ = gradeZ;
-                if ( !SampleOccupancyZ( o.x, o.y, floorZ ) )
-                {
-                    floorZ = gradeZ - (std::max)( 0.06f, 1.5f * kVoxelEdgeM );
-                }
-                // Recess floor slightly below grade so the lip still reads.
-                floorZ = (std::min)( floorZ, gradeZ - 0.04f );
-                for ( int i = 0; i < kSeg; ++i )
-                {
-                    float const a0 = (float)i / (float)kSeg * 6.2831853f;
-                    float const a1 = (float)( i + 1 ) / (float)kSeg * 6.2831853f;
-                    float const x0 = o.x + std::cos( a0 ) * rad;
-                    float const y0 = o.y + std::sin( a0 ) * rad;
-                    float const x1 = o.x + std::cos( a1 ) * rad;
-                    float const y1 = o.y + std::sin( a1 ) * rad;
-                    float z0 = floorZ, z1 = floorZ;
-                    float g0 = gradeZ, g1 = gradeZ;
-                    SampleGroundZBase( x0, y0, g0 );
-                    SampleGroundZBase( x1, y1, g1 );
-                    float o0 = g0, o1 = g1;
-                    if ( SampleOccupancyZ( x0, y0, o0 ) ) { z0 = (std::min)( o0, g0 - 0.04f ); }
-                    else { z0 = g0 - 0.06f; }
-                    if ( SampleOccupancyZ( x1, y1, o1 ) ) { z1 = (std::min)( o1, g1 - 0.04f ); }
-                    else { z1 = g1 - 0.06f; }
-                    EmitPhase3Tri( o.x, o.y, floorZ, x0, y0, z0, x1, y1, z1, 0.85f );
-                }
-            }
-        }
-        glEnd();
-        glEnable( GL_CULL_FACE );
-    }
-
     void DrawFoliationPlateNotches()
     {
         // Retired for P3b — pick opens occupancy D2 cavities, not flat face-line scars.
@@ -9450,17 +9728,32 @@ namespace
         glStencilFunc( GL_EQUAL, 1, 0xFF );
         glStencilMask( 0x00 );
         glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-        // ALWAYS only inside depth-gated stencil — clears HF skin without through-hill paint.
-        // Opening plugs + D2 must own punched pixels — sky/clear peek is PRESENTATION_COVERAGE_FAIL.
+        // Reset depth only inside the view-tested replacement stamp, then restore
+        // ordinary nearest-surface ordering.  GL_ALWAYS for the actual cavity made
+        // rear layers overwrite front layers after enough progressive strikes.
+        glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+        glDepthMask( GL_TRUE );
+        glDepthRange( 1.0, 1.0 );
         glDepthFunc( GL_ALWAYS );
+        DrawDigGradeFootprints();
+        DrawCarveActionFootprints();
+        glDepthRange( 0.0, 1.0 );
+        glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        glDepthFunc( GL_LESS );
+        // The tool-scale boolean patch owns pick replacement pixels.  Do not cover a
+        // missing surface with a generated floor plug: a geometric gap must remain a FAIL.
         DrawDigFloorPlugs();
-        DrawOpeningMouthPlugs();
         DrawLiveScoopCups( true );
         DrawCavityMeshesMouth();
 
         glStencilMask( 0xFF );
         glDisable( GL_STENCIL_TEST );
         glDepthFunc( GL_LEQUAL );
+        // The footprint stencil owns removal of the virgin height field, but it is
+        // only a 2-D projection. Draw the reconstructed boundary once more with
+        // ordinary depth testing so exposed vertical walls and floor pixels outside
+        // that projection remain visible without overwriting nearer terrain.
+        DrawFractureSurfacePatches();
         DrawCavityMeshesInterior();
         DrawMaterialFormGallery(); // hand-scale material forms east of spawn
         DrawHeldGallerySample();   // E-held sample at hand for close inspect
@@ -10025,6 +10318,29 @@ namespace
 
     void UpdateCamera( float dt )
     {
+        // The shelter certificate deliberately leaves the normal simulation alive
+        // for a few frames so the rebuilt terrain reaches the back buffer.  Keep
+        // that proof camera fixed: free-flight input and collision correction can
+        // otherwise move it several metres before the screenshot is read back.
+        if ( g.shelterPhotoPending > 0 )
+        {
+            g.camX=g.shelterPhotoCamX;g.camY=g.shelterPhotoCamY;
+            g.camZ=g.shelterPhotoCamZ;g.yaw=g.shelterPhotoYaw;
+            g.pitch=g.shelterPhotoPitch;
+            g.feetX=g.camX;g.feetY=g.camY;g.feetZ=g.camZ-kEyeHeightM;
+            g.walkMode=false;g.grounded=false;
+            return;
+        }
+        if ( g.certPickFracture && g.certPickFracturePhase >= 1 )
+        {
+            // Deterministic near-vertical progressive-cavity camera. Exact -pi/2
+            // degenerates the Z-up look-at basis; -1.568 remains centered in the 4.9 cm bore.
+            g.camX=g.certPickVisualX; g.camY=g.certPickVisualY;
+            g.camZ=g.certPickVisualZ+1.0f;
+            g.feetX=g.camX; g.feetY=g.camY; g.feetZ=g.camZ-kEyeHeightM;
+            g.walkMode=false; g.grounded=false; g.yaw=0.f; g.pitch=-1.568f;
+            return;
+        }
         // F toggles walk / free-fly
         if ( g.keys['F'] && !g.keyToggleLatch['F'] )
         {
@@ -10378,7 +10694,7 @@ namespace
         DrawHudText( 16, (float)h - 24, "PROVENANCE" );
         DrawHudText( 16, (float)h - 44, "Phase 4 - Horizon-to-Hand + geography + 6ft walk" );
         {
-            char geoLine[320];
+            char geoLine[512];
             H2H::EnsureReady();
             ProvenanceGeo::EnsureReady();
             auto surf = ProvenanceGeo::SampleSurface(
@@ -10388,8 +10704,14 @@ namespace
             RockStruct::Foliation const fol = RockStruct::FoliationAt( g.feetX, g.feetY );
             int openN = 0;
             for ( EditedRegion const& er : g.editedRegions ) { openN += (int)er.openings.size(); }
+            int fracCells = 0, fracTris = 0;
+            for ( FractureSurface::Patch const& p : g.fracturePatches )
+            {
+                fracCells += p.activeCells;
+                fracTris += (int)p.tris.size();
+            }
             std::snprintf( geoLine, sizeof( geoLine ),
-                "%s | geo %s | fixture=%s | biome=%s | cap=%s form=%s | dip=%.0f° | bodies=%d | editReg=%d opens=%d | bound=%s d2=%d chips=%s | [B][C][G][F8]",
+                "%s | geo %s | fixture=%s | biome=%s | cap=%s form=%s | dip=%.0f° | bodies=%d | editReg=%d opens=%d | frac=%d cells=%d tris=%d | bound=%s d2=%d chips=%s | [B][C][G][F8]",
                 H2H::kCapability,
                 ProvenanceGeo::kGeneratorId,
                 ProvenanceGeo::FixtureName( ProvenanceGeo::Fixture() ),
@@ -10400,6 +10722,7 @@ namespace
                 (int)H2H::State().bodies.size(),
                 (int)g.editedRegions.size(),
                 openN,
+                (int)g.fractureEvents.size(), fracCells, fracTris,
                 g.boundaryMode == BoundaryMode::D2 ? "D2"
                     : ( g.boundaryMode == BoundaryMode::DebugBoundary ? "AABB" : "OVER" ),
                 g.cavityTrisTotal,
@@ -11610,8 +11933,28 @@ namespace
         }
         if ( !cell )
         {
-            add( "D2_QEF_halo_determinism", "FAIL", "NO_CAVITY_AFTER_DIG_MATRIX" );
-            return;
+            // Live tool-scale strikes are reconstructed analytically and intentionally do not
+            // publish the 12.5 cm occupancy mesh.  Section 5 still owns the coarse D2 extractor,
+            // so create an explicit, isolated D2-scale fixture instead of treating the absence
+            // of coarse triangles after the live strike matrix as a failure.
+            float const fixtureX = (float)ProvenanceGeo::kRangeOriginX + 12.5f;
+            float const fixtureY = (float)ProvenanceGeo::kRangeOriginY - 10.5f;
+            float fixtureGrade = 0.f;
+            cx = (int)std::floor( fixtureX );
+            cy = (int)std::floor( fixtureY );
+            EnsureD2HaloLattices( cx, cy );
+            bool const sampled = SampleGroundZBase( fixtureX, fixtureY, fixtureGrade );
+            constexpr float kFixtureR = 0.28f;
+            bool const carved = sampled && CarveOccupancySphere(
+                fixtureX, fixtureY, fixtureGrade - kFixtureR * 0.45f, kFixtureR,
+                fixtureX, fixtureY, fixtureGrade );
+            cell = carved ? GetCellMutable( cx, cy ) : nullptr;
+            if ( !cell || !cell->carved || !cell->hasCavity || cell->cavityTris.empty() )
+            {
+                add( "D2_QEF_halo_determinism", "FAIL", "D2_FIXTURE_CAVITY_MISSING",
+                    fixtureX, fixtureY, fixtureGrade );
+                return;
+            }
         }
 
         uint32_t const h0 = GeoCertHashCavityTris( *cell );
@@ -15398,16 +15741,44 @@ namespace
             int sampled = 0;
             if ( w >= 64 && h >= 64 )
             {
-                // Crosshair / action neighborhood (center of view — LSI aims at the strike).
-                int const x0 = w * 2 / 5, x1 = w * 3 / 5;
-                int const y0 = h * 2 / 5, y1 = h * 3 / 5;
+                // Project the actual certified action.  The old gate scanned the central
+                // 20% even when the action was off-screen; it was literally counting the
+                // horizon as a hole (aim=-/- in the captured frame).
+                GLdouble model[16], proj[16];
+                glGetDoublev( GL_MODELVIEW_MATRIX, model );
+                glGetDoublev( GL_PROJECTION_MATRIX, proj );
+                auto projectPoint = [&]( double x,double y,double z,double& sx,double& sy )->bool
+                {
+                    double a[4] = {
+                        model[0]*x+model[4]*y+model[8]*z+model[12],
+                        model[1]*x+model[5]*y+model[9]*z+model[13],
+                        model[2]*x+model[6]*y+model[10]*z+model[14],
+                        model[3]*x+model[7]*y+model[11]*z+model[15] };
+                    double c[4] = {
+                        proj[0]*a[0]+proj[4]*a[1]+proj[8]*a[2]+proj[12]*a[3],
+                        proj[1]*a[0]+proj[5]*a[1]+proj[9]*a[2]+proj[13]*a[3],
+                        proj[2]*a[0]+proj[6]*a[1]+proj[10]*a[2]+proj[14]*a[3],
+                        proj[3]*a[0]+proj[7]*a[1]+proj[11]*a[2]+proj[15]*a[3] };
+                    if ( c[3] <= 1e-8 ) { return false; }
+                    double const nx=c[0]/c[3], ny=c[1]/c[3], nz=c[2]/c[3];
+                    if(nx < -1.0 || nx > 1.0 || ny < -1.0 || ny > 1.0 || nz < -1.0 || nz > 1.0)return false;
+                    sx=(nx*0.5+0.5)*(double)w; sy=(ny*0.5+0.5)*(double)h; return true;
+                };
+                double sx=0,sy=0,sxr=0,syr=0;
+                bool const visible=projectPoint(cap.vol.cx,cap.vol.cy,cap.vol.cz,sx,sy)
+                    && projectPoint(cap.vol.cx+cap.vol.r,cap.vol.cy,cap.vol.cz,sxr,syr);
+                int const rad=visible?(std::max)(6,(int)std::ceil(std::hypot(sxr-sx,syr-sy)*1.25)):0;
+                int const x0=visible?(std::max)(0,(int)sx-rad):0;
+                int const x1=visible?(std::min)(w,(int)sx+rad+1):0;
+                int const y0=visible?(std::max)(0,(int)sy-rad):0;
+                int const y1=visible?(std::min)(h,(int)sy+rad+1):0;
                 std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
                 glPixelStorei( GL_PACK_ALIGNMENT, 1 );
                 glReadBuffer( GL_FRONT );
                 glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
-                for ( int y = y0; y < y1; y += 2 )
+                for ( int y = y0; y < y1; y += 1 )
                 {
-                    for ( int x = x0; x < x1; x += 2 )
+                    for ( int x = x0; x < x1; x += 1 )
                     {
                         size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
                         int r = rgba[i], gc = rgba[i + 1], b = rgba[i + 2];
@@ -15415,6 +15786,16 @@ namespace
                         if ( isSkyOrClear( r, gc, b ) ) { ++skyHits; }
                     }
                 }
+                // Preserve the actual frame used by this gate. A broad RGB count alone
+                // cannot distinguish a hole leak from ordinary sky elsewhere in the view.
+                if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
+                char ppm[MAX_PATH], report[MAX_PATH];
+                std::snprintf( ppm, sizeof( ppm ), "%s\\provenance_lsi_%s.ppm",
+                    g.certOutDir, cap.actionId );
+                std::snprintf( report, sizeof( report ), "%s\\provenance_lsi_%s_pixels.txt",
+                    g.certOutDir, cap.actionId );
+                DumpFramePpm( ppm );
+                WriteCertPixelReport( ppm, report );
             }
             char note[200];
             std::snprintf( note, sizeof( note ),
@@ -18209,16 +18590,1374 @@ namespace
         PostQuitMessage( g.certWaterExitCode );
     }
 
+    struct ShelterStampSpec
+    {
+        PickFracture::Vec3 floorCenter{};
+        PickFracture::Vec3 outwardN{ -1.f,0.f,0.f };
+        float widthM = 0.90f;
+        float sideHeightM = 1.45f;
+        float archRadiusM = 0.45f;
+        float depthM = 1.20f;
+        float toolRadiusM = 0.049f;
+        // <= 2r/sqrt(3), with margin: the 3-D strike lattice cannot leave
+        // pinhole-solid seams between neighboring half-apples.
+        float strikeStepM = 0.047f;
+        uint64_t seed = 0xD001A11u;
+    };
+
+    struct ShelterExcavationAudit
+    {
+        int rays = 0;
+        int completedRays = 0;
+        int solidContacts = 0;
+        int airContacts = 0;
+        int blockedRays = 0;
+        int passes = 0;
+        float deepestM = 0.f;
+        PickFracture::Vec3 firstBlockedNominal{};
+        float firstBlockedContactD = 0.f;
+        float firstBlockedTargetPhi = 0.f;
+    };
+
+    std::vector<PickFracture::FractureEvent> BuildShelterStampEvents(
+        ShelterStampSpec const& s, ShelterExcavationAudit* auditOut = nullptr,
+        std::function<float(float,float)> const& groundZ = {} )
+    {
+        std::vector<PickFracture::FractureEvent> out;
+        PickFracture::Vec3 const up = PickFracture::V3( 0,0,1 );
+        PickFracture::Vec3 N = PickFracture::Norm( s.outwardN );
+        N.z = 0.f; N = PickFracture::Norm( N );
+        PickFracture::Vec3 const T = PickFracture::Norm( PickFracture::Cross( up,N ) );
+        PickFracture::Vec3 const B = PickFracture::Norm( PickFracture::Cross( N,T ) );
+        ShelterExcavationAudit audit{};
+
+        struct Ray
+        {
+            PickFracture::Vec3 nominal{};
+            float firstContactD = 0.f;
+            float targetD = 0.f;
+            float frontierD = -2.f;
+            bool initialized = false;
+            bool complete = false;
+        };
+        std::vector<Ray> rays;
+        float const totalHeight = s.sideHeightM + s.archRadiusM;
+        int const nz = (std::max)( 1, (int)std::floor(
+            ( totalHeight - 2.f * s.toolRadiusM ) / s.strikeStepM ) + 1 );
+        for ( int iz = 0; iz < nz; ++iz )
+        {
+            float const h = s.toolRadiusM + ( totalHeight - 2.f * s.toolRadiusM )
+                * (float)iz / (float)(std::max)( 1,nz - 1 );
+            float halfWidth = s.widthM * 0.5f;
+            if ( h > s.sideHeightM )
+            {
+                float const a = h - s.sideHeightM;
+                halfWidth = std::sqrt( (std::max)( 0.f,
+                    s.archRadiusM * s.archRadiusM - a * a ) );
+            }
+            float const centerLimit = (std::max)( 0.f,halfWidth - s.toolRadiusM );
+            int const nt = (std::max)( 1,
+                (int)std::ceil( 2.f * centerLimit / s.strikeStepM ) + 1 );
+            for ( int it = 0; it < nt; ++it )
+            {
+                float const lateral = nt == 1 ? 0.f
+                    : -centerLimit + 2.f * centerLimit * (float)it / (float)( nt - 1 );
+                rays.push_back( { PickFracture::Add( s.floorCenter,
+                    PickFracture::Add( PickFracture::Mul( T,lateral ),
+                        PickFracture::Mul( B,h ) ) ) } );
+            }
+        }
+
+        // A compact event index makes every strike query the CURRENT boolean body.
+        // A desired sample point is never accepted as a contact merely because it is
+        // inside the final target volume.
+        constexpr float bucketM = 0.125f;
+        std::unordered_map<uint64_t,std::vector<int>> buckets;
+        auto sampleGround = [&]( float x,float y ) -> float
+        {
+            if(groundZ)return groundZ(x,y);
+            float z=0.f;SampleGroundZBase(x,y,z);return z;
+        };
+        auto solidField = [&]( PickFracture::Vec3 const& p ) -> float
+        {
+            float const ground=sampleGround(p.x,p.y);
+            float phi = ground-p.z;
+            int const bx=(int)std::floor(p.x/bucketM);
+            int const by=(int)std::floor(p.y/bucketM);
+            int const bz=(int)std::floor(p.z/bucketM);
+            auto const found=buckets.find(FractureSurface::BucketKey(bx,by,bz));
+            if(found==buckets.end())return phi;
+            for(int const index:found->second)
+            {
+                PickFracture::FractureEvent const& ev=out[(size_t)index];
+                PickFracture::Vec3 const q=PickFracture::WorldToLocal(ev.frame,p);
+                float const outside=(PickFracture::LocalEnvelopeDistance(ev.env,q)-1.f)
+                    * FractureSurface::CharacteristicM(ev);
+                phi=(std::min)(phi,outside);
+            }
+            return phi;
+        };
+        auto indexEvent = [&]( int index )
+        {
+            float x0,y0,z0,x1,y1,z1;
+            PickFracture::WorldAabb(out[(size_t)index],x0,y0,z0,x1,y1,z1);
+            float const guard=1e-4f;
+            int const bx0=(int)std::floor((x0-guard)/bucketM);
+            int const by0=(int)std::floor((y0-guard)/bucketM);
+            int const bz0=(int)std::floor((z0-guard)/bucketM);
+            int const bx1=(int)std::floor((x1+guard)/bucketM);
+            int const by1=(int)std::floor((y1+guard)/bucketM);
+            int const bz1=(int)std::floor((z1+guard)/bucketM);
+            for(int bz=bz0;bz<=bz1;++bz)
+            for(int by=by0;by<=by1;++by)
+            for(int bx=bx0;bx<=bx1;++bx)
+                buckets[FractureSurface::BucketKey(bx,by,bz)].push_back(index);
+        };
+        auto pointAt = [&]( Ray const& ray,float d )
+        {
+            return PickFracture::Add(ray.nominal,PickFracture::Mul(N,-d));
+        };
+        auto firstSolid = [&]( Ray const& ray,float beginD,float endD,float& hitD ) -> bool
+        {
+            constexpr float step=0.008f;
+            float airD=beginD;
+            float airF=solidField(pointAt(ray,airD));
+            // The nominal mouth can itself lie inside a steep bank. Walk outward
+            // until this ray establishes real exterior air, then cross inward to
+            // the first solid boundary. Never manufacture a contact in empty space.
+            constexpr float outwardStep=0.05f;
+            constexpr int maxOutwardSteps=240; // twelve metres is well beyond a cell
+            for(int i=0;i<maxOutwardSteps && airF>=0.f;++i)
+            {
+                airD-=outwardStep;
+                airF=solidField(pointAt(ray,airD));
+            }
+            if(airF>=0.f)return false;
+            float const exteriorAirD=airD;
+            for(float d=airD+step;d<=endD+1e-5f;d+=step)
+            {
+                float const f=solidField(pointAt(ray,d));
+                if(f>=0.f)
+                {
+                    float solidD=d;
+                    // Put the contact on the current air/solid boundary, independent
+                    // of scan step, then validate both sides before accepting it.
+                    for(int i=0;i<12;++i)
+                    {
+                        float const mid=(airD+solidD)*0.5f;
+                        if(solidField(pointAt(ray,mid))<0.f)airD=mid;
+                        else solidD=mid;
+                    }
+                    hitD=solidD;
+                    return true;
+                }
+                airD=d;airF=f;
+            }
+            // Boolean overlap can leave a stone web thinner than the normal march
+            // step. Only on a miss, exhaustively rescan at the contact-proof scale.
+            airD=exteriorAirD;
+            airF=solidField(pointAt(ray,airD));
+            constexpr float fineStep=0.00020f;
+            for(float d=airD+fineStep;d<=endD+1e-5f;d+=fineStep)
+            {
+                float const f=solidField(pointAt(ray,d));
+                if(f>=0.f)
+                {
+                    float solidD=d;
+                    for(int i=0;i<8;++i)
+                    {
+                        float const mid=(airD+solidD)*0.5f;
+                        if(solidField(pointAt(ray,mid))<0.f)airD=mid;
+                        else solidD=mid;
+                    }
+                    hitD=solidD;
+                    return true;
+                }
+                airD=d;airF=f;
+            }
+            return false;
+        };
+
+        audit.rays=(int)rays.size();
+        uint64_t ordinal=0;
+        int const maxPasses=(int)std::ceil(s.depthM/(s.toolRadiusM*0.35f))+24;
+        for(int pass=0;pass<maxPasses;++pass)
+        {
+            int added=0;
+            for(Ray& ray:rays)
+            {
+                if(ray.complete)continue;
+                float hitD=0.f;
+                // Anchor at the intended mouth and let firstSolid walk outward to
+                // the NEAREST real air. Beginning far outside can skip a nearby air
+                // pocket and attach the ray to an unrelated hill many metres away.
+                float const begin=0.f;
+                float const end=ray.initialized
+                    ? ray.targetD+s.toolRadiusM*1.5f
+                    : s.depthM+2.f;
+                if(!firstSolid(ray,begin,end,hitD))
+                {
+                    if(ray.initialized
+                        &&solidField(pointAt(ray,ray.targetD-0.003f))<=0.f)
+                    {
+                        ++audit.completedRays;
+                        audit.deepestM=(std::max)(audit.deepestM,s.depthM);
+                    }
+                    else
+                    {
+                        if(audit.blockedRays==0)
+                        {
+                            audit.firstBlockedNominal=ray.nominal;
+                            audit.firstBlockedContactD=ray.firstContactD;
+                            audit.firstBlockedTargetPhi=ray.initialized
+                                ?solidField(pointAt(ray,ray.targetD-0.003f))
+                                :solidField(pointAt(ray,end));
+                        }
+                        ++audit.blockedRays;
+                    }
+                    ray.complete=true;
+                    continue;
+                }
+                if(!ray.initialized)
+                {
+                    ray.initialized=true;
+                    ray.firstContactD=hitD;
+                    // Preserve the requested depth behind the local exposed face,
+                    // but never stop short of the shared body-clearance back plane.
+                    ray.targetD=(std::max)(hitD+s.depthM,s.depthM);
+                }
+                float const excavated=hitD-ray.firstContactD;
+                audit.deepestM=(std::max)(audit.deepestM,excavated);
+                if(hitD>=ray.targetD-s.toolRadiusM*0.30f)
+                {
+                    ray.complete=true;++audit.completedRays;continue;
+                }
+                PickFracture::Vec3 const p=pointAt(ray,hitD);
+                // firstSolid returns the solid endpoint of a proven air/solid
+                // bracket. Requiring the endpoint itself to remain solid catches
+                // stale/air contacts without an overlap-sensitive epsilon probe.
+                if(solidField(p)<0.f)
+                {
+                    ++audit.airContacts;
+                    ray.frontierD=hitD+0.004f;
+                    continue;
+                }
+                std::string const material=CapAtWorld(p.x,p.y);
+                PickFracture::FractureEvent ev=PickFracture::BuildEvent(
+                    p,N,T,material.c_str(),s.seed+ordinal++,nullptr);
+                ev.env.tHalf=s.toolRadiusM;
+                ev.env.bHalf=s.toolRadiusM;
+                ev.env.nInto=s.toolRadiusM;
+                ev.env.nAir=0.010f;
+                ev.env.tipRM=0.f;
+                ev.env.angularSharp=0.f;
+                ev.env.foliationBias=0.f;
+                ev.fractureExtentRM=s.toolRadiusM;
+                ev.mouthOpenRM=s.toolRadiusM;
+                ev.volumeM3=2.f*PickFracture::kPi*s.toolRadiusM
+                    *s.toolRadiusM*s.toolRadiusM/3.f;
+                ev.ok=true;
+                out.push_back(ev);
+                indexEvent((int)out.size()-1);
+                ray.frontierD=hitD;
+                ++audit.solidContacts;++added;
+            }
+            audit.passes=pass+1;
+            if(added==0)break;
+        }
+        // A ray may have reached target depth on the final strike and not received
+        // another pass solely to mark completion. Re-query it without adding matter.
+        for(Ray& ray:rays)
+        {
+            if(ray.complete||!ray.initialized)continue;
+            float hitD=0.f;
+            if(firstSolid(ray,0.f,
+                ray.targetD+s.toolRadiusM*1.5f,hitD)
+                &&hitD>=ray.targetD-s.toolRadiusM*0.30f)
+            {
+                ray.complete=true;++audit.completedRays;
+                audit.deepestM=(std::max)(audit.deepestM,hitD-ray.firstContactD);
+            }
+        }
+        if(auditOut)*auditOut=audit;
+        return out;
+    }
+
+    bool ShelterStampPath( char (&path)[MAX_PATH], bool createDir )
+    {
+        char module[MAX_PATH]{};
+        if ( GetModuleFileNameA(nullptr,module,MAX_PATH)==0 ) { return false; }
+        char* slash=std::strrchr(module,'\\');
+        if(!slash)return false; *slash='\0'; // executable directory (Build)
+        slash=std::strrchr(module,'\\');
+        if(!slash)return false; *slash='\0'; // Build directory
+        slash=std::strrchr(module,'\\');
+        if(!slash)return false; *slash='\0'; // repository root (parent of Build)
+        char dir[MAX_PATH]{};
+        if(sprintf_s(dir,"%s\\SaveWorld",module)<0)return false;
+        if(createDir)CreateDirectoryA(dir,nullptr);
+        return sprintf_s(path,"%s\\excavation_stamps_v1.txt",dir)>0;
+    }
+
+    bool WriteShelterStamp( ShelterStampSpec const& s )
+    {
+        char path[MAX_PATH]{}; if(!ShelterStampPath(path,true))return false;
+        FILE* f=nullptr; if(fopen_s(&f,path,"w")!=0||!f)return false;
+        std::fprintf(f,
+            "# Provenance excavation stamp v1; generated from tool-scale strike union\n"
+            "arched_shelter %.8f %.8f %.8f %.8f %.8f %.8f %.5f %.5f %.5f %.5f %.5f %.5f %llu\n",
+            s.floorCenter.x,s.floorCenter.y,s.floorCenter.z,
+            s.outwardN.x,s.outwardN.y,s.outwardN.z,s.widthM,s.sideHeightM,
+            s.archRadiusM,s.depthM,s.toolRadiusM,s.strikeStepM,
+            (unsigned long long)s.seed);
+        std::fclose(f); return true;
+    }
+
+    bool ReadShelterStamp( ShelterStampSpec& s )
+    {
+        char path[MAX_PATH]{}; if(!ShelterStampPath(path,false))return false;
+        FILE* f=nullptr; if(fopen_s(&f,path,"r")!=0||!f)return false;
+        char line[512]{}; bool ok=false;
+        while(std::fgets(line,sizeof(line),f))
+        {
+            if(line[0]=='#')continue;
+            unsigned long long seed=0;
+            int const n=sscanf_s(line,
+                "arched_shelter %f %f %f %f %f %f %f %f %f %f %f %f %llu",
+                &s.floorCenter.x,&s.floorCenter.y,&s.floorCenter.z,
+                &s.outwardN.x,&s.outwardN.y,&s.outwardN.z,&s.widthM,
+                &s.sideHeightM,&s.archRadiusM,&s.depthM,&s.toolRadiusM,
+                &s.strikeStepM,&seed);
+            if(n==13){s.seed=(uint64_t)seed;ok=true;break;}
+        }
+        std::fclose(f); return ok;
+    }
+
+    ShelterStampSpec FindRangeShelterStamp()
+    {
+        ShelterStampSpec best{};
+        float bestScore=-1e9f;
+        float const ox=(float)ProvenanceGeo::kRangeOriginX;
+        float const oy=(float)ProvenanceGeo::kRangeOriginY;
+        for(float x=ox+92.f;x<=ox+108.f;x+=0.25f)
+        for(float y=oy-4.f;y<=oy+4.f;y+=0.25f)
+        {
+            float z=0,zxp=0,zxm=0,zyp=0,zym=0;
+            SampleGroundZBase(x,y,z);SampleGroundZBase(x+0.15f,y,zxp);
+            SampleGroundZBase(x-0.15f,y,zxm);SampleGroundZBase(x,y+0.15f,zyp);
+            SampleGroundZBase(x,y-0.15f,zym);
+            PickFracture::Vec3 N=PickFracture::Norm(PickFracture::V3(
+                -(zxp-zxm)/0.30f,-(zyp-zym)/0.30f,0.f));
+            float outwardGrade=0.f;
+            SampleGroundZBase(x+N.x*0.75f,y+N.y*0.75f,outwardGrade);
+            float const floor=outwardGrade+0.03f;
+            float minCover=1e9f;
+            PickFracture::Vec3 const T=PickFracture::Norm(
+                PickFracture::Cross(PickFracture::V3(0,0,1),N));
+            for(float d=0.10f;d<=1.25f;d+=0.20f)
+            for(float t=-0.45f;t<=0.45f;t+=0.30f)
+            {
+                float gz=0.f;SampleGroundZBase(x-N.x*d+T.x*t,y-N.y*d+T.y*t,gz);
+                minCover=(std::min)(minCover,gz-(floor+1.90f));
+            }
+            float const rise=z-outwardGrade;
+            float const score=minCover*4.f+rise;
+            if(minCover>-0.03f&&rise>1.5f&&score>bestScore)
+            {
+                bestScore=score;best.floorCenter=PickFracture::V3(x,y,floor);best.outwardN=N;
+            }
+        }
+        if(bestScore<-1e8f)
+        {
+            // Deterministic RANGE cliff fallback; still aligned from its local gradient.
+            float const x=ox+102.f,y=oy-1.5f;float zxp=0,zxm=0,zyp=0,zym=0,gz=0;
+            SampleGroundZBase(x+0.15f,y,zxp);SampleGroundZBase(x-0.15f,y,zxm);
+            SampleGroundZBase(x,y+0.15f,zyp);SampleGroundZBase(x,y-0.15f,zym);
+            best.outwardN=PickFracture::Norm(PickFracture::V3(
+                -(zxp-zxm)/0.30f,-(zyp-zym)/0.30f,0.f));
+            SampleGroundZBase(x+best.outwardN.x*0.75f,y+best.outwardN.y*0.75f,gz);
+            best.floorCenter=PickFracture::V3(x,y,gz+0.03f);
+        }
+        return best;
+    }
+
     // ---------- P5 side-gate: pick fracture + closed local surface (--cert-pick-fracture) ----------
     // Headless: contact-frame rotation equivalence, material morphology, two-strike gravel.
     // Does not touch WaterLedger / P5a. P5b remains CLOSED.
+    void AppendFractureSurfaceGeometryCert( PickFracture::CertResult& R )
+    {
+        auto ground = []( float, float ) -> float { return 0.f; };
+        PickFracture::FractureEvent ev = PickFracture::BuildEvent(
+            PickFracture::V3( 0,0,0 ), PickFracture::V3( 0,0,1 ),
+            PickFracture::V3( 1,0,0 ), "granite", 0xA991Eu, nullptr );
+        // Exact requested reference: a smooth 8 cm half-apple subtraction into a plane.
+        ev.env.tHalf = 0.08f;
+        ev.env.bHalf = 0.08f;
+        ev.env.nInto = 0.08f;
+        ev.env.nAir = 0.001f;
+        ev.env.tipRM = 0.f;
+        ev.env.angularSharp = 0.f;
+        ev.env.foliationBias = 0.f;
+        ev.fractureExtentRM = 0.08f;
+        ev.mouthOpenRM = 0.08f;
+        ev.ok = true;
+
+        FractureSurface::Patch patch = FractureSurface::BuildPatch( { ev }, ground, 0.01f );
+        {
+            char path[MAX_PATH];
+            if ( GetTempPathA( MAX_PATH, path ) > 0
+              && strcat_s( path, MAX_PATH, "provenance_half_apple.obj" ) == 0 )
+            {
+                FILE* f=nullptr;
+                if(fopen_s(&f,path,"w")==0&&f)
+                {
+                    for(FractureSurface::Tri const&t:patch.tris)
+                    {
+                        std::fprintf(f,"v %.8f %.8f %.8f\nv %.8f %.8f %.8f\nv %.8f %.8f %.8f\n",
+                            t.a.x,t.a.y,t.a.z,t.b.x,t.b.y,t.b.z,t.c.x,t.c.y,t.c.z);
+                    }
+                    for(size_t i=0;i<patch.tris.size();++i)
+                        std::fprintf(f,"f %zu %zu %zu\n",i*3+1,i*3+2,i*3+3);
+                    std::fclose(f);
+                }
+            }
+        }
+        {
+            char note[160];
+            std::snprintf( note, sizeof( note ), "tris=%d grid=%dx%dx%d spacing=%.4f",
+                (int)patch.tris.size(), patch.nx, patch.ny, patch.nz, patch.spacing );
+            bool const ok = !patch.tris.empty() && patch.spacing <= 0.02f;
+            PickFracture::CertAdd( R, "half_apple_mesh_generated", ok ? "PASS" : "FAIL", note );
+        }
+
+        float maxResidual = 0.f;
+        float maxOutsideDisplace = 0.f;
+        bool changedInside = true;
+        float fMinX,fMinY,fMinZ,fMaxX,fMaxY,fMaxZ;
+        PickFracture::WorldAabb( ev, fMinX,fMinY,fMinZ,fMaxX,fMaxY,fMaxZ );
+        auto visit = [&]( FractureSurface::Vec3 const& v )
+        {
+            float const phi = std::fabs( FractureSurface::SolidField( patch.events, ground, v.x,v.y,v.z ) );
+            maxResidual = (std::max)( maxResidual, phi );
+            PickFracture::Vec3 const local = PickFracture::WorldToLocal(
+                ev.frame, PickFracture::V3( v.x,v.y,v.z ) );
+            float const d = PickFracture::LocalEnvelopeDistance( ev.env, local );
+            if ( d > 1.08f ) { maxOutsideDisplace = (std::max)( maxOutsideDisplace, std::fabs( v.z ) ); }
+            if ( v.z < -patch.spacing * 1.5f )
+            {
+                if ( v.x < fMinX - patch.spacing || v.x > fMaxX + patch.spacing
+                  || v.y < fMinY - patch.spacing || v.y > fMaxY + patch.spacing
+                  || v.z < fMinZ - patch.spacing || v.z > fMaxZ + patch.spacing )
+                {
+                    changedInside = false;
+                }
+            }
+        };
+        for ( FractureSurface::Tri const& t : patch.tris ) { visit(t.a); visit(t.b); visit(t.c); }
+        {
+            char note[160];
+            std::snprintf( note, sizeof( note ), "maxFieldResidual=%.6f maxAllowed=%.6f",
+                maxResidual, patch.spacing * 1.75f );
+            bool const ok = maxResidual <= patch.spacing * 1.75f;
+            PickFracture::CertAdd( R, "half_apple_surface_accuracy", ok ? "PASS" : "FAIL", note );
+        }
+        {
+            char note[160];
+            std::snprintf( note, sizeof( note ), "outsideDisplace=%.7f changedInside=%d",
+                maxOutsideDisplace, changedInside ? 1 : 0 );
+            bool const ok = maxOutsideDisplace <= 1e-5f && changedInside;
+            PickFracture::CertAdd( R, "exact_strike_volume_identity", ok ? "PASS" : "FAIL", note );
+        }
+
+        struct EdgeKey { int ax,ay,az,bx,by,bz; bool operator==(EdgeKey const&o)const {
+            return ax==o.ax&&ay==o.ay&&az==o.az&&bx==o.bx&&by==o.by&&bz==o.bz; } };
+        struct EdgeHash { size_t operator()( EdgeKey const& e ) const {
+            size_t h=1469598103934665603ull; int v[6]={e.ax,e.ay,e.az,e.bx,e.by,e.bz};
+            for(int x:v){ h^=(uint32_t)x; h*=1099511628211ull; } return h; } };
+        float const q = patch.spacing / 64.f;
+        auto qi = [&]( float v ){ return (int)std::lround( v / q ); };
+        auto edge = [&]( FractureSurface::Vec3 a, FractureSurface::Vec3 b ) {
+            int aa[3]={qi(a.x),qi(a.y),qi(a.z)}, bb[3]={qi(b.x),qi(b.y),qi(b.z)};
+            bool swap = aa[0]>bb[0] || (aa[0]==bb[0] && (aa[1]>bb[1] || (aa[1]==bb[1]&&aa[2]>bb[2])));
+            if(swap){ for(int i=0;i<3;++i) std::swap(aa[i],bb[i]); }
+            return EdgeKey{aa[0],aa[1],aa[2],bb[0],bb[1],bb[2]};
+        };
+        std::unordered_map<EdgeKey,int,EdgeHash> edges;
+        for ( FractureSurface::Tri const& t : patch.tris )
+        { ++edges[edge(t.a,t.b)]; ++edges[edge(t.b,t.c)]; ++edges[edge(t.c,t.a)]; }
+        int unexplained=0, perimeter=0, nonManifold=0;
+        auto onBorder = [&]( int x,int y ) {
+            float const fx=x*q, fy=y*q;
+            return std::fabs(fx-patch.minX)<q*2 || std::fabs(fx-patch.maxX)<q*2
+                || std::fabs(fy-patch.minY)<q*2 || std::fabs(fy-patch.maxY)<q*2;
+        };
+        for(auto const& kv:edges)
+        {
+            if(kv.second>2){++nonManifold;continue;}
+            if(kv.second==1)
+            {
+                bool const border=onBorder(kv.first.ax,kv.first.ay)&&onBorder(kv.first.bx,kv.first.by);
+                if(border)++perimeter; else ++unexplained;
+            }
+        }
+        {
+            char note[160];
+            std::snprintf(note,sizeof(note),"unexplained=%d perimeter=%d nonManifold=%d",unexplained,perimeter,nonManifold);
+            bool const ok=unexplained==0&&nonManifold==0&&perimeter>0;
+            PickFracture::CertAdd(R,"half_apple_watertight_interior",ok?"PASS":"FAIL",note);
+        }
+
+        auto rayHit = [&]( float x,float y )->bool
+        {
+            for(FractureSurface::Tri const&t:patch.tris)
+            {
+                float const den=(t.b.y-t.c.y)*(t.a.x-t.c.x)+(t.c.x-t.b.x)*(t.a.y-t.c.y);
+                if(std::fabs(den)<1e-10f)continue;
+                float const u=((t.b.y-t.c.y)*(x-t.c.x)+(t.c.x-t.b.x)*(y-t.c.y))/den;
+                float const v=((t.c.y-t.a.y)*(x-t.c.x)+(t.a.x-t.c.x)*(y-t.c.y))/den;
+                float const w=1.f-u-v;
+                if(u>=-1e-4f&&v>=-1e-4f&&w>=-1e-4f)return true;
+            }
+            return false;
+        };
+        int rays=0,miss=0;
+        for(int y=-6;y<=6;++y)for(int x=-6;x<=6;++x)
+        {
+            float const fx=x*0.01f,fy=y*0.01f;
+            if(fx*fx+fy*fy>0.065f*0.065f)continue;
+            ++rays;if(!rayHit(fx,fy))++miss;
+        }
+        {
+            char note[128];std::snprintf(note,sizeof(note),"covered=%d/%d misses=%d",rays-miss,rays,miss);
+            PickFracture::CertAdd(R,"shallow_bite_ray_coverage",miss==0?"PASS":"FAIL",note);
+        }
+
+        // Mesh-backed strike poses. Fresh contacts are ray hits on the generated HF
+        // boundary; the 90 degree case rotates those same triangles into a D2 wall.
+        auto rotateFs=[](FractureSurface::Vec3 p,float deg){
+            PickFracture::Vec3 q=PickFracture::RotateX(PickFracture::V3(p.x,p.y,p.z),deg);
+            return FractureSurface::Vec3{q.x,q.y,q.z};
+        };
+        auto raycast=[](std::vector<FractureSurface::Tri> const& tris,
+            FractureSurface::Vec3 O,FractureSurface::Vec3 D,
+            FractureSurface::Vec3& hit,FractureSurface::Vec3& normal)->bool
+        {
+            float best=1e9f;bool found=false;
+            for(FractureSurface::Tri const&t:tris)
+            {
+                FractureSurface::Vec3 const e1=FractureSurface::Sub(t.b,t.a);
+                FractureSurface::Vec3 const e2=FractureSurface::Sub(t.c,t.a);
+                FractureSurface::Vec3 const p=FractureSurface::Cross(D,e2);
+                float const det=FractureSurface::Dot(e1,p);
+                if(std::fabs(det)<1e-9f)continue;
+                float const inv=1.f/det;
+                FractureSurface::Vec3 const s=FractureSurface::Sub(O,t.a);
+                float const u=FractureSurface::Dot(s,p)*inv;if(u<-1e-5f||u>1.00001f)continue;
+                FractureSurface::Vec3 const q=FractureSurface::Cross(s,e1);
+                float const v=FractureSurface::Dot(D,q)*inv;if(v<-1e-5f||u+v>1.00001f)continue;
+                float const d=FractureSurface::Dot(e2,q)*inv;
+                if(d>1e-5f&&d<best)
+                {
+                    best=d;found=true;hit=FractureSurface::Add(O,FractureSurface::Mul(D,d));
+                    normal=FractureSurface::Cross(e1,e2);
+                    float const nl=std::sqrt(FractureSurface::Dot(normal,normal));
+                    if(nl>1e-8f)normal=FractureSurface::Mul(normal,1.f/nl);
+                }
+            }
+            return found;
+        };
+        int poseHits=0;bool poseOk=true;float poseFailAngle=0.f;char const* poseFailMat="-";
+        float const poseAngles[]={0.f,15.f,30.f,45.f,60.f,75.f,90.f};
+        char const* poseMaterials[]={"dirt","clay","sand","gravel","stone","sandstone","shale",
+            "limestone","granite","mica_schist","basalt","hematite","azurite","gold","quartz",
+            "amethyst","ruby","lapis","emerald"};
+        for(size_t pmi=0;pmi<sizeof(poseMaterials)/sizeof(poseMaterials[0])&&poseOk;++pmi)
+        for(float angle:poseAngles)
+        {
+            float const buildAngle=angle>=89.9f?0.f:angle;
+            float const slope=std::tan(buildAngle*PickFracture::kPi/180.f);
+            auto fixtureGround=[=](float x,float)->float{return slope*x;};
+            PickFracture::Vec3 N=PickFracture::Norm(PickFracture::V3(-slope,0,1));
+            PickFracture::FractureEvent fresh=PickFracture::BuildEvent(
+                PickFracture::V3(0,0,0),N,PickFracture::V3(0,1,0),poseMaterials[pmi],
+                0xFA5700u+(uint64_t)pmi,nullptr);
+            FractureSurface::Patch fp=FractureSurface::BuildPatch({fresh},fixtureGround,0.025f);
+            std::vector<FractureSurface::Tri> wall=fp.tris;
+            FractureSurface::Vec3 O{N.x*0.35f,N.y*0.35f,N.z*0.35f};
+            FractureSurface::Vec3 D{-N.x,-N.y,-N.z};
+            if(angle>=89.9f)
+            {
+                for(FractureSurface::Tri&t:wall){t.a=rotateFs(t.a,90.f);t.b=rotateFs(t.b,90.f);t.c=rotateFs(t.c,90.f);}
+                O=rotateFs(O,90.f);D=rotateFs(D,90.f);
+            }
+            FractureSurface::Vec3 H{},HN{};
+            bool const hitOk=!wall.empty()&&raycast(wall,O,D,H,HN);
+            if(!hitOk){poseOk=false;poseFailAngle=angle;poseFailMat=poseMaterials[pmi];break;}++poseHits;
+            for(FractureSurface::Tri const&t:wall)
+            {
+                FractureSurface::Vec3 const nn=FractureSurface::Cross(FractureSurface::Sub(t.b,t.a),FractureSurface::Sub(t.c,t.a));
+                float const area2=std::sqrt(FractureSurface::Dot(nn,nn));
+                if(!std::isfinite(area2)||area2<1e-9f){poseOk=false;poseFailAngle=angle;poseFailMat=poseMaterials[pmi];break;}
+            }
+            if(!poseOk)break;
+        }
+        {
+            char note[192];std::snprintf(note,sizeof(note),"materials=19 rayHits=%d/133 HF=0..75 D2wall=90 fail=%s@%.0f",
+                poseHits,poseFailMat,poseFailAngle);
+            PickFracture::CertAdd(R,"mesh_pose_contact_matrix",poseOk&&poseHits==133?"PASS":"FAIL",note);
+        }
+
+        // Full reconstructed-solid continuity matrix.  The event-only matrix above
+        // cannot catch a renderer that rounds the approved pick signature, tears a
+        // backside, or quietly owns cells outside the strike collar.  Every fixture
+        // below begins on a proven air/solid bracket of a material half-space, builds
+        // the actual local reconstruction, and inspects it from all six directions.
+        {
+            char const* materials[]={"dirt","clay","sand","gravel","stone","sandstone",
+                "shale","limestone","granite","mica_schist","basalt","hematite","azurite",
+                "gold","quartz","amethyst","ruby","lapis","emerald"};
+            float const angles[]={0.f,15.f,30.f,45.f,60.f,75.f,90.f};
+            PickFracture::Vec3 const attacks[]={
+                {0,0,-1},{0.574f,0,-0.819f},{-0.574f,0,-0.819f},
+                {0,0.574f,-0.819f},{0,-0.574f,-0.819f}};
+            PickFracture::Vec3 const prys[]={{1,0,0},{0,1,0},{-1,0,0},{0,-1,0}};
+            PickFracture::Vec3 const structures[]={{0,0,1},{1,0,0},{0.7071f,0.7071f,0}};
+            auto rotY=[](PickFracture::Vec3 p,float deg){float const a=deg*PickFracture::kPi/180.f;
+                float const c=std::cos(a),s=std::sin(a);
+                return PickFracture::V3(c*p.x+s*p.z,p.y,-s*p.x+c*p.z);};
+            auto worldPoint=[](PickFracture::FractureEvent const&e,PickFracture::Vec3 q){
+                return PickFracture::Add(e.frame.origin,PickFracture::Add(
+                    PickFracture::Mul(e.frame.T,q.x),PickFracture::Add(
+                    PickFracture::Mul(e.frame.B,q.y),PickFracture::Mul(e.frame.N,q.z))));};
+            int cases=0,solidContacts=0,airContacts=0,sweepHits=0,sweepExpected=0;
+            int unexplainedEdges=0,nonManifoldEdges=0,badNormals=0,shapeMiss=0;
+            int approvedMismatch=0;float maxExpansion=0.f,maxShapeDelta=0.f;
+            float firstEdge[6]={};float firstEdgeBoundary=0.f,firstEdgeLength=0.f;
+            float firstNormalPlus=0.f,firstNormalMinus=0.f,firstNormalC[3]={};
+            bool allOk=true;char first[192]="-";
+            for(size_t mi=0;mi<sizeof(materials)/sizeof(materials[0])&&allOk;++mi)
+            {
+                H2H::MaterialFormContract const& form=H2H::FormOrDirt(materials[mi]);
+                bool const anis=form.fabric==H2H::FabricKind::FoliatedAnisotropic
+                    ||form.fabric==H2H::FabricKind::BeddedFissile;
+                int const structN=anis?3:1;
+                for(int si=0;si<structN&&allOk;++si)
+                for(int ai=0;ai<5&&allOk;++ai)
+                for(int pi=0;pi<4&&allOk;++pi)
+                {
+                    float baseDepth[9]={};bool haveBase=false;
+                    for(float angle:angles)
+                    {
+                        bool const wall=angle>=89.9f;
+                        float const buildAngle=wall?0.f:angle;
+                        float const rad=buildAngle*PickFracture::kPi/180.f;
+                        float const slope=std::tan(rad);
+                        auto fixtureGround=[=](float x,float)->float{return slope*x;};
+                        PickFracture::Vec3 N=PickFracture::Norm(PickFracture::V3(-slope,0,1));
+                        PickFracture::Vec3 WT=PickFracture::Norm(PickFracture::V3(1,0,slope));
+                        PickFracture::Vec3 WB=PickFracture::V3(0,1,0);
+                        auto wf=[&](PickFracture::Vec3 L){return PickFracture::Add(
+                            PickFracture::Mul(WT,L.x),PickFracture::Add(
+                            PickFracture::Mul(WB,L.y),PickFracture::Mul(N,L.z)));};
+                        RockStruct::Foliation fol{};PickFracture::Vec3 const fn=PickFracture::Norm(wf(structures[si]));
+                        fol.nx=fn.x;fol.ny=fn.y;fol.nz=fn.z;
+                        uint64_t const seed=PickFracture::HashMix(0xC105EDull,
+                            (uint64_t)mi*131ull+(uint64_t)ai*17ull+(uint64_t)pi*5ull+(uint64_t)si);
+                        PickFracture::FractureEvent fe=PickFracture::BuildEventDetailed(
+                            PickFracture::V3(0,0,0),N,PickFracture::Norm(wf(attacks[ai])),
+                            PickFracture::Norm(wf(prys[pi])),0.060f,25.f*PickFracture::kPi/180.f,
+                            0.020f,materials[mi],seed,anis?&fol:nullptr);
+                        FractureSurface::Patch fp=FractureSurface::BuildPatch({fe},fixtureGround);
+                        ++cases;
+                        // Pre-action body bracket: +N is exterior air, -N is attached matter.
+                        float const preAir=-0.003f,preSolid=0.003f;
+                        if(preAir<0.f&&preSolid>0.f)++solidContacts;else ++airContacts;
+                        if(!fe.ok||fp.tris.empty()||fp.regions.size()!=1)
+                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f empty/invalid",materials[mi],angle);break;}
+                        if(std::strcmp(materials[mi],"limestone")==0
+                            &&(std::strcmp(fe.morphology,"compact_angular")!=0
+                            ||fe.env.angularSharp<0.75f||std::fabs(fe.env.tHalf-fe.env.bHalf)<0.005f))
+                        {++approvedMismatch;allOk=false;std::snprintf(first,sizeof(first),"limestone@%.0f signature",angle);break;}
+
+                        FractureSurface::Region const& physical=fp.eventBounds.front();
+                        FractureSurface::Region const& owned=fp.regions.front();
+                        float const expansion=(std::max)({physical.minX-owned.minX,
+                            physical.minY-owned.minY,physical.minZ-owned.minZ,
+                            owned.maxX-physical.maxX,owned.maxY-physical.maxY,
+                            owned.maxZ-physical.maxZ});
+                        maxExpansion=(std::max)(maxExpansion,expansion);
+                        if(expansion>fp.spacing*1.52f)
+                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f expansion=%.4f",materials[mi],angle,expansion);break;}
+
+                        // Classify every exposed edge before the optional 90-degree body transform.
+                        // Edge identity uses numerical mesh precision, not a visual
+                        // welding tolerance; coarse quantization can collapse distinct
+                        // sub-millimetre slope intersections into false non-manifold edges.
+                        // Canonicalize at 1/512 cell (48.8 micrometres at the current
+                        // 2.5 cm lattice).  This is below raster/collision precision,
+                        // yet wide enough to identify the same interpolated crossing
+                        // when adjacent tetrahedra reach it through different FLOP order.
+                        float const qq=fp.spacing/512.f;
+                        auto qii=[&](float v){return(int)std::lround(v/qq);};
+                        auto ekey=[&](FractureSurface::Vec3 a,FractureSurface::Vec3 b){
+                            int aa[3]={qii(a.x),qii(a.y),qii(a.z)},bb[3]={qii(b.x),qii(b.y),qii(b.z)};
+                            bool sw=aa[0]>bb[0]||(aa[0]==bb[0]&&(aa[1]>bb[1]||(aa[1]==bb[1]&&aa[2]>bb[2])));
+                            if(sw)for(int k=0;k<3;++k)std::swap(aa[k],bb[k]);
+                            return EdgeKey{aa[0],aa[1],aa[2],bb[0],bb[1],bb[2]};};
+                        std::unordered_map<EdgeKey,int,EdgeHash> em;
+                        for(auto const&t:fp.tris){++em[ekey(t.a,t.b)];++em[ekey(t.b,t.c)];++em[ekey(t.c,t.a)];}
+                        auto handoff=[&](EdgeKey const& e){auto atSide=[&](int x,int y,int z){
+                            float const X=x*qq,Y=y*qq,Z=z*qq,eps=fp.spacing*0.08f;
+                            return std::fabs(X-owned.minX)<eps||std::fabs(X-owned.maxX)<eps
+                                ||std::fabs(Y-owned.minY)<eps||std::fabs(Y-owned.maxY)<eps;};
+                            auto atZHf=[&](int x,int y,int z){
+                                float const X=x*qq,Y=y*qq,Z=z*qq,eps=fp.spacing*0.08f;
+                                if(std::fabs(Z-owned.maxZ)<eps)return true;
+                                if(std::fabs(Z-owned.minZ)>=eps)return false;
+                                PickFracture::Vec3 const ql=PickFracture::WorldToLocal(
+                                    fe.frame,PickFracture::V3(X,Y,Z));
+                                return PickFracture::LocalEnvelopeDistance(fe.env,ql)>=0.98f
+                                    ||std::fabs(Z-fixtureGround(X,Y))<fp.spacing*0.70f;};
+                            return (atSide(e.ax,e.ay,e.az)&&atSide(e.bx,e.by,e.bz))
+                                ||(atZHf(e.ax,e.ay,e.az)&&atZHf(e.bx,e.by,e.bz));};
+                        for(auto const& kv:em)
+                        {
+                            if(kv.second>2)++nonManifoldEdges;
+                            else if(kv.second==1&&!handoff(kv.first))
+                            {
+                                if(unexplainedEdges==0)
+                                {
+                                    EdgeKey const& e=kv.first;
+                                    firstEdge[0]=e.ax*qq;firstEdge[1]=e.ay*qq;firstEdge[2]=e.az*qq;
+                                    firstEdge[3]=e.bx*qq;firstEdge[4]=e.by*qq;firstEdge[5]=e.bz*qq;
+                                    float const mx=.5f*(firstEdge[0]+firstEdge[3]);
+                                    float const my=.5f*(firstEdge[1]+firstEdge[4]);
+                                    float const mz=.5f*(firstEdge[2]+firstEdge[5]);
+                                    firstEdgeBoundary=(std::min)({std::fabs(mx-owned.minX),std::fabs(mx-owned.maxX),
+                                        std::fabs(my-owned.minY),std::fabs(my-owned.maxY),
+                                        std::fabs(mz-owned.minZ),std::fabs(mz-owned.maxZ)});
+                                    float const ex=firstEdge[3]-firstEdge[0],ey=firstEdge[4]-firstEdge[1],ez=firstEdge[5]-firstEdge[2];
+                                    firstEdgeLength=std::sqrt(ex*ex+ey*ey+ez*ez);
+                                }
+                                ++unexplainedEdges;
+                            }
+                        }
+                        if(nonManifoldEdges||unexplainedEdges)
+                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f edge u=%d n=%d z=%.4f:%.4f own=%.4f:%.4f len=%.5f",
+                            materials[mi],angle,unexplainedEdges,nonManifoldEdges,firstEdge[2],firstEdge[5],
+                            owned.minZ,owned.maxZ,firstEdgeLength);break;}
+
+                        if(wall)
+                        {
+                            for(auto& t:fp.tris)for(FractureSurface::Vec3* v:{&t.a,&t.b,&t.c})
+                            {PickFracture::Vec3 const rv=rotY(PickFracture::V3(v->x,v->y,v->z),90.f);v->x=rv.x;v->y=rv.y;v->z=rv.z;}
+                            fe.frame.origin=rotY(fe.frame.origin,90.f);fe.frame.T=rotY(fe.frame.T,90.f);
+                            fe.frame.B=rotY(fe.frame.B,90.f);fe.frame.N=rotY(fe.frame.N,90.f);
+                        }
+                        auto truth=[&](PickFracture::Vec3 p){PickFracture::Vec3 const ql=PickFracture::WorldToLocal(fe.frame,p);
+                            float const body=-ql.z;float const outside=(PickFracture::LocalEnvelopeDistance(fe.env,ql)-1.f)
+                                *FractureSurface::CharacteristicM(fe);return(std::min)(body,outside);};
+                        float const neps=fp.spacing*0.30f;
+                        for(auto const&t:fp.tris)
+                        {
+                            FractureSurface::Vec3 nn=FractureSurface::Cross(
+                                FractureSurface::Sub(t.b,t.a),FractureSurface::Sub(t.c,t.a));
+                            float const nl=std::sqrt(FractureSurface::Dot(nn,nn));
+                            if(!std::isfinite(nl)||nl<1e-9f){++badNormals;continue;}
+                            nn=FractureSurface::Mul(nn,1.f/nl);
+                            PickFracture::Vec3 const C=PickFracture::V3((t.a.x+t.b.x+t.c.x)/3.f,
+                                (t.a.y+t.b.y+t.c.y)/3.f,(t.a.z+t.b.z+t.c.z)/3.f);
+                            PickFracture::Vec3 const NW=PickFracture::V3(nn.x,nn.y,nn.z);
+                            float const plus=truth(PickFracture::Add(C,PickFracture::Mul(NW,neps)));
+                            float const minus=truth(PickFracture::Add(C,PickFracture::Mul(NW,-neps)));
+                            // Classify winding only when occupancy actually brackets
+                            // the surface.  A solid +normal / air -normal bracket is
+                            // unconditionally reversed.  When both probes land on the
+                            // same side of the analytic nonlinear crease, accept only
+                            // the same bounded 0.7-cell residual used by the certified
+                            // half-apple surface-accuracy gate.
+                            bool const correctBracket=plus<=0.f&&minus>=0.f;
+                            bool const reversedBracket=plus>0.f&&minus<0.f;
+                            bool const sameSideResidual=!reversedBracket
+                                &&plus*minus>=0.f
+                                &&(std::max)(std::fabs(plus),std::fabs(minus))<=fp.spacing*0.70f;
+                            if(!(correctBracket||sameSideResidual))
+                            {
+                                if(badNormals==0){firstNormalPlus=plus;firstNormalMinus=minus;
+                                    firstNormalC[0]=C.x;firstNormalC[1]=C.y;firstNormalC[2]=C.z;}
+                                ++badNormals;
+                            }
+                        }
+                        if(badNormals)
+                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f normals=%d p=%.5f m=%.5f C=(%.3f,%.3f,%.3f)",
+                            materials[mi],angle,badNormals,firstNormalPlus,firstNormalMinus,
+                            firstNormalC[0],firstNormalC[1],firstNormalC[2]);break;}
+
+                        // Exterior, ±tangent, ±binormal/underside, and interior/backside.
+                        PickFracture::Vec3 const target=worldPoint(fe,PickFracture::V3(0,0,-fe.env.nInto*0.35f));
+                        PickFracture::Vec3 origins[6]={
+                            worldPoint(fe,{0,0,fe.env.nAir+0.18f}),
+                            worldPoint(fe,{fe.env.tHalf+0.18f,0,-fe.env.nInto*0.45f}),
+                            worldPoint(fe,{-fe.env.tHalf-0.18f,0,-fe.env.nInto*0.45f}),
+                            worldPoint(fe,{0,fe.env.bHalf+0.18f,-fe.env.nInto*0.45f}),
+                            worldPoint(fe,{0,-fe.env.bHalf-0.18f,-fe.env.nInto*0.45f}),
+                            worldPoint(fe,{0,0,-fe.env.nInto-0.18f})};
+                        for(int oi=0;oi<6;++oi)
+                        {
+                            PickFracture::Vec3 const& O=origins[oi];
+                            PickFracture::Vec3 const DW=PickFracture::Norm(PickFracture::Sub(target,O));
+                            FractureSurface::Vec3 H{},HN{};++sweepExpected;
+                            bool sweepHit=raycast(fp.tris,{O.x,O.y,O.z},{DW.x,DW.y,DW.z},H,HN);
+                            // A symmetry-axis ray may land exactly on a shared MT
+                            // vertex. Retry parallel probes within 0.5 mm; this is far
+                            // below the pick mouth, so an actual opening still misses.
+                            float const jitter=fp.spacing*0.02f;
+                            PickFracture::Vec3 const offsets[]={
+                                PickFracture::Mul(fe.frame.T,jitter),PickFracture::Mul(fe.frame.T,-jitter),
+                                PickFracture::Mul(fe.frame.B,jitter),PickFracture::Mul(fe.frame.B,-jitter)};
+                            for(int ji=0;ji<4&&!sweepHit;++ji)
+                            {
+                                PickFracture::Vec3 const JO=PickFracture::Add(O,offsets[ji]);
+                                sweepHit=raycast(fp.tris,{JO.x,JO.y,JO.z},{DW.x,DW.y,DW.z},H,HN);
+                            }
+                            if(sweepHit&&std::isfinite(HN.x)&&std::isfinite(HN.y)&&std::isfinite(HN.z))++sweepHits;
+                            else {allOk=false;std::snprintf(first,sizeof(first),
+                                "%s@%.0f sw=%d pz=%.3f:%.3f oz=%.3f:%.3f",
+                                materials[mi],angle,oi,
+                                physical.minZ,physical.maxZ,owned.minZ,owned.maxZ);break;}
+                        }
+                        if(!allOk)break;
+
+                        float depths[9]={};int di=0;
+                        for(int vv=-1;vv<=1;++vv)for(int uu=-1;uu<=1;++uu,++di)
+                        {
+                            PickFracture::Vec3 const O=worldPoint(fe,{uu*0.35f*fe.env.tHalf,
+                                vv*0.35f*fe.env.bHalf,fe.env.nAir+0.14f});
+                            PickFracture::Vec3 const DW=PickFracture::Mul(fe.frame.N,-1.f);
+                            FractureSurface::Vec3 H{},HN{};
+                            if(!raycast(fp.tris,{O.x,O.y,O.z},{DW.x,DW.y,DW.z},H,HN))
+                            {++shapeMiss;allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f shapeRay",materials[mi],angle);break;}
+                            PickFracture::Vec3 const ql=PickFracture::WorldToLocal(fe.frame,
+                                PickFracture::V3(H.x,H.y,H.z));depths[di]=-ql.z;
+                            if(haveBase){float const delta=std::fabs(depths[di]-baseDepth[di]);
+                                maxShapeDelta=(std::max)(maxShapeDelta,delta);
+                                if(delta>fp.spacing*2.25f){allOk=false;std::snprintf(first,sizeof(first),
+                                    "%s@%.0f shapeDelta=%.4f ray=%d base=%.4f got=%.4f",
+                                    materials[mi],angle,delta,di,baseDepth[di],depths[di]);break;}}
+                            else baseDepth[di]=depths[di];
+                        }
+                        if(!allOk)break;haveBase=true;
+                    }
+                }
+            }
+            char note[256];std::snprintf(note,sizeof(note),
+                "cases=%d solid=%d air=%d sweeps=%d/%d edgeU=%d nonMan=%d normals=%d shapeMiss=%d approvedMismatch=%d maxShapeDelta=%.4f expansion=%.4f first=%s",
+                cases,solidContacts,airContacts,sweepHits,sweepExpected,unexplainedEdges,
+                nonManifoldEdges,badNormals,shapeMiss,approvedMismatch,maxShapeDelta,maxExpansion,first);
+            PickFracture::CertAdd(R,"full_solid_shape_closure_continuity_matrix",
+                allOk&&cases==3500&&solidContacts==cases&&airContacts==0&&sweepHits==sweepExpected
+                    ?"PASS":"FAIL",note);
+        }
+
+        // Progressive strike: reacquire strike two from the actual triangles produced
+        // after strike one. A coordinate derived from the virgin crest is not accepted.
+        FractureSurface::Vec3 hit2{},normal2{};
+        FractureSurface::Vec3 ro{0,0,0.30f},rd{0,0,-1};
+        bool const acquired2=raycast(patch.tris,ro,rd,hit2,normal2);
+        float interiorDepth=0.f;FractureSurface::Patch progressive;
+        PickFracture::FractureEvent ev2{};
+        if(acquired2)
+        {
+            PickFracture::Vec3 const H=PickFracture::V3(hit2.x,hit2.y,hit2.z);
+            interiorDepth=-PickFracture::WorldToLocal(ev.frame,H).z;
+            ev2=PickFracture::BuildEventDetailed(H,
+                PickFracture::V3(normal2.x,normal2.y,normal2.z),
+                PickFracture::V3(-normal2.x,-normal2.y,-normal2.z),ev.frame.B,
+                0.06f,25.f*PickFracture::kPi/180.f,0.02f,"granite",0xA992Eu,nullptr);
+            progressive=FractureSurface::BuildPatch({ev,ev2},ground,0.01f);
+        }
+        bool const progressiveOk=acquired2&&interiorDepth>patch.spacing
+            &&ev2.ok&&!progressive.tris.empty();
+        {
+            char note[160];std::snprintf(note,sizeof(note),"acquired=%d interiorDepth=%.4f tris=%d",
+                acquired2?1:0,interiorDepth,(int)progressive.tris.size());
+            PickFracture::CertAdd(R,"progressive_mesh_recontact",progressiveOk?"PASS":"FAIL",note,
+                hit2.x,hit2.y,hit2.z);
+        }
+
+        // Adjacent strikes remain separate until their physical envelopes overlap,
+        // then the production patch grouper must publish one connected replacement.
+        PickFracture::FractureEvent left=ev,right=ev;
+        left.frame.origin=PickFracture::V3(-0.055f,0,0);
+        right.frame.origin=PickFracture::V3(0.055f,0,0);
+        std::vector<FractureSurface::Patch> merged=FractureSurface::BuildConnectedPatches({left,right},ground,0.0125f);
+        right.frame.origin=PickFracture::V3(0.45f,0,0);
+        std::vector<FractureSurface::Patch> separate=FractureSurface::BuildConnectedPatches({left,right},ground,0.0125f);
+        bool const mergeOk=merged.size()==1&&!merged[0].tris.empty()&&separate.size()==2;
+        {
+            char note[128];std::snprintf(note,sizeof(note),"overlapPatches=%d separatePatches=%d",
+                (int)merged.size(),(int)separate.size());
+            PickFracture::CertAdd(R,"adjacent_mesh_merge",mergeOk?"PASS":"FAIL",note);
+        }
+
+        // Consecutive connected strikes must not fine-mesh their aggregate rectangle.
+        // Walk a U-shaped chain: the boolean remains connected, while reconstruction
+        // ownership and work remain the sparse union of tool-local envelopes.
+        {
+            std::vector<PickFracture::FractureEvent> chain;
+            auto pushAt=[&](float x,float y){auto e=ev;e.frame.origin=PickFracture::V3(x,y,0);chain.push_back(e);};
+            constexpr float step=0.10f;
+            for(int i=0;i<7;++i)pushAt((float)i*step,0.f);
+            for(int j=1;j<6;++j)pushAt(0.f,(float)j*step);
+            for(int j=1;j<6;++j)pushAt(6.f*step,(float)j*step);
+            std::vector<FractureSurface::Patch> sparse=FractureSurface::BuildConnectedPatches(
+                chain,ground,0.015625f);
+            FractureSurface::Patch single=FractureSurface::BuildPatch({chain[0]},ground,0.015625f);
+            int active=0,tris=0,box=0,regions=0;
+            float maxExpansion=0.f;
+            for(auto const& p:sparse){active+=p.activeCells;tris+=(int)p.tris.size();
+                box+=p.nx*p.ny*p.nz;regions+=(int)p.regions.size();}
+            if(sparse.size()==1&&sparse[0].regions.size()==chain.size())
+            for(size_t i=0;i<chain.size();++i)
+            {
+                float a,b,c,d,e,f;PickFracture::WorldAabb(chain[i],a,b,c,d,e,f);
+                float best=1e9f;
+                for(auto const& q:sparse[0].regions)
+                {
+                    // Match independently of connected-component BFS ordering.
+                    float const containsPenalty=(q.minX>a||q.minY>b||q.minZ>c
+                        ||q.maxX<d||q.maxY<e||q.maxZ<f)?10.f:0.f;
+                    float const expansion=(std::max)({a-q.minX,b-q.minY,c-q.minZ,
+                        q.maxX-d,q.maxY-e,q.maxZ-f});
+                    best=(std::min)(best,containsPenalty+expansion);
+                }
+                maxExpansion=(std::max)(maxExpansion,best);
+            }
+            float const fill=box>0?(float)active/(float)box:1.f;
+            bool const localBounds=!sparse.empty()&&regions==(int)chain.size()
+                &&maxExpansion<=0.015625f*1.52f;
+            bool const linearLoad=single.activeCells>0&&active<=single.activeCells*(int)chain.size()
+                &&tris<=(int)single.tris.size()*(int)chain.size();
+            bool const sparseBox=sparse.size()==1&&fill<0.72f;
+            char note[192];std::snprintf(note,sizeof(note),
+                "events=%d patches=%d regions=%d expansion=%.4f cells=%d box=%d fill=%.3f tris=%d single=%d/%d",
+                (int)chain.size(),(int)sparse.size(),regions,maxExpansion,active,box,fill,tris,
+                single.activeCells,(int)single.tris.size());
+            PickFracture::CertAdd(R,"consecutive_sparse_subdivision_load",
+                localBounds&&linearLoad&&sparseBox?"PASS":"FAIL",note);
+        }
+
+        // Long progressive column: every strike is acquired from the current mesh.
+        // The nearest surface may only move deeper; any virgin roof/slab publication
+        // makes ray T regress and fails immediately.
+        {
+            std::vector<PickFracture::FractureEvent> history{ev};
+            FractureSurface::Patch const one=FractureSurface::BuildPatch({ev},ground,0.015625f);
+            FractureSurface::Patch p;
+            float firstT=0.f,lastT=0.f,minStep=1e9f;
+            bool monotonic=true,allHit=true;
+            constexpr int kStrikes=24;
+            for(int strike=0;strike<kStrikes;++strike)
+            {
+                p=FractureSurface::BuildPatch(history,ground,0.015625f);
+                FractureSurface::Vec3 h{},n{};
+                bool const hit=raycast(p.tris,{0,0,1.f},{0,0,-1.f},h,n);
+                if(!hit){allHit=false;break;}
+                float const t=1.f-h.z;
+                if(strike==0)firstT=t;
+                else
+                {
+                    float const dt=t-lastT;
+                    minStep=(std::min)(minStep,dt);
+                    if(dt<=0.005f){monotonic=false;break;}
+                }
+                lastT=t;
+                if(strike+1<kStrikes)
+                {
+                    PickFracture::FractureEvent next=ev;
+                    next.frame=PickFracture::MakeContactFrame(
+                        PickFracture::V3(h.x,h.y,h.z),
+                        PickFracture::V3(n.x,n.y,n.z),ev.frame.T);
+                    history.push_back(next);
+                }
+            }
+            int const box=p.nx*p.ny*p.nz;
+            // Global snapped Z can add one boundary layer over the sum of isolated
+            // regions; allow 5%, never aggregate-volume growth.
+            bool const bounded=p.activeCells>0
+                &&p.activeCells<=(int)std::ceil((float)one.activeCells*kStrikes*1.05f);
+            bool const ok=allHit&&monotonic&&(lastT-firstT)>0.50f
+                &&p.regions.size()==history.size()&&bounded;
+            char note[192];std::snprintf(note,sizeof(note),
+                "strikes=%d hit=%d monotonic=%d depth=%.3f minStep=%.4f cells=%d box=%d tris=%d",
+                (int)history.size(),allHit?1:0,monotonic?1:0,lastT-firstT,minStep,
+                p.activeCells,box,(int)p.tris.size());
+            PickFracture::CertAdd(R,"progressive_24_no_reconstructed_roof",ok?"PASS":"FAIL",note);
+        }
+
+        // Body-scale acceptance fixture: an arched 0.9 m x 1.9 m x 1.2 m stone
+        // shelter assembled exclusively from overlapping 4.9 cm half-apple strikes.
+        // A synthetic cliff makes front-air/back-rock unambiguous and catches the
+        // former headless false positive where an open rear/sky path went unnoticed.
+        {
+            ShelterStampSpec spec{};
+            spec.floorCenter = PickFracture::V3( 0.f,0.f,0.05f );
+            spec.outwardN = PickFracture::V3( -1.f,0.f,0.f );
+            auto cliff = []( float x,float ) -> float { return x >= 0.f ? 2.40f : 0.f; };
+            ShelterExcavationAudit syntheticAudit{};
+            std::vector<PickFracture::FractureEvent> const doorway =
+                BuildShelterStampEvents( spec,&syntheticAudit,cliff );
+            ULONGLONG const t0 = GetTickCount64();
+            FractureSurface::Patch const shelter =
+                FractureSurface::BuildPatch( doorway,cliff,0.025f );
+            ULONGLONG const buildMs = GetTickCount64() - t0;
+
+            bool finite = !shelter.tris.empty();
+            float maxEdge = 0.f;
+            for ( FractureSurface::Tri const& tri : shelter.tris )
+            {
+                FractureSurface::Vec3 const v[3] = { tri.a,tri.b,tri.c };
+                for ( int i=0;i<3;++i )
+                {
+                    finite = finite && std::isfinite(v[i].x)
+                        && std::isfinite(v[i].y) && std::isfinite(v[i].z);
+                    FractureSurface::Vec3 const d = FractureSurface::Sub(v[i],v[(i+1)%3]);
+                    maxEdge = (std::max)(maxEdge,std::sqrt(FractureSurface::Dot(d,d)));
+                }
+            }
+            bool clearance = true;
+            int airSamples = 0;
+            int blockedSamples = 0;
+            float blockedX=0.f,blockedY=0.f,blockedZ=0.f,blockedPhi=0.f;
+            // A 0.35 m-radius, 1.8288 m player capsule must fit along the passage.
+            for ( float x=0.08f;x<=1.08f;x+=0.10f )
+            for ( float y=-0.35f;y<=0.35f;y+=0.05f )
+            for ( float z=spec.floorCenter.z+0.03f;
+                z<=spec.floorCenter.z+kCharHeightM-0.02f;z+=0.08f )
+            {
+                float const bodyZ=z-spec.floorCenter.z;
+                float bodyHalf=kCapsuleRadiusM;
+                if(bodyZ<kCapsuleRadiusM)
+                    bodyHalf=std::sqrt((std::max)(0.f,kCapsuleRadiusM*kCapsuleRadiusM
+                        -(bodyZ-kCapsuleRadiusM)*(bodyZ-kCapsuleRadiusM)));
+                else if(bodyZ>kCharHeightM-kCapsuleRadiusM)
+                    bodyHalf=std::sqrt((std::max)(0.f,kCapsuleRadiusM*kCapsuleRadiusM
+                        -(bodyZ-(kCharHeightM-kCapsuleRadiusM))
+                        *(bodyZ-(kCharHeightM-kCapsuleRadiusM))));
+                if(std::fabs(y)>bodyHalf)continue;
+                float const archStart = spec.floorCenter.z + spec.sideHeightM;
+                float const dz = (std::max)(0.f,z-archStart);
+                float const allowed = dz <= 0.f ? spec.widthM*0.5f
+                    : std::sqrt((std::max)(0.f,spec.archRadiusM*spec.archRadiusM-dz*dz));
+                ++airSamples;
+                float const phi=FractureSurface::SolidField(shelter,cliff,x,y,z);
+                if(std::fabs(y)>allowed-0.02f || phi>=0.f)
+                {
+                    clearance=false;
+                    if(blockedSamples++==0){blockedX=x;blockedY=y;blockedZ=z;blockedPhi=phi;}
+                }
+            }
+            bool rearClosed = true;
+            for(float y=-0.30f;y<=0.30f;y+=0.10f)
+            for(float z=0.20f;z<=1.75f;z+=0.15f)
+                rearClosed = rearClosed
+                    && FractureSurface::SolidField(shelter,cliff,1.32f,y,z)>0.f;
+            bool outsideStable = true;
+            for(float x=0.1f;x<=1.1f;x+=0.2f)
+            for(float z=0.2f;z<=1.6f;z+=0.2f)
+                outsideStable = outsideStable
+                    && FractureSurface::SolidField(shelter,cliff,x,0.56f,z)>0.f;
+            int const denseBox=shelter.nx*shelter.ny*shelter.nz;
+            float const sparseFill=denseBox>0?(float)shelter.activeCells/(float)denseBox:1.f;
+            bool const boundedLoad=shelter.activeCells>0&&shelter.activeCells<260000
+                &&shelter.tris.size()<350000&&buildMs<12000
+                &&shelter.footprintRegions.size()<1000;
+            bool const noSpikes=finite&&maxEdge<=shelter.spacing*1.82f;
+            bool const causal=syntheticAudit.solidContacts==(int)doorway.size()
+                &&syntheticAudit.airContacts==0&&syntheticAudit.blockedRays==0
+                &&syntheticAudit.completedRays==syntheticAudit.rays;
+            bool const ok=doorway.size()>1000&&causal&&clearance&&airSamples>1000
+                &&rearClosed&&outsideStable&&boundedLoad&&noSpikes;
+            char note[256];std::snprintf(note,sizeof(note),
+                "strikes=%d cells=%d tris=%d footprint=%d box=%d fill=%.3f ms=%llu air=%d blocked=%d first=(%.2f,%.2f,%.2f;%.3f) rear=%d outside=%d edge=%.4f",
+                (int)doorway.size(),shelter.activeCells,(int)shelter.tris.size(),
+                (int)shelter.footprintRegions.size(),denseBox,sparseFill,
+                (unsigned long long)buildMs,airSamples,blockedSamples,
+                blockedX,blockedY,blockedZ,blockedPhi,rearClosed?1:0,outsideStable?1:0,maxEdge);
+            PickFracture::CertAdd(R,"body_scale_arched_shelter_load_and_closure",
+                ok?"PASS":"FAIL",note);
+        }
+    }
+
+    void CertPickMatrixOnlyTick()
+    {
+        if(!g.certPickMatrixOnly)return;
+        PickFracture::CertResult R=PickFracture::RunHeadlessCert();
+        AppendFractureSurfaceGeometryCert(R);
+        PickFracture::WriteCertArtifact(R,"Docs\\provenance_pick_fracture_cert.txt",nullptr);
+        g.certPickMatrixOnly=false;PostQuitMessage(R.exitCode);
+    }
+
     void CertPickFractureTick()
     {
         if ( !g.certPickFracture ) { return; }
-        if ( g.certPickFracturePhase != 0 ) { return; }
-        g.certPickFracturePhase = 1;
+        if ( g.certPickFracturePhase == 0 )
+        {
+            // Exercise the same live soft-scoop event construction used by gameplay.
+            g.certPickVisualX = g.feetX;
+            g.certPickVisualY = g.feetY + 0.70f;
+            float bestNz=-1.f;
+            for(int j=-12;j<=12;++j)for(int i=-12;i<=12;++i)
+            {
+                float const x=g.feetX+(float)i*0.25f;
+                float const y=g.feetY+0.70f+(float)j*0.25f;
+                float nx=0,ny=0,nz=1;CaptureFaceNormalAt(x,y,nx,ny,nz);
+                if(nz>bestNz){bestNz=nz;g.certPickVisualX=x;g.certPickVisualY=y;}
+            }
+            EnsureGeoDisk((int)std::floor(g.certPickVisualX),(int)std::floor(g.certPickVisualY),4);
+            SampleGroundZBase( g.certPickVisualX, g.certPickVisualY, g.certPickVisualZ );
+            g.aimHit=true;g.aimX=g.certPickVisualX;g.aimY=g.certPickVisualY;g.aimZ=g.certPickVisualZ;
+            g.aimNx=0;g.aimNy=0;g.aimNz=1;g.aimFromFractureSurface=false;
+            DigAffectSpec live{};live.mode=DigAffectMode::ScoopHemi;
+            live.radiusM=0.049f;live.depthM=0.049f;live.volumeM3=SphereVolumeM3(live.radiusM);
+            H2H::MaterialFormContract const& grass=H2H::FormOrDirt("grass");
+            g.fractureEvents.clear();g.fracturePatches.clear();
+            // Renderer-backed progressive column, not a one-strike beauty shot.
+            // Every event begins on the prior half-apple floor.
+            constexpr int kIntegratedStrikes=12;
+            for(int i=0;i<kIntegratedStrikes;++i)
+            {
+                g.aimZ=g.certPickVisualZ-(float)i*live.depthM;
+                PickFracture::FractureEvent const stepEv=BuildAnalyticDigEvent(
+                    live,grass,0,0,1,0,0,-1,0xA991Eu+(uint64_t)i);
+                CarveOccupancyFracture(stepEv);
+            }
+            g.aimZ=g.certPickVisualZ;
+            InvalidateTerrainMesh("cert_pick_integrated");
+            g.certPickFractureWait=0;
+            g.certPickFracturePhase=1;
+            return;
+        }
+        if ( g.certPickFracturePhase == 1 )
+        {
+            // Hold a deterministic top-down camera on the actual replacement patch.
+            // The former grazing view could put the horizon in the sample window and
+            // certify camera aim rather than cavity coverage.
+            g.camX=g.certPickVisualX;
+            g.camY=g.certPickVisualY;
+            float camGround=g.certPickVisualZ;
+            SampleGroundZBase(g.camX,g.camY,camGround);
+            // A full metre of clearance prevents a newly resident cell or steep
+            // neighbouring sample from leaving the free camera inside the solid.
+            g.camZ=(std::max)(g.certPickVisualZ+1.00f,camGround+0.95f);
+            g.feetX=g.camX; g.feetY=g.camY; g.feetZ=g.camZ-kEyeHeightM;
+            g.walkMode=false; g.grounded=false;
+            g.yaw=0.f;
+            g.pitch=-1.568f;
+            if(++g.certPickFractureWait<8)return;
+            g.certPickFracturePhase=2;
+        }
 
-        PickFracture::CertResult const R = PickFracture::RunHeadlessCert();
+        PickFracture::CertResult R = PickFracture::RunHeadlessCert();
+        AppendFractureSurfaceGeometryCert( R );
+        {
+            float cp=std::cos(g.pitch),sp=std::sin(g.pitch),cy=std::cos(g.yaw),sy=std::sin(g.yaw);
+            float rt=0,rx=0,ry=0,rz=0,rnx=0,rny=0,rnz=1;
+            bool const acquired=RayHitFractureSurface(g.camX,g.camY,g.camZ,
+                sy*cp,cy*cp,sp,5.f,rt,rx,ry,rz,rnx,rny,rnz);
+            float depth=0.f;
+            if(acquired&&!g.fractureEvents.empty())
+                depth=-PickFracture::WorldToLocal(g.fractureEvents[0].frame,
+                    PickFracture::V3(rx,ry,rz)).z;
+            char note[160];std::snprintf(note,sizeof(note),"acquired=%d liveDepth=%.4f normal=(%.2f,%.2f,%.2f)",
+                acquired?1:0,depth,rnx,rny,rnz);
+            PickFracture::CertAdd(R,"live_reconstructed_surface_contact",
+                acquired&&depth>0.01f?"PASS":"FAIL",note,rx,ry,rz);
+        }
+        GLint vp[4]={}; glGetIntegerv(GL_VIEWPORT,vp);
+        int const w=vp[2],h=vp[3]; int sampled=0,sky=0;
+        if(w>=64&&h>=64)
+        {
+            std::vector<unsigned char> rgba((size_t)w*(size_t)h*4u);
+            glFinish();
+            glPixelStorei(GL_PACK_ALIGNMENT,1); glReadBuffer(GL_FRONT);
+            glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
+            int const rad=(std::min)(36,(std::min)(w,h)/10);
+            for(int y=h/2-rad;y<=h/2+rad;++y)for(int x=w/2-rad;x<=w/2+rad;++x)
+            {
+                size_t const i=((size_t)y*(size_t)w+(size_t)x)*4u;
+                int const r=rgba[i],gc=rgba[i+1],b=rgba[i+2]; ++sampled;
+                long long dr=r-114,dg=gc-158,db=b-224;
+                if(dr*dr+dg*dg+db*db<=48*48||(b>gc&&b>r&&b>150))++sky;
+            }
+            if(!g.certOutDir[0])GetTempPathA(MAX_PATH,g.certOutDir);
+            char ppm[MAX_PATH];std::snprintf(ppm,sizeof(ppm),"%s\\provenance_pick_integrated.ppm",g.certOutDir);
+            DumpFramePpm(ppm);
+        }
+        // A hidden Win32 front buffer can transiently expose the compositor clear
+        // immediately after other certificate windows close.  Require a settled frame;
+        // persistent sky still hard-fails after eight retries.
+        if(sampled>0&&sky>0&&g.certPickFractureWait<16)
+        {
+            ++g.certPickFractureWait;
+            return;
+        }
+        {
+            float baseNow=0.f; SampleGroundZBase(g.certPickVisualX,g.certPickVisualY,baseNow);
+            char note[192];std::snprintf(note,sizeof(note),"sky=%d sampled=%d patches=%d tris=%d camZ=%.3f baseZ=%.3f pitch=%.3f",
+                sky,sampled,(int)g.fracturePatches.size(),g.fracturePatches.empty()?0:(int)g.fracturePatches[0].tris.size(),
+                g.camZ,baseNow,g.pitch);
+            bool const ok=sampled>0&&sky==0&&!g.fracturePatches.empty()&&!g.fracturePatches[0].tris.empty();
+            PickFracture::CertAdd(R,"integrated_progressive_frame_coverage",ok?"PASS":"FAIL",note,
+                g.certPickVisualX,g.certPickVisualY,g.certPickVisualZ);
+        }
+        {
+            // Repeat through the production surface raycaster at the reconstructed floor.
+            // This guards the gameplay failure where strike two silently remounted the
+            // virgin heightfield and spawned an unrelated coarse cavity.
+            float const cp=std::cos(g.pitch),sp=std::sin(g.pitch),cy=std::cos(g.yaw),sy=std::sin(g.yaw);
+            float const rdx=sy*cp,rdy=cy*cp,rdz=sp;
+            float t0=0,x0=0,y0=0,z0=0,nx0=0,ny0=0,nz0=1;
+            bool const hit0=RayHitFractureSurface(g.camX,g.camY,g.camZ,
+                rdx,rdy,rdz,5.f,t0,x0,y0,z0,nx0,ny0,nz0);
+            int const d2Before=g.perfD2Rebuilds;
+            int const eventsBefore=(int)g.fractureEvents.size();
+            bool carved2=false;
+            if(hit0)
+            {
+                DigAffectSpec live{};live.mode=DigAffectMode::ScoopHemi;
+                live.radiusM=0.049f;live.depthM=0.049f;live.volumeM3=SphereVolumeM3(live.radiusM);
+                H2H::MaterialFormContract const& grass=H2H::FormOrDirt("grass");
+                PickFracture::FractureEvent const ev2=BuildAnalyticDigEvent(
+                    live,grass,nx0,ny0,nz0,rdx,rdy,rdz,0xA992Eu);
+                carved2=CarveOccupancyFracture(ev2);
+            }
+            float t1=0,x1=0,y1=0,z1=0,nx1=0,ny1=0,nz1=1;
+            bool const hit1=RayHitFractureSurface(g.camX,g.camY,g.camZ,
+                rdx,rdy,rdz,5.f,t1,x1,y1,z1,nx1,ny1,nz1);
+            float const progress=hit0&&hit1?t1-t0:0.f;
+            bool const ok=hit0&&carved2&&hit1&&progress>0.005f
+                &&(int)g.fractureEvents.size()==eventsBefore+1&&!g.fracturePatches.empty()
+                &&g.perfD2Rebuilds==d2Before;
+            char note[192];std::snprintf(note,sizeof(note),
+                "hit=%d/%d progress=%.4f events=%d patches=%d dD2=%d",
+                hit0?1:0,hit1?1:0,progress,(int)g.fractureEvents.size(),
+                (int)g.fracturePatches.size(),g.perfD2Rebuilds-d2Before);
+            PickFracture::CertAdd(R,"live_repeated_strike_progresses",ok?"PASS":"FAIL",note,
+                x1,y1,z1);
+        }
+        {
+            ShelterStampSpec const saved=FindRangeShelterStamp();
+            bool const wrote=g.certPickFractureReloadOnly?true:WriteShelterStamp(saved);
+            ShelterStampSpec loaded{};
+            bool const read=wrote&&ReadShelterStamp(loaded);
+            ShelterExcavationAudit excavationAudit{};
+            std::vector<PickFracture::FractureEvent> const loadedEvents=
+                read?BuildShelterStampEvents(loaded,&excavationAudit)
+                    :std::vector<PickFracture::FractureEvent>{};
+            size_t const strikes=loadedEvents.size();
+            bool const causal=read&&strikes>1000
+                &&excavationAudit.solidContacts==(int)strikes
+                &&excavationAudit.airContacts==0
+                &&excavationAudit.blockedRays==0
+                &&excavationAudit.completedRays==excavationAudit.rays
+                &&excavationAudit.deepestM>=loaded.depthM-0.02f;
+            bool const same=causal
+                &&std::fabs(saved.floorCenter.x-loaded.floorCenter.x)<1e-4f
+                &&std::fabs(saved.floorCenter.y-loaded.floorCenter.y)<1e-4f
+                &&std::fabs(saved.floorCenter.z-loaded.floorCenter.z)<1e-4f;
+            char note[224];std::snprintf(note,sizeof(note),
+                "write=%d read=%d strikes=%d floor=(%.3f,%.3f,%.3f) outward=(%.3f,%.3f)",
+                wrote?1:0,read?1:0,(int)strikes,loaded.floorCenter.x,
+                loaded.floorCenter.y,loaded.floorCenter.z,loaded.outwardN.x,loaded.outwardN.y);
+            PickFracture::CertAdd(R,"saved_world_shelter_stamp_roundtrip",
+                same?"PASS":"FAIL",note,loaded.floorCenter.x,loaded.floorCenter.y,loaded.floorCenter.z);
+            char causalNote[320];std::snprintf(causalNote,sizeof(causalNote),
+                "rays=%d complete=%d strikes=%d solid=%d air=%d blocked=%d passes=%d depth=%.3f firstBlocked=(%.3f,%.3f,%.3f d0=%.4f phi=%.6f)",
+                excavationAudit.rays,excavationAudit.completedRays,(int)strikes,
+                excavationAudit.solidContacts,excavationAudit.airContacts,
+                excavationAudit.blockedRays,excavationAudit.passes,excavationAudit.deepestM,
+                excavationAudit.firstBlockedNominal.x,excavationAudit.firstBlockedNominal.y,
+                excavationAudit.firstBlockedNominal.z,excavationAudit.firstBlockedContactD,
+                excavationAudit.firstBlockedTargetPhi);
+            PickFracture::CertAdd(R,"saved_world_shelter_reachable_solid_strikes",
+                causal?"PASS":"FAIL",causalNote,loaded.floorCenter.x,
+                loaded.floorCenter.y,loaded.floorCenter.z);
+            if(read)
+            {
+                auto worldGround=[](float x,float y)->float{float z=0.f;SampleGroundZBase(x,y,z);return z;};
+                ULONGLONG const t0=GetTickCount64();
+                FractureSurface::Patch const worldPatch=
+                    FractureSurface::BuildPatch(loadedEvents,worldGround,0.025f);
+                ULONGLONG const ms=GetTickCount64()-t0;
+                PickFracture::Vec3 const N=PickFracture::Norm(loaded.outwardN);
+                PickFracture::Vec3 const T=PickFracture::Norm(PickFracture::Cross(
+                    PickFracture::V3(0,0,1),N));
+                bool air=true,rear=true,side=true;
+                for(float d=0.10f;d<=1.08f;d+=0.14f)
+                for(float h=0.18f;h<=1.78f;h+=0.16f)
+                for(float t=-0.28f;t<=0.28f;t+=0.14f)
+                {
+                    PickFracture::Vec3 const p=PickFracture::Add(loaded.floorCenter,
+                        PickFracture::Add(PickFracture::Mul(T,t),
+                        PickFracture::Add(PickFracture::V3(0,0,h),PickFracture::Mul(N,-d))));
+                    air=air&&FractureSurface::SolidField(worldPatch,worldGround,p.x,p.y,p.z)<0.f;
+                }
+                for(float h=0.25f;h<=1.70f;h+=0.20f)
+                {
+                    PickFracture::Vec3 const p=PickFracture::Add(loaded.floorCenter,
+                        PickFracture::Add(PickFracture::V3(0,0,h),PickFracture::Mul(N,-1.32f)));
+                    rear=rear&&FractureSurface::SolidField(worldPatch,worldGround,p.x,p.y,p.z)>0.f;
+                    PickFracture::Vec3 const q=PickFracture::Add(loaded.floorCenter,
+                        PickFracture::Add(PickFracture::Mul(T,0.56f),
+                        PickFracture::Add(PickFracture::V3(0,0,h),PickFracture::Mul(N,-0.60f))));
+                    side=side&&FractureSurface::SolidField(worldPatch,worldGround,q.x,q.y,q.z)>0.f;
+                }
+                bool const rebuilt=!worldPatch.tris.empty()&&air&&rear&&side&&ms<12000;
+                char rebuildNote[192];std::snprintf(rebuildNote,sizeof(rebuildNote),
+                    "events=%d cells=%d tris=%d ms=%llu air=%d rear=%d side=%d",
+                    (int)loadedEvents.size(),worldPatch.activeCells,(int)worldPatch.tris.size(),
+                    (unsigned long long)ms,air?1:0,rear?1:0,side?1:0);
+                PickFracture::CertAdd(R,"saved_world_shelter_real_cliff_rebuild",
+                    rebuilt?"PASS":"FAIL",rebuildNote,loaded.floorCenter.x,
+                    loaded.floorCenter.y,loaded.floorCenter.z);
+                if(rebuilt)
+                {
+                    // Reproducible renderer-backed photograph of the persisted stamp
+                    // through the ordinary terrain/replacement compositor.
+                    g.fractureEvents=loadedEvents;
+                    g.fracturePatches.clear();
+                    g.fracturePatches.push_back(worldPatch);
+                    constexpr float photoDistanceM=1.83f; // six feet from the doorway
+                    g.shelterPhotoCamX=loaded.floorCenter.x+N.x*photoDistanceM;
+                    g.shelterPhotoCamY=loaded.floorCenter.y+N.y*photoDistanceM;
+                    g.shelterPhotoCamZ=loaded.floorCenter.z+1.05f;
+                    g.shelterPhotoYaw=std::atan2(-N.x,-N.y);
+                    g.shelterPhotoPitch=0.f;
+                    g.shelterPerfLastQpc=0;
+                    g.shelterPerfMsSum=0.0;
+                    g.shelterPerfMsMax=0.0;
+                    g.shelterPerfSamples=0;
+                    g.shelterPerfBaseline=false;
+                    g.shelterPerfCleanOnly=false;
+                    g.shelterPerfFrameMs.clear();
+                    g.shelterPerfResidentAvg=0.0;
+                    g.shelterPerfResidentMax=0.0;
+                    g.camX=g.shelterPhotoCamX;g.camY=g.shelterPhotoCamY;
+                    g.camZ=g.shelterPhotoCamZ;
+                    g.feetX=g.camX;g.feetY=g.camY;g.feetZ=g.camZ-kEyeHeightM;
+                    g.walkMode=false;g.grounded=false;
+                    g.yaw=g.shelterPhotoYaw;
+                    g.pitch=g.shelterPhotoPitch;
+                    g.terrainAnchorX=(int)std::floor(g.camX);
+                    g.terrainAnchorY=(int)std::floor(g.camY);
+                    EnsureGeoDisk((int)std::floor(loaded.floorCenter.x),
+                        (int)std::floor(loaded.floorCenter.y),10);
+                    g.streamComplete=true;
+                    InvalidateTerrainMesh("saved_shelter_photo");
+                }
+            }
+        }
         g.certPickFractureExitCode = R.exitCode;
 
         if ( !g.certOutDir[0] ) { GetTempPathA( MAX_PATH, g.certOutDir ); }
@@ -18241,7 +19980,356 @@ namespace
             ? "CERT-PICK-FRACTURE done — FAIL"
             : "CERT-PICK-FRACTURE done — PASS";
         g.certPickFracturePhase = 99;
-        PostQuitMessage( g.certPickFractureExitCode );
+        // Let the prepared shelter camera pass through the ordinary frame loop.
+        // Nested SwapBuffers calls can leave GL_FRONT on the previous cert view.
+        g.certPickFracture=false;
+        g.shelterStampLoadAttempted=true;
+        g.shelterPhotoPending=1;
+    }
+
+    void CertSinglePickBenchmarkAfterRender()
+    {
+        if(!g.certSinglePickBenchmark)return;
+        auto holdCamera=[]()
+        {
+            g.camX=g.singlePickCamX;g.camY=g.singlePickCamY;g.camZ=g.singlePickCamZ;
+            g.feetX=g.camX;g.feetY=g.camY;g.feetZ=g.camZ-kEyeHeightM;
+            g.yaw=g.singlePickYaw;g.pitch=g.singlePickPitch;
+            g.walkMode=true;g.grounded=true;g.hotbarSel=2;
+        };
+        if(g.singlePickPhase==0)
+        {
+            if(!g.streamComplete)return;
+            // This certificate is deliberately independent of SaveWorld.  A non-empty
+            // edit/fracture set means the process was not pristine and is a hard failure.
+            g.shelterStampLoadAttempted=true;
+            if(!g.fractureEvents.empty()||!g.fracturePatches.empty()||!g.editedRegions.empty())
+            {
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","w")==0&&f)
+                {std::fprintf(f,"exit_code=2\nreason=NON_PRISTINE_RANGE\n");std::fclose(f);}
+                PostQuitMessage(2);g.certSinglePickBenchmark=false;return;
+            }
+            // Reproduce the accepted Range limestone contact from the sparse-union
+            // pick test: feet ~= (234.4,126.0), aim cell (234,125), uv ~= (.76,.83).
+            // The final contact still comes from a live ray against the currently
+            // drawn exterior skin, never from an assumed/air coordinate.
+            g.singlePickCamX=234.4f;g.singlePickCamY=126.0f;
+            EnsureGeoDisk(234,125,10);
+            float footZ=g.feetZ;SampleGroundZBase(g.singlePickCamX,g.singlePickCamY,footZ);
+            g.singlePickCamZ=footZ+kEyeHeightM;
+            float targetZ=footZ;SampleGroundZBase(234.76f,125.83f,targetZ);
+            float const targetDx=234.76f-g.singlePickCamX;
+            float const targetDy=125.83f-g.singlePickCamY;
+            float const targetDz=targetZ-g.singlePickCamZ;
+            g.singlePickYaw=std::atan2(targetDx,targetDy);
+            g.singlePickPitch=std::atan2(targetDz,std::sqrt(targetDx*targetDx+targetDy*targetDy));
+            holdCamera();
+            float cp=std::cos(g.singlePickPitch),sp=std::sin(g.singlePickPitch);
+            float cy=std::cos(g.singlePickYaw),sy=std::sin(g.singlePickYaw);
+            float t=0.f;
+            bool hit=RayHitDrawnSkin(g.singlePickCamX,g.singlePickCamY,g.singlePickCamZ,
+                sy*cp,cy*cp,sp,4.f,t,g.singlePickX,g.singlePickY,g.singlePickZ);
+            if(!hit)
+            {
+                g.singlePickPitch=-1.25f;holdCamera();
+                cp=std::cos(g.singlePickPitch);sp=std::sin(g.singlePickPitch);
+                cy=std::cos(g.singlePickYaw);sy=std::sin(g.singlePickYaw);
+                hit=RayHitDrawnSkin(g.singlePickCamX,g.singlePickCamY,g.singlePickCamZ,
+                    sy*cp,cy*cp,sp,4.f,t,g.singlePickX,g.singlePickY,g.singlePickZ);
+            }
+            if(!hit)
+            {
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","w")==0&&f)
+                {std::fprintf(f,"exit_code=3\nreason=NO_EXPOSED_SOLID_FACE\n");std::fclose(f);}
+                PostQuitMessage(3);g.certSinglePickBenchmark=false;return;
+            }
+            g.aimX=g.singlePickX;g.aimY=g.singlePickY;g.aimZ=g.singlePickZ;
+            g.aimFromFractureSurface=false;
+            CaptureFaceNormalAt(g.singlePickX,g.singlePickY,
+                g.singlePickNx,g.singlePickNy,g.singlePickNz);
+            g.singlePickFrame=0;g.singlePickLastQpc=0;g.singlePickFrameMs.clear();
+            g.singlePickPhase=1;
+            g.statusLine="CERT single pick: pristine Range baseline";
+            return;
+        }
+
+        holdCamera();
+        if(g.singlePickPhase==2)
+        {
+            static int lastHf=0,lastD2=0,lastOcc=0,lastWakes=0,lastMut=0;
+            if(g.singlePickFirstVisibleMs==0.0&&g.singlePickStrikeQpc!=0)
+            {
+                LARGE_INTEGER qpc{},qpf{};QueryPerformanceCounter(&qpc);QueryPerformanceFrequency(&qpf);
+                g.singlePickFirstVisibleMs=1000.0*(double)(qpc.QuadPart-g.singlePickStrikeQpc)
+                    /(double)qpf.QuadPart;
+            }
+            ++g.singlePickFrame;
+            bool const countersStable=lastHf==g.perfHfRebuilds&&lastD2==g.perfD2Rebuilds
+                &&lastOcc==g.perfOccRebuilds&&lastWakes==g.perfTerrainWakes
+                &&lastMut==g.perfOccupancyMutations;
+            bool const idle=g.pending==PendingKind::None&&g.columnQueue.empty()
+                &&!g.terrainDirty&&g.streamComplete;
+            g.singlePickStableFrames=(idle&&countersStable)?g.singlePickStableFrames+1:0;
+            lastHf=g.perfHfRebuilds;lastD2=g.perfD2Rebuilds;lastOcc=g.perfOccRebuilds;
+            lastWakes=g.perfTerrainWakes;lastMut=g.perfOccupancyMutations;
+            if(g.singlePickStableFrames>=30)
+            {
+                g.singlePickActionHf=g.perfHfRebuilds-g.singlePickActionHf;
+                g.singlePickActionD2=g.perfD2Rebuilds-g.singlePickActionD2;
+                g.singlePickActionOcc=g.perfOccRebuilds-g.singlePickActionOcc;
+                g.singlePickActionWakes=g.perfTerrainWakes-g.singlePickActionWakes;
+                g.singlePickActionMutations=g.perfOccupancyMutations-g.singlePickActionMutations;
+                if(g.singlePickConsecutiveCells.empty())
+                {
+                    g.singlePickConsecutiveCommitMs.push_back(g.singlePickCommitMs);
+                    g.singlePickConsecutiveVisibleMs.push_back(g.singlePickFirstVisibleMs);
+                    g.singlePickConsecutiveCells.push_back(g.fracturePatches.empty()?0:
+                        g.fracturePatches.front().activeCells);
+                    g.singlePickConsecutiveTris.push_back(g.fracturePatches.empty()?0:
+                        (int)g.fracturePatches.front().tris.size());
+                }
+                g.singlePickFrame=0;g.singlePickLastQpc=0;g.singlePickFrameMs.clear();
+                g.singlePickPhase=3;
+                g.statusLine="CERT single pick: settled wound benchmark";
+            }
+            else if(g.singlePickFrame>1800)
+            {
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","w")==0&&f)
+                {std::fprintf(f,"exit_code=4\nreason=RECONSTRUCTION_DID_NOT_SETTLE\n");std::fclose(f);}
+                PostQuitMessage(4);g.certSinglePickBenchmark=false;
+            }
+            return;
+        }
+
+        if(g.singlePickPhase==4)
+        {
+            float const cp=std::cos(g.singlePickPitch),sp=std::sin(g.singlePickPitch);
+            float const cy=std::cos(g.singlePickYaw),sy=std::sin(g.singlePickYaw);
+            float t=0,x=0,y=0,z=0,nx=0,ny=0,nz=1;
+            bool const hit=RayHitFractureSurface(g.singlePickCamX,g.singlePickCamY,
+                g.singlePickCamZ,sy*cp,cy*cp,sp,4.f,t,x,y,z,nx,ny,nz);
+            if(!hit)
+            {
+                FILE* f=nullptr;if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","a")==0&&f)
+                {std::fprintf(f,"consecutive_exit_code=7\nreason=RECONTACT_MISS\n");std::fclose(f);}
+                g.certSinglePickBenchmark=false;PostQuitMessage(7);return;
+            }
+            g.aimHit=true;g.aimX=x;g.aimY=y;g.aimZ=z;g.aimNx=nx;g.aimNy=ny;g.aimNz=nz;
+            g.aimFromFractureSurface=true;g.aimStrikeCap=g.fractureEvents.front().env.material_id;
+            H2H::MaterialFormContract const& form=H2H::FormOrDirt(g.aimStrikeCap.c_str());
+            H2H::ToolMatterProfile const& pick=H2H::ToolById("pick");
+            DigAffectSpec const affect=ComputeDigAffect(pick,form,nz<0.58f);
+            float lx=x-g.singlePickCamX,ly=y-g.singlePickCamY,lz=z-g.singlePickCamZ;
+            float const ll=std::sqrt(lx*lx+ly*ly+lz*lz);if(ll>1e-6f){lx/=ll;ly/=ll;lz/=ll;}
+            uint64_t const seed=0x51A61Eull+(uint64_t)g.fractureEvents.size();
+            PickFracture::FractureEvent const ev=BuildProductionPickEvent(
+                affect,form,nx,ny,nz,lx,ly,lz,seed);
+            LARGE_INTEGER q0{},q1{},qpf{};QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+            bool const carved=CarveOccupancyFracture(ev);QueryPerformanceCounter(&q1);
+            if(!carved)
+            {
+                FILE* f=nullptr;if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","a")==0&&f)
+                {std::fprintf(f,"consecutive_exit_code=8\nreason=RECONTACT_CARVE_FAILED\n");std::fclose(f);}
+                g.certSinglePickBenchmark=false;PostQuitMessage(8);return;
+            }
+            g.singlePickConsecutiveCommitMs.push_back(1000.0*(double)(q1.QuadPart-q0.QuadPart)
+                /(double)qpf.QuadPart);
+            g.singlePickStrikeQpc=q0.QuadPart;g.singlePickFrame=0;g.singlePickStableFrames=0;
+            g.singlePickPhase=5;g.statusLine="CERT pick continuity: consecutive strike settling";
+            return;
+        }
+        if(g.singlePickPhase==5)
+        {
+            static int lastHf=0,lastD2=0,lastOcc=0,lastWakes=0,lastMut=0;
+            if(g.singlePickFrame==0)
+            {
+                LARGE_INTEGER qpc{},qpf{};QueryPerformanceCounter(&qpc);QueryPerformanceFrequency(&qpf);
+                g.singlePickConsecutiveVisibleMs.push_back(1000.0*
+                    (double)(qpc.QuadPart-g.singlePickStrikeQpc)/(double)qpf.QuadPart);
+            }
+            ++g.singlePickFrame;
+            bool const countersStable=lastHf==g.perfHfRebuilds&&lastD2==g.perfD2Rebuilds
+                &&lastOcc==g.perfOccRebuilds&&lastWakes==g.perfTerrainWakes
+                &&lastMut==g.perfOccupancyMutations;
+            bool const idle=g.pending==PendingKind::None&&g.columnQueue.empty()
+                &&!g.terrainDirty&&g.streamComplete;
+            g.singlePickStableFrames=(idle&&countersStable)?g.singlePickStableFrames+1:0;
+            lastHf=g.perfHfRebuilds;lastD2=g.perfD2Rebuilds;lastOcc=g.perfOccRebuilds;
+            lastWakes=g.perfTerrainWakes;lastMut=g.perfOccupancyMutations;
+            if(g.singlePickStableFrames>=15)
+            {
+                g.singlePickConsecutiveCells.push_back(g.fracturePatches.empty()?0:
+                    g.fracturePatches.front().activeCells);
+                g.singlePickConsecutiveTris.push_back(g.fracturePatches.empty()?0:
+                    (int)g.fracturePatches.front().tris.size());
+                if((int)g.fractureEvents.size()<g.singlePickConsecutiveTarget)
+                    g.singlePickPhase=4;
+                else
+                {
+                    g.singlePickFrame=0;g.singlePickLastQpc=0;g.singlePickFrameMs.clear();
+                    g.singlePickPhase=6;g.statusLine="CERT pick continuity: final settled benchmark";
+                }
+            }
+            return;
+        }
+
+        if(g.singlePickPhase!=1&&g.singlePickPhase!=3&&g.singlePickPhase!=6)return;
+        LARGE_INTEGER now{},freq{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&freq);
+        ++g.singlePickFrame;
+        if(g.singlePickLastQpc!=0&&g.singlePickFrame>30)
+        {
+            g.singlePickFrameMs.push_back(1000.0*(double)(now.QuadPart-g.singlePickLastQpc)
+                /(double)freq.QuadPart);
+        }
+        g.singlePickLastQpc=now.QuadPart;
+        if(g.singlePickFrame==30)
+        {
+            g.singlePickMeasureHf=g.perfHfRebuilds;g.singlePickMeasureD2=g.perfD2Rebuilds;
+            g.singlePickMeasureOcc=g.perfOccRebuilds;g.singlePickMeasureWakes=g.perfTerrainWakes;
+            g.singlePickMeasureMutations=g.perfOccupancyMutations;
+        }
+        if(g.singlePickFrameMs.size()<300)return;
+        std::vector<double> sorted=g.singlePickFrameMs;std::sort(sorted.begin(),sorted.end());
+        double sum=0.0,worst=0.0;for(double v:sorted){sum+=v;worst=(std::max)(worst,v);}
+        auto pct=[&](double p){return sorted[(size_t)std::floor(p*(double)(sorted.size()-1))];};
+        double const mean=sum/(double)sorted.size();
+        int const settledHf=g.perfHfRebuilds-g.singlePickMeasureHf;
+        int const settledD2=g.perfD2Rebuilds-g.singlePickMeasureD2;
+        int const settledOcc=g.perfOccRebuilds-g.singlePickMeasureOcc;
+        int const settledWakes=g.perfTerrainWakes-g.singlePickMeasureWakes;
+        int const settledMut=g.perfOccupancyMutations-g.singlePickMeasureMutations;
+        if(g.singlePickPhase==1)
+        {
+            g.singlePickBaseMean=mean;g.singlePickBaseMedian=pct(0.50);
+            g.singlePickBaseP95=pct(0.95);g.singlePickBaseP99=pct(0.99);
+            g.singlePickBaseWorst=worst;g.singlePickBaseHf=settledHf;
+            g.singlePickBaseD2=settledD2;g.singlePickBaseOcc=settledOcc;
+            g.singlePickBaseWakes=settledWakes;g.singlePickBaseMutations=settledMut;
+            g.singlePickActionHf=g.perfHfRebuilds;g.singlePickActionD2=g.perfD2Rebuilds;
+            g.singlePickActionOcc=g.perfOccRebuilds;g.singlePickActionWakes=g.perfTerrainWakes;
+            g.singlePickActionMutations=g.perfOccupancyMutations;
+            g.aimHit=true;g.aimX=g.singlePickX;g.aimY=g.singlePickY;g.aimZ=g.singlePickZ;
+            g.aimNx=g.singlePickNx;g.aimNy=g.singlePickNy;g.aimNz=g.singlePickNz;
+            g.aimFromFractureSurface=false;g.aimStrikeCap=CapAtWorld(g.aimX,g.aimY);
+            H2H::MaterialFormContract const& form=H2H::FormOrDirt(g.aimStrikeCap.c_str());
+            H2H::ToolMatterProfile const& pick=H2H::ToolById("pick");
+            bool const steep=g.singlePickNz<0.58f||IsSteepFaceAt(g.aimX,g.aimY);
+            DigAffectSpec const affect=ComputeDigAffect(pick,form,steep);
+            float lx=g.singlePickX-g.singlePickCamX,ly=g.singlePickY-g.singlePickCamY;
+            float lz=g.singlePickZ-g.singlePickCamZ;
+            float const ll=std::sqrt(lx*lx+ly*ly+lz*lz);if(ll>1e-6f){lx/=ll;ly/=ll;lz/=ll;}
+            PickFracture::FractureEvent const ev=BuildProductionPickEvent(affect,form,
+                g.singlePickNx,g.singlePickNy,g.singlePickNz,lx,ly,lz,0x51A61Eull);
+            LARGE_INTEGER q0{},q1{},qpf{};QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+            bool const carved=CarveOccupancyFracture(ev);QueryPerformanceCounter(&q1);
+            g.singlePickCommitMs=1000.0*(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+            g.singlePickStrikeQpc=q0.QuadPart;g.singlePickFirstVisibleMs=0.0;
+            if(!carved||g.fractureEvents.size()!=1)
+            {
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","w")==0&&f)
+                {std::fprintf(f,"exit_code=5\nreason=SINGLE_CAUSAL_STRIKE_FAILED\nevents=%d\n",
+                    (int)g.fractureEvents.size());std::fclose(f);}
+                PostQuitMessage(5);g.certSinglePickBenchmark=false;return;
+            }
+            g.singlePickFrame=0;g.singlePickStableFrames=0;g.singlePickPhase=2;
+            g.statusLine="CERT single pick: local reconstruction settling";
+            return;
+        }
+
+        if(g.singlePickPhase==6)
+        {
+            FILE* f=nullptr;
+            if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","a")==0&&f)
+            {
+                std::fprintf(f,"\nCONSECUTIVE_PRODUCTION_RECONTACT\nconsecutive_exit_code=0\n"
+                    "total_strikes=%d\nC_final_mean_ms=%.3f\nC_final_median_ms=%.3f\n"
+                    "C_final_p95_ms=%.3f\nC_final_p99_ms=%.3f\nC_final_worst_ms=%.3f\n"
+                    "C_delta_vs_clean_mean_ms=%+.3f\nC_delta_vs_clean_median_ms=%+.3f\n"
+                    "C_settled_terrain_rebuilds=%d\nC_settled_d2_rebuilds=%d\n"
+                    "C_settled_occupancy_rebuilds=%d\nC_settled_dirty_wakes=%d\n"
+                    "C_settled_occupancy_mutations=%d\n",
+                    (int)g.fractureEvents.size(),mean,pct(0.50),pct(0.95),pct(0.99),worst,
+                    mean-g.singlePickBaseMean,pct(0.50)-g.singlePickBaseMedian,
+                    settledHf,settledD2,settledOcc,settledWakes,settledMut);
+                for(size_t i=0;i<g.singlePickConsecutiveCommitMs.size();++i)
+                    std::fprintf(f,"strike_%d_commit_rebuild_ms=%.3f strike_%d_first_visible_ms=%.3f cells=%d tris=%d\n",
+                        (int)i+1,g.singlePickConsecutiveCommitMs[i],(int)i+1,
+                        i<g.singlePickConsecutiveVisibleMs.size()?g.singlePickConsecutiveVisibleMs[i]:-1.0,
+                        i<g.singlePickConsecutiveCells.size()?g.singlePickConsecutiveCells[i]:0,
+                        i<g.singlePickConsecutiveTris.size()?g.singlePickConsecutiveTris[i]:0);
+                std::fclose(f);
+            }
+            g.certSinglePickBenchmark=false;PostQuitMessage(0);return;
+        }
+
+        glFinish();
+        bool const shot=DumpFramePpm("Docs\\provenance_single_pick_wound.ppm");
+        FractureSurface::Patch const* patch=g.fracturePatches.empty()?nullptr:&g.fracturePatches.front();
+        PickFracture::FractureEvent const& ev=g.fractureEvents.front();
+        float maxExpansion=0.f;
+        if(patch&&!patch->eventBounds.empty()&&!patch->regions.empty())
+        {
+            FractureSurface::Region const& physical=patch->eventBounds.front();
+            FractureSurface::Region const& owned=patch->regions.front();
+            maxExpansion=(std::max)({physical.minX-owned.minX,physical.minY-owned.minY,
+                physical.minZ-owned.minZ,owned.maxX-physical.maxX,
+                owned.maxY-physical.maxY,owned.maxZ-physical.maxZ});
+        }
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_single_pick_perf.txt","w")==0&&f)
+        {
+            std::fprintf(f,
+                "PRISTINE_RANGE_SINGLE_CAUSAL_PICK_BENCHMARK\nexit_code=%d\n"
+                "seed_hash=678ed28042d554db\ngenerator=provenance_tectonic_v3\n"
+                "strike_count=%d\nshelter_state=0\ndoorway_state=0\n"
+                "contact=(%.4f,%.4f,%.4f)\ncontact_normal=(%.5f,%.5f,%.5f)\n"
+                "material=%s\nshape_half_extents_m=(%.5f,%.5f,%.5f)\n"
+                "morphology=%s\nangular_sharpness=%.5f\n"
+                "camera=(%.4f,%.4f,%.4f,%.5f,%.5f)\n"
+                "warmup_frames=30\nmeasured_frames=300\n"
+                "A_clean_mean_ms=%.3f\nA_clean_median_ms=%.3f\nA_clean_p95_ms=%.3f\n"
+                "A_clean_p99_ms=%.3f\nA_clean_worst_ms=%.3f\n"
+                "A_settled_terrain_rebuilds=%d\nA_settled_d2_rebuilds=%d\n"
+                "A_settled_occupancy_rebuilds=%d\nA_settled_dirty_wakes=%d\n"
+                "A_settled_occupancy_mutations=%d\n"
+                "strike_reconstruction_terrain_rebuilds=%d\nstrike_reconstruction_d2_rebuilds=%d\n"
+                "strike_reconstruction_occupancy_rebuilds=%d\nstrike_reconstruction_dirty_wakes=%d\n"
+                "strike_reconstruction_occupancy_mutations=%d\n"
+                "strike_commit_rebuild_ms=%.3f\nstrike_first_visible_ms=%.3f\n"
+                "B_wound_mean_ms=%.3f\nB_wound_median_ms=%.3f\nB_wound_p95_ms=%.3f\n"
+                "B_wound_p99_ms=%.3f\nB_wound_worst_ms=%.3f\n"
+                "B_settled_terrain_rebuilds=%d\nB_settled_d2_rebuilds=%d\n"
+                "B_settled_occupancy_rebuilds=%d\nB_settled_dirty_wakes=%d\n"
+                "B_settled_occupancy_mutations=%d\n"
+                "frame_delta_mean_ms=%+.3f\nframe_delta_median_ms=%+.3f\n"
+                "reconstruction_regions=%d\nmax_outside_expansion_m=%.5f\n"
+                "max_allowed_expansion_m=%.5f\nfracture_cells=%d\n"
+                "fracture_triangles=%d\nscreenshot_count=%d\n"
+                "screenshot=Docs/provenance_single_pick_wound.ppm\n",
+                shot?0:6,(int)g.fractureEvents.size(),g.singlePickX,g.singlePickY,g.singlePickZ,
+                g.singlePickNx,g.singlePickNy,g.singlePickNz,ev.env.material_id,
+                ev.env.tHalf,ev.env.bHalf,ev.env.nInto,ev.morphology,ev.env.angularSharp,
+                g.singlePickCamX,g.singlePickCamY,
+                g.singlePickCamZ,g.singlePickYaw,g.singlePickPitch,g.singlePickBaseMean,
+                g.singlePickBaseMedian,g.singlePickBaseP95,g.singlePickBaseP99,g.singlePickBaseWorst,
+                g.singlePickBaseHf,g.singlePickBaseD2,g.singlePickBaseOcc,g.singlePickBaseWakes,
+                g.singlePickBaseMutations,g.singlePickActionHf,g.singlePickActionD2,
+                g.singlePickActionOcc,g.singlePickActionWakes,g.singlePickActionMutations,
+                g.singlePickCommitMs,g.singlePickFirstVisibleMs,
+                mean,pct(0.50),pct(0.95),pct(0.99),worst,settledHf,settledD2,settledOcc,
+                settledWakes,settledMut,mean-g.singlePickBaseMean,
+                pct(0.50)-g.singlePickBaseMedian,patch?(int)patch->regions.size():0,
+                maxExpansion,patch?patch->spacing*1.52f:0.f,patch?patch->activeCells:0,
+                patch?(int)patch->tris.size():0,shot?1:0);
+            std::fclose(f);
+        }
+        if(!shot){g.certSinglePickBenchmark=false;PostQuitMessage(6);return;}
+        g.singlePickPhase=4;
+        g.statusLine="CERT pick continuity: consecutive production recontacts";
     }
 
     void CertGeoTick()
@@ -18592,6 +20680,53 @@ namespace
         }
 
         TickStreamRequests();
+        if(g.streamComplete&&g.certShelterCleanBenchmark&&!g.shelterStampLoadAttempted)
+        {
+            g.shelterStampLoadAttempted=true;
+            ShelterStampSpec stamp{};
+            if(ReadShelterStamp(stamp))
+            {
+                PickFracture::Vec3 const N=PickFracture::Norm(stamp.outwardN);
+                constexpr float photoDistanceM=1.83f;
+                g.shelterPhotoCamX=stamp.floorCenter.x+N.x*photoDistanceM;
+                g.shelterPhotoCamY=stamp.floorCenter.y+N.y*photoDistanceM;
+                g.shelterPhotoCamZ=stamp.floorCenter.z+1.05f;
+                g.shelterPhotoYaw=std::atan2(-N.x,-N.y);
+                g.shelterPhotoPitch=0.f;
+                g.shelterPerfCleanOnly=true;
+                g.shelterPerfBaseline=true;
+                g.shelterPerfLastQpc=0;g.shelterPerfMsSum=0.0;
+                g.shelterPerfMsMax=0.0;g.shelterPerfSamples=0;
+                g.shelterPerfFrameMs.clear();
+                g.shelterPhotoPending=1;
+            }
+            else PostQuitMessage(2);
+        }
+        if(g.streamComplete&&!g.shelterStampLoadAttempted)
+        {
+            bool const certMode=g.certDig||g.certGeo||g.certLsi||g.certAsync||g.certP4
+                ||g.certResidency||g.certStress||g.certWater||g.certPickFracture
+                ||g.certShelterCleanBenchmark||g.certSinglePickBenchmark||g.certPickMatrixOnly;
+            if(!certMode)
+            {
+                g.shelterStampLoadAttempted=true;
+                ShelterStampSpec stamp{};
+                if(ReadShelterStamp(stamp))
+                {
+                    ULONGLONG const t0=GetTickCount64();
+                    g.fractureEvents=BuildShelterStampEvents(stamp);
+                    RebuildFractureSurfacePatches();
+                    g.shelterStampLoaded=!g.fracturePatches.empty()
+                        &&!g.fracturePatches.front().tris.empty();
+                    InvalidateTerrainMesh("saved_excavation_stamp");
+                    char note[192];std::snprintf(note,sizeof(note),
+                        "Loaded saved arched shelter: %d strikes, %d ms @ %.1f,%.1f",
+                        (int)g.fractureEvents.size(),
+                        (int)(GetTickCount64()-t0),stamp.floorCenter.x,stamp.floorCenter.y);
+                    g.statusLine=note;
+                }
+            }
+        }
         UpdateCamera( dt );
         UpdateAim();
         if ( ( now / 250 ) != ( ( now - (DWORD)( dt * 1000 ) ) / 250 ) )
@@ -18627,6 +20762,127 @@ namespace
             WriteChipProbeDump(); // %TEMP%\provenance_chip_probe.txt — full chip list for agents
         }
         Render();
+        CertPickMatrixOnlyTick();
+        CertSinglePickBenchmarkAfterRender();
+        if(g.shelterPhotoPending>0)
+        {
+            LARGE_INTEGER nowQpc{},freqQpc{};
+            QueryPerformanceCounter(&nowQpc);QueryPerformanceFrequency(&freqQpc);
+            if(g.shelterPerfLastQpc!=0&&g.shelterPhotoPending>30)
+            {
+                double const ms=1000.0*(double)(nowQpc.QuadPart-g.shelterPerfLastQpc)
+                    /(double)freqQpc.QuadPart;
+                g.shelterPerfMsSum+=ms;
+                g.shelterPerfMsMax=(std::max)(g.shelterPerfMsMax,ms);
+                g.shelterPerfFrameMs.push_back(ms);
+                ++g.shelterPerfSamples;
+            }
+            g.shelterPerfLastQpc=nowQpc.QuadPart;
+            ++g.shelterPhotoPending;
+            if(g.shelterPhotoPending==31)
+            {
+                glFinish();
+                if(!g.shelterPerfBaseline)DumpFramePpm("Docs\\provenance_saved_shelter.ppm");
+                g.shelterPerfStartHf=g.perfHfRebuilds;
+                g.shelterPerfStartD2=g.perfD2Rebuilds;
+                g.shelterPerfStartOcc=g.perfOccRebuilds;
+                g.shelterPerfStartWakes=g.perfTerrainWakes;
+                g.shelterPerfStartMutations=g.perfOccupancyMutations;
+            }
+            if(g.shelterPerfSamples>=300)
+            {
+                double const avg=g.shelterPerfMsSum/(double)g.shelterPerfSamples;
+                std::vector<double> sorted=g.shelterPerfFrameMs;
+                std::sort(sorted.begin(),sorted.end());
+                auto pct=[&](double p)->double
+                {
+                    if(sorted.empty())return 0.0;
+                    size_t const i=(size_t)std::floor(p*(double)(sorted.size()-1));
+                    return sorted[i];
+                };
+                if(g.shelterPerfCleanOnly)
+                {
+                    FILE* f=nullptr;
+                    if(fopen_s(&f,"Docs\\provenance_clean_range_perf.txt","w")==0&&f)
+                    {
+                        std::fprintf(f,
+                            "A_native_clean_range\nseed_hash=678ed28042d554db\ngenerator=provenance_tectonic_v3\n"
+                            "distance_m=1.83\nresolution=1264x761\nwarmup_frames=30\nmeasured_frames=%d\n"
+                            "mean_ms=%.3f\nmedian_ms=%.3f\np95_ms=%.3f\np99_ms=%.3f\nworst_ms=%.3f\n"
+                            "terrain_rebuilds=%d\nd2_rebuilds=%d\noccupancy_rebuilds=%d\n"
+                            "dirty_region_wakes=%d\noccupancy_mutations=%d\nfracture_events=0\nshelter_triangles=0\n",
+                            g.shelterPerfSamples,avg,pct(0.50),pct(0.95),pct(0.99),
+                            g.shelterPerfMsMax,g.perfHfRebuilds-g.shelterPerfStartHf,
+                            g.perfD2Rebuilds-g.shelterPerfStartD2,
+                            g.perfOccRebuilds-g.shelterPerfStartOcc,
+                            g.perfTerrainWakes-g.shelterPerfStartWakes,
+                            g.perfOccupancyMutations-g.shelterPerfStartMutations);
+                        std::fclose(f);
+                    }
+                    g.shelterPhotoPending=0;PostQuitMessage(0);return;
+                }
+                if(!g.shelterPerfBaseline)
+                {
+                    g.shelterPerfResidentAvg=avg;
+                    g.shelterPerfResidentMax=g.shelterPerfMsMax;
+                    g.shelterPerfResidentMedian=pct(0.50);
+                    g.shelterPerfResidentP95=pct(0.95);
+                    g.shelterPerfResidentP99=pct(0.99);
+                    g.shelterPerfResidentHf=g.perfHfRebuilds-g.shelterPerfStartHf;
+                    g.shelterPerfResidentD2=g.perfD2Rebuilds-g.shelterPerfStartD2;
+                    g.shelterPerfResidentOcc=g.perfOccRebuilds-g.shelterPerfStartOcc;
+                    g.shelterPerfResidentWakes=g.perfTerrainWakes-g.shelterPerfStartWakes;
+                    g.shelterPerfResidentMutations=
+                        g.perfOccupancyMutations-g.shelterPerfStartMutations;
+                    g.shelterPerfBaseline=true;
+                    g.shelterPerfLastQpc=0;
+                    g.shelterPerfMsSum=0.0;
+                    g.shelterPerfMsMax=0.0;
+                    g.shelterPerfSamples=0;
+                    g.shelterPerfFrameMs.clear();
+                    g.shelterPhotoPending=1;
+                    return;
+                }
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_saved_shelter_perf.txt","w")==0&&f)
+                {
+                    std::fprintf(f,
+                        "resident_shelter_frame_benchmark_ab\n"
+                        "distance_m=1.83\n"
+                        "samples_each=%d\n"
+                        "B_resident_mean_ms=%.3f\nB_resident_median_ms=%.3f\nB_resident_p95_ms=%.3f\n"
+                        "B_resident_p99_ms=%.3f\nB_resident_worst_ms=%.3f\nB_resident_fps=%.2f\n"
+                        "B_terrain_rebuilds=%d\nB_d2_rebuilds=%d\nB_occupancy_rebuilds=%d\n"
+                        "B_dirty_wakes=%d\nB_occupancy_mutations=%d\n"
+                        "C_hidden_mean_ms=%.3f\nC_hidden_median_ms=%.3f\nC_hidden_p95_ms=%.3f\n"
+                        "C_hidden_p99_ms=%.3f\nC_hidden_worst_ms=%.3f\nC_hidden_fps=%.2f\n"
+                        "C_terrain_rebuilds=%d\nC_d2_rebuilds=%d\nC_occupancy_rebuilds=%d\n"
+                        "C_dirty_wakes=%d\nC_occupancy_mutations=%d\n"
+                        "excavation_overhead_ms=%.3f\nexcavation_slowdown_ratio=%.3f\n"
+                        "fracture_events=%d\nfracture_tris=%d\n",
+                        g.shelterPerfSamples,g.shelterPerfResidentAvg,
+                        g.shelterPerfResidentMedian,g.shelterPerfResidentP95,
+                        g.shelterPerfResidentP99,g.shelterPerfResidentMax,
+                        g.shelterPerfResidentAvg>0.0?1000.0/g.shelterPerfResidentAvg:0.0,
+                        g.shelterPerfResidentHf,g.shelterPerfResidentD2,
+                        g.shelterPerfResidentOcc,g.shelterPerfResidentWakes,
+                        g.shelterPerfResidentMutations,
+                        avg,pct(0.50),pct(0.95),pct(0.99),g.shelterPerfMsMax,
+                        avg>0.0?1000.0/avg:0.0,
+                        g.perfHfRebuilds-g.shelterPerfStartHf,
+                        g.perfD2Rebuilds-g.shelterPerfStartD2,
+                        g.perfOccRebuilds-g.shelterPerfStartOcc,
+                        g.perfTerrainWakes-g.shelterPerfStartWakes,
+                        g.perfOccupancyMutations-g.shelterPerfStartMutations,
+                        g.shelterPerfResidentAvg-avg,avg>0.0?g.shelterPerfResidentAvg/avg:0.0,
+                        (int)g.fractureEvents.size(),
+                        g.fracturePatches.empty()?0:(int)g.fracturePatches.front().tris.size());
+                    std::fclose(f);
+                }
+                g.shelterPhotoPending=0;
+                PostQuitMessage(g.certPickFractureExitCode);
+            }
+        }
         SnapVirginPerfIfNeeded();
         CertDigTick();
         CertGeoTick();
@@ -19013,6 +21269,30 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   || _wcsicmp( argv[i], L"--cert-pick-fracture-closed" ) == 0 )
                 {
                     g.certPickFracture = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-pick-fracture-reload" ) == 0 )
+                {
+                    g.certPickFracture=true;
+                    g.certPickFractureReloadOnly=true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-shelter-clean-benchmark" ) == 0 )
+                {
+                    g.certShelterCleanBenchmark=true;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Range);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-single-pick-benchmark" ) == 0 )
+                {
+                    g.certSinglePickBenchmark=true;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Range);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-pick-matrix-only" ) == 0 )
+                {
+                    g.certPickMatrixOnly=true;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Range);
                     continue;
                 }
                 if ( _wcsnicmp( argv[i], L"--geo-fixture=", 14 ) == 0 )

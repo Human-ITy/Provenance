@@ -18,8 +18,8 @@
 // Outside physical changed region + min recon halo → pre-strike surface bit-identical.
 //
 // Hard presentation gates (no exceptions):
-//   - Sky/clear RGB in or around a strike hole = PRESENTATION_COVERAGE_FAIL.
-//     There is NO "legitimate cavity mouth showing sky" exception.
+//   - Sky/clear RGB in or around a shallow strike hole = PRESENTATION_COVERAGE_FAIL.
+//     Background is valid only when topology proves the cut connects through the solid.
 //   - Deform beyond fracture + min recon halo = HF_CHANGED_OUTSIDE_RECON_HALO.
 //
 // P5a water ledger FREEZE. P5b CLOSED. Do not redesign D2 topology / EditedRegion /
@@ -181,6 +181,15 @@ namespace PickFracture
     {
         ContactFrame frame{};
         Envelope env{};
+        // Complete tool action, retained independently from the fracture envelope.
+        // Impact and pry are distinct: neither is reconstructed later from world-up.
+        Vec3 impactWorld{};
+        Vec3 pryWorld{};
+        Vec3 impactLocalTBN{};
+        Vec3 pryLocalTBN{};
+        float penetrationM = 0.f;
+        float pryAngleRad = 0.f;
+        float tipRadiusM = 0.f;
         float contactQueryRM = kContactQueryRM;
         float fractureExtentRM = 0.f; // max half-extent of envelope (physical changed)
         float d2ReconHaloRM = kD2ReconHaloM;
@@ -284,6 +293,20 @@ namespace PickFracture
             break;
         }
 
+        // Material response is continuous inside a broad fracture family.  This keeps
+        // limestone, basalt, ore and crystals from becoming the same seeded hole merely
+        // because they share a massive fabric classification.
+        H2H::MaterialFormContract const& form = H2H::FormOrDirt( e.material_id );
+        float const lateralScale = std::clamp(
+            0.82f + 0.30f * form.wedging_response + 0.10f * form.crushing_response,
+            0.82f, 1.12f );
+        float const depthScale = std::clamp(
+            1.10f - 0.30f * form.penetration_resist + 0.16f * form.crushing_response,
+            0.78f, 1.14f );
+        e.tHalf *= lateralScale;
+        e.bHalf *= 0.96f + 0.04f * lateralScale;
+        e.nInto *= depthScale;
+
         // Hard freezes against meter-scale folds from cm bites.
         e.tHalf = (std::min)( e.tHalf, kMaxFractureExtentM );
         e.bHalf = (std::min)( e.bHalf, kMaxFractureExtentM );
@@ -355,11 +378,12 @@ namespace PickFracture
         return (std::max)( 1e-8f, box * shape );
     }
 
-    inline FractureEvent BuildEvent( Vec3 hit, Vec3 surfaceN, Vec3 strikeOrPry,
+    inline FractureEvent BuildEventDetailed( Vec3 hit, Vec3 surfaceN, Vec3 impact,
+        Vec3 pry, float penetrationM, float pryAngleRad, float tipRadiusM,
         char const* matId, uint64_t seed, RockStruct::Foliation const* fol = nullptr )
     {
         FractureEvent ev;
-        ev.frame = MakeContactFrame( hit, surfaceN, strikeOrPry );
+        ev.frame = MakeContactFrame( hit, surfaceN, pry );
         if ( !ev.frame.valid )
         {
             std::snprintf( ev.fail, sizeof( ev.fail ), "BAD_CONTACT_FRAME" );
@@ -379,6 +403,31 @@ namespace PickFracture
         }
 
         ev.env = BuildEnvelope( matId, seed, fol, ev.frame );
+        ev.impactWorld = Norm( impact );
+        ev.pryWorld = Norm( pry );
+        ev.impactLocalTBN = { Dot( ev.impactWorld, ev.frame.T ),
+            Dot( ev.impactWorld, ev.frame.B ), Dot( ev.impactWorld, ev.frame.N ) };
+        ev.pryLocalTBN = { Dot( ev.pryWorld, ev.frame.T ),
+            Dot( ev.pryWorld, ev.frame.B ), Dot( ev.pryWorld, ev.frame.N ) };
+        ev.penetrationM = penetrationM > 0.f ? penetrationM : ev.env.nInto;
+        ev.pryAngleRad = pryAngleRad;
+        ev.tipRadiusM = tipRadiusM > 0.f ? tipRadiusM : ev.env.tipRM;
+        if ( tipRadiusM > 0.f ) { ev.env.tipRM = (std::min)( tipRadiusM, 0.04f ); }
+        // Action causality in local contact coordinates. Oblique impact broadens along
+        // its tangent component but couples less penetration into N; pry angle adds
+        // leverage along T. The same local action therefore rotates equivalently while
+        // physically different attacks do not collapse to one material-only envelope.
+        float const normalCoupling = 0.65f + 0.35f
+            * std::clamp( -ev.impactLocalTBN.z, 0.f, 1.f );
+        float const penetrationScale = std::clamp(
+            ev.penetrationM / (std::max)( 0.01f, ev.env.nInto ), 0.55f, 1.25f );
+        float const pryLeverage = std::fabs( std::sin( ev.pryAngleRad ) );
+        ev.env.nInto *= normalCoupling * penetrationScale;
+        ev.env.tHalf *= 1.f + 0.16f * std::fabs( ev.impactLocalTBN.x ) + 0.14f * pryLeverage;
+        ev.env.bHalf *= 1.f + 0.16f * std::fabs( ev.impactLocalTBN.y );
+        ev.env.nInto = (std::min)( ev.env.nInto, kMaxFractureExtentM );
+        ev.env.tHalf = (std::min)( ev.env.tHalf, kMaxFractureExtentM );
+        ev.env.bHalf = (std::min)( ev.env.bHalf, kMaxFractureExtentM );
         ev.contactQueryRM = kContactQueryRM;
         ev.fractureExtentRM = (std::max)( ev.env.tHalf,
             (std::max)( ev.env.bHalf, (std::max)( ev.env.nInto, ev.env.nAir ) ) );
@@ -396,19 +445,43 @@ namespace PickFracture
         ev.releasedGrams = H2H::VolumeToGramsFloor( ev.volumeM3, form.density_kg_m3 );
         ev.releasesRigidBody = form.rigid_fracture_body
             && ev.env.family != MaterialFamily::GravelAggregate;
-        if ( ev.env.family == MaterialFamily::MicaSchistFoliation )
+        if ( form.fabric == H2H::FabricKind::FoliatedAnisotropic )
         {
             ev.plateAlongM = 2.f * ev.env.tHalf;
             ev.plateAcrossM = 2.f * ev.env.bHalf;
             ev.plateThickM = (std::max)( 0.015f, ev.env.nInto * 0.65f );
             std::snprintf( ev.morphology, sizeof( ev.morphology ), "foliation_plate" );
         }
+        else if ( form.fabric == H2H::FabricKind::BeddedFissile )
+        {
+            ev.plateAlongM = 2.f * ev.env.tHalf;
+            ev.plateAcrossM = 2.f * ev.env.bHalf;
+            ev.plateThickM = (std::max)( 0.012f, ev.env.nInto * 0.52f );
+            std::snprintf( ev.morphology, sizeof( ev.morphology ), "bedding_plate" );
+        }
+        else if ( form.fabric == H2H::FabricKind::CohesivePlastic )
+        {
+            ev.plateAlongM = 2.f * ev.env.tHalf;
+            ev.plateAcrossM = 2.f * ev.env.bHalf;
+            ev.plateThickM = ev.env.nInto;
+            ev.releasesRigidBody = form.rigid_fracture_body;
+            std::snprintf( ev.morphology, sizeof( ev.morphology ), "cohesive_shear" );
+        }
         else if ( ev.env.family == MaterialFamily::GraniteCompactAngular )
         {
             ev.plateAlongM = 2.f * ev.env.tHalf * 0.85f;
             ev.plateAcrossM = 2.f * ev.env.bHalf * 0.85f;
             ev.plateThickM = (std::max)( 0.02f, ev.env.nInto * 0.75f );
-            std::snprintf( ev.morphology, sizeof( ev.morphology ), "compact_angular" );
+            bool const crystal = std::strcmp( ev.env.material_id, "quartz" ) == 0
+                || std::strcmp( ev.env.material_id, "amethyst" ) == 0
+                || std::strcmp( ev.env.material_id, "ruby" ) == 0
+                || std::strcmp( ev.env.material_id, "emerald" ) == 0;
+            bool const ore = std::strcmp( ev.env.material_id, "hematite" ) == 0
+                || std::strcmp( ev.env.material_id, "azurite" ) == 0
+                || std::strcmp( ev.env.material_id, "gold" ) == 0
+                || std::strcmp( ev.env.material_id, "lapis" ) == 0;
+            std::snprintf( ev.morphology, sizeof( ev.morphology ), "%s",
+                crystal ? "crystalline_break" : ( ore ? "ore_matrix_break" : "compact_angular" ) );
         }
         else
         {
@@ -427,6 +500,14 @@ namespace PickFracture
         return ev;
     }
 
+    inline FractureEvent BuildEvent( Vec3 hit, Vec3 surfaceN, Vec3 strikeOrPry,
+        char const* matId, uint64_t seed, RockStruct::Foliation const* fol = nullptr )
+    {
+        Vec3 const N = Norm( surfaceN );
+        return BuildEventDetailed( hit, surfaceN, Mul( N, -1.f ), strikeOrPry,
+            0.f, 0.f, 0.f, matId, seed, fol );
+    }
+
     // Local-frame AABB of envelope (for recon halo / outside-identity).
     inline void LocalAabb( Envelope const& e, float& t0, float& t1, float& b0, float& b1,
         float& n0, float& n1 )
@@ -434,6 +515,32 @@ namespace PickFracture
         t0 = -e.tHalf; t1 = e.tHalf;
         b0 = -e.bHalf; b1 = e.bHalf;
         n0 = -e.nInto; n1 = e.nAir;
+        if ( e.foliationBias > 0.05f )
+        {
+            // LocalEnvelopeDistance evaluates an adjusted coordinate A*x, where A
+            // expands in-plane and contracts across the foliation normal. Bounds must
+            // therefore use A^-1; nominal axis extents clip the deep side of bedding-
+            // biased wounds and leave their underside open at the reconstruction box.
+            float const along = 1.f + e.foliationBias * 0.55f;
+            float const across = 1.f / ( 1.f + e.foliationBias * 0.85f );
+            float const ia = 1.f / along, ic = 1.f / across;
+            Vec3 const f = Norm( e.folLocalTBN );
+            float const M[3][3] = {
+                { ia+(ic-ia)*f.x*f.x, (ic-ia)*f.x*f.y, (ic-ia)*f.x*f.z },
+                { (ic-ia)*f.y*f.x, ia+(ic-ia)*f.y*f.y, (ic-ia)*f.y*f.z },
+                { (ic-ia)*f.z*f.x, (ic-ia)*f.z*f.y, ia+(ic-ia)*f.z*f.z } };
+            float const lo[3]={-e.tHalf,-e.bHalf,-e.nInto};
+            float const hi[3]={ e.tHalf, e.bHalf, e.nAir};
+            float outLo[3]={},outHi[3]={};
+            for(int i=0;i<3;++i)for(int j=0;j<3;++j)
+            {
+                float const a=M[i][j]*lo[j],b=M[i][j]*hi[j];
+                outLo[i]+=(std::min)(a,b);outHi[i]+=(std::max)(a,b);
+            }
+            t0=(std::min)(outLo[0],-e.tipRM);t1=(std::max)(outHi[0],e.tipRM);
+            b0=(std::min)(outLo[1],-e.tipRM);b1=(std::max)(outHi[1],e.tipRM);
+            n0=(std::min)(outLo[2],-e.tipRM);n1=(std::max)(outHi[2],e.tipRM);
+        }
     }
 
     inline void WorldAabb( FractureEvent const& ev,
@@ -1074,6 +1181,102 @@ namespace PickFracture
             }
         }
 
+        // 10) Deterministic strike matrix. This is the commit-sized equivalence set:
+        // full host material palette x 0..90 surface rotation x five impacts x four
+        // independent pry azimuths x three structural orientations where anisotropic.
+        {
+            char const* materials[] = {
+                "dirt", "clay", "sand", "gravel",
+                "stone", "sandstone", "shale", "limestone", "granite", "mica_schist", "basalt",
+                "hematite", "azurite", "gold", "quartz", "amethyst", "ruby", "lapis", "emerald"
+            };
+            float const angles[] = { 0.f,15.f,30.f,45.f,60.f,75.f,90.f };
+            Vec3 const attackLocal[] = {
+                {0.f,0.f,-1.f}, {0.574f,0.f,-0.819f}, {-0.574f,0.f,-0.819f},
+                {0.f,0.574f,-0.819f}, {0.f,-0.574f,-0.819f}
+            };
+            Vec3 const pryLocal[] = { {1,0,0}, {0,1,0}, {-1,0,0}, {0,-1,0} };
+            Vec3 const structureLocal[] = { {0,0,1}, {1,0,0}, {0.7071f,0.7071f,0} };
+            bool allOk=true; char failNote[224]="ok"; int cases=0, materialN=0;
+            float failX=0,failY=0,failZ=0;
+            for(size_t mi=0;mi<sizeof(materials)/sizeof(materials[0])&&allOk;++mi)
+            {
+                char const* mat=materials[mi]; ++materialN;
+                H2H::MaterialFormContract const& form=H2H::FormOrDirt(mat);
+                bool const anis=form.fabric==H2H::FabricKind::FoliatedAnisotropic
+                    || form.fabric==H2H::FabricKind::BeddedFissile;
+                int const structN=anis?3:1;
+                for(int si=0;si<structN&&allOk;++si)
+                for(int ai=0;ai<5&&allOk;++ai)
+                for(int pi=0;pi<4&&allOk;++pi)
+                {
+                    LocalMorphMetrics base{}; bool haveBase=false;
+                    Vec3 baseImpactLocal{},basePryLocal{};
+                    for(float ang:angles)
+                    {
+                        Vec3 const N=RotateX(V3(0,0,1),ang);
+                        Vec3 const WT=RotateX(V3(1,0,0),ang);
+                        Vec3 const WB=RotateX(V3(0,1,0),ang);
+                        auto worldFromFixture=[&](Vec3 L){return Add(Mul(WT,L.x),Add(Mul(WB,L.y),Mul(N,L.z)));};
+                        Vec3 const impact=Norm(worldFromFixture(attackLocal[ai]));
+                        Vec3 const pry=Norm(worldFromFixture(pryLocal[pi]));
+                        RockStruct::Foliation fol{};
+                        Vec3 const fn=Norm(worldFromFixture(structureLocal[si]));
+                        fol.nx=fn.x;fol.ny=fn.y;fol.nz=fn.z;
+                        uint64_t const seed=HashMix(0x57A1CEull,(uint64_t)mi*131ull+(uint64_t)ai*17ull+(uint64_t)pi*5ull+(uint64_t)si);
+                        FractureEvent ev=BuildEventDetailed(RotateX(V3(3,0,1),ang),N,impact,pry,
+                            0.060f,25.f*kPi/180.f,0.020f,mat,seed,anis?&fol:nullptr);
+                        ++cases;
+                        bool const actionFinite=std::isfinite(ev.impactLocalTBN.x)
+                            &&std::isfinite(ev.impactLocalTBN.y)&&std::isfinite(ev.impactLocalTBN.z)
+                            &&std::isfinite(ev.pryLocalTBN.x)&&std::isfinite(ev.pryLocalTBN.y)
+                            &&std::isfinite(ev.pryLocalTBN.z);
+                        if(!ev.ok||!actionFinite||ev.fractureExtentRM>kMaxFractureExtentM+1e-4f
+                            ||ev.releasedGrams<=0||!ev.morphology[0])
+                        {
+                            allOk=false;failX=ev.frame.origin.x;failY=ev.frame.origin.y;failZ=ev.frame.origin.z;
+                            std::snprintf(failNote,sizeof(failNote),"%s angle=%.0f impact=%d pry=%d struct=%d invalid=%s",
+                                mat,ang,ai,pi,si,ev.fail);break;
+                        }
+                        LocalMorphMetrics const m=SampleLocalMorph(ev,0.015f);
+                        if(!haveBase)
+                        {
+                            base=m;baseImpactLocal=ev.impactLocalTBN;basePryLocal=ev.pryLocalTBN;haveBase=true;
+                        }
+                        else
+                        {
+                            char why[80]="action_frame_delta";
+                            float const actionDelta=Len(Sub(baseImpactLocal,ev.impactLocalTBN))
+                                +Len(Sub(basePryLocal,ev.pryLocalTBN));
+                            if(!MorphEquivalent(base,m,why,sizeof(why))||actionDelta>0.002f)
+                            {
+                                allOk=false;failX=ev.frame.origin.x;failY=ev.frame.origin.y;failZ=ev.frame.origin.z;
+                                std::snprintf(failNote,sizeof(failNote),"%s angle=%.0f impact=%d pry=%d struct=%d %s actionDelta=%.5f",
+                                    mat,ang,ai,pi,si,why,actionDelta);break;
+                            }
+                        }
+                    }
+                }
+            }
+            char note[224];
+            if(allOk)std::snprintf(note,sizeof(note),"materials=%d cases=%d angles=7 impacts=5 pry=4 anisStruct=3 local-equivalent",
+                materialN,cases);
+            else std::snprintf(note,sizeof(note),"%s",failNote);
+            CertAdd(R,"systematic_strike_matrix",allOk?"PASS":"FAIL",note,failX,failY,failZ);
+
+            FractureEvent normal=BuildEventDetailed(V3(0,0,0),V3(0,0,1),V3(0,0,-1),V3(1,0,0),
+                0.060f,0.f,0.020f,"granite",0xAC710Fu,nullptr);
+            FractureEvent oblique=BuildEventDetailed(V3(0,0,0),V3(0,0,1),V3(0.574f,0,-0.819f),V3(1,0,0),
+                0.060f,35.f*kPi/180.f,0.020f,"granite",0xAC710Fu,nullptr);
+            bool const causal=normal.ok&&oblique.ok
+                &&std::fabs(normal.env.tHalf-oblique.env.tHalf)>0.003f
+                &&std::fabs(normal.env.nInto-oblique.env.nInto)>0.001f;
+            char causalNote[160];std::snprintf(causalNote,sizeof(causalNote),
+                "normal(t=%.3f n=%.3f) oblique+pry(t=%.3f n=%.3f)",
+                normal.env.tHalf,normal.env.nInto,oblique.env.tHalf,oblique.env.nInto);
+            CertAdd(R,"action_dimensions_causal",causal?"PASS":"FAIL",causalNote);
+        }
+
         return R;
     }
 
@@ -1086,7 +1289,7 @@ namespace PickFracture
             "P5 SIDE-GATE - MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE\n"
             "law=impact->penetration->pry->material fracture->connected release->occupancy->local recon\n"
             "contact_frame=(T,B,N) angle-independent; P5a FREEZE; P5b CLOSED\n"
-            "hard_gate=sky/clear in|around hole => PRESENTATION_COVERAGE_FAIL (no mouth exception)\n"
+            "hard_gate=sky/clear in|around shallow hole => PRESENTATION_COVERAGE_FAIL; through-cut requires topology proof\n"
             "hard_gate=deform beyond fracture+min recon halo => HF_CHANGED_OUTSIDE_RECON_HALO\n"
             "pass=%d fail=%d skip=%d exit_code=%d\n"
             "first_fail=%s @ (%.3f,%.3f,%.3f)\n\n",
@@ -1119,6 +1322,12 @@ namespace PickFracture
                 }
                 std::fclose( ff );
             }
+        }
+        else if ( failPath && failPath[0] )
+        {
+            // A later passing run supersedes an older failure.  Leaving the old blob
+            // behind made cold-resume tooling report failures that were no longer current.
+            std::remove( failPath );
         }
         return true;
     }
