@@ -223,7 +223,7 @@ Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34,
 
 ```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
-SHA: 434a565333225764fda61a3ceb3148d42fe6713c
+SHA: fa73dd240214ce48659937fa5df757d05d10c15f
 ```
 
 **Law:** Pick is not sphere/cup/cell deform. Contact frame `(T,B,N)` at hit owns tip/penetration/pry/fracture envelope; material structure (aggregate / compact angular / foliation) determines releasable connected volume; occupancy loses exactly that material; HF/D2 reconstruct the remaining local boundary (canonical mouth). Four distinct radii: contact/query ≠ fracture ≠ D2 recon halo ≠ HF refine. Outside physical changed + min recon halo → pre-strike surface bit-identical.
