@@ -339,7 +339,7 @@ Live `--cert-geo` after place/re-fill: `exit_code=0`, `PASS_rows=111 FAIL_rows=0
 
 §9 probes (RANGE): `place_flat_mound`; `place_slope_supported` + `place_slope_no_float`; `place_cavity_floor_upward` + raised floor; `place_cavity_lip_connect` + `place_lip_no_roof_hole`; `place_no_HF_resurrection`; `remove_place_remove_reconcile`. After-each: held debit == accepted grams; occupancy units correspond; SupportBelow sees matter; D2 rebuilds on cavity edits; HF grade stable / openings kept.
 
-**Order for next agents:** LSI presentation-closure floor is green under `--cert-lsi`. Next is **ASYNC+DETERMINISM** (fold LSI hashes/closure into that gate) → P4. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
+**Order for next agents:** LSI presentation-closure + ASYNC+DETERMINISM floors are green (`--cert-lsi`, `--cert-async`). Next is **P4**. Never redesign D2 halo/seam ownership or SupportBelow without a cert defect. Do not mix Unreal vs Esoterica clean-dig presentation into this lane.
 
 ### Local Surface Intent (presentation-closure floor)
 
@@ -385,6 +385,23 @@ Live `--cert-lsi` (RANGE, presentation-closure floor): `exit_code=0`, `PASS_rows
 
 ```bat
 Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-lsi
+```
+
+### Async + Determinism (LSI hashes in gate)
+
+```
+ASYNC + DETERMINISM FLOOR
+SHA: faa8b9fcefddf1037f467cd7458a7eb2b32908dd
+```
+
+**Flag:** `--cert-async` (alias `--cert-async-determinism`). Forces RANGE. Artifact: `%TEMP%\provenance_async_determinism_cert.txt`.
+
+**Gate:** after dig and place, re-fan-in 3×3 `voxel_column` in forward / reverse / checkerboard pacing; require bit-identical occ + D2 + outside HF hashes and LSI `unexplainedOpen=0` / `mismatch=0`. Also D2 rebuild cell-order independence. Settles place neighborhood columns once before baseline so virgin wire fill is not false-failed as matter drift.
+
+Live `--cert-async` (RANGE): `exit_code=0`, `PASS_rows=9 FAIL_rows=0`.
+
+```bat
+Build\x64_Release_geocert\ProvenanceClient.exe 127.0.0.1 8765 --cert-async
 ```
 
 ---

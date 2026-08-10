@@ -129,7 +129,14 @@ LSI PRESENTATION-CLOSURE FLOOR
 SHA: b3dca76b449d33f796a755c6f899db1096cea612
 ```
 
-`--cert-lsi` green: dig mouth annulus + place crest/open-skin classified as expected LSI free boundaries; cross-cell accidental opens = 0 via canonical per-column-crest seam verts; coverage + outside identity green. Freeze: do not weaken boundary classification or reopen broad D2 topology. **Next: ASYNC+DETERMINISM** (include LSI hashes/closure in that gate).
+`--cert-lsi` green: dig mouth annulus + place crest/open-skin classified as expected LSI free boundaries; cross-cell accidental opens = 0 via canonical per-column-crest seam verts; coverage + outside identity green. Freeze: do not weaken boundary classification or reopen broad D2 topology.
+
+```
+ASYNC + DETERMINISM FLOOR
+SHA: faa8b9fcefddf1037f467cd7458a7eb2b32908dd
+```
+
+`--cert-async` / `--cert-async-determinism` → `%TEMP%\provenance_async_determinism_cert.txt`. Equal matter + equal LSI closure (unexplainedOpen=0, occ/D2/outside hashes) under 3×3 `voxel_column` forward/reverse/checkerboard pacing and D2 rebuild order. `keepLocalCarve` preserved. **Next: P4.**
 
 ### Standing scalability rule
 

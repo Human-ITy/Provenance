@@ -55,6 +55,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 - Geo fixtures: default **RANGE** (representative flank transect); **TORTURE** keeps prior extreme FBM (`--geo-fixture=` / F8). See `PROVENANCE_PIN.md`.
 - Geography interaction cert (RANGE as H2H transect, not D2-only): `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — `--cert-geo`.
 - Local Surface Intent / presentation-closure: `--cert-lsi` → `%TEMP%\provenance_local_surface_intent_cert.txt` (mouth annulus + place open-skin expected; cross-cell accidental opens FAIL; canonical per-column-crest seam).
+- Async + determinism (includes LSI hashes/closure): `--cert-async` → `%TEMP%\provenance_async_determinism_cert.txt`.
 - **Scalability:** material vocabulary is cheap; instantiated representation is what costs (wake geometry/physics/optics on exposure, detachment, proximity, or gameplay meaning).
 - Material distribution / appearance docs for **review** (not cert authority): plaintxt-decoded branches `claude/terrain-material-distribution-v1` and `claude/terrain-material-set-appearance` under `fablescript/docs`. **Heightfield object palette is a keeper** — do not overwrite when merging; separate from dig/geo cert. See `PROVENANCE_PIN.md`.
 
