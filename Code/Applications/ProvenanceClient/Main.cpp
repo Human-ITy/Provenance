@@ -203,6 +203,9 @@ namespace
         int lastD2HaloMissing = 0;
         int lastD2BoundaryEdges = 0;
         bool lastD2PublishRefused = false;
+        // Lattice top Z when place adds headroom above virgin grade (HF grade unchanged).
+        float occCrestZ = 0.f;
+        bool hasOccCrest = false;
     };
 
     // One connected excavation. Openings only expand on remove-only edits.
@@ -669,6 +672,19 @@ namespace
     void EnsureOccupancyLattice( int cx, int cy );
     bool CarveOccupancySphere( float carveX, float carveY, float carveZ, float radiusM,
         float openX, float openY, float openZ );
+    // P3e: place / re-fill — reverse matter transfer into occupancy (not DigScar mound).
+    struct PlaceFillResult
+    {
+        bool ok = false;
+        int acceptedGrams = 0;
+        int unitsFilled = 0;
+        int voxelsTouched = 0;
+    };
+    float CellOccCrest( CellSample const& cell );
+    bool ExpandOccupancyHeadroom( int cx, int cy, int addLayers );
+    int CountOccupancySolidInSphere( float wx, float wy, float wz, float radiusM );
+    int CountOccupancyFillUnitsInSphere( float wx, float wy, float wz, float radiusM );
+    PlaceFillResult PlaceOccupancyFill( float wx, float wy, float wz, float radiusM, int gramsAvailable );
     void RetirePresentationScarsNear( float wx, float wy, float radiusM );
     void RebuildCavityMesh( int cx, int cy );
     void DrawCavityMeshes();
@@ -2691,17 +2707,20 @@ namespace
         int placedByTotal = 0;
         std::string placedDom;
         ParseGramsMapAfterKey( line, "\"placed_by\"", placedBy, placedByTotal, placedDom );
+        // Local PlaceOccupancyFill already debited pendingPlaceG on send. Digest reconciles only.
+        int const alreadyDebited = g.pendingPlaceG;
         if ( placedByTotal > 0 )
         {
-            DebitHeldBy( placedBy );
             placed = placedByTotal;
+            int delta = placedByTotal - alreadyDebited;
+            if ( delta > 0 ) { DebitHeldTotal( delta ); }
         }
         else
         {
-            int debit = havePlaced && placed > 0 ? placed : g.pendingPlaceG;
-            if ( debit <= 0 ) { debit = g.pendingPlaceG; }
+            int debit = havePlaced && placed > 0 ? placed : alreadyDebited;
             if ( debit <= 0 ) { debit = HandfulScoopGrams(); }
-            DebitHeldTotal( debit );
+            int delta = debit - alreadyDebited;
+            if ( delta > 0 ) { DebitHeldTotal( delta ); }
             if ( !havePlaced || placed <= 0 ) { placed = debit; }
         }
         g.pendingPlaceAsk.clear();
@@ -2714,7 +2733,7 @@ namespace
             g.pendingBiteCx, g.pendingBiteCy, g.heldTotalG, g.heldTotalG / kHandfulDirtG,
             g.terrainRev, g.lastEngineMs );
         g.digestLine = d;
-        g.statusLine = g.heldTotalG > 0 ? "Phase 4 - placed scoop (still holding)" : "Phase 4 - placed scoop (hand empty)";
+        g.statusLine = g.heldTotalG > 0 ? "P3e - placed (still holding)" : "P3e - placed (hand empty)";
         ClearPendingScarEdit();
         // Slump fill: one scoop into the hole shrinks the dig cup. Hole-fill never added a mound.
         CancelDigScarsUnderPlace( (float)g.pendingBiteCx + g.pendingBiteU,
@@ -2754,7 +2773,7 @@ namespace
         {
             if ( FillAt( *cell, col, row, k ) >= kFillIso ) { top = k; break; }
         }
-        float const crest = GradeToZ( cell->grade );
+        float const crest = CellOccCrest( *cell );
         if ( top < 0 )
         {
             outZ = crest - (float)kz * g.voxelEdgeM;
@@ -2805,7 +2824,7 @@ namespace
         {
             float const edge = (std::max)( 0.05f, g.voxelEdgeM );
             float const step = edge * 0.25f;
-            float const crest = GradeToZ( cell->grade );
+            float const crest = CellOccCrest( *cell );
             float const columnBottom = crest - (float)cell->fillK * edge - edge;
             writeRev( hit );
 
@@ -3024,6 +3043,12 @@ namespace
                     SeedOccupancyFromVirginSurface( nx, ny );
                 }
                 n = GetCellMutable( nx, ny );
+                // P3e place headroom may raise home fillK — expand neighbors to match.
+                if ( n && !n->fill.empty() && n->fillW == w && n->fillH == h && n->fillK < kz )
+                {
+                    ExpandOccupancyHeadroom( nx, ny, kz - n->fillK );
+                    n = GetCellMutable( nx, ny );
+                }
                 if ( !n || n->fill.empty()
                   || n->fillW != w || n->fillH != h || n->fillK != kz )
                 {
@@ -3098,8 +3123,8 @@ namespace
             cell.debugBoundaryList = 0;
         }
         int const w = cell.fillW, h = cell.fillH, kz = cell.fillK;
-        float const edge = kVoxelEdgeM;
-        float const crest = GradeToZ( cell.grade );
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const crest = CellOccCrest( cell );
         float const x0 = (float)cx, y0 = (float)cy;
         float const du = 1.f / (float)w, dv = 1.f / (float)h;
         constexpr float kCollar = 0.08f;
@@ -3216,7 +3241,7 @@ namespace
         float const u = x - (float)cx, v = y - (float)cy;
         c = (std::min)( w - 1, (std::max)( 0, (int)( u * (float)w ) ) );
         r = (std::min)( h - 1, (std::max)( 0, (int)( v * (float)h ) ) );
-        crestZ = GradeToZ( cell->grade );
+        crestZ = CellOccCrest( *cell );
         float const edge = (std::max)( 0.05f, g.voxelEdgeM );
         float const t = ( crestZ - z ) / edge; // 0 at crest, +down
         if ( t < -0.05f ) { k = kz; return true; } // above crest = air sentinel
@@ -3309,8 +3334,8 @@ namespace
         CellSample* cell = GetCellMutable( cx, cy );
         if ( !cell || cell->fill.empty() || cell->fillW <= 0 || cell->fillK <= 0 ) { return; }
         int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
-        float const edge = kVoxelEdgeM;
-        float const crest = GradeToZ( cell->grade );
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const crest = CellOccCrest( *cell );
         float const du = 1.f / (float)w, dv = 1.f / (float)h;
         constexpr float kEps = 0.02f;
         for ( int r = 0; r < h; ++r )
@@ -3368,6 +3393,348 @@ namespace
         if ( g.scars.size() != before ) { ++g.scarGen; }
     }
 
+
+    float CellOccCrest( CellSample const& cell )
+    {
+        // Occupancy lattice top. May sit above virgin HF grade when place added headroom.
+        return cell.hasOccCrest ? cell.occCrestZ : GradeToZ( cell.grade );
+    }
+
+    bool ExpandOccupancyHeadroom( int cx, int cy, int addLayers )
+    {
+        // Grow lattice upward (raise occ crest, keep column bottom) so placed mounds have air cells
+        // above virgin surface without mutating HF grade.
+        if ( addLayers <= 0 ) { return true; }
+        CellSample* cell = GetCellMutable( cx, cy );
+        if ( !cell || cell->fill.empty() || cell->fillW <= 0 || cell->fillK <= 0 ) { return false; }
+        int const w = cell->fillW, h = cell->fillH, oldK = cell->fillK;
+        int const newK = oldK + addLayers;
+        float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+        float const oldCrest = CellOccCrest( *cell );
+        std::vector<uint8_t> neu( (size_t)w * h * newK, (uint8_t)0 );
+        for ( int k = 0; k < oldK; ++k )
+        {
+            for ( int r = 0; r < h; ++r )
+            {
+                for ( int c = 0; c < w; ++c )
+                {
+                    neu[(size_t)k * w * h + r * w + c] =
+                        cell->fill[(size_t)k * w * h + r * w + c];
+                }
+            }
+        }
+        cell->fill.swap( neu );
+        cell->fillK = newK;
+        cell->occCrestZ = oldCrest + (float)addLayers * edge;
+        cell->hasOccCrest = true;
+        return true;
+    }
+
+    int CountOccupancySolidInSphere( float wx, float wy, float wz, float radiusM )
+    {
+        float const R = (std::max)( 0.02f, radiusM );
+        float const R2 = R * R;
+        int const x0 = (int)std::floor( wx - R - 0.05f );
+        int const x1 = (int)std::floor( wx + R + 0.05f );
+        int const y0 = (int)std::floor( wy - R - 0.05f );
+        int const y1 = (int)std::floor( wy + R + 0.05f );
+        int n = 0;
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                CellSample const* cell = GetCell( cx, cy );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+                float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+                float const crest = CellOccCrest( *cell );
+                float const du = 1.f / (float)w, dv = 1.f / (float)h;
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    for ( int r = 0; r < h; ++r )
+                    {
+                        float const yc = (float)cy + ( (float)r + 0.5f ) * dv;
+                        for ( int c = 0; c < w; ++c )
+                        {
+                            float const xc = (float)cx + ( (float)c + 0.5f ) * du;
+                            float const dx = xc - wx, dy = yc - wy, dz = zc - wz;
+                            if ( dx * dx + dy * dy + dz * dz > R2 ) { continue; }
+                            if ( FillAt( *cell, c, r, k ) >= kFillIso ) { ++n; }
+                        }
+                    }
+                }
+            }
+        }
+        return n;
+    }
+
+    int CountOccupancyFillUnitsInSphere( float wx, float wy, float wz, float radiusM )
+    {
+        float const R = (std::max)( 0.02f, radiusM );
+        float const R2 = R * R;
+        int const x0 = (int)std::floor( wx - R - 0.05f );
+        int const x1 = (int)std::floor( wx + R + 0.05f );
+        int const y0 = (int)std::floor( wy - R - 0.05f );
+        int const y1 = (int)std::floor( wy + R + 0.05f );
+        int units = 0;
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                CellSample const* cell = GetCell( cx, cy );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+                float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+                float const crest = CellOccCrest( *cell );
+                float const du = 1.f / (float)w, dv = 1.f / (float)h;
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    for ( int r = 0; r < h; ++r )
+                    {
+                        float const yc = (float)cy + ( (float)r + 0.5f ) * dv;
+                        for ( int c = 0; c < w; ++c )
+                        {
+                            float const xc = (float)cx + ( (float)c + 0.5f ) * du;
+                            float const dx = xc - wx, dy = yc - wy, dz = zc - wz;
+                            if ( dx * dx + dy * dy + dz * dz > R2 ) { continue; }
+                            units += (int)FillAt( *cell, c, r, k );
+                        }
+                    }
+                }
+            }
+        }
+        return units;
+    }
+
+    PlaceFillResult PlaceOccupancyFill( float wx, float wy, float wz, float radiusM, int gramsAvailable )
+    {
+        // Reverse of CarveOccupancySphere: debit-budgeted fill units → occupancy air→solid,
+        // bottom-up with support. Never mutates virgin HF grade. Never shrinks EditedRegion openings.
+        // Representation: dirt aggregate in occupancy (cheap). Meaningful quartz/block → MatterBody later.
+        PlaceFillResult out{};
+        if ( gramsAvailable <= 0 ) { return out; }
+        float const R = (std::max)( 0.02f, radiusM );
+        float const R2 = R * R;
+        int unitsBudget = (int)std::lround( (double)gramsAvailable * (double)kFillFull / (double)kDirtVoxelG );
+        if ( unitsBudget <= 0 ) { unitsBudget = 1; }
+
+        int const x0 = (int)std::floor( wx - R - 0.05f );
+        int const x1 = (int)std::floor( wx + R + 0.05f );
+        int const y0 = (int)std::floor( wy - R - 0.05f );
+        int const y1 = (int)std::floor( wy + R + 0.05f );
+
+        int const headLayers = (std::max)( 2, (int)std::ceil( ( R * 2.5f ) / kVoxelEdgeM ) + 1 );
+        // Include D2 halo neighbors so fillK stays matched after headroom expand.
+        int const hx0 = x0 - 1, hx1 = x1 + 1, hy0 = y0 - 1, hy1 = y1 + 1;
+        float needTop = wz + R + kVoxelEdgeM;
+        for ( int cy = hy0; cy <= hy1; ++cy )
+        {
+            for ( int cx = hx0; cx <= hx1; ++cx )
+            {
+                float virginZ = 0.f;
+                SampleGroundZBase( (float)cx + 0.5f, (float)cy + 0.5f, virginZ );
+                needTop = (std::max)( needTop, virginZ + R * 2.f + kVoxelEdgeM );
+            }
+        }
+        for ( int cy = hy0; cy <= hy1; ++cy )
+        {
+            for ( int cx = hx0; cx <= hx1; ++cx )
+            {
+                EnsureOccupancyLattice( cx, cy );
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( !cell ) { continue; }
+                if ( !cell->carved )
+                {
+                    SeedOccupancyFromVirginSurface( cx, cy );
+                }
+                float const crest = CellOccCrest( *cell );
+                if ( crest + 1e-4f < needTop )
+                {
+                    int add = (int)std::ceil( ( needTop - crest ) / kVoxelEdgeM );
+                    add = (std::max)( add, headLayers );
+                    ExpandOccupancyHeadroom( cx, cy, add );
+                }
+            }
+        }
+
+        struct Cand { int cx, cy, c, r, k; float z; int space; };
+        std::vector<Cand> cands;
+        cands.reserve( 256 );
+        for ( int cy = y0; cy <= y1; ++cy )
+        {
+            for ( int cx = x0; cx <= x1; ++cx )
+            {
+                CellSample* cell = GetCellMutable( cx, cy );
+                if ( !cell || cell->fill.empty() ) { continue; }
+                int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
+                float const edge = (std::max)( 0.05f, g.voxelEdgeM );
+                float const crest = CellOccCrest( *cell );
+                float const du = 1.f / (float)w, dv = 1.f / (float)h;
+                for ( int k = 0; k < kz; ++k )
+                {
+                    float const zc = crest - ( (float)( kz - 1 - k ) + 0.5f ) * edge;
+                    for ( int r = 0; r < h; ++r )
+                    {
+                        float const yc = (float)cy + ( (float)r + 0.5f ) * dv;
+                        for ( int c = 0; c < w; ++c )
+                        {
+                            float const xc = (float)cx + ( (float)c + 0.5f ) * du;
+                            float const dx = xc - wx, dy = yc - wy, dz = zc - wz;
+                            if ( dx * dx + dy * dy + dz * dz > R2 ) { continue; }
+                            int const cur = FillAt( *cell, c, r, k );
+                            int const space = kFillFull - cur;
+                            if ( space <= 0 ) { continue; }
+                            cands.push_back( { cx, cy, c, r, k, zc, space } );
+                        }
+                    }
+                }
+            }
+        }
+        std::sort( cands.begin(), cands.end(),
+            []( Cand const& a, Cand const& b ) { return a.z < b.z; } );
+
+        auto columnSupported = [&]( int cx, int cy, int c, int r, int k, float zc ) -> bool
+        {
+            CellSample const* cell = GetCell( cx, cy );
+            if ( !cell ) { return false; }
+            if ( k > 0 && FillAt( *cell, c, r, k - 1 ) >= kFillIso ) { return true; }
+            int const w = cell->fillW, h = cell->fillH;
+            auto solidAt = [&]( int cc, int rr, int kk ) -> bool
+            {
+                if ( kk < 0 || kk >= cell->fillK ) { return false; }
+                if ( cc < 0 || rr < 0 || cc >= w || rr >= h ) { return false; }
+                return FillAt( *cell, cc, rr, kk ) >= kFillIso;
+            };
+            if ( solidAt( c - 1, r, k ) || solidAt( c + 1, r, k )
+              || solidAt( c, r - 1, k ) || solidAt( c, r + 1, k ) )
+            {
+                return true;
+            }
+            if ( k > 0 && ( solidAt( c - 1, r, k - 1 ) || solidAt( c + 1, r, k - 1 )
+              || solidAt( c, r - 1, k - 1 ) || solidAt( c, r + 1, k - 1 ) ) )
+            {
+                return true;
+            }
+            float virginZ = 0.f;
+            float const xc = (float)cx + ( (float)c + 0.5f ) / (float)w;
+            float const yc = (float)cy + ( (float)r + 0.5f ) / (float)h;
+            if ( SampleGroundZBase( xc, yc, virginZ ) && zc <= virginZ + (std::max)( 0.05f, g.voxelEdgeM ) * 0.75f )
+            {
+                return true;
+            }
+            if ( OccupancySolidAt( xc, yc, zc - (std::max)( 0.05f, g.voxelEdgeM ) ) ) { return true; }
+            return false;
+        };
+
+        int unitsLeft = unitsBudget;
+        int unitsFilled = 0;
+        int voxelsTouched = 0;
+        std::vector<std::pair<int, int>> touchedCells;
+        for ( Cand const& cand : cands )
+        {
+            if ( unitsLeft <= 0 ) { break; }
+            if ( !columnSupported( cand.cx, cand.cy, cand.c, cand.r, cand.k, cand.z ) ) { continue; }
+            CellSample* cell = GetCellMutable( cand.cx, cand.cy );
+            if ( !cell ) { continue; }
+            int const cur = FillAt( *cell, cand.c, cand.r, cand.k );
+            int const space = kFillFull - cur;
+            if ( space <= 0 ) { continue; }
+            int const take = (std::min)( space, unitsLeft );
+            int const neu = cur + take;
+            SetFillAt( *cell, cand.c, cand.r, cand.k, (uint8_t)neu );
+            unitsLeft -= take;
+            unitsFilled += take;
+            if ( take > 0 ) { ++voxelsTouched; }
+            cell->edited = true;
+            cell->carved = true;
+            cell->carveWx = wx;
+            cell->carveWy = wy;
+            cell->carveWz = wz;
+            cell->carveRM = R;
+            cell->hasCarveFocus = true;
+            float occZ = CellOccCrest( *cell );
+            SampleOccupancyZ( (float)cand.cx + 0.5f, (float)cand.cy + 0.5f, occZ );
+            cell->fillZ = (std::max)( cell->hasFillZ ? cell->fillZ : occZ, occZ );
+            cell->hasFillZ = true;
+            bool seen = false;
+            for ( auto const& t : touchedCells )
+            {
+                if ( t.first == cand.cx && t.second == cand.cy ) { seen = true; break; }
+            }
+            if ( !seen ) { touchedCells.push_back( { cand.cx, cand.cy } ); }
+        }
+
+        if ( unitsFilled <= 0 || touchedCells.empty() ) { return out; }
+
+        int acceptedGrams = (int)std::lround(
+            (double)unitsFilled * (double)kDirtVoxelG / (double)kFillFull );
+        if ( acceptedGrams > gramsAvailable ) { acceptedGrams = gramsAvailable; }
+        if ( acceptedGrams < 1 && unitsFilled > 0 ) { acceptedGrams = 1; }
+
+        bool anyEr = false;
+        for ( auto const& xy : touchedCells )
+        {
+            CellSample const* c = GetCell( xy.first, xy.second );
+            if ( c && c->editedRegionId != 0 ) { anyEr = true; break; }
+        }
+        uint32_t rid = MergeOrCreateEditedRegion( wx, wy, wz, (std::min)( R, 0.12f ),
+            touchedCells, 0.f, 0.f, 1.f );
+        if ( EditedRegion* er = FindEditedRegion( rid ) )
+        {
+            // Cavity re-fill: openings stay (remove-only). Always bump support rev.
+            if ( anyEr ) { ++er->dirtyRev; }
+            er->actionX = wx; er->actionY = wy; er->actionZ = wz; er->actionR = R;
+            er->hasAction = true;
+        }
+        EditedRegion* er = FindEditedRegion( rid );
+
+        for ( auto const& xy : touchedCells )
+        {
+            RebuildCavityMesh( xy.first, xy.second );
+            CellSample* cell = GetCellMutable( xy.first, xy.second );
+            if ( !cell ) { continue; }
+            if ( cell->hasCavity && er && er->hasOwnBounds )
+            {
+                cell->patchMinX = er->ownMinX;
+                cell->patchMaxX = er->ownMaxX;
+                cell->patchMinY = er->ownMinY;
+                cell->patchMaxY = er->ownMaxY;
+                cell->hasPatchBounds = true;
+            }
+        }
+        if ( er )
+        {
+            for ( auto const& t : touchedCells )
+            {
+                for ( int dy = -1; dy <= 1; ++dy )
+                {
+                    for ( int dx = -1; dx <= 1; ++dx )
+                    {
+                        if ( dx == 0 && dy == 0 ) { continue; }
+                        int const nx = t.first + dx, ny = t.second + dy;
+                        bool already = false;
+                        for ( auto const& u : touchedCells )
+                        {
+                            if ( u.first == nx && u.second == ny ) { already = true; break; }
+                        }
+                        if ( already ) { continue; }
+                        CellSample* cell = GetCellMutable( nx, ny );
+                        if ( !cell || !cell->carved ) { continue; }
+                        RebuildCavityMesh( nx, ny );
+                    }
+                }
+            }
+        }
+
+        out.ok = true;
+        out.acceptedGrams = acceptedGrams;
+        out.unitsFilled = unitsFilled;
+        out.voxelsTouched = voxelsTouched;
+        return out;
+    }
+
     bool CarveOccupancySphere( float carveX, float carveY, float carveZ, float radiusM,
         float openX, float openY, float openZ )
     {
@@ -3395,7 +3762,7 @@ namespace
                 }
                 int const w = cell->fillW, h = cell->fillH, kz = cell->fillK;
                 float const edge = kVoxelEdgeM;
-                float const crest = GradeToZ( cell->grade );
+                float const crest = CellOccCrest( *cell );
                 float const du = 1.f / (float)w, dv = 1.f / (float)h;
                 bool touched = false;
                 for ( int k = 0; k < kz; ++k )
@@ -3606,7 +3973,7 @@ namespace
 
         int const w = it->second.fillW, h = it->second.fillH, kz = it->second.fillK;
         float const edge = kVoxelEdgeM;
-        float const crest = GradeToZ( it->second.grade );
+        float const crest = CellOccCrest( it->second );
 
         float mnX, mxX, mnY, mxY, mnZ, mxZ;
         if ( !DirtyBoundsFromEditedRegion( er, it->second, cx, cy, mnX, mxX, mnY, mxY, mnZ, mxZ ) )
@@ -7336,23 +7703,40 @@ namespace
         g.pendingBiteU = bu;
         g.pendingBiteV = bv;
         g.columnQueue.clear();
-        // One scoop into an open hole fills it — shrink dig on success, never leave a mound on top.
+        // P3e: place into occupancy (matter), not DigScar mound authority.
         g.pendingPlaceIntoHole = ( bdepthM > kHandfulRadiusM * 0.25f );
+        float placeZ = bz;
         if ( g.pendingPlaceIntoHole )
         {
+            // Seat fill on cavity floor / matter boundary under aim — not virgin HF skin.
+            SupportHit const seat = SupportBelow( bx, by, g.aimZ + 0.05f );
+            if ( seat.hit ) { placeZ = seat.position.z + kVoxelEdgeM * 0.35f; }
             ClearPendingScarEdit();
         }
         else
         {
-            float openZ = g.aimZ;
-            SampleGroundZ( bx, by, openZ );
-            AddScar( bx, by, openZ, bcx, bcy, true, false );
+            SampleGroundZBase( bx, by, placeZ );
+            placeZ += kVoxelEdgeM * 0.35f; // mound seat just above virgin skin
+        }
+        PrefetchOccupancyCell( bcx, bcy );
+        PlaceFillResult const filled = PlaceOccupancyFill(
+            bx, by, placeZ, (std::max)( kHandfulRadiusM, kVoxelEdgeM * 0.85f ), askG );
+        if ( filled.ok && filled.acceptedGrams > 0 )
+        {
+            // Local debit matches accepted placed matter (engine digest reconciles).
+            DebitHeldTotal( filled.acceptedGrams );
+            g.pendingPlaceG = filled.acceptedGrams;
         }
         FireActionCue( true, false );
-        g.statusLine = "Phase 4 - placing scoop...";
-        char sent[160];
-        std::snprintf( sent, sizeof( sent ), "PLACE sent %dg (hand stock %dg) - awaiting digest",
-            askG, g.heldTotalG );
+        g.statusLine = filled.ok
+            ? "P3e - placed into occupancy"
+            : "Phase 4 - placing scoop...";
+        char sent[200];
+        std::snprintf( sent, sizeof( sent ),
+            "PLACE %s %dg->occ units=%d (hand %dg) - awaiting digest",
+            filled.ok ? "fill" : "sent",
+            filled.ok ? filled.acceptedGrams : askG,
+            filled.unitsFilled, g.heldTotalG );
         g.digestLine = sent;
         UpdateStreamHud();
         return true;
@@ -12724,6 +13108,293 @@ namespace
         g.chipMode = ChipMode::Off; // cert default — zero chip cost for residual frames
     }
 
+    void GeoCertRunPlaceSection()
+    {
+        // §9 P3e PLACE / RE-FILL — reverse matter transfer into occupancy.
+        auto add = [&]( char const* scen, char const* verdict, char const* note,
+            float x = 0.f, float y = 0.f, float z = 0.f,
+            int grams = 0, int occDelta = 0, char const* terrain = "-" )
+        {
+            GeoCertRow r{};
+            std::snprintf( r.section, sizeof( r.section ), "9" );
+            std::snprintf( r.scenario, sizeof( r.scenario ), "%s", scen );
+            std::snprintf( r.verdict, sizeof( r.verdict ), "%s", verdict );
+            std::snprintf( r.note, sizeof( r.note ), "%s", note );
+            std::snprintf( r.action, sizeof( r.action ), "place_refill" );
+            std::snprintf( r.terrain, sizeof( r.terrain ), "%s", terrain ? terrain : "-" );
+            r.x = x; r.y = y; r.z = z;
+            r.grams = grams;
+            r.occDelta = occDelta;
+            GeoCertAddRow( r );
+            if ( std::strcmp( verdict, "FAIL" ) == 0 )
+            {
+                GeoCertHardFail( scen, "place_refill", note, x, y, z, 0.f, 0.f, 1.f );
+            }
+        };
+
+        float const ox = (float)ProvenanceGeo::kRangeOriginX;
+        float const oy = (float)ProvenanceGeo::kRangeOriginY;
+        float const padY = oy - 28.f;
+        float const placeR = (std::max)( kHandfulRadiusM * 1.8f, kVoxelEdgeM * 1.25f );
+        int const placeG = (int)std::lround( kDirtVoxelG );
+
+        auto seedBaseline = [&]( float x, float y )
+        {
+            int const cx = (int)std::floor( x );
+            int const cy = (int)std::floor( y );
+            PrefetchOccupancyCell( cx, cy );
+            EnsureOccupancyLattice( cx, cy );
+            CellSample* cell = GetCellMutable( cx, cy );
+            if ( cell && !cell->carved && !cell->fill.empty() )
+            {
+                SeedOccupancyFromVirginSurface( cx, cy );
+            }
+        };
+
+        auto runPlace = [&]( char const* scen, float x, float y, float placeZ,
+            float mouthX, float mouthY, bool expectMouthStay, char const* terrain )
+        {
+            float grade0 = 0.f;
+            SampleGroundZBase( x, y, grade0 );
+            seedBaseline( x, y );
+            bool const mouth0 = NearOpeningMouthAt( mouthX, mouthY );
+            int const solid0 = CountOccupancySolidInSphere( x, y, placeZ, placeR );
+            CellSample const* c0 = GetCell( (int)std::floor( x ), (int)std::floor( y ) );
+            int const d2_0 = c0 ? (int)c0->cavityTris.size() : 0;
+
+            std::unordered_map<std::string, int> credit;
+            credit["dirt"] = placeG;
+            CreditHeld( credit );
+            int const heldCredited = g.heldTotalG;
+            PlaceFillResult const pr = PlaceOccupancyFill( x, y, placeZ, placeR, placeG );
+            if ( !pr.ok || pr.acceptedGrams <= 0 )
+            {
+                DebitHeldTotal( placeG );
+                add( scen, "FAIL", "PLACE_FILL_NO_MATTER", x, y, placeZ, 0, 0, terrain );
+                return;
+            }
+            DebitHeldTotal( pr.acceptedGrams );
+            int const heldAfter = g.heldTotalG;
+            int const solid1 = CountOccupancySolidInSphere( x, y, placeZ, placeR );
+            float gradeAfter = 0.f;
+            SampleGroundZBase( x, y, gradeAfter );
+            bool const gradeStable = std::fabs( gradeAfter - grade0 ) < 1e-4f;
+            bool const mouthAfter = NearOpeningMouthAt( mouthX, mouthY );
+            int const dHeld = heldCredited - heldAfter;
+            int const dSolid = solid1 - solid0;
+            CellSample const* cell = GetCell( (int)std::floor( x ), (int)std::floor( y ) );
+            int const d2Tris = cell ? (int)cell->cavityTris.size() : 0;
+            SupportHit const sup = SupportBelow( x, y, gradeAfter + 2.0f );
+            float occZ = gradeAfter;
+            bool const haveOcc = SampleOccupancyZ( x, y, occZ );
+            bool const solidNear = OccupancySolidAt( x, y, occZ - 0.02f )
+                || OccupancySolidAt( x, y, placeZ );
+            bool const supportSees = ( (sup.hit && !sup.deferred) || (haveOcc && solidNear) );
+            int const unitsAsG = (int)std::lround(
+                (double)pr.unitsFilled * (double)kDirtVoxelG / (double)kFillFull );
+            bool const gramsOk = ( dHeld == pr.acceptedGrams ) && ( pr.acceptedGrams > 0 );
+            bool const occOk = ( pr.unitsFilled > 0 );
+            bool const massOcc = std::abs( unitsAsG - pr.acceptedGrams ) <= 2;
+            bool const mouthOk = !expectMouthStay || ( mouth0 && mouthAfter ) || mouthAfter;
+            if ( !gramsOk || !occOk || !massOcc || !supportSees || !gradeStable || !mouthOk )
+            {
+                char note[240];
+                std::snprintf( note, sizeof( note ),
+                    "held %d->%d acc=%d fillU=%d solid+%d sup=%d/%d occZ=%.3f grade=%d mouth=%d->%d d2=%d",
+                    heldCredited, heldAfter, pr.acceptedGrams, pr.unitsFilled, dSolid,
+                    (sup.hit && !sup.deferred) ? 1 : 0, solidNear ? 1 : 0, occZ,
+                    gradeStable ? 1 : 0, mouth0 ? 1 : 0, mouthAfter ? 1 : 0, d2Tris );
+                add( scen, "FAIL", note, x, y, placeZ, pr.acceptedGrams, dSolid, terrain );
+                return;
+            }
+            char note[220];
+            std::snprintf( note, sizeof( note ),
+                "held-%dg fillU=%d solid+%d supZ=%.3f occZ=%.3f d2=%d->%d HF_grade_stable",
+                pr.acceptedGrams, pr.unitsFilled, dSolid,
+                sup.hit ? sup.position.z : occZ, occZ, d2_0, d2Tris );
+            add( scen, "PASS", note, x, y, placeZ, pr.acceptedGrams, dSolid, terrain );
+        };
+
+        float const flatX = ox + 6.f, flatY = padY;
+        float flatZ = 0.f;
+        if ( !SampleGroundZBase( flatX, flatY, flatZ ) )
+        {
+            add( "place_flat_mound", "FAIL", "PAD_SAMPLE_FAIL", flatX, flatY, 0.f );
+        }
+        else
+        {
+            runPlace( "place_flat_mound", flatX, flatY, flatZ + kVoxelEdgeM * 0.35f,
+                flatX, flatY, false, "flat_soil" );
+        }
+
+        float slopeX = ox + 18.f, slopeY = padY, slopeZ = 0.f;
+        char const* slopeTerrain = "gentle_slope";
+        for ( int i = 0; i < s_geoContactN; ++i )
+        {
+            if ( std::strcmp( s_geoContacts[i].id, "B_slope" ) == 0 && s_geoContacts[i].found )
+            {
+                slopeX = s_geoContacts[i].x;
+                slopeY = padY;
+                slopeTerrain = s_geoContacts[i].terrain;
+                break;
+            }
+        }
+        SampleGroundZBase( slopeX, slopeY, slopeZ );
+        {
+            runPlace( "place_slope_supported", slopeX, slopeY, slopeZ + kVoxelEdgeM * 0.35f,
+                slopeX, slopeY, false, slopeTerrain );
+            float const floatZ = slopeZ + kVoxelEdgeM * 2.5f;
+            bool const floating = OccupancySolidAt( slopeX, slopeY, floatZ )
+                && !OccupancySolidAt( slopeX, slopeY, floatZ - kVoxelEdgeM );
+            if ( floating )
+            {
+                add( "place_slope_no_float", "FAIL", "FLOATING_BLOB",
+                    slopeX, slopeY, floatZ, 0, 0, slopeTerrain );
+            }
+            else
+            {
+                add( "place_slope_no_float", "PASS", "no unsupported solid above seat",
+                    slopeX, slopeY, slopeZ, 0, 0, slopeTerrain );
+            }
+        }
+
+        float const cavX = ox + 10.f, cavY = padY;
+        float cavGrade = 0.f;
+        SampleGroundZBase( cavX, cavY, cavGrade );
+        float const openR = 0.24f;
+        float const carveZ = cavGrade - openR * 0.40f;
+        PrefetchOccupancyCell( (int)std::floor( cavX ), (int)std::floor( cavY ) );
+        bool const carved = CarveOccupancySphere( cavX, cavY, carveZ, openR, cavX, cavY, cavGrade );
+        if ( !carved )
+        {
+            add( "place_cavity_floor_upward", "FAIL", "CAVITY_CARVE_FAIL", cavX, cavY, cavGrade );
+            add( "place_cavity_lip_connect", "SKIP", "no cavity" );
+            add( "place_lip_no_roof_hole", "SKIP", "no cavity" );
+            add( "place_no_HF_resurrection", "SKIP", "no cavity" );
+            add( "remove_place_remove_reconcile", "SKIP", "no cavity" );
+        }
+        else
+        {
+            SupportHit const floor0 = SupportBelow( cavX, cavY, cavGrade + 0.5f );
+            float placeFloorZ = carveZ;
+            if ( floor0.hit ) { placeFloorZ = floor0.position.z + kVoxelEdgeM * 0.35f; }
+            float const occTop0 = floor0.hit ? floor0.position.z : carveZ;
+            runPlace( "place_cavity_floor_upward", cavX, cavY, placeFloorZ,
+                cavX, cavY, true, "cavity_floor" );
+            SupportHit const floor1 = SupportBelow( cavX, cavY, cavGrade + 0.5f );
+            if ( !( floor1.hit && floor1.position.z > occTop0 + 1e-4f ) )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ), "FLOOR_NOT_RAISED %.3f->%.3f",
+                    occTop0, floor1.position.z );
+                add( "place_cavity_floor_raised", "FAIL", note, cavX, cavY, placeFloorZ, 0, 0, "cavity_floor" );
+            }
+            else
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ), "occ floor %.3f->%.3f (bottom-up)",
+                    occTop0, floor1.position.z );
+                add( "place_cavity_floor_raised", "PASS", note, cavX, cavY, placeFloorZ, 0, 0, "cavity_floor" );
+            }
+
+            float const lipX = cavX + openR * 0.85f;
+            float const lipY = cavY;
+            float lipZ = cavGrade;
+            SampleGroundZBase( lipX, lipY, lipZ );
+            bool const mouthBeforeLip = NearOpeningMouthAt( cavX, cavY );
+            float const farProbeX = cavX - openR * 0.5f;
+            bool const airFar0 = !OccupancySolidAt( farProbeX, cavY, carveZ );
+            // Mouth probe stays on cavity center — lip XY may sit outside tip disk.
+            runPlace( "place_cavity_lip_connect", lipX, lipY, lipZ - kVoxelEdgeM * 0.15f,
+                cavX, cavY, true, "cavity_lip" );
+            bool const mouthAfterLip = NearOpeningMouthAt( cavX, cavY );
+            bool const airFar1 = !OccupancySolidAt( farProbeX, cavY, carveZ );
+            bool const roofed = mouthBeforeLip && !mouthAfterLip;
+            bool const filledWhole = airFar0 && !airFar1
+                && std::fabs( farProbeX - lipX ) > placeR * 0.9f;
+            if ( roofed || filledWhole )
+            {
+                char note[140];
+                std::snprintf( note, sizeof( note ),
+                    "ROOF_OR_WHOLE_HOLE mouth=%d->%d farAir=%d->%d",
+                    mouthBeforeLip ? 1 : 0, mouthAfterLip ? 1 : 0,
+                    airFar0 ? 1 : 0, airFar1 ? 1 : 0 );
+                add( "place_lip_no_roof_hole", "FAIL", note, lipX, lipY, lipZ, 0, 0, "cavity_lip" );
+            }
+            else
+            {
+                add( "place_lip_no_roof_hole", "PASS",
+                    "lip place local; mouth kept; far cavity air retained",
+                    lipX, lipY, lipZ, 0, 0, "cavity_lip" );
+            }
+
+            float gradeB = 0.f;
+            SampleGroundZBase( cavX, cavY, gradeB );
+            bool const mouthKeep = NearOpeningMouthAt( cavX, cavY );
+            if ( !mouthKeep || std::fabs( gradeB - cavGrade ) > 1e-4f )
+            {
+                char note[120];
+                std::snprintf( note, sizeof( note ),
+                    "HF_RESURRECT mouth=%d grade %.4f->%.4f",
+                    mouthKeep ? 1 : 0, cavGrade, gradeB );
+                add( "place_no_HF_resurrection", "FAIL", note, cavX, cavY, cavGrade, 0, 0, "cavity_floor" );
+            }
+            else
+            {
+                add( "place_no_HF_resurrection", "PASS",
+                    "openings kept; virgin grade unchanged; no HF skin restore",
+                    cavX, cavY, cavGrade, 0, 0, "cavity_floor" );
+            }
+
+            float const rpX = ox + 14.f, rpY = padY;
+            float rpGrade = 0.f;
+            SampleGroundZBase( rpX, rpY, rpGrade );
+            float const rpR = 0.20f;
+            float const rpCarveZ = rpGrade - rpR * 0.35f;
+            PrefetchOccupancyCell( (int)std::floor( rpX ), (int)std::floor( rpY ) );
+            int const held0 = g.heldTotalG;
+            bool const rm1 = CarveOccupancySphere( rpX, rpY, rpCarveZ, rpR, rpX, rpY, rpGrade );
+            std::unordered_map<std::string, int> carry;
+            carry["dirt"] = placeG;
+            CreditHeld( carry );
+            int const heldAfterRemove = g.heldTotalG;
+            int const unitsAfterRemove = CountOccupancyFillUnitsInSphere( rpX, rpY, rpCarveZ, rpR );
+            SupportHit const rpFloor = SupportBelow( rpX, rpY, rpGrade + 0.5f );
+            float rpPlaceZ = rpCarveZ;
+            if ( rpFloor.hit ) { rpPlaceZ = rpFloor.position.z + kVoxelEdgeM * 0.35f; }
+            PlaceFillResult const rpPlace = PlaceOccupancyFill( rpX, rpY, rpPlaceZ, placeR, placeG );
+            if ( rpPlace.ok ) { DebitHeldTotal( rpPlace.acceptedGrams ); }
+            int const heldAfterPlace = g.heldTotalG;
+            int const unitsAfterPlace = CountOccupancyFillUnitsInSphere( rpX, rpY, rpPlaceZ, placeR );
+            bool const rm2 = CarveOccupancySphere( rpX, rpY, rpPlaceZ, rpR * 0.9f, rpX, rpY, rpGrade );
+            int const unitsAfterReRemove = CountOccupancyFillUnitsInSphere( rpX, rpY, rpPlaceZ, placeR );
+            int const dPlaceHeld = heldAfterRemove - heldAfterPlace;
+            bool const ok = rm1 && rm2 && rpPlace.ok
+                && ( dPlaceHeld == rpPlace.acceptedGrams )
+                && ( unitsAfterPlace > unitsAfterRemove )
+                && ( unitsAfterReRemove < unitsAfterPlace );
+            if ( !ok )
+            {
+                char note[180];
+                std::snprintf( note, sizeof( note ),
+                    "RECONCILE fail rm=%d/%d place=%d held-%d units %d->%d->%d held0=%d",
+                    rm1 ? 1 : 0, rm2 ? 1 : 0, rpPlace.ok ? 1 : 0, dPlaceHeld,
+                    unitsAfterRemove, unitsAfterPlace, unitsAfterReRemove, held0 );
+                add( "remove_place_remove_reconcile", "FAIL", note, rpX, rpY, rpGrade,
+                    rpPlace.acceptedGrams, unitsAfterPlace - unitsAfterRemove, "cycle" );
+            }
+            else
+            {
+                char note[160];
+                std::snprintf( note, sizeof( note ),
+                    "held-%dg units %d->%d->%d (remove/place/remove)",
+                    dPlaceHeld, unitsAfterRemove, unitsAfterPlace, unitsAfterReRemove );
+                add( "remove_place_remove_reconcile", "PASS", note, rpX, rpY, rpGrade,
+                    rpPlace.acceptedGrams, unitsAfterPlace - unitsAfterRemove, "cycle" );
+            }
+        }
+    }
+
     void GeoCertScaffoldRest()
     {
         // §3 / §5 / §6 / §7 / §8 / §10 / §11 are filled by dedicated runners; SKIP if early exit skipped them.
@@ -12756,7 +13427,10 @@ namespace
         {
             GeoCertScaffold( "8", "material_correctness", "skipped — cert exited before material runner" );
         }
-        GeoCertScaffold( "9", "placement_matter_add", "frozen — place/re-fill deferred (after P3d chip floor)" );
+        if ( !hasSec( "9" ) )
+        {
+            GeoCertScaffold( "9", "placement_matter_add", "skipped — cert exited before place runner" );
+        }
         if ( !hasSec( "10" ) )
         {
             GeoCertScaffold( "10", "support_collision_probes", "skipped — cert exited before support runner" );
@@ -12975,6 +13649,10 @@ namespace
             if ( g.certGeoExitCode == 0 )
             {
                 GeoCertRunMaterialSection();
+            }
+            if ( g.certGeoExitCode == 0 )
+            {
+                GeoCertRunPlaceSection();
             }
             if ( g.certGeoExitCode == 0 )
             {
