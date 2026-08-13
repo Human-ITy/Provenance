@@ -1,0 +1,17 @@
+STAGE15_BARE_EARTH_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED BARE-EARTH CAUSAL GEOGRAPHY
+image=Docs/provenance_stage15_bare_earth_player_view.ppm
+lower_frame_sky_pixels=0
+resident_packages=2601
+sample_material=sandstone
+sample_surface_z_m=53.770729
+grass=0
+trees=0
+water=0
+fog=0
+scatter=0
+props=0
+ruler=0
+palette=0
+xray=0

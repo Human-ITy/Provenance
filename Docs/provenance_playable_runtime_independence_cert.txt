@@ -1,5 +1,5 @@
 PLAYABLE_RUNTIME_INDEPENDENCE PASS
-case_count=24
+case_count=32
 case.cold_clean_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
 case.5_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
 case.6_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
@@ -24,12 +24,24 @@ case.cold_clean_to_13 selected=1 terrain_visible=1 resident=1 settled=1 collisio
 case.12_to_13 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
 case.13_to_12 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=7c1424243c13a283
 case.13_to_13 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.cold_clean_to_14 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.13_to_14 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.14_to_13 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.14_to_14 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.cold_clean_to_15 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
+case.14_to_15 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
+case.15_to_14 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1400832 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=03ee78f688e6c04d
+case.15_to_15 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
 check.cold_stage10_independent=PASS
 check.cold_stage11_independent=PASS
 check.cold_stage12_independent=PASS
 check.cold_stage13_independent=PASS
+check.cold_stage14_independent=PASS
+check.cold_stage15_independent=PASS
 check.transition_matrix=PASS
 check.stage10_digest_order_invariant=PASS
 check.stage11_digest_order_invariant=PASS
 check.stage12_digest_order_invariant=PASS
 check.stage13_digest_order_invariant=PASS
+check.stage14_digest_order_invariant=PASS
+check.stage15_digest_order_invariant=PASS

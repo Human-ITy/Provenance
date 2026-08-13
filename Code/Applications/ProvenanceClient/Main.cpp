@@ -29,6 +29,7 @@
 #include "CausalSurfaceBreachContinuity.h"
 #include "CausalExactLocalMaterialization.h"
 #include "CausalSinglePickProof.h"
+#include "CausalBareEarthGeography.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -332,7 +333,8 @@ namespace
         FaultDisplacement = 11,
         SurfaceBreachContinuity = 12,
         ExactLocalMaterialization = 13,
-        SinglePickProof = 14
+        SinglePickProof = 14,
+        BareEarthGeography = 15
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -647,12 +649,15 @@ namespace
         bool playStage12Launch = false;
         bool playStage13Launch = false;
         bool playStage14Launch = false;
+        bool playStage15Launch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
         int certStage13VisualFrames = 0;
         bool certStage14Visual = false;
         int certStage14VisualFrames = 0;
+        bool certStage15Visual = false;
+        int certStage15VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -809,6 +814,8 @@ namespace
         bool causalBreachCertified = false;
         bool exactLocalAuthorityAttempted = false;
         bool exactLocalCertified = false;
+        bool bareEarthAuthorityAttempted = false;
+        bool bareEarthCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
         bool cutCOccupancyCertified = false;
         std::string causalGeologyAuthorityReason = "not_loaded";
@@ -820,6 +827,7 @@ namespace
         std::string causalFaultAuthorityReason = "not_loaded";
         std::string causalBreachAuthorityReason = "not_loaded";
         std::string exactLocalAuthorityReason = "not_loaded";
+        std::string bareEarthAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -831,6 +839,7 @@ namespace
         std::unique_ptr<CausalSurfaceBreachContinuity::Kernel> causalBreachRuntime;
         std::unique_ptr<CausalExactLocalMaterialization::Fixture> exactLocalRuntime;
         std::unique_ptr<CausalSinglePickProof::Mutation> singlePickRuntime;
+        std::unique_ptr<CausalBareEarthGeography::Kernel> bareEarthRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2508,9 +2517,22 @@ namespace
         return view == Stage0PlayView::SinglePickProof;
     }
 
+    bool IsBareEarthGeographyView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::BareEarthGeography;
+    }
+
     bool UsesExactLocalMaterialization( Stage0PlayView view )
     {
         return IsExactLocalMaterializationView(view)||IsSinglePickProofView(view);
+    }
+
+    bool UsesPackageOwnedTerrain( Stage0PlayView view )
+    {
+        // These views render and collide against their certified 8 m package
+        // stream. The older one-metre cell map is only a bounded local
+        // diagnostic/tool cache and must not duplicate live terrain residency.
+        return UsesExactLocalMaterialization(view)||IsBareEarthGeographyView(view);
     }
 
     bool IsCausalPlayableView( Stage0PlayView view )
@@ -2519,7 +2541,8 @@ namespace
             || IsVisibleExposureView( view ) || IsDifferentialErosionView( view )
             || IsGraniteIntrusionView( view ) || IsContactMineralizationView( view )
             || IsCutCOccupancyView( view ) || IsFaultDisplacementView( view )
-            || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization( view );
+            || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization( view )
+            || IsBareEarthGeographyView( view );
     }
 
     char const* PresentationIsolationModeName( int mode )
@@ -2566,6 +2589,30 @@ namespace
             "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
         constexpr char const* kBreachPath =
             "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc";
+        constexpr char const* kGeographyPath =
+            "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg";
+
+        if(IsBareEarthGeographyView(view))
+        {
+            if(!g.bareEarthAuthorityAttempted)
+            {
+                g.bareEarthAuthorityAttempted=true;
+                auto const cert=CausalBareEarthGeography::RunCert(kGeologyPath,
+                    kExposurePath,kErosionPath,kIntrusionPath,kMineralizationPath,
+                    kFaultPath,kBreachPath,kGeographyPath);
+                g.bareEarthCertified=cert.passed;
+                g.bareEarthAuthorityReason=cert.passed?"certified":cert.reason;
+                if(cert.passed)
+                {
+                    std::string reason;g.bareEarthRuntime=CausalBareEarthGeography::LoadKernel(
+                        kGeologyPath,kExposurePath,kErosionPath,kIntrusionPath,
+                        kMineralizationPath,kFaultPath,kBreachPath,kGeographyPath,&reason);
+                    if(!g.bareEarthRuntime)
+                    {g.bareEarthCertified=false;g.bareEarthAuthorityReason=reason;}
+                }
+            }
+            return g.bareEarthCertified&&g.bareEarthRuntime!=nullptr;
+        }
 
         if ( UsesExactLocalMaterialization( view ) )
         {
@@ -2951,6 +2998,31 @@ namespace
         return true;
     }
 
+    // Stage 15 reaches through the Stage-12 differential-erosion kernel, whose
+    // certified dual-surface acceleration caches are mutable. Sharing one
+    // instance between terrain workers would race those maps. Each worker owns
+    // an identical descriptor-linked kernel instead; results remain byte-stable
+    // while the cache is private to the job lane that mutates it.
+    CausalBareEarthGeography::Kernel* ThreadBareEarthKernel()
+    {
+        thread_local std::unique_ptr<CausalBareEarthGeography::Kernel> kernel;
+        thread_local bool attempted=false;
+        if(!attempted)
+        {
+            attempted=true;std::string reason;
+            kernel=CausalBareEarthGeography::LoadKernel(
+                "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg",
+                "Data\\Worldgen\\causal_world_geologic_exposure_floor.cwe",
+                "Data\\Worldgen\\causal_world_differential_erosion_floor.cde",
+                "Data\\Worldgen\\causal_world_granite_intrusion_floor.cgi",
+                "Data\\Worldgen\\causal_world_contact_mineralization_floor.ccm",
+                "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd",
+                "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc",
+                "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg",&reason);
+        }
+        return kernel.get();
+    }
+
     bool SampleResidentCausalPackageSurface(double x,double y,float& outZ)
     {
         double const shiftedX=x+0.5*CausalVisibleExposure::kDualStepM;
@@ -2970,6 +3042,24 @@ namespace
     bool SampleCausalPlayableCell( Stage0PlayView view, double x, double y,
         float& outZ, std::string& outCap )
     {
+        if ( IsBareEarthGeographyView( view ) )
+        {
+            if(!g.bareEarthRuntime)return false;
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                // Material identity is the compiled surface authority, not a
+                // float-round-tripped query just below the reconstructed mesh.
+                // Near a formation contact the latter could choose a different
+                // side depending on whether the package was already resident.
+                auto const geology=g.bareEarthRuntime->SurfaceGeology(x,y);
+                if(!geology.found)return false;
+                outCap=geology.material;return true;
+            }
+            outZ=(float)g.bareEarthRuntime->ReconstructedZ(x,y);
+            auto const geology=g.bareEarthRuntime->SurfaceGeology(x,y);
+            if(!geology.found)return false;
+            outCap=geology.material;return true;
+        }
         if ( UsesExactLocalMaterialization( view ) )
         {
             if(!g.exactLocalRuntime||!g.causalBreachRuntime)return false;
@@ -3125,6 +3215,8 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
+        {return g.bareEarthRuntime->Query(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
           &&g.exactLocalRuntime->Owns(x,y))return g.singlePickRuntime->Query(*g.exactLocalRuntime,x,y,z);
         if(UsesExactLocalMaterialization(view)&&g.exactLocalRuntime
@@ -3158,6 +3250,8 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
+        {return g.bareEarthRuntime->QueryMaterial(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
           &&g.exactLocalRuntime->Owns(x,y))
             return g.singlePickRuntime->QueryMaterial(*g.exactLocalRuntime,x,y,z);
@@ -3365,6 +3459,7 @@ namespace
             || IsFaultDisplacementView( g.stage0PlayView )
             || IsSurfaceBreachView( g.stage0PlayView )
             || UsesExactLocalMaterialization( g.stage0PlayView )
+            || IsBareEarthGeographyView( g.stage0PlayView )
             || IsCutCOccupancyView( g.stage0PlayView );
         float const dualOffset = dualSurface ? -0.25f : 0.f;
         b.minX = b.bx0 * kStage0TerrainBlockCells + dualOffset;
@@ -3386,7 +3481,7 @@ namespace
         // 68 m causal disk made every 4 m flight step synchronously resample a
         // wide fringe on the frame thread even though the package workers had
         // already supplied the complete 192 m terrain answer.
-        int const cacheRadius = UsesExactLocalMaterialization( g.stage0PlayView )
+        int const cacheRadius = UsesPackageOwnedTerrain( g.stage0PlayView )
             ? 20 : 68;
         int const cacheRadiusSq = cacheRadius * cacheRadius;
 
@@ -9860,6 +9955,15 @@ namespace
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
+          && IsBareEarthGeographyView( g.stage0PlayView )
+          && g.bareEarthRuntime )
+        {
+            if(sampleResidentCausalPackage(outZ))return true;
+            outZ=(float)g.bareEarthRuntime->ReconstructedZ(x,y);
+            return std::isfinite(outZ);
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
           && UsesExactLocalMaterialization(g.stage0PlayView)
           && g.exactLocalRuntime && g.causalBreachRuntime )
         {
@@ -10988,7 +11092,7 @@ namespace
         // The Stage-13 package stream is already the complete live-terrain
         // authority.  Its cell cache exists only for nearby diagnostic/tool
         // consumers and must not duplicate the 192 m package residency path.
-        int const analyticRadius = UsesExactLocalMaterialization( g.stage0PlayView )
+        int const analyticRadius = UsesPackageOwnedTerrain( g.stage0PlayView )
             ? 16 : (std::min)( kFarRadiusCells, 64 );
         EnsureGeoDisk( cx, cy, analyticRadius );
         EvictStage0Residency( cx, cy );
@@ -11848,6 +11952,8 @@ namespace
         LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},materialEnd{},meshEnd{},
             collisionEnd{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        CausalBareEarthGeography::Kernel* const workerGeography=
+            IsBareEarthGeographyView(job.view)?ThreadBareEarthKernel():nullptr;
 
         if(out.integratedCutC)
         {
@@ -11862,6 +11968,8 @@ namespace
         }
         else if(IsSurfaceBreachView(job.view)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(job.bx,job.by);}
+        else if(IsBareEarthGeographyView(job.view)&&workerGeography)
+        {surfaceSamples=workerGeography->SampleBlock(job.bx,job.by);}
         else if(IsFaultDisplacementView(job.view)&&g.causalFaultRuntime)
         {surfaceSamples=g.causalFaultRuntime->SampleBlock(job.bx,job.by);}
         else if(IsContactMineralizationView(job.view)&&g.causalMineralizationRuntime)
@@ -11898,8 +12006,9 @@ namespace
             {
                 point=CausalVisibleExposure::PresentationSamplePoint(
                     surfaceSamples,descriptors.crossings[i]);
-                auto const geology=CausalMaterialAt(job.view,
-                    point.x,point.y,point.z-0.001);
+                auto const geology=workerGeography
+                    ?workerGeography->QueryMaterial(point.x,point.y,point.z-0.001)
+                    :CausalMaterialAt(job.view,point.x,point.y,point.z-0.001);
                 out.materials.emplace_back(geology.found&&geology.material
                     ?geology.material:"dirt");
             }
@@ -12201,7 +12310,7 @@ namespace
         if ( !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
-          && !g.exactLocalRuntime ) { return; }
+          && !g.exactLocalRuntime && !g.bareEarthRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -12239,6 +12348,8 @@ namespace
         }
         else if(IsSurfaceBreachView(g.stage0PlayView)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(bx,by);}
+        else if(IsBareEarthGeographyView(g.stage0PlayView)&&g.bareEarthRuntime)
+        {surfaceSamples=g.bareEarthRuntime->SampleBlock(bx,by);}
         else if(IsFaultDisplacementView(g.stage0PlayView)&&g.causalFaultRuntime)
         {surfaceSamples=g.causalFaultRuntime->SampleBlock(bx,by);}
         else if(IsContactMineralizationView(g.stage0PlayView)&&g.causalMineralizationRuntime)
@@ -12446,7 +12557,7 @@ namespace
         if ( !stage56 && !stage7 && !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
-          && !g.exactLocalRuntime ) { return; }
+          && !g.exactLocalRuntime && !g.bareEarthRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -12608,6 +12719,7 @@ namespace
         if ( IsCausalExposureView( view ) ) { return 2; }
         if ( IsVisibleExposureView( view ) ) { return 3; }
         if ( IsDifferentialErosionView( view ) ) { return 4; }
+        if ( IsBareEarthGeographyView( view ) ) { return 12; }
         if ( IsGraniteIntrusionView( view ) ) { return 5; }
         if ( IsContactMineralizationView( view ) ) { return 6; }
         if ( IsCutCOccupancyView( view ) ) { return 7; }
@@ -12663,6 +12775,8 @@ namespace
           "GEO.BREACH_CONTINUITY", "bounded 12.5cm occupancy drives render, collision, and x-ray", Stage0PlayView::ExactLocalMaterialization },
         { "INTEGRATION", "MAT.HORIZON_TO_HAND_PICK_PROOF", "Stage 14 - Single Causal Pick Strike",
           "MAT.EXACT_LOCAL_MATERIALIZATION", "one reconciled pick mutation preserves matter and provenance", Stage0PlayView::SinglePickProof },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEOGRAPHY.BARE_EARTH_FLOOR", "Stage 15 - Bare-Earth Causal Geography",
+          "MAT.HORIZON_TO_HAND_PICK_PROOF", "regional uplift and compiled erosion produce legible bare landforms", Stage0PlayView::BareEarthGeography },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
@@ -12754,6 +12868,8 @@ namespace
         { attempted = g.exactLocalAuthorityAttempted; certified = g.exactLocalCertified; }
         else if ( IsSinglePickProofView( entry.view ) )
         { attempted = g.exactLocalAuthorityAttempted; certified = g.exactLocalCertified; }
+        else if ( IsBareEarthGeographyView( entry.view ) )
+        { attempted = g.bareEarthAuthorityAttempted; certified = g.bareEarthCertified; }
         else if ( IsCutCOccupancyView( entry.view ) )
         { attempted = g.cutCOccupancyAuthorityAttempted; certified = g.cutCOccupancyCertified; }
         return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
@@ -12920,7 +13036,7 @@ namespace
         int const cx = (int)std::floor( g.feetX );
         int const cy = (int)std::floor( g.feetY );
         EnsureGeoDisk( cx, cy,
-            UsesExactLocalMaterialization( g.stage0PlayView ) ? 16 : 64 );
+            UsesPackageOwnedTerrain( g.stage0PlayView ) ? 16 : 64 );
         EvictStage0Residency( cx, cy );
         float groundZ = g.feetZ;
         if ( SampleGroundZBase( g.feetX, g.feetY, groundZ ) )
@@ -12946,6 +13062,7 @@ namespace
             if ( IsFaultDisplacementView( view ) ) { reason = &g.causalFaultAuthorityReason; }
             if ( IsSurfaceBreachView( view ) ) { reason = &g.causalBreachAuthorityReason; }
             if ( UsesExactLocalMaterialization( view ) ) { reason = &g.exactLocalAuthorityReason; }
+            if ( IsBareEarthGeographyView( view ) ) { reason = &g.bareEarthAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
         }
@@ -13003,6 +13120,13 @@ namespace
             g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
             g.generatorId = authority.worldgenId;
             g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsBareEarthGeographyView( view ) && g.bareEarthRuntime )
+        {
+            auto const& authority=g.bareEarthRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
         }
         else if ( ( IsContactMineralizationView( view ) || IsCutCOccupancyView( view ) )
           && g.causalMineralizationRuntime )
@@ -13073,6 +13197,16 @@ namespace
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="STAGE 14 - aim at quartz and strike once with LMB";
         }
+        if(g.playWorldgenInitialized&&IsBareEarthGeographyView(view)&&oldView!=view)
+        {
+            // Enter on a walkable regional shoulder overlooking the causal
+            // valley/ridge system. Nothing decorative is enabled here.
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+        }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
             // Player-scale certified outcrop and readable oblique flashlight
@@ -13117,6 +13251,7 @@ namespace
             case Stage0PlayView::SurfaceBreachContinuity: return "CERTIFIED SURFACE BREACH CONTINUITY";
             case Stage0PlayView::ExactLocalMaterialization: return "CERTIFIED EXACT LOCAL MATERIALIZATION";
             case Stage0PlayView::SinglePickProof: return "CERTIFIED SINGLE CAUSAL PICK STRIKE";
+            case Stage0PlayView::BareEarthGeography: return "CERTIFIED BARE-EARTH CAUSAL GEOGRAPHY";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -13918,6 +14053,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
+          || IsBareEarthGeographyView( g.stage0PlayView )
           || IsCutCOccupancyView( g.stage0PlayView ) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
@@ -13932,6 +14068,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
+          || IsBareEarthGeographyView( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)std::floor( x / blockSize );
@@ -13948,6 +14085,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
+          || IsBareEarthGeographyView( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)(int32_t)( key >> 32 );
@@ -14072,6 +14210,7 @@ namespace
                 || IsFaultDisplacementView( g.stage0PlayView )
                 || IsSurfaceBreachView( g.stage0PlayView )
                 || UsesExactLocalMaterialization( g.stage0PlayView )
+                || IsBareEarthGeographyView( g.stage0PlayView )
                 || IsCutCOccupancyView( g.stage0PlayView );
             float const latticeOrigin = dualLattice ? 0.25f : 0.f;
             int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
@@ -18295,6 +18434,7 @@ namespace
               || IsFaultDisplacementView( g.stage0PlayView )
               || IsSurfaceBreachView( g.stage0PlayView )
               || UsesExactLocalMaterialization( g.stage0PlayView )
+              || IsBareEarthGeographyView( g.stage0PlayView )
               || IsCutCOccupancyView( g.stage0PlayView ) ) )
             { DrawStage8TerrainBlocks(); }
             else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
@@ -29845,11 +29985,12 @@ namespace
 
         g.playWorldgenInitialized = true;
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
-          &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch&&!g.playCutCLaunch)
+          &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
+          &&!g.playStage15Launch&&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::SinglePickProof);
+            SelectStage0PlayView(Stage0PlayView::BareEarthGeography);
         }
         if ( g.playStage11Launch )
         {
@@ -29920,6 +30061,21 @@ namespace
                 g.yaw=0.f;g.pitch=-1.0f;
             }
         }
+        if(g.playStage15Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::BareEarthGeography);
+            if(g.certStage15Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if ( g.playCutCLaunch )
         {
             g.stage0StageMenuOpen = false;
@@ -29938,7 +30094,7 @@ namespace
             }
         }
         g.statusLine = g.playWorldgenLatestStableLaunch
-            ? "STAGE 14 - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
+            ? "STAGE 15 - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
             : ( g.playStage11Launch ? "STAGE 11 - FAULT DISPLACEMENT  [M] stages"
             : ( g.playCutCLaunch ? "CUT C — FABLESCRIPT OCCUPANCY PARITY"
             : "WORLDGEN PLAYTEST — STAGE 0  [R] residency overlay" ) );
@@ -29948,6 +30104,8 @@ namespace
         {g.statusLine="STAGE 13 - EXACT LOCAL MATERIALIZATION  [M] stages";}
         if(g.playStage14Launch)
         {g.statusLine="STAGE 14 - SINGLE CAUSAL PICK STRIKE  [M] stages";}
+        if(g.playStage15Launch)
+        {g.statusLine="STAGE 15 - BARE-EARTH CAUSAL GEOGRAPHY  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -30236,6 +30394,8 @@ namespace
         { row( "fixture=exact_local_materialization  authority=STAGE12  voxel=0.125m  bounded=8m" ); }
         else if ( IsSinglePickProofView( g.stage0PlayView ) )
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
+        else if(IsBareEarthGeographyView(g.stage0PlayView))
+        {row("fixture=bare_earth_geography  authority=CERTIFIED  region=4096m  beauty_layers=OFF");}
         else if ( IsCutCOccupancyView( g.stage0PlayView ) )
         { row( "fixture=cut_c_occupancy  authority=FABLESCRIPT  voxel=0.125m  grade=FORBIDDEN" ); }
         else if ( IsContactMineralizationView( g.stage0PlayView ) )
@@ -32433,6 +32593,10 @@ namespace
         { "13_to_14", Stage0PlayView::ExactLocalMaterialization, Stage0PlayView::SinglePickProof },
         { "14_to_13", Stage0PlayView::SinglePickProof, Stage0PlayView::ExactLocalMaterialization },
         { "14_to_14", Stage0PlayView::SinglePickProof, Stage0PlayView::SinglePickProof },
+        { "cold_clean_to_15", Stage0PlayView::Clean, Stage0PlayView::BareEarthGeography },
+        { "14_to_15", Stage0PlayView::SinglePickProof, Stage0PlayView::BareEarthGeography },
+        { "15_to_14", Stage0PlayView::BareEarthGeography, Stage0PlayView::SinglePickProof },
+        { "15_to_15", Stage0PlayView::BareEarthGeography, Stage0PlayView::BareEarthGeography },
     };
 
     struct RuntimeIndependenceReceipt
@@ -32504,9 +32668,10 @@ namespace
         Stage0PlayView::SurfaceBreachContinuity,
         Stage0PlayView::ExactLocalMaterialization,
         Stage0PlayView::SinglePickProof,
+        Stage0PlayView::BareEarthGeography,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -32548,6 +32713,11 @@ namespace
         // center.  Establish the distant destination first so this audit tests
         // traversal coverage, not a deliberately stale pre-teleport package set.
         SelectStage0PlayView( view );
+        // Stage 15 deliberately spawns a normal player in walk mode. The
+        // boundary audit is explicitly a free-flight stability probe, so apply
+        // its movement contract after stage selection has configured the spawn.
+        g.walkMode = false;
+        g.grounded = false;
         FollowStreamCenter();
         float surfaceZ = 0.f;
         float walkGroundZ = 0.f;
@@ -32671,7 +32841,7 @@ namespace
             && s_boundaryPopChangedPixels == 0;
         std::fprintf( file,
             "WORLDGEN_BOUNDARY_CONTINUITY %s\n"
-            "capture_policy=stage0_stage5_to_stage14_x_north_east_south_west\n"
+            "capture_policy=stage0_stage5_to_stage15_x_north_east_south_west\n"
             "active_residency_radius_m=%d\nactive_residency_diameter_m=%d\n"
             "far_field_extent_m=%d\nfar_field_collision=0\n"
             "check.partial_edge_packages_closed=%s\n"
@@ -32729,15 +32899,18 @@ namespace
         std::fprintf( file, "check.cold_stage10_independent=%s\n"
             "check.cold_stage11_independent=%s\ncheck.cold_stage12_independent=%s\n"
             "check.cold_stage13_independent=%s\ncheck.cold_stage14_independent=%s\n"
+            "check.cold_stage15_independent=%s\n"
             "check.transition_matrix=%s\n"
             "check.stage10_digest_order_invariant=%s\n"
             "check.stage11_digest_order_invariant=%s\n"
             "check.stage12_digest_order_invariant=%s\n"
             "check.stage13_digest_order_invariant=%s\n"
-            "check.stage14_digest_order_invariant=%s\n",
+            "check.stage14_digest_order_invariant=%s\n"
+            "check.stage15_digest_order_invariant=%s\n",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL" );
@@ -33044,6 +33217,9 @@ namespace
             uint64_t stage10Digest = 0;
             uint64_t stage11Digest = 0;
             uint64_t stage12Digest = 0;
+            uint64_t stage13Digest = 0;
+            uint64_t stage14Digest = 0;
+            uint64_t stage15Digest = 0;
             for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
             {
                 basePassed = basePassed && r.selected && r.terrainVisible && r.resident
@@ -33062,6 +33238,21 @@ namespace
                 {
                     if ( stage12Digest == 0 ) { stage12Digest = r.digest; }
                     else { basePassed = basePassed && stage12Digest == r.digest; }
+                }
+                if ( std::strstr( r.id, "to_13" ) || std::strcmp( r.id, "13_to_13" ) == 0 )
+                {
+                    if ( stage13Digest == 0 ) { stage13Digest = r.digest; }
+                    else { basePassed = basePassed && stage13Digest == r.digest; }
+                }
+                if ( std::strstr( r.id, "to_14" ) || std::strcmp( r.id, "14_to_14" ) == 0 )
+                {
+                    if ( stage14Digest == 0 ) { stage14Digest = r.digest; }
+                    else { basePassed = basePassed && stage14Digest == r.digest; }
+                }
+                if ( std::strstr( r.id, "to_15" ) || std::strcmp( r.id, "15_to_15" ) == 0 )
+                {
+                    if ( stage15Digest == 0 ) { stage15Digest = r.digest; }
+                    else { basePassed = basePassed && stage15Digest == r.digest; }
                 }
             }
             RuntimeDiagnosticResidencyTick( basePassed );
@@ -33124,7 +33315,8 @@ namespace
           || IsContactMineralizationView( test.target )
           || IsFaultDisplacementView( test.target )
           || IsSurfaceBreachView( test.target )
-          || UsesExactLocalMaterialization( test.target ) )
+          || UsesExactLocalMaterialization( test.target )
+          || IsBareEarthGeographyView( test.target ) )
         {
             receipt.packages = (int)g.stage8TerrainBlocks.size();
             receipt.triangles = g.stage8TerrainTriangles;
@@ -33183,14 +33375,21 @@ namespace
         for ( int py = -24; py <= 24; py += 6 )
         for ( int px = -24; px <= 24; px += 6 )
         {
-            float rendered[3];
-            Stage0CalibrationRenderPoint( px + 0.5f, py + 0.5f, 0.f, rendered );
+            float rendered[3],normal[3],anchorZ=0.f;
+            Stage0CalibrationSurfaceZ(px+0.5f,py+0.5f,anchorZ);
+            Stage0CalibrationRenderPoint(
+                px + 0.5f, py + 0.5f, 0.f, rendered,normal );
             float surfaceAtRendered = 0.f;
             Stage0CalibrationSurfaceZ( rendered[0], rendered[1], surfaceAtRendered );
             double const clearance = (double)rendered[2] - surfaceAtRendered;
+            double const dx=(double)rendered[0]-((double)px+.5);
+            double const dy=(double)rendered[1]-((double)py+.5);
+            double const dz=(double)rendered[2]-(double)anchorZ;
+            double const normalOffset=std::sqrt(dx*dx+dy*dy+dz*dz);
             ++receipt.attachmentSamples;
             if ( clearance < 0.002 ) { ++receipt.attachmentPenetrations; }
-            receipt.attachmentMaxFloatM = (std::max)( receipt.attachmentMaxFloatM, clearance );
+            receipt.attachmentMaxFloatM = (std::max)(
+                receipt.attachmentMaxFloatM,normalOffset );
         }
         s_runtimeIndependenceReceipts.push_back( receipt );
 
@@ -33299,7 +33498,8 @@ namespace
         if ( IsVisibleExposureView( view ) ) { return g.stage7TerrainBlocks; }
         if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
           || IsContactMineralizationView( view ) || IsFaultDisplacementView( view )
-          || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization(view) )
+          || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization(view)
+          || IsBareEarthGeographyView(view) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
     }
@@ -33546,6 +33746,8 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
+        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
+        {return g.bareEarthRuntime->SurfaceGeology(x,y);}
         if(UsesExactLocalMaterialization(view)&&g.exactLocalRuntime&&g.causalBreachRuntime)
         {return g.exactLocalRuntime->Owns(x,y)?g.exactLocalRuntime->SurfaceSample(x,y)
             :g.causalBreachRuntime->SurfaceGeology(x,y);}
@@ -33665,8 +33867,7 @@ namespace
             // direct FableScript/Stage-12 oracle is the material control; the
             // cell cache is local diagnostic state and is not an authority
             // gate.  Earlier stages retain their original cache-parity check.
-            bool const requireCell =
-                !UsesExactLocalMaterialization( receipt.view );
+            bool const requireCell = !UsesPackageOwnedTerrain(receipt.view);
             bool matches = expected && presented && collision
                 && ( !requireCell || ( cell && cell->valid ) )
                 && std::fabs( presentedZ - collisionZ ) <= 0.001f
@@ -33771,11 +33972,13 @@ namespace
         bool residencyDigestExact = passed;
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
-        char const* certPath=g.certWorldgenCardinalStageFilter==10
+        char const* certPath=g.certWorldgenCardinalStageFilter==11
+            ?"Docs\\provenance_stage15_cardinal_replacement_cert.txt"
+            :(g.certWorldgenCardinalStageFilter==10
             ?"Docs\\provenance_stage14_cardinal_replacement_cert.txt"
             :(g.certWorldgenCardinalStageFilter==9
             ?"Docs\\provenance_stage13_cardinal_replacement_cert.txt"
-            :"Docs\\provenance_worldgen_cardinal_replacement_cert.txt");
+            :"Docs\\provenance_worldgen_cardinal_replacement_cert.txt"));
         if ( fopen_s( &file, certPath, "wb" ) != 0
           || !file ) { return false; }
         // The permitted residency envelope follows the residency law at the
@@ -33894,11 +34097,13 @@ namespace
         if ( !g.certWorldgenCardinalReplacement || !g.playWorldgenInitialized ) { return; }
         if ( !s_cardinalTrace )
         {
-            char const* tracePath=g.certWorldgenCardinalStageFilter==10
+            char const* tracePath=g.certWorldgenCardinalStageFilter==11
+                ?"Docs\\provenance_stage15_cardinal_replacement_trace.csv"
+                :(g.certWorldgenCardinalStageFilter==10
                 ?"Docs\\provenance_stage14_cardinal_replacement_trace.csv"
                 :(g.certWorldgenCardinalStageFilter==9
                 ?"Docs\\provenance_stage13_cardinal_replacement_trace.csv"
-                :"Docs\\provenance_worldgen_cardinal_replacement_trace.csv");
+                :"Docs\\provenance_worldgen_cardinal_replacement_trace.csv"));
             fopen_s( &s_cardinalTrace, tracePath, "wb" );
             if ( s_cardinalTrace )
             { std::fprintf( s_cardinalTrace,
@@ -36212,6 +36417,60 @@ namespace
                     &&g.stage0GeologySnapshotDepositVisible?0:2);
             }
         }
+        if(g.certStage15Visual)
+        {
+            static int visualProbeFrames=0;++visualProbeFrames;
+            int const pendingPackages=Stage0PendingPackageCount(
+                Stage0PlayView::BareEarthGeography);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(
+                Stage0PlayView::BareEarthGeography);
+            if((visualProbeFrames%600)==0)
+            {
+                FILE* progress=nullptr;
+                if(fopen_s(&progress,"Docs\\provenance_stage15_visual_progress.txt","wb")==0&&progress)
+                {
+                    std::fprintf(progress,"frames=%d\npackages=%zu\npending=%d\n"
+                        "workers_idle=%d\ncomplete_radius_m=%.3f\n",
+                        visualProbeFrames,g.stage8TerrainBlocks.size(),pendingPackages,
+                        workersIdle?1:0,completeRadius);
+                    std::fclose(progress);
+                }
+            }
+            // A visual frame needs the declared 192 m disk. The one-package
+            // eviction collar is separately certified by cardinal replacement.
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(settled)++g.certStage15VisualFrames;
+            if(g.certStage15VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_stage15_bare_earth_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                float ground=0.f;std::string material;
+                bool const sampled=SampleCausalPlayableCell(
+                    Stage0PlayView::BareEarthGeography,-96.0,-112.0,ground,material);
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_stage15_bare_earth_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&sampled
+                    &&g.bareEarthCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE15_BARE_EARTH_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_stage15_bare_earth_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nresident_packages=%zu\n"
+                        "sample_material=%s\nsample_surface_z_m=%.6f\n"
+                        "grass=0\ntrees=0\nwater=0\nfog=0\nscatter=0\nprops=0\n"
+                        "ruler=0\npalette=0\nxray=0\n",
+                        passed?"PASS":"FAIL",g.certStage15VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,
+                        g.stage8TerrainBlocks.size(),material.c_str(),ground);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -37546,6 +37805,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runCausalWorldBreachCert = false;
         bool runExactLocalMaterializationCert = false;
         bool runSinglePickProofCert = false;
+        bool runBareEarthGeographyCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -37555,6 +37815,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         char mineralizationPath[MAX_PATH] = "Data\\Worldgen\\causal_world_contact_mineralization_floor.ccm";
         char faultPath[MAX_PATH] = "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
         char breachPath[MAX_PATH] = "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc";
+        char geographyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -37622,6 +37883,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     runSinglePickProofCert = true;
                 }
+                else if(_wcsicmp(certArgv[i],L"--cert-stage15-bare-earth-geography")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-causal-bare-earth-geography")==0)
+                {runBareEarthGeographyCert=true;}
                 else if ( _wcsnicmp( certArgv[i], L"--causal-world-descriptor=", 26 ) == 0 )
                 {
                     WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 26, -1,
@@ -37700,6 +37964,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             auto const result=CausalSinglePickProof::RunCert(*kernel);
             CausalSinglePickProof::WriteCertArtifact(result,
                 "Docs\\provenance_stage14_single_pick_proof_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runBareEarthGeographyCert)
+        {
+            auto const result=CausalBareEarthGeography::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath);
+            CausalBareEarthGeography::WriteCertArtifact(result,
+                "Docs\\provenance_stage15_bare_earth_geography_cert.txt");
             return result.passed?0:1;
         }
         if ( runCausalWorldMineralizationCert )
@@ -38426,6 +38699,28 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playStage14Launch=true;g.certStage14Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage15")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=11;
+                    g.playWorldgenBaseline=true;g.playStage15Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-stage15-bare-earth-geography")==0
+                  ||_wcsicmp(argv[i],L"--play-causal-geography-floor")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage15Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-stage15-bare-earth-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage15Launch=true;g.certStage15Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

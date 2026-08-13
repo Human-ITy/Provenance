@@ -1,0 +1,34 @@
+PROVENANCE_CAUSAL_BARE_EARTH_GEOGRAPHY_V1
+# Stage 15: bounded analytical regional uplift and compiled erosion history.
+# No runtime water, sediment transport, ecology, or generic noise is admitted.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_bare_earth_geography_floor
+breach_descriptor_digest=b672d587a5d9fb08
+authority_revision=1
+uplift_event_id=15a6e00000000001
+uplift_chronology=80
+erosion_event_id=15e2051000000001
+erosion_chronology=90
+region_min_x_m=-2048.0
+region_max_x_m=2048.0
+region_min_y_m=-2048.0
+region_max_y_m=2048.0
+massif_amplitude_m=92.0
+massif_radius_x_m=1350.0
+massif_radius_y_m=900.0
+fold_amplitude_m=15.0
+fold_wavelength_m=240.0
+fold_azimuth_deg=24.0
+valley_width_m=92.0
+valley_incision_m=34.0
+ravine_width_m=26.0
+ravine_incision_m=15.0
+basin_radius_x_m=360.0
+basin_radius_y_m=250.0
+basin_incision_m=12.0
+fault_scarp_height_m=7.5
+fault_scarp_width_m=18.0
+integration_step_m=0.125
