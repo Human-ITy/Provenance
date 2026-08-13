@@ -27,6 +27,7 @@
 #include "CausalContactMineralization.h"
 #include "CausalFaultDisplacement.h"
 #include "CausalSurfaceBreachContinuity.h"
+#include "CausalExactLocalMaterialization.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -328,7 +329,8 @@ namespace
         ContactMineralization = 9,
         CutCOccupancyParity = 10,
         FaultDisplacement = 11,
-        SurfaceBreachContinuity = 12
+        SurfaceBreachContinuity = 12,
+        ExactLocalMaterialization = 13
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -641,8 +643,11 @@ namespace
         bool playCutCLaunch = false;
         bool playStage11Launch = false;
         bool playStage12Launch = false;
+        bool playStage13Launch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
+        bool certStage13Visual = false;
+        int certStage13VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -797,6 +802,8 @@ namespace
         bool causalFaultCertified = false;
         bool causalBreachAuthorityAttempted = false;
         bool causalBreachCertified = false;
+        bool exactLocalAuthorityAttempted = false;
+        bool exactLocalCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
         bool cutCOccupancyCertified = false;
         std::string causalGeologyAuthorityReason = "not_loaded";
@@ -807,6 +814,7 @@ namespace
         std::string causalMineralizationAuthorityReason = "not_loaded";
         std::string causalFaultAuthorityReason = "not_loaded";
         std::string causalBreachAuthorityReason = "not_loaded";
+        std::string exactLocalAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -816,6 +824,7 @@ namespace
         std::unique_ptr<CausalContactMineralization::Kernel> causalMineralizationRuntime;
         std::unique_ptr<CausalFaultDisplacement::Kernel> causalFaultRuntime;
         std::unique_ptr<CausalSurfaceBreachContinuity::Kernel> causalBreachRuntime;
+        std::unique_ptr<CausalExactLocalMaterialization::Fixture> exactLocalRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2482,13 +2491,18 @@ namespace
         return view == Stage0PlayView::SurfaceBreachContinuity;
     }
 
+    bool IsExactLocalMaterializationView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::ExactLocalMaterialization;
+    }
+
     bool IsCausalPlayableView( Stage0PlayView view )
     {
         return IsCausalGeologyView( view ) || IsCausalExposureView( view )
             || IsVisibleExposureView( view ) || IsDifferentialErosionView( view )
             || IsGraniteIntrusionView( view ) || IsContactMineralizationView( view )
             || IsCutCOccupancyView( view ) || IsFaultDisplacementView( view )
-            || IsSurfaceBreachView( view );
+            || IsSurfaceBreachView( view ) || IsExactLocalMaterializationView( view );
     }
 
     char const* PresentationIsolationModeName( int mode )
@@ -2535,6 +2549,34 @@ namespace
             "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
         constexpr char const* kBreachPath =
             "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc";
+
+        if ( IsExactLocalMaterializationView( view ) )
+        {
+            if ( !g.exactLocalAuthorityAttempted )
+            {
+                g.exactLocalAuthorityAttempted = true;
+                bool const stage12Ready=EnsureCausalPlayableAuthority(
+                    Stage0PlayView::SurfaceBreachContinuity);
+                if(stage12Ready)
+                {
+                    auto const cert=CausalExactLocalMaterialization::RunCert(
+                        *g.causalBreachRuntime);
+                    g.exactLocalCertified=cert.passed;
+                    g.exactLocalAuthorityReason=cert.passed?"certified":cert.reason;
+                    if(cert.passed)
+                    {
+                        auto fixture=std::make_unique<CausalExactLocalMaterialization::Fixture>();
+                        std::string reason;
+                        if(fixture->Build(*g.causalBreachRuntime,&reason))
+                            g.exactLocalRuntime=std::move(fixture);
+                        else
+                        {g.exactLocalCertified=false;g.exactLocalAuthorityReason=reason;}
+                    }
+                }
+                else g.exactLocalAuthorityReason="stage12_control_unavailable";
+            }
+            return g.exactLocalCertified&&g.exactLocalRuntime&&g.causalBreachRuntime;
+        }
 
         if ( IsSurfaceBreachView( view ) )
         {
@@ -2908,6 +2950,23 @@ namespace
     bool SampleCausalPlayableCell( Stage0PlayView view, double x, double y,
         float& outZ, std::string& outCap )
     {
+        if ( IsExactLocalMaterializationView( view ) )
+        {
+            if(!g.exactLocalRuntime||!g.causalBreachRuntime)return false;
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const geology=g.exactLocalRuntime->Owns(x,y)
+                    ?g.exactLocalRuntime->Query(x,y,(double)outZ-0.001)
+                    :g.causalBreachRuntime->Query(x,y,(double)outZ-0.001);
+                if(!geology.found)return false;outCap=geology.material;return true;
+            }
+            outZ=(float)CausalExactLocalMaterialization::IntegratedSurfaceZ(
+                *g.exactLocalRuntime,*g.causalBreachRuntime,x,y);
+            auto const geology=g.exactLocalRuntime->Owns(x,y)
+                ?g.exactLocalRuntime->SurfaceSample(x,y)
+                :g.causalBreachRuntime->SurfaceGeology(x,y);
+            if(!geology.found)return false;outCap=geology.material;return true;
+        }
         if ( IsSurfaceBreachView( view ) )
         {
             if(!g.causalBreachRuntime)return false;
@@ -3039,6 +3098,10 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsExactLocalMaterializationView(view)&&g.exactLocalRuntime
+          &&g.exactLocalRuntime->Owns(x,y))return g.exactLocalRuntime->Query(x,y,z);
+        if(IsExactLocalMaterializationView(view)&&g.causalBreachRuntime)
+        {return g.causalBreachRuntime->Query(x,y,z);}
         if(IsSurfaceBreachView(view)&&g.causalBreachRuntime)
         {return g.causalBreachRuntime->Query(x,y,z);}
         if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
@@ -3066,6 +3129,10 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsExactLocalMaterializationView(view)&&g.exactLocalRuntime
+          &&g.exactLocalRuntime->Owns(x,y))return g.exactLocalRuntime->QueryMaterial(x,y,z);
+        if(IsExactLocalMaterializationView(view)&&g.causalBreachRuntime)
+        {return g.causalBreachRuntime->QueryMaterial(x,y,z);}
         if(IsSurfaceBreachView(view)&&g.causalBreachRuntime)
         {return g.causalBreachRuntime->QueryMaterial(x,y,z);}
         if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
@@ -3265,6 +3332,7 @@ namespace
             || IsContactMineralizationView( g.stage0PlayView )
             || IsFaultDisplacementView( g.stage0PlayView )
             || IsSurfaceBreachView( g.stage0PlayView )
+            || IsExactLocalMaterializationView( g.stage0PlayView )
             || IsCutCOccupancyView( g.stage0PlayView );
         float const dualOffset = dualSurface ? -0.25f : 0.f;
         b.minX = b.bx0 * kStage0TerrainBlockCells + dualOffset;
@@ -3280,8 +3348,15 @@ namespace
         LARGE_INTEGER q0{}, q1{}, qpf{};
         QueryPerformanceFrequency( &qpf );
         QueryPerformanceCounter( &q0 );
-        constexpr int kCacheRadius = 68;
-        constexpr int kCacheRadiusSq = kCacheRadius * kCacheRadius;
+        // Stage 13 render/collision residency is the authoritative 8 m package
+        // window, not this legacy one-metre diagnostic cache.  Keep only a
+        // bounded local interaction neighborhood there; retaining a second
+        // 68 m causal disk made every 4 m flight step synchronously resample a
+        // wide fringe on the frame thread even though the package workers had
+        // already supplied the complete 192 m terrain answer.
+        int const cacheRadius = IsExactLocalMaterializationView( g.stage0PlayView )
+            ? 20 : 68;
+        int const cacheRadiusSq = cacheRadius * cacheRadius;
 
         std::vector<uint64_t> cellsToErase;
         cellsToErase.reserve( 256 );
@@ -3291,7 +3366,7 @@ namespace
             int const cy = (int)(int32_t)( kv.first & 0xffffffffu );
             int const dx = cx - centerX;
             int const dy = cy - centerY;
-            if ( dx * dx + dy * dy <= kCacheRadiusSq ) { continue; }
+            if ( dx * dx + dy * dy <= cacheRadiusSq ) { continue; }
             if ( Stage0CellHasPersistentAuthority( kv.second ) ) { continue; }
             cellsToErase.push_back( kv.first );
         }
@@ -9753,6 +9828,16 @@ namespace
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
+          && IsExactLocalMaterializationView(g.stage0PlayView)
+          && g.exactLocalRuntime && g.causalBreachRuntime )
+        {
+            if(sampleResidentCausalPackage(outZ))return true;
+            outZ=(float)CausalExactLocalMaterialization::IntegratedSurfaceZ(
+                *g.exactLocalRuntime,*g.causalBreachRuntime,x,y);
+            return std::isfinite(outZ);
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
           && IsSurfaceBreachView( g.stage0PlayView )
           && g.causalBreachRuntime )
         {
@@ -10865,7 +10950,12 @@ namespace
         }
         // Expand analytic residency with the player (isotropic disk).
         // EnsureGeoDisk invalidates only when new cells appear — do NOT remesh every footstep.
-        EnsureGeoDisk( cx, cy, (std::min)( kFarRadiusCells, 64 ) );
+        // The Stage-13 package stream is already the complete live-terrain
+        // authority.  Its cell cache exists only for nearby diagnostic/tool
+        // consumers and must not duplicate the 192 m package residency path.
+        int const analyticRadius = IsExactLocalMaterializationView( g.stage0PlayView )
+            ? 16 : (std::min)( kFarRadiusCells, 64 );
+        EnsureGeoDisk( cx, cy, analyticRadius );
         EvictStage0Residency( cx, cy );
         g.streamComplete = true;
         g.blocksLoaded = g.blocksWanted;
@@ -11714,8 +11804,10 @@ namespace
         Stage8CpuPackage out;
         out.epoch=job.epoch;out.view=job.view;out.control=job.control;
         out.bx=job.bx;out.by=job.by;
-        out.integratedCutC=IsCutCOccupancyView(job.view)
-            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime;
+        bool const integratedExact=IsExactLocalMaterializationView(job.view)
+            &&g.exactLocalRuntime&&g.causalBreachRuntime;
+        out.integratedCutC=integratedExact||(IsCutCOccupancyView(job.view)
+            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime);
         CausalVisibleExposure::BlockSurfaceSamples surfaceSamples;
         CausalVisibleExposure::BlockSurfaceDescriptors descriptors;
         LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},materialEnd{},meshEnd{},
@@ -11724,8 +11816,11 @@ namespace
 
         if(out.integratedCutC)
         {
-            out.mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
-                *g.causalMineralizationRuntime,job.bx,job.by);
+            if(integratedExact)
+                out.mesh=CausalExactLocalMaterialization::BuildIntegratedBlock(
+                    *g.exactLocalRuntime,*g.causalBreachRuntime,job.bx,job.by);
+            else out.mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
+                    *g.causalMineralizationRuntime,job.bx,job.by);
         }
         else if(IsSurfaceBreachView(job.view)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(job.bx,job.by);}
@@ -12067,7 +12162,8 @@ namespace
     {
         if ( !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
-          && !g.causalBreachRuntime && !g.cutCOccupancyRuntime ) { return; }
+          && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
+          && !g.exactLocalRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -12078,8 +12174,10 @@ namespace
             &&IsFaultDisplacementView(g.stage0PlayView);
         if(profileWaterfall&&GetCurrentThreadId()!=s_stage11Waterfall.frameThreadId)
         {++s_stage11Waterfall.offFrameThreadBuilds;}
-        bool const integratedCutC=IsCutCOccupancyView(g.stage0PlayView)
-            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime;
+        bool const integratedExact=IsExactLocalMaterializationView(g.stage0PlayView)
+            &&g.exactLocalRuntime&&g.causalBreachRuntime;
+        bool const integratedCutC=integratedExact||(IsCutCOccupancyView(g.stage0PlayView)
+            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime);
         CausalVisibleExposure::BlockSurfaceSamples surfaceSamples;
         CausalVisibleExposure::BlockSurfaceDescriptors surfaceDescriptors;
         CausalVisibleExposure::BlockMesh mesh;
@@ -12092,8 +12190,11 @@ namespace
         // path and remains outside this Stage-11 performance experiment.
         if(integratedCutC)
         {
-            mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
-                *g.causalMineralizationRuntime,bx,by);
+            if(integratedExact)
+                mesh=CausalExactLocalMaterialization::BuildIntegratedBlock(
+                    *g.exactLocalRuntime,*g.causalBreachRuntime,bx,by);
+            else mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
+                    *g.causalMineralizationRuntime,bx,by);
         }
         else if(IsSurfaceBreachView(g.stage0PlayView)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(bx,by);}
@@ -12266,7 +12367,8 @@ namespace
         if ( stage7 && !g.causalVisibleRuntime ) { return; }
         if ( !stage56 && !stage7 && !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
-          && !g.causalBreachRuntime && !g.cutCOccupancyRuntime ) { return; }
+          && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
+          && !g.exactLocalRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -12433,6 +12535,7 @@ namespace
         if ( IsCutCOccupancyView( view ) ) { return 7; }
         if ( IsFaultDisplacementView( view ) ) { return 8; }
         if ( IsSurfaceBreachView( view ) ) { return 9; }
+        if ( IsExactLocalMaterializationView( view ) ) { return 10; }
         return 0;
     }
 
@@ -12477,6 +12580,8 @@ namespace
           "GEO.CONTACT_MINERALIZATION", "identity-preserving displacement of the assembled Stage-10 history", Stage0PlayView::FaultDisplacement },
         { "GEOLOGY / GEOMORPHOLOGY", "GEO.BREACH_CONTINUITY", "Stage 12 - Surface Breach Continuity",
           "GEO.FAULT_DISPLACEMENT", "real quartz outcrop continues through the faulted subsurface", Stage0PlayView::SurfaceBreachContinuity },
+        { "INTEGRATION", "MAT.EXACT_LOCAL_MATERIALIZATION", "Stage 13 - Exact Local Materialization",
+          "GEO.BREACH_CONTINUITY", "bounded 12.5cm occupancy drives render, collision, and x-ray", Stage0PlayView::ExactLocalMaterialization },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
@@ -12564,6 +12669,8 @@ namespace
         { attempted = g.causalFaultAuthorityAttempted; certified = g.causalFaultCertified; }
         else if ( IsSurfaceBreachView( entry.view ) )
         { attempted = g.causalBreachAuthorityAttempted; certified = g.causalBreachCertified; }
+        else if ( IsExactLocalMaterializationView( entry.view ) )
+        { attempted = g.exactLocalAuthorityAttempted; certified = g.exactLocalCertified; }
         else if ( IsCutCOccupancyView( entry.view ) )
         { attempted = g.cutCOccupancyAuthorityAttempted; certified = g.cutCOccupancyCertified; }
         return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
@@ -12729,7 +12836,8 @@ namespace
 
         int const cx = (int)std::floor( g.feetX );
         int const cy = (int)std::floor( g.feetY );
-        EnsureGeoDisk( cx, cy, 64 );
+        EnsureGeoDisk( cx, cy,
+            IsExactLocalMaterializationView( g.stage0PlayView ) ? 16 : 64 );
         EvictStage0Residency( cx, cy );
         float groundZ = g.feetZ;
         if ( SampleGroundZBase( g.feetX, g.feetY, groundZ ) )
@@ -12754,6 +12862,7 @@ namespace
             if ( IsCutCOccupancyView( view ) ) { reason = &g.cutCOccupancyAuthorityReason; }
             if ( IsFaultDisplacementView( view ) ) { reason = &g.causalFaultAuthorityReason; }
             if ( IsSurfaceBreachView( view ) ) { reason = &g.causalBreachAuthorityReason; }
+            if ( IsExactLocalMaterializationView( view ) ) { reason = &g.exactLocalAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
         }
@@ -12797,7 +12906,8 @@ namespace
             g.generatorId = authority.worldgenId;
             g.generatorVersion = (int)authority.worldgenVersion;
         }
-        else if ( IsSurfaceBreachView( view ) && g.causalBreachRuntime )
+        else if ( (IsSurfaceBreachView( view )||IsExactLocalMaterializationView(view))
+          && g.causalBreachRuntime )
         {
             auto const& authority = g.causalBreachRuntime->GetProgram();
             g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
@@ -12855,6 +12965,16 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
         }
+        if ( g.playWorldgenInitialized && IsExactLocalMaterializationView(view)
+          && oldView!=view )
+        {
+            g.feetX=7.5f;g.feetY=-14.25f;g.yaw=0.0f;g.pitch=-0.78f;
+            g.stage0GeologyInspectorDepthM=2.0f;
+            g.stage0GeologyInspectorWidthM=3.048f;
+            g.stage0GeologyInspectorMode=1;g.stage0ToolGeologyCutaway=false;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+        }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
             // Player-scale certified outcrop and readable oblique flashlight
@@ -12897,6 +13017,7 @@ namespace
             case Stage0PlayView::CutCOccupancyParity: return "CERTIFIED CUT C OCCUPANCY PARITY";
             case Stage0PlayView::FaultDisplacement: return "CERTIFIED FAULT DISPLACEMENT";
             case Stage0PlayView::SurfaceBreachContinuity: return "CERTIFIED SURFACE BREACH CONTINUITY";
+            case Stage0PlayView::ExactLocalMaterialization: return "CERTIFIED EXACT LOCAL MATERIALIZATION";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -13075,6 +13196,7 @@ namespace
                 if((IsDifferentialErosionView(g.stage0PlayView)||IsGraniteIntrusionView(g.stage0PlayView)
                     ||IsContactMineralizationView(g.stage0PlayView)||IsFaultDisplacementView(g.stage0PlayView)
                     ||IsSurfaceBreachView(g.stage0PlayView)
+                    ||IsExactLocalMaterializationView(g.stage0PlayView)
                     ||IsCutCOccupancyView(g.stage0PlayView))&&g.causalVisibleRuntime)
                 {
                     float const stage7=(float)g.causalVisibleRuntime->AuthoritySurfaceZ(x,y);
@@ -13696,6 +13818,7 @@ namespace
           || IsContactMineralizationView( g.stage0PlayView )
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
+          || IsExactLocalMaterializationView( g.stage0PlayView )
           || IsCutCOccupancyView( g.stage0PlayView ) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
@@ -13709,6 +13832,7 @@ namespace
           || IsContactMineralizationView( g.stage0PlayView )
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
+          || IsExactLocalMaterializationView( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)std::floor( x / blockSize );
@@ -13724,6 +13848,7 @@ namespace
           || IsContactMineralizationView( g.stage0PlayView )
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
+          || IsExactLocalMaterializationView( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)(int32_t)( key >> 32 );
@@ -13847,6 +13972,7 @@ namespace
                 || IsContactMineralizationView( g.stage0PlayView )
                 || IsFaultDisplacementView( g.stage0PlayView )
                 || IsSurfaceBreachView( g.stage0PlayView )
+                || IsExactLocalMaterializationView( g.stage0PlayView )
                 || IsCutCOccupancyView( g.stage0PlayView );
             float const latticeOrigin = dualLattice ? 0.25f : 0.f;
             int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
@@ -17860,7 +17986,7 @@ namespace
     {
         if ( !g.stage0ToolGeologyCutaway
           || !IsCausalPlayableView( g.stage0PlayView ) ) { return false; }
-        if(g.certStage12Visual&&g.causalBreachRuntime)
+        if((g.certStage12Visual||g.certStage13Visual)&&g.causalBreachRuntime)
         {
             auto const& p=g.causalBreachRuntime->GetProgram();
             (void)p;
@@ -18048,6 +18174,7 @@ namespace
               || IsContactMineralizationView( g.stage0PlayView )
               || IsFaultDisplacementView( g.stage0PlayView )
               || IsSurfaceBreachView( g.stage0PlayView )
+              || IsExactLocalMaterializationView( g.stage0PlayView )
               || IsCutCOccupancyView( g.stage0PlayView ) ) )
             { DrawStage8TerrainBlocks(); }
             else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
@@ -19548,14 +19675,17 @@ namespace
         }
         bool const cutC=IsCutCOccupancyView(g.stage0PlayView);
         bool const breach=IsSurfaceBreachView(g.stage0PlayView);
+        bool const exact=IsExactLocalMaterializationView(g.stage0PlayView);
         bool const terminalIsCertifiedDeposit=terminal.material=="quartz"
-          &&(!breach||(g.causalBreachRuntime&&g.causalBreachRuntime->IsTarget(terminal)));
-        char const* imagePath=breach?"Docs\\provenance_stage12_surface_breach_xray.ppm"
+          &&(!(breach||exact)||(g.causalBreachRuntime&&g.causalBreachRuntime->IsTarget(terminal)));
+        char const* imagePath=exact?"Docs\\provenance_stage13_exact_local_materialization_xray.ppm"
+            :(breach?"Docs\\provenance_stage12_surface_breach_xray.ppm"
             :(cutC?"Docs\\provenance_cut_c_player_xray.ppm"
-            :"Docs\\provenance_geology_xray_snapshot.ppm");
-        char const* receiptPath=breach?"Docs\\provenance_stage12_surface_breach_xray.txt"
+            :"Docs\\provenance_geology_xray_snapshot.ppm"));
+        char const* receiptPath=exact?"Docs\\provenance_stage13_exact_local_materialization_xray.txt"
+            :(breach?"Docs\\provenance_stage12_surface_breach_xray.txt"
             :(cutC?"Docs\\provenance_cut_c_player_xray.txt"
-            :"Docs\\provenance_geology_xray_snapshot.txt");
+            :"Docs\\provenance_geology_xray_snapshot.txt"));
         bool const image=DumpFramePpm(imagePath);
         FILE* f=nullptr;
         bool const opened=fopen_s(&f,receiptPath,"w")==0&&f;
@@ -19566,9 +19696,10 @@ namespace
                 "terminal=%.6f,%.6f,%.6f\nmaterial=%s\nfeature_id=%s\nformation=%s\n"
                 "deposit_visible=%d\ndeposit_pixels=%d\nevent_count=%zu\nchronology_count=%zu\n"
                 "presentation_only=1\n",
-                image?(breach?"Docs/provenance_stage12_surface_breach_xray.ppm"
+                image?(exact?"Docs/provenance_stage13_exact_local_materialization_xray.ppm"
+                    :(breach?"Docs/provenance_stage12_surface_breach_xray.ppm"
                     :(cutC?"Docs/provenance_cut_c_player_xray.ppm"
-                    :"Docs/provenance_geology_xray_snapshot.ppm")):"WRITE_FAILED",
+                    :"Docs/provenance_geology_xray_snapshot.ppm"))):"WRITE_FAILED",
                 Stage0PlayViewName(g.stage0PlayView),inspector.px,inspector.py,inspector.pz,
                 g.stage0GeologyInspectorDepthM,g.stage0GeologyInspectorWidthM,tx,ty,tz,
                 terminal.material.c_str(),CausalWorldGeology::Hex64(terminal.featureId).c_str(),
@@ -29590,7 +29721,7 @@ namespace
 
         g.playWorldgenInitialized = true;
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
-          &&!g.playStage12Launch&&!g.playCutCLaunch)
+          &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
@@ -29630,6 +29761,21 @@ namespace
                 g.yaw=0.f;g.pitch=-1.0f;
             }
         }
+        if(g.playStage13Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::ExactLocalMaterialization);
+            if(g.certStage13Visual)
+            {
+                g.stage0ToolGeologyCutaway=true;
+                g.stage0GeologyInspectorMode=0;
+                g.stage0GeologyInspectorWidthM=3.048f;
+                g.walkMode=false;g.feetX=7.5f;g.feetY=-18.0f;
+                RebuildStage0PlayableRuntime();
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=4.0f;
+                g.yaw=0.f;g.pitch=-1.0f;
+            }
+        }
         if ( g.playCutCLaunch )
         {
             g.stage0StageMenuOpen = false;
@@ -29654,6 +29800,8 @@ namespace
             : "WORLDGEN PLAYTEST — STAGE 0  [R] residency overlay" ) );
         if(g.playStage12Launch)
         {g.statusLine="STAGE 12 - SURFACE BREACH CONTINUITY  [M] stages";}
+        if(g.playStage13Launch)
+        {g.statusLine="STAGE 13 - EXACT LOCAL MATERIALIZATION  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -29938,6 +30086,8 @@ namespace
         { row( "fixture=fault_displacement  authority=CERTIFIED  Stage10=fallback" ); }
         else if ( IsSurfaceBreachView( g.stage0PlayView ) )
         { row( "fixture=surface_breach_continuity  authority=CERTIFIED  outcrop=physical" ); }
+        else if ( IsExactLocalMaterializationView( g.stage0PlayView ) )
+        { row( "fixture=exact_local_materialization  authority=STAGE12  voxel=0.125m  bounded=8m" ); }
         else if ( IsCutCOccupancyView( g.stage0PlayView ) )
         { row( "fixture=cut_c_occupancy  authority=FABLESCRIPT  voxel=0.125m  grade=FORBIDDEN" ); }
         else if ( IsContactMineralizationView( g.stage0PlayView ) )
@@ -30036,6 +30186,21 @@ namespace
                 differential.erosionWork, differential.surfaceZ,
                 (int)g.stage8TerrainBlocks.size(), g.stage8TerrainTriangles );
             row( line, 0.82f, 0.92f, 0.72f );
+        }
+        else if ( IsExactLocalMaterializationView(g.stage0PlayView)
+          &&g.exactLocalRuntime&&g.causalBreachRuntime )
+        {
+            float z=g.feetZ;SampleGroundZBase(g.feetX,g.feetY,z);
+            auto const geology=CausalGeologyAt(g.stage0PlayView,g.feetX,g.feetY,z-0.001);
+            std::snprintf(line,sizeof(line),"%s feature=%s material=%s surface_z=%.3f",
+                g.exactLocalRuntime->Owns(g.feetX,g.feetY)?"exact_occupancy":"stage12_control",
+                CausalWorldGeology::Hex64(geology.featureId).c_str(),geology.material.c_str(),z);
+            row(line,0.82f,0.92f,0.72f);
+            std::snprintf(line,sizeof(line),"columns=%zu runs=%zu build=%.3fms digest=%s",
+                g.exactLocalRuntime->ColumnCount(),g.exactLocalRuntime->RunCount(),
+                g.exactLocalRuntime->BuildMs(),
+                CausalWorldGeology::Hex64(g.exactLocalRuntime->Digest()).c_str());
+            row(line,0.82f,0.92f,0.72f);
         }
         else if ( IsSurfaceBreachView( g.stage0PlayView )
           && g.causalBreachRuntime )
@@ -31065,7 +31230,7 @@ namespace
         }
         else if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
           || IsContactMineralizationView( view ) || IsFaultDisplacementView(view)
-          || IsSurfaceBreachView(view) )
+          || IsSurfaceBreachView(view) || IsExactLocalMaterializationView(view) )
         {
             for ( auto const& package : g.stage8TerrainBlocks )
             { packageKeys.push_back( package.first ); packageTriangles += package.second.tris; }
@@ -31865,7 +32030,8 @@ namespace
           || IsGraniteIntrusionView( g.stage0PlayView )
           || IsContactMineralizationView( g.stage0PlayView )
           || IsFaultDisplacementView(g.stage0PlayView)
-          || IsSurfaceBreachView(g.stage0PlayView) )
+          || IsSurfaceBreachView(g.stage0PlayView)
+          || IsExactLocalMaterializationView(g.stage0PlayView) )
         {
             r.residentTriangles = g.stage8TerrainTriangles;
             r.meshPackages = (int)g.stage8TerrainBlocks.size();
@@ -32091,6 +32257,10 @@ namespace
         { "12_to_5", Stage0PlayView::SurfaceBreachContinuity, Stage0PlayView::CausalGeologyKernel },
         { "12_to_11", Stage0PlayView::SurfaceBreachContinuity, Stage0PlayView::FaultDisplacement },
         { "12_to_12", Stage0PlayView::SurfaceBreachContinuity, Stage0PlayView::SurfaceBreachContinuity },
+        { "cold_clean_to_13", Stage0PlayView::Clean, Stage0PlayView::ExactLocalMaterialization },
+        { "12_to_13", Stage0PlayView::SurfaceBreachContinuity, Stage0PlayView::ExactLocalMaterialization },
+        { "13_to_12", Stage0PlayView::ExactLocalMaterialization, Stage0PlayView::SurfaceBreachContinuity },
+        { "13_to_13", Stage0PlayView::ExactLocalMaterialization, Stage0PlayView::ExactLocalMaterialization },
     };
 
     struct RuntimeIndependenceReceipt
@@ -32160,9 +32330,10 @@ namespace
         Stage0PlayView::ContactMineralization,
         Stage0PlayView::FaultDisplacement,
         Stage0PlayView::SurfaceBreachContinuity,
+        Stage0PlayView::ExactLocalMaterialization,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -32327,7 +32498,7 @@ namespace
             && s_boundaryPopChangedPixels == 0;
         std::fprintf( file,
             "WORLDGEN_BOUNDARY_CONTINUITY %s\n"
-            "capture_policy=stage0_stage5_to_stage12_x_north_east_south_west\n"
+            "capture_policy=stage0_stage5_to_stage13_x_north_east_south_west\n"
             "active_residency_radius_m=%d\nactive_residency_diameter_m=%d\n"
             "far_field_extent_m=%d\nfar_field_collision=0\n"
             "check.partial_edge_packages_closed=%s\n"
@@ -32384,10 +32555,13 @@ namespace
         }
         std::fprintf( file, "check.cold_stage10_independent=%s\n"
             "check.cold_stage11_independent=%s\ncheck.cold_stage12_independent=%s\n"
+            "check.cold_stage13_independent=%s\n"
             "check.transition_matrix=%s\n"
             "check.stage10_digest_order_invariant=%s\n"
             "check.stage11_digest_order_invariant=%s\n"
-            "check.stage12_digest_order_invariant=%s\n",
+            "check.stage12_digest_order_invariant=%s\n"
+            "check.stage13_digest_order_invariant=%s\n",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
             passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
@@ -32774,7 +32948,8 @@ namespace
           || IsGraniteIntrusionView( test.target )
           || IsContactMineralizationView( test.target )
           || IsFaultDisplacementView( test.target )
-          || IsSurfaceBreachView( test.target ) )
+          || IsSurfaceBreachView( test.target )
+          || IsExactLocalMaterializationView( test.target ) )
         {
             receipt.packages = (int)g.stage8TerrainBlocks.size();
             receipt.triangles = g.stage8TerrainTriangles;
@@ -32949,7 +33124,7 @@ namespace
         if ( IsVisibleExposureView( view ) ) { return g.stage7TerrainBlocks; }
         if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
           || IsContactMineralizationView( view ) || IsFaultDisplacementView( view )
-          || IsSurfaceBreachView( view ) )
+          || IsSurfaceBreachView( view ) || IsExactLocalMaterializationView(view) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
     }
@@ -33196,6 +33371,9 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
+        if(IsExactLocalMaterializationView(view)&&g.exactLocalRuntime&&g.causalBreachRuntime)
+        {return g.exactLocalRuntime->Owns(x,y)?g.exactLocalRuntime->SurfaceSample(x,y)
+            :g.causalBreachRuntime->SurfaceGeology(x,y);}
         if(IsSurfaceBreachView(view)&&g.causalBreachRuntime)
         {return g.causalBreachRuntime->SurfaceGeology(x,y);}
         if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
@@ -33307,11 +33485,20 @@ namespace
             CellSample const* cell = GetCell(
                 (int)std::floor( x ), (int)std::floor( y ) );
             ++receipt.oracleSamples;
-            bool matches = expected && presented && collision && cell && cell->valid
+            // Stage 13 deliberately does not duplicate its complete package
+            // residency into the older one-metre cell map.  For that view the
+            // direct FableScript/Stage-12 oracle is the material control; the
+            // cell cache is local diagnostic state and is not an authority
+            // gate.  Earlier stages retain their original cache-parity check.
+            bool const requireCell =
+                !IsExactLocalMaterializationView( receipt.view );
+            bool matches = expected && presented && collision
+                && ( !requireCell || ( cell && cell->valid ) )
                 && std::fabs( presentedZ - collisionZ ) <= 0.001f
-                && cell->cap == expectedMaterial;
-            if ( !cell || !cell->valid ) { ++receipt.oracleMissingCells; }
-            else if ( cell->cap != expectedMaterial )
+                && ( !requireCell || cell->cap == expectedMaterial );
+            if ( requireCell && ( !cell || !cell->valid ) )
+            { ++receipt.oracleMissingCells; }
+            else if ( requireCell && cell->cap != expectedMaterial )
             { ++receipt.oracleCellMaterialMismatches; }
             if ( !presented || !collision
               || ( presented && collision && std::fabs( presentedZ - collisionZ ) > 0.001f ) )
@@ -33409,8 +33596,10 @@ namespace
         bool residencyDigestExact = passed;
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
-        if ( fopen_s( &file,
-            "Docs\\provenance_worldgen_cardinal_replacement_cert.txt", "wb" ) != 0
+        char const* certPath=g.certWorldgenCardinalStageFilter==9
+            ?"Docs\\provenance_stage13_cardinal_replacement_cert.txt"
+            :"Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
+        if ( fopen_s( &file, certPath, "wb" ) != 0
           || !file ) { return false; }
         // The permitted residency envelope follows the residency law at the
         // configured radius, so this certificate proves the same contract at
@@ -33528,8 +33717,10 @@ namespace
         if ( !g.certWorldgenCardinalReplacement || !g.playWorldgenInitialized ) { return; }
         if ( !s_cardinalTrace )
         {
-            fopen_s( &s_cardinalTrace,
-                "Docs\\provenance_worldgen_cardinal_replacement_trace.csv", "wb" );
+            char const* tracePath=g.certWorldgenCardinalStageFilter==9
+                ?"Docs\\provenance_stage13_cardinal_replacement_trace.csv"
+                :"Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
+            fopen_s( &s_cardinalTrace, tracePath, "wb" );
             if ( s_cardinalTrace )
             { std::fprintf( s_cardinalTrace,
                 "stage,bearing,phase,distance_m,x,y,mode,resident_cells,resident_packages,frame_ms,pending_packages,workers_idle,column_queue,pending_kind\n" );
@@ -35750,6 +35941,45 @@ namespace
                     &&surfaceIsTarget?0:2);
             }
         }
+        if(g.certStage13Visual)
+        {
+            ++g.certStage13VisualFrames;
+            if(g.certStage13VisualFrames==90)
+            {
+                bool const wrote=CaptureStage0GeologyXraySnapshot();
+                auto const surface=g.exactLocalRuntime
+                    ?g.exactLocalRuntime->SurfaceSample(7.5,-14.25)
+                    :CausalWorldGeology::GeoSample{};
+                bool const surfaceIsTarget=g.causalBreachRuntime
+                    &&g.causalBreachRuntime->IsTarget(surface);
+                uint64_t const targetId=g.causalBreachRuntime
+                    ?g.causalBreachRuntime->GetProgram().targetFeatureId:0;
+                FILE* file=nullptr;
+                bool opened=fopen_s(&file,
+                    "Docs\\provenance_stage13_exact_local_materialization_visual_cert.txt",
+                    "wb")==0&&file;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE13_EXACT_LOCAL_MATERIALIZATION_VISUAL %s\n"
+                        "frames=%d\nstage=%s\n"
+                        "image=Docs/provenance_stage13_exact_local_materialization_xray.ppm\n"
+                        "xray_deposit_visible=%d\ndeposit_pixels=%d\n"
+                        "surface_material=%s\nsurface_feature_id=%s\n"
+                        "target_feature_id=%s\nsurface_is_target=%d\n"
+                        "presentation_source=bounded_integer_12_5cm_occupancy\n"
+                        "authority_source=stage12_faulted_quartz\n",
+                        wrote&&g.stage0GeologySnapshotDepositVisible&&surfaceIsTarget?"PASS":"FAIL",
+                        g.certStage13VisualFrames,Stage0PlayViewName(g.stage0PlayView),
+                        g.stage0GeologySnapshotDepositVisible?1:0,
+                        g.stage0GeologySnapshotDepositPixels,surface.material.c_str(),
+                        CausalWorldGeology::Hex64(surface.featureId).c_str(),
+                        CausalWorldGeology::Hex64(targetId).c_str(),surfaceIsTarget?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(wrote&&opened&&g.stage0GeologySnapshotDepositVisible
+                    &&surfaceIsTarget?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -37082,6 +37312,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runCausalWorldMineralizationCert = false;
         bool runCausalWorldFaultCert = false;
         bool runCausalWorldBreachCert = false;
+        bool runExactLocalMaterializationCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -37147,6 +37378,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     runCutCOccupancyParityCert = true;
                 }
+                else if ( _wcsicmp( certArgv[i],
+                    L"--cert-causal-world-exact-local-materialization" ) == 0
+                  || _wcsicmp( certArgv[i], L"--cert-stage13-materialization" ) == 0 )
+                {
+                    runExactLocalMaterializationCert = true;
+                }
                 else if ( _wcsnicmp( certArgv[i], L"--causal-world-descriptor=", 26 ) == 0 )
                 {
                     WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 26, -1,
@@ -37202,6 +37439,18 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             CutCOccupancy::WriteCertArtifact( result,
                 "Docs\\provenance_cut_c_occupancy_reconstruction_parity_cert.txt" );
             return result.passed ? 0 : 1;
+        }
+        if ( runExactLocalMaterializationCert )
+        {
+            std::string reason;
+            auto kernel=CausalSurfaceBreachContinuity::LoadKernel(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,&reason);
+            if(!kernel)return 1;
+            auto const result=CausalExactLocalMaterialization::RunCert(*kernel);
+            CausalExactLocalMaterialization::WriteCertArtifact(result,
+                "Docs\\provenance_stage13_exact_local_materialization_cert.txt");
+            return result.passed?0:1;
         }
         if ( runCausalWorldMineralizationCert )
         {
@@ -37876,6 +38125,35 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     g.playWorldgenBaseline=true;g.playStage12Launch=true;
                     g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-cardinal-replacement-stage13" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;
+                    g.certWorldgenCardinalStageFilter=9;
+                    g.playWorldgenBaseline=true;g.playStage13Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-stage13-materialization")==0
+                  ||_wcsicmp(argv[i],L"--play-exact-local-materialization")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage13Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-stage13-materialization-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage13Launch=true;
+                    g.certStage13Visual=true;g.certWorldgenBaselinePerf=false;
+                    g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
                     continue;
                 }

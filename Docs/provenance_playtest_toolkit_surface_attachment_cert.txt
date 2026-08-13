@@ -1,12 +1,12 @@
 PLAYTEST_TOOLKIT_SURFACE_ATTACHMENT PASS
-samples=1620
+samples=1944
 penetrations=0
 max_float_m=0.012339
 normal_offset_m=0.008000
 ruler_min_triangles=1238
 ruler_max_surface_error_m=0.000017405
 palette_max_surface_error_m=0.000012517
-cutaway_authority_samples=1063
+cutaway_authority_samples=1291
 check.surface_normal_offset=PASS
 check.no_terrain_penetration=PASS
 check.no_gross_float=PASS

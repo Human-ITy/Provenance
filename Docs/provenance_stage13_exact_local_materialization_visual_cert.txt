@@ -1,0 +1,12 @@
+STAGE13_EXACT_LOCAL_MATERIALIZATION_VISUAL PASS
+frames=90
+stage=CERTIFIED EXACT LOCAL MATERIALIZATION
+image=Docs/provenance_stage13_exact_local_materialization_xray.ppm
+xray_deposit_visible=1
+deposit_pixels=10118
+surface_material=quartz
+surface_feature_id=da10b0d1e5f01001
+target_feature_id=da10b0d1e5f01001
+surface_is_target=1
+presentation_source=bounded_integer_12_5cm_occupancy
+authority_source=stage12_faulted_quartz
