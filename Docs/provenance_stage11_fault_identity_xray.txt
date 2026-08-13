@@ -1,0 +1,13 @@
+PROVENANCE_STAGE11_FAULT_IDENTITY_XRAY PASS
+image=Docs/provenance_stage11_fault_identity_xray.ppm
+mode=IDENTITY
+contact=-5.500000,-49.386379,-1.761356
+terminal=-5.500000,-8.750000,-17.000000
+selected_post=-2.577000,-9.117977,-17.981274
+source=-5.577000,-10.617977,-21.981274
+feature_id=da10b0d1e5f01001
+fault_event_id=fa117d15ace00011
+footwall_quartz_samples=144
+hanging_wall_quartz_samples=161
+same_identity=1
+presentation_only=1

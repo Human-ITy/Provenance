@@ -1,0 +1,26 @@
+STAGE11_FAR_FIELD_SHIFT_SCALING
+route=east_shift_ladder_capture_free
+anchor_cadence_m=8
+far_extent_m=384
+shift_classes_m=8,16,32,64
+shifts_per_class=4
+settle_frames_per_shift=8
+total_travel_m=480.0
+cold_warm_worst_frame_ms=2216.335
+resident_far_tiles=753
+resident_coarse_tiles=609
+resident_stitch_tiles=144
+ground_failures=0
+collision_mismatches=0
+class.8m shifts=4 missed=0 meters=32 far_ms_total=94.418 far_ms_per_shift=23.604 far_ms_per_m=2.9506 tiles_built=405 tiles_built_per_shift=101.25 tiles_built_per_m=12.6562 coarse_built=81 stitch_built=324 tiles_retained=2611 tiles_discovered=405 tiles_retired=173 packages_built=16 surface_queries=10752 material_queries=17134 shift_frame_ms_mean=27.050 shift_frame_ms_worst=75.044 settle_frames=32 settle_prefetch_ms=477.499 settle_prefetch_queries=63920 resident_window_fraction=0.1345
+class.16m shifts=4 missed=0 meters=64 far_ms_total=86.663 far_ms_per_shift=21.666 far_ms_per_m=1.3541 tiles_built=454 tiles_built_per_shift=113.50 tiles_built_per_m=7.0938 coarse_built=114 stitch_built=340 tiles_retained=2566 tiles_discovered=454 tiles_retired=346 packages_built=84 surface_queries=3232 material_queries=6416 shift_frame_ms_mean=28.304 shift_frame_ms_worst=42.944 settle_frames=32 settle_prefetch_ms=496.988 settle_prefetch_queries=73088 resident_window_fraction=0.1507
+class.32m shifts=4 missed=0 meters=128 far_ms_total=159.006 far_ms_per_shift=39.752 far_ms_per_m=1.2422 tiles_built=552 tiles_built_per_shift=138.00 tiles_built_per_m=4.3125 coarse_built=180 stitch_built=372 tiles_retained=2460 tiles_discovered=552 tiles_retired=436 packages_built=220 surface_queries=6496 material_queries=15521 shift_frame_ms_mean=55.205 shift_frame_ms_worst=57.840 settle_frames=32 settle_prefetch_ms=713.910 settle_prefetch_queries=80864 resident_window_fraction=0.1833
+class.64m shifts=4 missed=0 meters=256 far_ms_total=453.946 far_ms_per_shift=113.487 far_ms_per_m=1.7732 tiles_built=748 tiles_built_per_shift=187.00 tiles_built_per_m=2.9219 coarse_built=312 stitch_built=436 tiles_retained=2264 tiles_discovered=748 tiles_retired=616 packages_built=492 surface_queries=48488 material_queries=86806 shift_frame_ms_mean=196.520 shift_frame_ms_worst=203.334 settle_frames=32 settle_prefetch_ms=718.506 settle_prefetch_queries=84896 resident_window_fraction=0.2483
+tiles_per_m_spread=4.332
+far_ms_per_m_spread=2.375
+small_shift_window_fraction=0.1345
+measurement_complete=PASS
+bounded_fringe=PASS
+scaling=OPEN
+macro_geography=BLOCKED
+stage12=BLOCKED

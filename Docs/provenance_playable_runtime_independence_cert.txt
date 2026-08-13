@@ -1,0 +1,22 @@
+PLAYABLE_RUNTIME_INDEPENDENCE PASS
+case_count=15
+case.cold_clean_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.5_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.6_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.7_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.8_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.9_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.10_to_5 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1238 ruler_error_m=0.000000000 palette_error_m=0.000000000 digest=dfc64227c583ef13
+case.10_to_7 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000001311 palette_error_m=0.000000715 digest=f03aa76e4e77d0a7
+case.10_to_9 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=891eb5489a2c1f91
+case.10_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.cold_clean_to_11 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=7c1424243c13a283
+case.10_to_11 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=7c1424243c13a283
+case.11_to_5 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1238 ruler_error_m=0.000000000 palette_error_m=0.000000000 digest=dfc64227c583ef13
+case.11_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
+case.11_to_11 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=7c1424243c13a283
+check.cold_stage10_independent=PASS
+check.cold_stage11_independent=PASS
+check.transition_matrix=PASS
+check.stage10_digest_order_invariant=PASS
+check.stage11_digest_order_invariant=PASS

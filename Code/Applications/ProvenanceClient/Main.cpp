@@ -19,6 +19,15 @@
 #include "stb_image.h"
 
 #include "ProvenanceGeography.h"
+#include "CausalWorldGeology.h"
+#include "CausalWorldExposure.h"
+#include "CausalVisibleExposure.h"
+#include "CausalDifferentialErosion.h"
+#include "CausalGraniteIntrusion.h"
+#include "CausalContactMineralization.h"
+#include "CausalFaultDisplacement.h"
+#include "CausalGeologyAuthorityBridge.h"
+#include "CutCOccupancy.h"
 #include "VisualMaterial.h"
 #include "RockStructure.h"
 #include "HorizonToHand.h"
@@ -32,9 +41,16 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <deque>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -58,12 +74,21 @@ namespace
 
     // 6 ft scale reference (engine: 1 cell = 1 m)
     constexpr float kCharHeightM = 1.8288f;  // 6 ft
-    constexpr float kEyeHeightM = 1.70f;     // eye line for a ~6 ft adult
+    // Eye line, NOT stature. A 1.8288 m person's eyes are ~142 mm below the top of
+    // his head, so a camera at kCharHeightM looks down onto a same-height
+    // character's forehead. Measured off this character rather than taken from a
+    // population table: landmark read against a calibrated stature ruler, recorded
+    // in Docs/provrender_eye_height.txt with the plate as its receipt.
+    constexpr float kEyeHeightM = 1.687f;    // 92.25% of kCharHeightM, measured
+    constexpr float kCharEyeHeightM = 1.687f; // the character's eye line above his feet
+    constexpr float kCrouchEyeHeightM = 1.05f;
     constexpr float kCapsuleRadiusM = 0.35f;
     constexpr float kWalkSpeedMps = 5.0f;    // brisk walk
     constexpr float kSprintSpeedMps = 11.0f; // matches Unreal sprint ~cell/s order
     constexpr float kFlySpeedMps = 24.f;
     constexpr float kFlySprintMps = 48.f;
+    constexpr float kFlySprintTierDistanceM = 50.f;
+    constexpr float kFlySprintTierStepMps = 24.f;
     constexpr float kGravityMps2 = 20.f;
     constexpr float kJumpSpeedMps = 7.5f;
     constexpr float kMaxStepM = 0.55f;       // max climb per move without jump
@@ -72,6 +97,23 @@ namespace
     constexpr float kWallBodyClearM = 0.45f; // torso hits wall if grade beside feet exceeds this
     constexpr float kProjNearDefaultM = 0.5f;  // outdoor / held-inspect clearance
     constexpr float kProjNearCavityM = 0.06f; // inside carve — else near clip eats cavity walls → void
+    // ProvRender close studies keep the ordinary outdoor near plane, but place
+    // every measured head view far enough away that the deepest physical feature
+    // still has at least five inches of clip clearance.  A narrower capture FOV
+    // preserves the previous on-screen head scale after moving the camera back.
+    constexpr float kStage0PortraitDistanceM = 0.80f;
+    constexpr float kStage0PortraitFovYDeg = 55.0f;
+    constexpr float kStage0PortraitMaxHeadReachM = 0.17f;
+    constexpr float kStage0PortraitNearClearanceM =
+        kStage0PortraitDistanceM-kStage0PortraitMaxHeadReachM-kProjNearDefaultM;
+    // ProvRender diagnostic visual-hull inspection. Build-ProvRenderVisualHull.py
+    // writes hull-local metres: z is height above the character's ground plane, so
+    // the authored neck cut is kStage0VisualHullNeckCutZM and the crown lands one
+    // kStage0VisualHullHeightM above it. Hull x is the depth axis with the face
+    // toward -x, matching the runtime character.
+    constexpr float kStage0VisualHullNeckCutZM = 1.545f;         // builder Z_BOTTOM_M
+    constexpr float kStage0VisualHullHeightM = 0.275f;           // builder HEIGHT_M
+    constexpr float kStage0VisualHullNeckJointZM = 1.585f;       // runtime Neck joint
     constexpr float kEyeCrouchMinM = 0.42f;
 
     // Handheld / manipulation volume (authoritative player scoop feel)
@@ -225,6 +267,91 @@ namespace
         // Lattice top Z when place adds headroom above virgin grade (HF grade unchanged).
         float occCrestZ = 0.f;
         bool hasOccCrest = false;
+    };
+
+    struct Stage0TerrainBlock
+    {
+        GLuint list = 0;
+        int tris = 0;
+        // The resident collision boundary is the same package-local sample
+        // field from which the render triangles were emitted.  A null field is
+        // valid for legacy/Stage-7 blocks that still use analytic collision.
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const> collisionSurface;
+    };
+    struct Stage0FarFieldTile
+    {
+        GLuint list = 0;
+        int tris = 0;
+        uint64_t contentSignature = 0;
+    };
+    struct Stage0RetiredDisplayList
+    {
+        GLuint list = 0;
+        ULONGLONG safeAfterMs = 0;
+    };
+    constexpr int kStage0TerrainBlockCells = 8;
+    // Packages of hysteresis retained on each side of the live window. Part of
+    // the residency law: the certificate derives its permitted population and
+    // its replacement distance from this rather than from magic constants.
+    constexpr int kStage0PackageApron = 1;
+    // Sustained 60 FPS is the gameplay acceptance rule, so every discretionary
+    // frame-thread activity is measured against this budget rather than against
+    // "does it avoid a visible stall".
+    constexpr double kStage0FrameBudgetMs = 16.667;
+    // Left for draw submission and presentation after the lookahead yields.
+    constexpr double kStage0LookaheadReserveMs = 4.0;
+    // Left for the far field, drawing and presentation after live package
+    // construction yields. Live packages are built before either, so this
+    // reserve is what keeps a build burst from consuming the whole frame.
+    constexpr double kStage0LivePackageReserveMs = 6.0;
+
+    struct Stage0PresentationBounds
+    {
+        int anchorX = 0, anchorY = 0;
+        int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+        float minX = 0.f, minY = 0.f, maxX = 0.f, maxY = 0.f;
+    };
+
+    enum class Stage0PlayView : uint8_t
+    {
+        Clean = 0,
+        DistanceRuler = 1,
+        TerrainPalette = 2,
+        Combined = 3,
+        CausalGeologyKernel = 4,
+        GeologicExposure = 5,
+        VisibleGeologicExposure = 6,
+        DifferentialErosion = 7,
+        GraniteIntrusion = 8,
+        ContactMineralization = 9,
+        CutCOccupancyParity = 10,
+        FaultDisplacement = 11
+    };
+
+    enum class Stage0ToolKind : uint8_t
+    {
+        None = 0,
+        Pickaxe,
+        Axe,
+        Shovel
+    };
+
+    struct Stage0ToolProp
+    {
+        Stage0ToolKind kind = Stage0ToolKind::None;
+        bool present = false;
+        float x = 0.f, y = 0.f, z = 0.f;
+        float yaw = 0.f;
+    };
+
+    struct Stage0SwatchStat
+    {
+        char name[32] = {};
+        char representation[64] = {};
+        int triangles = 0;
+        int vertices = 0;
+        int mesoDetails = 0;
+        int bodies = 0;
     };
 
     // One connected excavation. Openings only expand on remove-only edits.
@@ -427,6 +554,329 @@ namespace
         // --cert-single-pick-benchmark: pristine Range A/B around exactly one live pick wound.
         bool certSinglePickBenchmark = false;
         bool certPickMatrixOnly = false;
+        // --cert-worldgen-baseline-perf: flat 128 m-diameter residency traversal floor.
+        bool certWorldgenBaselinePerf = false;
+        bool certStage8Perf = false;
+        bool certWorldgenLadderAudit = false;
+        bool certWorldgenLadderLivePerf = false;
+        // --cert-worldgen-cardinal-replacement: force complete 192 m live-world
+        // replacement in N/E/S/W and prove exact regeneration on return.
+        bool certWorldgenCardinalReplacement = false;
+        int certWorldgenCardinalStageFilter = -1; // diagnostic subset; permanent gate uses -1
+        bool certStage11ResidencyWaterfall = false;
+        // Capture-free traversal bearing for the waterfall route.
+        // 0=north(+Y) 1=east(+X) 2=south(-Y) 3=west(-X), matching the cardinal
+        // replacement bearing labels.
+        int certStage11WaterfallBearing = 1;
+        // --cert-stage11-shift-scaling: prove far-field work per anchor shift
+        // scales with the entering fringe rather than the full 384 m window.
+        bool certStage11ShiftScaling = false;
+        // --cert-stage11-freefly: sustained high-speed free-flight, the mode that
+        // actually stresses residency. Speed and distance are settable so live
+        // draw distance can be chosen from a measured curve.
+        bool certStage11FreeFly = false;
+        float certStage11FreeFlyStepM = 4.f;
+        int certStage11FreeFlyDistanceM = 512;
+        bool certPlayableRuntimeIndependence = false;
+        // --cert-stage0-character-portrait: deterministic measured front portrait.
+        bool certStage0CharacterPortrait = false;
+        bool certStage0MacroFormV1 = false;
+        bool certStage0CharacterFullBody = false;
+        bool certStage0CharacterProfile = false;
+        bool certStage0CharacterHeadMaskOnly = false;
+        bool certStage0CharacterHeadSkinMaskOnly = false;
+        bool certStage0CharacterHeadHairMaskOnly = false;
+        bool certStage0CharacterSemanticIdPass = false;
+        bool certStage0CharacterPartIdPass = false;
+        bool certStage0CharacterBodyMaskOnly = false;
+        bool certStage0CharacterGarmentMaskOnly = false;
+        // --capture-unlit: emit sampled vertex colour with no directional shade,
+        // so a paint proof measures the paint and not the renderer.
+        bool certStage0Unlit = false;
+        // --candidate-atlas: render the multiview texture atlas instead of
+        // per-vertex colour. Off by default so the vertex-colour baseline stays
+        // reproducible and the two can be measured against each other.
+        bool candidateUseAtlas = false;
+        std::string atlasPath, atlasError;
+        // 0 front, 1 right-profile camera, 2 rear, 3 left-profile camera,
+        // 4 front-right three-quarter, 5 front-left three-quarter.
+        int certStage0CharacterHeadView = 0;
+        // Full-body atlas order: front, rear, right profile, left profile,
+        // top-oblique, front-right three-quarter.
+        int certStage0CharacterBodyView = 0;
+        // 0 neutral, 1 crouch extreme, 2 two-handed tool-ready extreme.
+        int certStage0CharacterPoseAudit = 0;
+        float certStage0CharacterCameraDistanceM = kStage0PortraitDistanceM;
+        float certStage0CharacterCaptureFovYDeg = kStage0PortraitFovYDeg;
+        float certStage0CharacterMaxReachM = kStage0PortraitMaxHeadReachM;
+        float certStage0CharacterNearClearanceM = kStage0PortraitNearClearanceM;
+        int certStage0CharacterPortraitFrames = 0;
+        long long certStage0CharacterPortraitLastQpc = 0;
+        std::vector<double> certStage0CharacterPortraitFrameMs;
+        // --cert-stage0-visual-hull-*: ProvRender-only diagnostic inspection of the
+        // measured six-view head envelope. It rides the identical deterministic head
+        // camera routes so its plates register against the accepted character plates,
+        // but it draws the loaded hull instead of the runtime character and writes a
+        // separate receipt family. Nothing here feeds an accepted anatomy gate.
+        bool certStage0VisualHull = false;
+        bool certStage0VisualHullMaskOnly = false;
+        // Lateral chirality probe. The default mapping is derived in
+        // GetStage0VisualHullMesh; this inverts it so the plates measure the
+        // authored mask handedness instead of inheriting the derivation.
+        bool certStage0VisualHullMirror = false;
+        // --play-worldgen-baseline: human traversal counterpart to the fixed cert.
+        bool playWorldgenBaseline = false;
+        bool playWorldgenInitialized = false;
+        bool playWorldgenLatestStableLaunch = false;
+        bool certWorldgenLaunchContract = false;
+        bool certPresentationIsolation = false;
+        // 1 baseline, 2 pre-swap glFinish, 3 terrain submission suppressed,
+        // 4 all scene/HUD submission suppressed, 5 swap interval 1,
+        // 6 one live terrain package submitted per frame.
+        int presentationIsolationMode = 0;
+        double presentationIsolationDurationS = 40.0;
+        bool playCutCLaunch = false;
+        bool playStage11Launch = false;
+        bool certStage11Visual = false;
+        int certStage11VisualFrames = 0;
+        bool certCutCVisual = false;
+        bool certCutCXrayVisual = false;
+        int certCutCVisualFrames = 0;
+        bool certCutCContinuityImageWrote = false;
+        int certCutCContinuityLowerSkyPixels = 0;
+        bool playWorldgenResidencyOverlay = false;
+        long long playWorldgenLastQpc = 0;
+        long long playWorldgenLastTickQpc = 0;
+        ULONGLONG playWorldgenStartMs = 0;
+        ULONGLONG playWorldgenRateMs = 0;
+        double playWorldgenFrameMs = 0.0;
+        double playWorldgenP99Ms = 0.0;
+        double playWorldgenWorstMs = 0.0;
+        double playWorldgenNewCellsPerS = 0.0;
+        double playWorldgenRebuildsPerS = 0.0;
+        double playWorldgenLastGeoMs = 0.0;
+        double playWorldgenWorstGeoMs = 0.0;
+        double playWorldgenLastHfMs = 0.0;
+        double playWorldgenWorstHfMs = 0.0;
+        long long stage0TickStartQpc = 0;
+        double stage0FrameCpuMs = 0.0;
+        double stage0FrameSimulationMs = 0.0;
+        double stage0FrameResidencyMs = 0.0;
+        double stage0FrameGenerationMs = 0.0;
+        double stage0FrameHfBuildMs = 0.0;
+        double stage0FrameHfUploadMs = 0.0; // display-list backend: included in build
+        double stage0FrameHfRetireMs = 0.0;
+        double stage0FrameDrawSubmitMs = 0.0;
+        double stage0FrameCalibrationDrawMs = 0.0;
+        double stage0FramePresentWaitMs = 0.0;
+        double stage0FrameGpuFinishMs = 0.0;
+        double stage0FramePacingWaitMs = 0.0;
+        double stage0FrameGpuMs = -1.0; // no timer-query backend in legacy GL path
+        double stage0FrameCollisionMs = 0.0;
+        bool stage0SwapControlAvailable = false;
+        int stage0SwapInterval = -1;
+        Stage0PlayView stage0PlayView = Stage0PlayView::Clean;
+        bool stage0StageMenuOpen = false;
+        bool stage0ToolDrawerOpen = false;
+        int stage0BrowserSelection = 0;
+        int stage0BrowserCategory = 0;
+        int stage0ToolSelection = 0;
+        bool stage0ToolRuler = false;
+        bool stage0ToolPalette = false;
+        // Shift+P / --play-stage0-character-only: the palette anchor hosts only
+        // the articulated figure and its local six-foot truth ruler.
+        bool stage0CharacterOnly = false;
+        // --provrender-workbench: ProvRender's own front door. Deliberately NOT
+        // --play-stage0-character-only, which calls SummonStage0Palette and then
+        // strips the palette and tool props -- the opposite of a workbench. This
+        // mode keeps the palette fixture beside the character and opens with every
+        // certification/debug surface closed, so pressing Enter Workbench puts you
+        // in front of the character rather than behind a menu.
+        bool provRenderWorkbench = false;
+        bool provRenderWorkbenchSeated = false;
+        // F1 toggles the Phase-4 diagnostic readout, which otherwise covers the
+        // model in a docked viewport.
+        bool provRenderHudText = false;
+        // [F9] input-ownership witness. On by default in the workbench so the
+        // re-entry cycle can be certified rather than eyeballed.
+        bool inputWitnessHud = true;
+        // --capture-focal=<mm>: focal length is the PRIMARY projection control.
+        // Vertical FOV is only a consequence of it and the film back, so driving
+        // the sweep by FOV would leave the calibration ambiguous. Sensor height is
+        // declared, not implied: 24 mm, the vertical dimension of a 36x24 frame.
+        //   vertical_fov = 2 * atan( sensor_h / 2 / focal )
+        // Zero keeps the built-in 60 deg vertical FOV.
+        float captureFocalMm = 0.f;
+        // --capture-fixed-distance: hold the camera at the baseline 2.15 m instead
+        // of compensating framing. Used to PROVE focal length alters the projection
+        // matrix: at a fixed position two focals must render the subject at
+        // different pixel heights, or focal is not implemented.
+        bool captureFixedDistance = false;
+        // Serialized straight from the matrix handed to glLoadMatrixf. Recomputing
+        // "what the matrix should be" at receipt time produced a receipt that
+        // described a projection the renderer never used, and reported a working
+        // focal sweep that was measuring only camera distance.
+        float renderedProjM00 = 0.f;
+        float renderedProjM11 = 0.f;
+        float renderedFovYDeg = 0.f;
+        // --parent-hwnd=<handle>: run as a WS_CHILD inside the ProvRender viewport
+        // instead of creating a top-level window, so the host embeds the real
+        // renderer rather than a screenshot. Zero means run free-standing.
+        HWND provRenderParent = nullptr;
+        bool stage0ToolGeologyIdentity = true;
+        bool stage0ToolFormationContacts = true;
+        bool stage0ToolBedding = true;
+        bool stage0ToolPerformanceHud = true;
+        bool stage0ToolMutationHud = true;
+        bool stage0ToolProvenance = false;
+        bool stage0ToolGeologyCutaway = false;
+        // Presentation-only, aim-local geology x-ray.  It never writes occupancy,
+        // collision, matter, support, or geological authority.
+        float stage0GeologyInspectorDepthM = 12.8016f; // 42 ft
+        float stage0GeologyInspectorWidthM = 3.048f;  // 10 ft
+        int stage0GeologyInspectorMode = 0;           // material / identity / history
+        bool stage0GeologySnapshotPending = false;
+        bool stage0GeologySnapshotSucceeded = false;
+        bool stage0GeologySnapshotDepositVisible = false;
+        int stage0GeologySnapshotDepositPixels = 0;
+        bool causalGeologyAuthorityAttempted = false;
+        bool causalGeologyCertified = false;
+        bool causalExposureAuthorityAttempted = false;
+        bool causalExposureCertified = false;
+        bool causalVisibleAuthorityAttempted = false;
+        bool causalVisibleCertified = false;
+        bool causalErosionAuthorityAttempted = false;
+        bool causalErosionCertified = false;
+        bool causalIntrusionAuthorityAttempted = false;
+        bool causalIntrusionCertified = false;
+        bool causalMineralizationAuthorityAttempted = false;
+        bool causalMineralizationCertified = false;
+        bool causalFaultAuthorityAttempted = false;
+        bool causalFaultCertified = false;
+        bool cutCOccupancyAuthorityAttempted = false;
+        bool cutCOccupancyCertified = false;
+        std::string causalGeologyAuthorityReason = "not_loaded";
+        std::string causalExposureAuthorityReason = "not_loaded";
+        std::string causalVisibleAuthorityReason = "not_loaded";
+        std::string causalErosionAuthorityReason = "not_loaded";
+        std::string causalIntrusionAuthorityReason = "not_loaded";
+        std::string causalMineralizationAuthorityReason = "not_loaded";
+        std::string causalFaultAuthorityReason = "not_loaded";
+        std::string cutCOccupancyAuthorityReason = "not_loaded";
+        std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
+        std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
+        std::unique_ptr<CausalVisibleExposure::Kernel> causalVisibleRuntime;
+        std::unique_ptr<CausalDifferentialErosion::Kernel> causalErosionRuntime;
+        std::unique_ptr<CausalGraniteIntrusion::Kernel> causalIntrusionRuntime;
+        std::unique_ptr<CausalContactMineralization::Kernel> causalMineralizationRuntime;
+        std::unique_ptr<CausalFaultDisplacement::Kernel> causalFaultRuntime;
+        std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
+        CausalDifferentialErosion::Control stage8Control =
+            CausalDifferentialErosion::Control::DifferentialResistance;
+        std::unordered_map<uint64_t, Stage0TerrainBlock> stage7TerrainBlocks;
+        std::unordered_map<uint64_t, Stage0TerrainBlock> stage8TerrainBlocks;
+        std::deque<Stage0RetiredDisplayList> stage8RetiredDisplayLists;
+        std::vector<GLuint> stage8ReusableDisplayLists;
+        GLuint stage0FarFieldList = 0;
+        std::unordered_map<uint64_t, Stage0FarFieldTile> stage0FarCoarseTiles;
+        std::unordered_map<uint64_t, Stage0FarFieldTile> stage0FarStitchTiles;
+        // Half-extent of the exact live terrain window, in metres, snapped down
+        // to the 8 m package cadence. Settable with --live-radius so the client
+        // and the certificates can sweep player-space draw distance.
+        int stage0LiveRadiusM = 64;
+        // Half-extent of the latent far field, in metres. Zero disables it
+        // entirely so player-space terrain can be evaluated on its own.
+        int stage0FarExtentM = 384;
+        // Frames on which live package construction hit its budget and deferred
+        // remaining in-bounds packages to the next frame. Non-zero means the
+        // outermost live ring was briefly allowed to trail.
+        int stage0LivePackageDeferrals = 0;
+        std::vector<GLuint> stage0FarFreeLists;
+        std::deque<Stage0RetiredDisplayList> stage0FarRetiredLists;
+        int stage0FarFieldAnchorX = INT_MIN;
+        int stage0FarFieldAnchorY = INT_MIN;
+        int stage0FarFieldRuntimeKind = -1;
+        int stage0FarFieldControl = -1;
+        int stage0FarLastPruneAnchorX = INT_MIN;
+        int stage0FarLastPruneAnchorY = INT_MIN;
+        // Observed travel bearing of the far-field anchor. The lookahead cannot
+        // infer this from the player's offset inside the anchor cell, because a
+        // floor-snapped anchor makes that offset non-negative on both axes.
+        int stage0FarTravelDirX = 0;
+        int stage0FarTravelDirY = 0;
+        float stage0FarLastFeetX = 0.f;
+        float stage0FarLastFeetY = 0.f;
+        bool stage0FarLastFeetValid = false;
+        int stage0FarFieldTriangles = 0;
+        std::unordered_map<uint64_t, float> stage0FarSurfaceCache;
+        std::unordered_map<uint64_t, float> stage0FarFilteredCache;
+        std::unordered_map<uint64_t, std::string> stage0FarMaterialCache;
+        int stage7TerrainTriangles = 0;
+        int stage8TerrainTriangles = 0;
+        double stage7LastBuildMs = 0.0;
+        double stage8LastBuildMs = 0.0;
+        GLuint stage0RulerList = 0;
+        GLuint stage0PaletteList = 0;
+        uint64_t stage0RulerResidencyDigest = 0;
+        int stage0RulerHostPackages = 0;
+        float stage0RulerLaneX = 128.5f;
+        bool stage0PaletteAnchored = false;
+        float stage0PaletteAnchorX = 0.f;
+        float stage0PaletteAnchorY = 0.f;
+        uint64_t stage0PaletteHostPackage = 0;
+        int stage0PaletteHostRuntime = -1;
+        int stage0PaletteHostRevision = -1;
+        int stage0RulerTriangles = 0;
+        int stage0RulerVertices = 0;
+        double stage0RulerBuildMs = 0.0;
+        double stage0RulerMaxSurfaceErrorM = 0.0;
+        float flySprintDistanceM = 0.f;
+        float flyCurrentSpeedMps = kFlySpeedMps;
+        int flySprintTier = 0;
+        int stage0PaletteTriangles = 0;
+        int stage0PaletteVertices = 0;
+        double stage0PaletteBuildMs = 0.0;
+        double stage0PaletteMaxSurfaceErrorM = 0.0;
+        Stage0SwatchStat stage0Swatches[5];
+        // Player-scale palette tools. They are presentation/contact probes, deliberately
+        // outside MatterBody and terrain mutation authority so Stage-0 stays isolated.
+        Stage0ToolProp stage0Tools[3] = {};
+        Stage0ToolKind stage0HeldTool = Stage0ToolKind::None;
+        float stage0ToolSpin = 0.f;
+        float stage0ToolRoll = 0.f;
+        bool stage0LeftHanded = false;
+        ULONGLONG stage0StrikeStartMs = 0;
+        ULONGLONG stage0StrikeImpactMs = 0;
+        float stage0StrikeImpactPhase = 0.f;
+        int stage0StrikeResponse = 0; // 0 air, 1 rebound, 2 lodge, 3 soil bite
+        bool stage0StrikeContactDone = false;
+        bool stage0StrikePrevValid = false;
+        float stage0StrikePrevPoints[3][3] = {};
+        int stage0StrikePrevCount = 0;
+        char stage0StrikeMaterial[32] = "air";
+        SIZE_T playWorldgenWorkingSet = 0;
+        int playWorldgenFrame = 0;
+        int playWorldgenLastNewCells = 0;
+        int playWorldgenLastHfRebuilds = 0;
+        int playWorldgenLastHfLocalUpdates = 0;
+        int playWorldgenRateCells = 0;
+        int playWorldgenRateHf = 0;
+        int playWorldgenRateHfLocal = 0;
+        int playWorldgenEvicted = 0; // cumulative deterministic virgin-cell eviction
+        int playWorldgenStartD2 = 0;
+        int playWorldgenStartOcc = 0;
+        int playWorldgenStartEdits = 0;
+        int playWorldgenStartSupport = 0;
+        int playWorldgenStartMutations = 0;
+        double playWorldgenPrevGeoTotal = 0.0;
+        double playWorldgenPrevHfTotal = 0.0;
+        int playWorldgenPrevCells = 0;
+        int playWorldgenPrevHf = 0;
+        int playWorldgenPrevHfLocal = 0;
+        float playWorldgenPrevX = 0.f, playWorldgenPrevY = 0.f;
+        std::vector<double> playWorldgenRecentFrameMs;
+        std::vector<std::pair<float, float>> playWorldgenRecentPath;
+        FILE* playWorldgenTrace = nullptr;
         int singlePickPhase = 0;
         int singlePickFrame = 0;
         int singlePickStableFrames = 0;
@@ -511,9 +961,19 @@ namespace
         int perfGeoCellsCreated = 0;
         int perfSampleSurfaceCalls = 0;   // only EnsureGeoCell should bump this for terrain
         int perfSampleCapColorCalls = 0;  // must use cell cache (no FBM)
+        int perfGeoDiskRequests = 0;      // synchronous local residency requests
+        int perfGeoDiskNoopRequests = 0;
+        int perfGeoCellsRequested = 0;
+        int perfGeoCellsEvicted = 0;
+        int perfHfBlocksEvicted = 0;
+        double perfGeoGenMsTotal = 0.0;
+        double perfGeoPureGenMsTotal = 0.0;
+        double perfGeoGenMsMax = 0.0;
         int perfHfRebuilds = 0;
+        int perfHfLocalUpdates = 0;
         int perfHfTris = 0;
         float perfHfRemeshMsTotal = 0.f;
+        float perfHfRemeshMsMax = 0.f;
         int perfD2Rebuilds = 0;
         int perfD2Tris = 0;
         int perfD2Edges = 0;
@@ -567,6 +1027,8 @@ namespace
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
         std::unordered_map<uint64_t, CellSample> cells;
+        std::unordered_map<uint64_t, Stage0TerrainBlock> stage0TerrainBlocks;
+        std::unordered_set<uint64_t> stage0DirtyTerrainBlocks;
         std::unordered_set<uint64_t> fetchedBlocks;
         std::vector<EditedRegion> editedRegions;
         uint32_t nextEditedRegionId = 1;
@@ -720,6 +1182,11 @@ namespace
         float velZ = 0.f;
         bool grounded = false;
         bool walkMode = true;   // default: 6ft standable walk; F = free camera
+        float playerCrouch = 0.f; // smooth 0=standing, 1=crouched camera
+        bool playerCrouched = false;
+        float stage0SlideRemaining = 0.f;
+        float stage0SlideSpeed = 0.f;
+        float stage0SlideDirX = 0.f, stage0SlideDirY = 0.f;
         DWORD sessionStartMs = 0; // GetTickCount at launch — session clock
         float camX = 128.f;
         float camY = 128.f;
@@ -741,6 +1208,10 @@ namespace
         bool keyToggleLatch[256] = {};
         bool rmbDown = false;
         bool mouseLook = true;   // FPS: cursor locked to camera
+        // Gameplay input and cursor capture were effectively separate states, which
+        // is how the viewport could own the mouse while the shell owned the
+        // keyboard. They are now set and cleared only by Enter/ReleaseViewportInput.
+        bool gameplayInput = true;
         bool cursorCaptured = false;
         int lastMouseX = 0;
         int lastMouseY = 0;
@@ -790,6 +1261,80 @@ namespace
 
     AppState g;
 
+    struct Stage11ResidencyWaterfallCounters
+    {
+        bool collecting = false;
+        DWORD frameThreadId = 0;
+        int offFrameThreadBuilds = 0;
+        int packagesBuilt = 0;
+        int packageMaterialSamples = 0;
+        int packageMaterialCacheHits = 0;
+        int farFieldRebuilds = 0;
+        int farSurfaceQueries = 0;
+        int farMaterialQueries = 0;
+        int farMaterialCacheHits = 0;
+        int farTilesRetained = 0;
+        int farTilesDiscovered = 0;
+        int farTilesBuilt = 0;
+        int farCoarseTilesBuilt = 0;
+        int farStitchTilesBuilt = 0;
+        int farTilesPublished = 0;
+        int farTilesRetired = 0;
+        int farTilesPendingMax = 0;
+        int packageDiscoveryCandidates = 0;
+        int packagesRetired = 0;
+        double packageDiscoveryMs = 0.0;
+        double packageRetirementScanMs = 0.0;
+        double packageMeshMs = 0.0;
+        double packageSampleMs = 0.0;
+        double packageSurfaceDescriptorMs = 0.0;
+        double packageMaterialMs = 0.0;
+        double packageMeshEmitMs = 0.0;
+        double packageCollisionMs = 0.0;
+        double packageAllocationMs = 0.0;
+        double packageGlCompileMs = 0.0;
+        double packagePublishMs = 0.0;
+        double farFieldTotalMs = 0.0;
+        double farPrefetchMs = 0.0;
+        int farPrefetchSurfaceQueries = 0;
+        int farPrefetchMaterialQueries = 0;
+        double farTileDiscoveryMs = 0.0;
+        double farTileResourceMs = 0.0;
+        double farTileCompileMs = 0.0;
+        double farTilePublishMs = 0.0;
+        double farCachePruneMs = 0.0;
+        double farSurfaceMs = 0.0;
+        double farMaterialMs = 0.0;
+    };
+    Stage11ResidencyWaterfallCounters s_stage11Waterfall;
+
+    // Per-package build attribution. The aggregate substage totals cannot answer
+    // the decisive question -- what turns a ~0.19 ms package into a ~17 ms one --
+    // because a handful of extreme packages vanish into a route-wide mean. Each
+    // build is recorded individually with its first-touch signals so the cold
+    // tail can be explained rather than guessed at.
+    struct Stage0PackageBuildSample
+    {
+        int bx=0,by=0;
+        int tris=0;
+        int materialSamples=0;
+        int materialMisses=0;      // geology queried, not served from cache
+        int newMaterialVariants=0; // material string never seen before anywhere
+        double totalMs=0.0;
+        double buildBlockMs=0.0;   // authority + surface/HF + mesh construction
+        double sampleMs=0.0;       // authoritative package-local field
+        double surfaceDescriptorMs=0.0;
+        double allocMs=0.0;        // display list id allocation
+        double materialMs=0.0;     // material derivation pass
+        double meshEmitMs=0.0;     // descriptors -> canonical triangles
+        double collisionMs=0.0;    // adopt the same sampled boundary for collision
+        double glCompileMs=0.0;    // triangle emission + list compile
+        double publishMs=0.0;
+    };
+    std::vector<Stage0PackageBuildSample> s_packageBuildSamples;
+    std::unordered_set<std::string> s_seenPackageMaterials;
+    bool s_packageBuildProfiling=false;
+
     void SetMouseLook( HWND hwnd, bool enabled ); // defined with camera/input
     void LoadIconTextures();
     void UnloadIconTextures();
@@ -803,12 +1348,117 @@ namespace
     void UpdateUiMouseFromWin( int winX, int winY );
     bool TryHotbarClick( float mx, float my );
     bool HandleJournalClick( float mx, float my, bool rightClick );
+    bool HandleWorldgenMenuClick( float mx, float my );
     void UpdateStreamHud();
+    void MarkStage0TerrainVertexDirty( int cx, int cy );
+    void RetireTerrainDisplayList( GLuint list );
+    void ServiceRetiredTerrainDisplayLists();
+    void DrawStage0TerrainBlocks();
+    void DrawStage7TerrainBlocks();
+    void DrawStage8TerrainBlocks();
+    void ResetStage8PackageJobs();
+    void ShutdownStage8PackageWorkers();
+    bool Stage8PackageJobsIdle();
+    int Stage0PendingPackageCount( Stage0PlayView view );
+    void DrawStage0CalibrationPresentation();
+    bool TryStage0PickaxeInteraction();
+    bool BeginStage0ToolStrike();
+    void UpdateStage0ToolStrike();
+    char const* Stage0PlayViewName( Stage0PlayView view );
+    void DrawWorldgenStageMenu( int w, int h );
+    void DrawWorldgenToolDrawer( int w, int h );
+    bool SelectStage0PlayView( Stage0PlayView view );
+    void InvalidateStage0CalibrationSurface();
+    void SummonStage0Palette();
+    void SummonStage0CharacterOnly();
+    char const* Stage0PlayViewName( Stage0PlayView view );
+    int FloorDivCell( int v, int divisor );
+    void EvictStage0Residency( int centerX, int centerY );
+    SIZE_T CurrentWorkingSetBytes();
+    double PercentileSorted( std::vector<double> const& sorted, double p );
+    void DrawWorldgenPlayHud( int w, int h );
+    void WorldgenPlayShutdown();
     void UpdateAim();
     bool TryPickupGallerySample();
     bool DropHeldGalleryToGround();
     void DrawHeldGallerySample();
     void EnsureGallerySpawned();
+    // Candidate 001 is defined with the OBJ loader further down; the carrier draw
+    // needs it earlier. A bool avoids depending on the incomplete mesh type here.
+    bool Stage0CandidateLoaded();
+    // Single predicate behind every old-sculpt emitter gate. The scene purity
+    // receipt reports its counts through the same call, so a gate that is ever
+    // removed shows up in the receipt instead of only on screen.
+    bool Stage0OldSculptSuppressed();
+
+    // Declared film back: 24 mm, the vertical dimension of a 36x24 frame. Focal
+    // length is the control; this is the only assumption that turns it into an
+    // angle, so it is stated once here rather than implied at each call site.
+    constexpr float kCaptureSensorHeightMm = 24.f;
+
+    // Subject pixel height straight off the depth buffer: the vertical extent of
+    // everything nearer than the far plane. This is the number that must change
+    // between two focals at a FIXED camera distance if focal really drives the
+    // projection.
+    int Stage0MaskSubjectHeightPx()
+    {
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+        int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0)return 0;
+        std::vector<float> depth((size_t)w*(size_t)h,1.f);
+        glPixelStorei(GL_PACK_ALIGNMENT,1);
+        glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
+        int top=-1,bottom=-1;
+        for(int y=0;y<h;++y)
+        {
+            bool any=false;
+            for(int x=0;x<w;++x){if(depth[(size_t)y*(size_t)w+(size_t)x]<0.999999f){any=true;break;}}
+            if(any){if(top<0)top=y;bottom=y;}
+        }
+        return (top<0)?0:(bottom-top+1);
+    }
+
+    float Stage0CaptureFovYDeg()
+    {
+        if ( g.captureFocalMm <= 0.f ) { return 60.f; }
+        return 2.f * std::atan( kCaptureSensorHeightMm * 0.5f / g.captureFocalMm )
+             * 180.f / 3.14159265f;
+    }
+
+    // ---- facing contract ----
+    // Four independent facts per body view. The subject faces -X, so the front
+    // camera stands at -X, and a camera at -Y sees the subject's LEFT side while
+    // the subject's nose points to that camera's screen-LEFT. None of these is
+    // derived from another at read time: they are declared together here so a
+    // disagreement is visible rather than silently reconciled.
+    char const* Stage0BodyCameraSide( int view )
+    {
+        switch(view){case 0:return "anterior";case 1:return "posterior";
+            case 2:return "negative_y";case 3:return "positive_y";
+            case 4:return "superior_oblique";default:return "anterior_negative_y";}
+    }
+    char const* Stage0BodyScreenFacing( int view )
+    {
+        switch(view){case 0:return "toward_camera";case 1:return "away_from_camera";
+            case 2:return "screen_left";case 3:return "screen_right";
+            case 4:return "downward";default:return "screen_left_oblique";}
+    }
+    char const* Stage0BodyAnatomicalSide( int view )
+    {
+        switch(view){case 0:return "front";case 1:return "back";
+            case 2:return "left";case 3:return "right";
+            case 4:return "top";default:return "front_left_quarter";}
+    }
+    char const* Stage0BodySourcePanel( int view )
+    {
+        switch(view){case 0:return "front";case 1:return "back";
+            case 2:return "left_profile";case 3:return "right_profile";
+            case 4:return "top_oblique";default:return "threequarter";}
+    }
+    struct Stage0VisualHullMesh;
+    void EmitStage0CandidateBody( float ox, float oy, float ground, float sway, float breathe,
+                                  int filter = 0, Stage0VisualHullMesh const* meshPtr = nullptr );
+    void DrawStage0CandidateGallery( float ox, float oy, float ground, float sway, float breathe );
 
     uint64_t CellKey( int x, int y )
     {
@@ -1740,12 +2390,637 @@ namespace
         return EditedRegionOwnsAt( x, y );
     }
 
+    bool IsCausalGeologyView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::CausalGeologyKernel;
+    }
+
+    bool IsCausalExposureView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::GeologicExposure;
+    }
+
+    bool IsVisibleExposureView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::VisibleGeologicExposure;
+    }
+
+    bool IsDifferentialErosionView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::DifferentialErosion;
+    }
+
+    bool IsGraniteIntrusionView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::GraniteIntrusion;
+    }
+
+    bool IsContactMineralizationView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::ContactMineralization;
+    }
+
+    bool IsCutCOccupancyView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::CutCOccupancyParity;
+    }
+
+    bool IsFaultDisplacementView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::FaultDisplacement;
+    }
+
+    bool IsCausalPlayableView( Stage0PlayView view )
+    {
+        return IsCausalGeologyView( view ) || IsCausalExposureView( view )
+            || IsVisibleExposureView( view ) || IsDifferentialErosionView( view )
+            || IsGraniteIntrusionView( view ) || IsContactMineralizationView( view )
+            || IsCutCOccupancyView( view ) || IsFaultDisplacementView( view );
+    }
+
+    char const* PresentationIsolationModeName( int mode )
+    {
+        switch(mode)
+        {
+            case 1:return "baseline_swap0";
+            case 2:return "prefinish_swap0";
+            case 3:return "no_terrain_submission";
+            case 4:return "no_scene_submission";
+            case 5:return "swap1";
+            case 6:return "minimal_terrain_submission";
+            default:return "none";
+        }
+    }
+
+    bool PresentationSuppressesTerrainSubmission()
+    {return g.certPresentationIsolation
+        &&(g.presentationIsolationMode==3||g.presentationIsolationMode==4);}
+
+    bool PresentationUsesMinimalTerrainSubmission()
+    {return g.certPresentationIsolation&&g.presentationIsolationMode==6;}
+
+    bool Stage0UsesPrePresentCompletion()
+    {
+        if(g.certPresentationIsolation)
+        {return g.presentationIsolationMode==2;}
+        return g.playWorldgenBaseline||g.certWorldgenLadderLivePerf;
+    }
+
+    bool EnsureCausalPlayableAuthority( Stage0PlayView view )
+    {
+        constexpr char const* kGeologyPath =
+            "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
+        constexpr char const* kExposurePath =
+            "Data\\Worldgen\\causal_world_geologic_exposure_floor.cwe";
+        constexpr char const* kErosionPath =
+            "Data\\Worldgen\\causal_world_differential_erosion_floor.cde";
+        constexpr char const* kIntrusionPath =
+            "Data\\Worldgen\\causal_world_granite_intrusion_floor.cgi";
+        constexpr char const* kMineralizationPath =
+            "Data\\Worldgen\\causal_world_contact_mineralization_floor.ccm";
+        constexpr char const* kFaultPath =
+            "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
+
+        if ( IsFaultDisplacementView( view ) )
+        {
+            if ( !g.causalFaultAuthorityAttempted )
+            {
+                g.causalFaultAuthorityAttempted = true;
+                auto const cert = CausalFaultDisplacement::RunCert(
+                    kGeologyPath, kExposurePath, kErosionPath, kIntrusionPath,
+                    kMineralizationPath, kFaultPath );
+                g.causalFaultCertified = cert.passed;
+                g.causalFaultAuthorityReason = cert.passed ? "certified"
+                    : ( cert.reason.empty() ? "cert_failed" : cert.reason );
+                if ( cert.passed )
+                {
+                    std::string reason;
+                    g.causalFaultRuntime = CausalFaultDisplacement::LoadKernel(
+                        kGeologyPath, kExposurePath, kErosionPath, kIntrusionPath,
+                        kMineralizationPath, kFaultPath, &reason );
+                    if ( !g.causalFaultRuntime )
+                    {
+                        g.causalFaultCertified = false;
+                        g.causalFaultAuthorityReason = reason;
+                    }
+                }
+            }
+            return g.causalFaultCertified && g.causalFaultRuntime != nullptr;
+        }
+
+        if ( IsCutCOccupancyView( view ) )
+        {
+            if ( !g.cutCOccupancyAuthorityAttempted )
+            {
+                g.cutCOccupancyAuthorityAttempted = true;
+                bool const stage10Ready = EnsureCausalPlayableAuthority(
+                    Stage0PlayView::ContactMineralization );
+                auto const cert = CutCOccupancy::RunCert(
+                    "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc",
+                    "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab",
+                    kGeologyPath, kExposurePath, kErosionPath, kIntrusionPath,
+                    kMineralizationPath );
+                g.cutCOccupancyCertified = stage10Ready && cert.passed;
+                g.cutCOccupancyAuthorityReason = cert.passed
+                    ? ( stage10Ready ? "certified" : "stage10_control_unavailable" )
+                    : ( cert.reason.empty() ? "cert_failed" : cert.reason );
+                if ( g.cutCOccupancyCertified )
+                {
+                    auto fixture = std::make_unique<CutCOccupancy::Fixture>();
+                    auto const loaded = fixture->Load(
+                        "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc" );
+                    if ( loaded.ok ) { g.cutCOccupancyRuntime = std::move( fixture ); }
+                    else
+                    {
+                        g.cutCOccupancyCertified = false;
+                        g.cutCOccupancyAuthorityReason = loaded.reason;
+                    }
+                }
+            }
+            return g.cutCOccupancyCertified && g.cutCOccupancyRuntime != nullptr;
+        }
+
+        if ( IsContactMineralizationView( view ) )
+        {
+            if ( !g.causalMineralizationAuthorityAttempted )
+            {
+                g.causalMineralizationAuthorityAttempted = true;
+                auto const cert = CausalContactMineralization::RunCert(
+                    kGeologyPath, kExposurePath, kErosionPath,
+                    kIntrusionPath, kMineralizationPath );
+                g.causalMineralizationCertified = cert.passed;
+                g.causalMineralizationAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    std::string gs, es, ers, is, ms;
+                    auto geology = CausalWorldGeology::LoadResult{};
+                    auto exposure = CausalWorldExposure::LoadResult{};
+                    auto erosion = CausalDifferentialErosion::LoadResult{};
+                    auto intrusion = CausalGraniteIntrusion::LoadResult{};
+                    auto mineralization = CausalContactMineralization::LoadResult{};
+                    if ( CausalWorldExposure::ReadFile( kGeologyPath, gs )
+                      && CausalWorldExposure::ReadFile( kExposurePath, es )
+                      && CausalDifferentialErosion::ReadFile( kErosionPath, ers )
+                      && CausalGraniteIntrusion::ReadFile( kIntrusionPath, is )
+                      && CausalContactMineralization::ReadFile( kMineralizationPath, ms ) )
+                    {
+                        geology = CausalWorldGeology::LoadText( gs );
+                        exposure = CausalWorldExposure::LoadText( es, gs );
+                        if ( geology.ok && exposure.ok )
+                        { erosion = CausalDifferentialErosion::LoadText(
+                            ers, geology.descriptor, exposure.descriptor, gs ); }
+                        if ( geology.ok && exposure.ok && erosion.ok )
+                        { intrusion = CausalGraniteIntrusion::LoadText(
+                            is, geology.descriptor, exposure.descriptor, gs, ers ); }
+                        if ( intrusion.ok )
+                        { mineralization = CausalContactMineralization::LoadText(
+                            ms, intrusion.program, is ); }
+                    }
+                    if ( geology.ok && exposure.ok && erosion.ok
+                      && intrusion.ok && mineralization.ok )
+                    {
+                        CausalWorldExposure::Kernel exposureKernel(
+                            std::move( geology.descriptor ), std::move( exposure.descriptor ) );
+                        CausalDifferentialErosion::Kernel erosionKernel(
+                            std::move( exposureKernel ), std::move( erosion.program ) );
+                        CausalGraniteIntrusion::Kernel intrusionKernel(
+                            std::move( erosionKernel ), std::move( intrusion.program ) );
+                        g.causalMineralizationRuntime =
+                            std::make_unique<CausalContactMineralization::Kernel>(
+                                std::move( intrusionKernel ), std::move( mineralization.program ) );
+                    }
+                    else
+                    {
+                        g.causalMineralizationCertified = false;
+                        g.causalMineralizationAuthorityReason = !geology.ok ? geology.reason
+                            : ( !exposure.ok ? exposure.reason : ( !erosion.ok ? erosion.reason
+                                : ( !intrusion.ok ? intrusion.reason : mineralization.reason ) ) );
+                    }
+                }
+            }
+            return g.causalMineralizationCertified && g.causalMineralizationRuntime != nullptr;
+        }
+
+        if ( IsGraniteIntrusionView( view ) )
+        {
+            if ( !g.causalIntrusionAuthorityAttempted )
+            {
+                g.causalIntrusionAuthorityAttempted = true;
+                auto const cert = CausalGraniteIntrusion::RunCert(
+                    kGeologyPath, kExposurePath, kErosionPath, kIntrusionPath );
+                g.causalIntrusionCertified = cert.passed;
+                g.causalIntrusionAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    std::string gs, es, ers, is;
+                    auto geology = CausalWorldGeology::LoadResult{};
+                    auto exposure = CausalWorldExposure::LoadResult{};
+                    auto erosion = CausalDifferentialErosion::LoadResult{};
+                    auto intrusion = CausalGraniteIntrusion::LoadResult{};
+                    if ( CausalWorldExposure::ReadFile( kGeologyPath, gs )
+                      && CausalWorldExposure::ReadFile( kExposurePath, es )
+                      && CausalDifferentialErosion::ReadFile( kErosionPath, ers )
+                      && CausalGraniteIntrusion::ReadFile( kIntrusionPath, is ) )
+                    {
+                        geology = CausalWorldGeology::LoadText( gs );
+                        exposure = CausalWorldExposure::LoadText( es, gs );
+                        if ( geology.ok && exposure.ok )
+                        { erosion = CausalDifferentialErosion::LoadText(
+                            ers, geology.descriptor, exposure.descriptor, gs ); }
+                        if ( geology.ok && exposure.ok && erosion.ok )
+                        { intrusion = CausalGraniteIntrusion::LoadText(
+                            is, geology.descriptor, exposure.descriptor, gs, ers ); }
+                    }
+                    if ( geology.ok && exposure.ok && erosion.ok && intrusion.ok )
+                    {
+                        CausalWorldExposure::Kernel exposureKernel(
+                            std::move( geology.descriptor ), std::move( exposure.descriptor ) );
+                        CausalDifferentialErosion::Kernel erosionKernel(
+                            std::move( exposureKernel ), std::move( erosion.program ) );
+                        g.causalIntrusionRuntime = std::make_unique<CausalGraniteIntrusion::Kernel>(
+                            std::move( erosionKernel ), std::move( intrusion.program ) );
+                    }
+                    else
+                    {
+                        g.causalIntrusionCertified = false;
+                        g.causalIntrusionAuthorityReason = !geology.ok ? geology.reason
+                            : ( !exposure.ok ? exposure.reason
+                                : ( !erosion.ok ? erosion.reason : intrusion.reason ) );
+                    }
+                }
+            }
+            return g.causalIntrusionCertified && g.causalIntrusionRuntime != nullptr;
+        }
+
+        if ( IsDifferentialErosionView( view ) )
+        {
+            if ( !g.causalErosionAuthorityAttempted )
+            {
+                g.causalErosionAuthorityAttempted = true;
+                auto const cert = CausalDifferentialErosion::RunCert(
+                    kGeologyPath, kExposurePath, kErosionPath );
+                g.causalErosionCertified = cert.passed;
+                g.causalErosionAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    std::string geologySource, exposureSource, erosionSource;
+                    auto geology = CausalWorldGeology::LoadResult{};
+                    auto exposure = CausalWorldExposure::LoadResult{};
+                    auto erosion = CausalDifferentialErosion::LoadResult{};
+                    if ( CausalWorldExposure::ReadFile( kGeologyPath, geologySource )
+                      && CausalWorldExposure::ReadFile( kExposurePath, exposureSource )
+                      && CausalDifferentialErosion::ReadFile( kErosionPath, erosionSource ) )
+                    {
+                        geology = CausalWorldGeology::LoadText( geologySource );
+                        exposure = CausalWorldExposure::LoadText( exposureSource, geologySource );
+                        if ( geology.ok && exposure.ok )
+                        {
+                            erosion = CausalDifferentialErosion::LoadText( erosionSource,
+                                geology.descriptor, exposure.descriptor, geologySource );
+                        }
+                    }
+                    if ( geology.ok && exposure.ok && erosion.ok )
+                    {
+                        CausalWorldExposure::Kernel exposureKernel(
+                            std::move( geology.descriptor ), std::move( exposure.descriptor ) );
+                        g.causalErosionRuntime =
+                            std::make_unique<CausalDifferentialErosion::Kernel>(
+                                std::move( exposureKernel ), std::move( erosion.program ) );
+                    }
+                    else
+                    {
+                        g.causalErosionCertified = false;
+                        g.causalErosionAuthorityReason = !geology.ok ? geology.reason
+                            : ( !exposure.ok ? exposure.reason : erosion.reason );
+                    }
+                }
+            }
+            return g.causalErosionCertified && g.causalErosionRuntime != nullptr;
+        }
+
+        if ( IsVisibleExposureView( view ) )
+        {
+            if ( !g.causalVisibleAuthorityAttempted )
+            {
+                g.causalVisibleAuthorityAttempted = true;
+                CausalVisibleExposure::CertResult const cert =
+                    CausalVisibleExposure::RunCert( kGeologyPath, kExposurePath );
+                g.causalVisibleCertified = cert.passed;
+                g.causalVisibleAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    std::string geologySource;
+                    std::string exposureSource;
+                    CausalWorldGeology::LoadResult geology;
+                    CausalWorldExposure::LoadResult exposure;
+                    if ( CausalWorldExposure::ReadFile( kGeologyPath, geologySource )
+                      && CausalWorldExposure::ReadFile( kExposurePath, exposureSource ) )
+                    {
+                        geology = CausalWorldGeology::LoadText( geologySource );
+                        exposure = CausalWorldExposure::LoadText( exposureSource, geologySource );
+                    }
+                    if ( geology.ok && exposure.ok )
+                    {
+                        CausalWorldExposure::Kernel exposureKernel(
+                            std::move( geology.descriptor ), std::move( exposure.descriptor ) );
+                        g.causalVisibleRuntime = std::make_unique<CausalVisibleExposure::Kernel>(
+                            std::move( exposureKernel ) );
+                    }
+                    else
+                    {
+                        g.causalVisibleCertified = false;
+                        g.causalVisibleAuthorityReason = !geology.ok
+                            ? geology.reason : exposure.reason;
+                    }
+                }
+            }
+            return g.causalVisibleCertified && g.causalVisibleRuntime != nullptr;
+        }
+
+        if ( IsCausalGeologyView( view ) )
+        {
+            if ( !g.causalGeologyAuthorityAttempted )
+            {
+                g.causalGeologyAuthorityAttempted = true;
+                CausalWorldGeology::CertResult const cert =
+                    CausalWorldGeology::RunCert( kGeologyPath );
+                g.causalGeologyCertified = cert.passed;
+                g.causalGeologyAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    CausalWorldGeology::LoadResult loaded =
+                        CausalWorldGeology::LoadFile( kGeologyPath );
+                    if ( loaded.ok )
+                    {
+                        g.causalGeologyRuntime = std::make_unique<CausalWorldGeology::Kernel>(
+                            std::move( loaded.descriptor ) );
+                    }
+                    else
+                    {
+                        g.causalGeologyCertified = false;
+                        g.causalGeologyAuthorityReason = loaded.reason;
+                    }
+                }
+            }
+            return g.causalGeologyCertified && g.causalGeologyRuntime != nullptr;
+        }
+
+        if ( IsCausalExposureView( view ) )
+        {
+            if ( !g.causalExposureAuthorityAttempted )
+            {
+                g.causalExposureAuthorityAttempted = true;
+                CausalWorldExposure::CertResult const cert =
+                    CausalWorldExposure::RunCert( kGeologyPath, kExposurePath );
+                g.causalExposureCertified = cert.passed;
+                g.causalExposureAuthorityReason = cert.passed
+                    ? "certified" : ( cert.loadReason.empty() ? "cert_failed" : cert.loadReason );
+                if ( cert.passed )
+                {
+                    std::string geologySource;
+                    std::string exposureSource;
+                    CausalWorldGeology::LoadResult geology;
+                    CausalWorldExposure::LoadResult exposure;
+                    if ( CausalWorldExposure::ReadFile( kGeologyPath, geologySource )
+                      && CausalWorldExposure::ReadFile( kExposurePath, exposureSource ) )
+                    {
+                        geology = CausalWorldGeology::LoadText( geologySource );
+                        exposure = CausalWorldExposure::LoadText( exposureSource, geologySource );
+                    }
+                    if ( geology.ok && exposure.ok )
+                    {
+                        g.causalExposureRuntime = std::make_unique<CausalWorldExposure::Kernel>(
+                            std::move( geology.descriptor ), std::move( exposure.descriptor ) );
+                    }
+                    else
+                    {
+                        g.causalExposureCertified = false;
+                        g.causalExposureAuthorityReason = !geology.ok
+                            ? geology.reason : exposure.reason;
+                    }
+                }
+            }
+            return g.causalExposureCertified && g.causalExposureRuntime != nullptr;
+        }
+        return true;
+    }
+
+    bool SampleResidentCausalPackageSurface(double x,double y,float& outZ)
+    {
+        double const shiftedX=x+0.5*CausalVisibleExposure::kDualStepM;
+        double const shiftedY=y+0.5*CausalVisibleExposure::kDualStepM;
+        int const bx=(int)std::floor(shiftedX/CausalVisibleExposure::kBlockSizeM);
+        int const by=(int)std::floor(shiftedY/CausalVisibleExposure::kBlockSizeM);
+        auto const block=g.stage8TerrainBlocks.find(CellKey(bx,by));
+        if(block==g.stage8TerrainBlocks.end()||!block->second.collisionSurface)
+        {return false;}
+        double resolved=0.0;
+        if(!CausalVisibleExposure::ReconstructedZ(
+            *block->second.collisionSurface,x,y,resolved))return false;
+        outZ=(float)resolved;
+        return std::isfinite(outZ);
+    }
+
+    bool SampleCausalPlayableCell( Stage0PlayView view, double x, double y,
+        float& outZ, std::string& outCap )
+    {
+        if ( IsFaultDisplacementView( view ) )
+        {
+            if ( !g.causalFaultRuntime ) { return false; }
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const material=g.causalFaultRuntime->QueryMaterial(
+                    true,x,y,(double)outZ-0.001);
+                if(!material.found||!material.material)return false;
+                outCap=material.material;return true;
+            }
+            outZ = (float)g.causalFaultRuntime->ReconstructedZ( x, y );
+            auto const geology = g.causalFaultRuntime->SurfaceGeology( true, x, y );
+            if ( !geology.found ) { return false; }
+            outCap = geology.material; return true;
+        }
+        if ( IsCutCOccupancyView( view ) )
+        {
+            if ( !g.cutCOccupancyRuntime || !g.causalMineralizationRuntime )
+            { return false; }
+            outZ=(float)CutCOccupancy::IntegratedSurfaceZ(*g.cutCOccupancyRuntime,
+                *g.causalMineralizationRuntime,x,y);
+            if ( g.cutCOccupancyRuntime->Owns( x, y ) )
+            {
+                auto const geology = g.cutCOccupancyRuntime->SurfaceSample( x, y );
+                if ( !geology.found ) { return false; }
+                outCap = geology.material; return true;
+            }
+            // The finite Cut-C proof sits in the unchanged Stage-10 control
+            // world.  Only coordinates inside the proof region switch source.
+            auto const geology = g.causalMineralizationRuntime->Query(true,x,y,outZ-0.001);
+            if ( !geology.found ) { return false; }
+            outCap = geology.material; return true;
+        }
+        if ( IsCausalGeologyView( view ) )
+        {
+            if ( !g.causalGeologyRuntime ) { return false; }
+            outZ = 0.0f;
+            CausalWorldGeology::GeoSample const sample =
+                g.causalGeologyRuntime->Query( x, y, -0.001 );
+            if ( !sample.found ) { return false; }
+            outCap = sample.material;
+            return true;
+        }
+        if ( IsContactMineralizationView( view ) )
+        {
+            if ( !g.causalMineralizationRuntime ) { return false; }
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const material=g.causalMineralizationRuntime->QueryMaterial(
+                    true,x,y,(double)outZ-0.001);
+                if(!material.found||!material.material)return false;
+                outCap=material.material;return true;
+            }
+            outZ = (float)g.causalMineralizationRuntime->ReconstructedZ( x, y );
+            auto const geology = g.causalMineralizationRuntime->SurfaceGeology( true, x, y );
+            if ( !geology.found ) { return false; }
+            outCap = geology.material;
+            return true;
+        }
+        if ( IsGraniteIntrusionView( view ) )
+        {
+            if ( !g.causalIntrusionRuntime ) { return false; }
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const material=g.causalIntrusionRuntime->QueryMaterial(
+                    true,x,y,(double)outZ-0.001);
+                if(!material.found||!material.material)return false;
+                outCap=material.material;return true;
+            }
+            outZ = (float)g.causalIntrusionRuntime->ReconstructedZ( x, y );
+            auto const geology = g.causalIntrusionRuntime->SurfaceGeology( true, x, y );
+            if ( !geology.found ) { return false; }
+            outCap = geology.material;
+            return true;
+        }
+        if ( IsDifferentialErosionView( view ) )
+        {
+            if ( !g.causalErosionRuntime ) { return false; }
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const material=g.causalErosionRuntime->Exposure().Geology()
+                    .QueryMaterial(x,y,(double)outZ-0.001);
+                if(!material.found||!material.material)return false;
+                outCap=material.material;return true;
+            }
+            auto const sample = g.causalErosionRuntime->Query( g.stage8Control, x, y );
+            if ( !sample.found ) { return false; }
+            outZ = (float)g.causalErosionRuntime->ReconstructedZ( g.stage8Control, x, y );
+            outCap = sample.geology.material;
+            return true;
+        }
+        if ( IsCausalExposureView( view ) )
+        {
+            if ( !g.causalExposureRuntime ) { return false; }
+            CausalWorldExposure::ExposureSample const sample =
+                g.causalExposureRuntime->Query( CausalWorldExposure::kPresentSurface, x, y );
+            if ( !sample.found ) { return false; }
+            outZ = (float)sample.surfaceZ;
+            outCap = sample.geology.material;
+            return true;
+        }
+        if ( IsVisibleExposureView( view ) )
+        {
+            if ( !g.causalVisibleRuntime ) { return false; }
+            CausalWorldExposure::ExposureSample const sample =
+                g.causalVisibleRuntime->AuthorityAt( x, y );
+            if ( !sample.found ) { return false; }
+            outZ = (float)g.causalVisibleRuntime->ReconstructedZ( x, y );
+            outCap = sample.geology.material;
+            return true;
+        }
+        return false;
+    }
+
+    CausalWorldGeology::GeoSample CausalGeologyAt(
+        Stage0PlayView view, double x, double y, double z )
+    {
+        if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
+        { return g.causalFaultRuntime->Query( true, x, y, z ); }
+        if ( IsCutCOccupancyView( view ) && g.cutCOccupancyRuntime
+          && g.cutCOccupancyRuntime->Owns( x, y ) )
+        { return g.cutCOccupancyRuntime->Query( x, y, z ); }
+        if ( IsCutCOccupancyView( view ) && g.causalMineralizationRuntime )
+        { return g.causalMineralizationRuntime->Query( true, x, y, z ); }
+        if ( IsCausalGeologyView( view ) && g.causalGeologyRuntime )
+        { return g.causalGeologyRuntime->Query( x, y, z ); }
+        if ( IsCausalExposureView( view ) && g.causalExposureRuntime )
+        { return g.causalExposureRuntime->Geology().Query( x, y, z ); }
+        if ( IsVisibleExposureView( view ) && g.causalVisibleRuntime )
+        { return g.causalVisibleRuntime->Exposure().Geology().Query( x, y, z ); }
+        if ( IsDifferentialErosionView( view ) && g.causalErosionRuntime )
+        { return g.causalErosionRuntime->Exposure().Geology().Query( x, y, z ); }
+        if ( IsGraniteIntrusionView( view ) && g.causalIntrusionRuntime )
+        { return g.causalIntrusionRuntime->Query( true, x, y, z ); }
+        if ( IsContactMineralizationView( view ) && g.causalMineralizationRuntime )
+        { return g.causalMineralizationRuntime->Query( true, x, y, z ); }
+        return {};
+    }
+
+    CausalWorldGeology::MaterialSample CausalMaterialAt(
+        Stage0PlayView view, double x, double y, double z )
+    {
+        if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
+        { return g.causalFaultRuntime->QueryMaterial( true, x, y, z ); }
+        if ( IsGraniteIntrusionView( view ) && g.causalIntrusionRuntime )
+        { return g.causalIntrusionRuntime->QueryMaterial( true, x, y, z ); }
+        if ( ( IsContactMineralizationView( view ) || IsCutCOccupancyView( view ) )
+          && g.causalMineralizationRuntime )
+        { return g.causalMineralizationRuntime->QueryMaterial( true, x, y, z ); }
+        if ( IsDifferentialErosionView( view ) && g.causalErosionRuntime )
+        { return g.causalErosionRuntime->Exposure().Geology().QueryMaterial( x, y, z ); }
+        if ( IsVisibleExposureView( view ) && g.causalVisibleRuntime )
+        { return g.causalVisibleRuntime->Exposure().Geology().QueryMaterial( x, y, z ); }
+        if ( IsCausalExposureView( view ) && g.causalExposureRuntime )
+        { return g.causalExposureRuntime->Geology().QueryMaterial( x, y, z ); }
+        if ( IsCausalGeologyView( view ) && g.causalGeologyRuntime )
+        { return g.causalGeologyRuntime->QueryMaterial( x, y, z ); }
+        return {};
+    }
+
     void EnsureGeoCell( int cx, int cy )
     {
-        ProvenanceGeo::EnsureReady();
-        auto const sample = ProvenanceGeo::SampleSurface(
-            (double)cx + 0.5, (double)cy + 0.5,
-            g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+        float sampleGrade = g.gradeDatum;
+        std::string sampleCap = "dirt";
+        if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsCausalPlayableView( g.stage0PlayView ) )
+        {
+            float surfaceZ = 0.0f;
+            if ( !SampleCausalPlayableCell( g.stage0PlayView,
+                    (double)cx + 0.5, (double)cy + 0.5, surfaceZ, sampleCap ) )
+            {
+                g.statusLine = "CAUSAL WORLD REFUSED - authoritative sample unavailable";
+                return;
+            }
+            float const scale = g.reliefVoxels * g.voxelEdgeM;
+            if ( scale <= 0.0f )
+            {
+                g.statusLine = "CAUSAL WORLD REFUSED - invalid grade scale";
+                return;
+            }
+            sampleGrade = g.gradeDatum + surfaceZ / scale;
+        }
+        else
+        {
+            ProvenanceGeo::EnsureReady();
+            auto const sample = ProvenanceGeo::SampleSurface(
+                (double)cx + 0.5, (double)cy + 0.5,
+                g.gradeDatum, g.reliefVoxels, g.voxelEdgeM );
+            sampleGrade = sample.grade;
+            sampleCap = sample.cap;
+        }
         auto const key = CellKey( cx, cy );
         CellSample& dest = g.cells[key];
         bool const keepFillZ = dest.valid && dest.hasFillZ;
@@ -1766,9 +3041,9 @@ namespace
         }
         ++g.perfSampleSurfaceCalls; // geography FBM — once per cell create/refresh, not per tri
         // Esoterica geography = baseline grade/cap authority (bridge optional).
-        dest.grade = sample.grade;
-        dest.cap = sample.cap;
-        CapColor( sample.cap, dest.r, dest.g, dest.b );
+        dest.grade = sampleGrade;
+        dest.cap = sampleCap;
+        CapColor( sampleCap.c_str(), dest.r, dest.g, dest.b );
         dest.valid = true;
         // Preserve dig flags — never promote resident fill into "edited/carved" on stream refresh.
         if ( keepFillZ )
@@ -1799,7 +3074,13 @@ namespace
 
     void EnsureGeoDisk( int px, int py, int radCells )
     {
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        ++g.perfGeoDiskRequests;
         bool any = false;
+        int requested = 0;
+        double pureGenerationMs = 0.0;
         for ( int dy = -radCells; dy <= radCells; ++dy )
         {
             for ( int dx = -radCells; dx <= radCells; ++dx )
@@ -1807,13 +3088,153 @@ namespace
                 if ( dx * dx + dy * dy > radCells * radCells ) { continue; }
                 int const cx = px + dx, cy = py + dy;
                 if ( GetCell( cx, cy ) ) { continue; }
+                ++requested;
+                LARGE_INTEGER gen0{}, gen1{};
+                QueryPerformanceCounter( &gen0 );
                 EnsureGeoCell( cx, cy );
+                QueryPerformanceCounter( &gen1 );
+                if ( qpf.QuadPart > 0 )
+                {
+                    pureGenerationMs += 1000.0 * (double)( gen1.QuadPart - gen0.QuadPart )
+                        / (double)qpf.QuadPart;
+                }
+                if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+                {
+                    MarkStage0TerrainVertexDirty( cx, cy );
+                }
                 any = true;
             }
         }
+        QueryPerformanceCounter( &q1 );
+        double const requestMs = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart
+            : 0.0;
+        g.perfGeoCellsRequested += requested;
+        g.perfGeoGenMsTotal += requestMs;
+        g.perfGeoPureGenMsTotal += pureGenerationMs;
+        g.perfGeoGenMsMax = (std::max)( g.perfGeoGenMsMax, requestMs );
+        if ( requested == 0 ) { ++g.perfGeoDiskNoopRequests; }
+        if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+        {
+            g.stage0FrameGenerationMs += pureGenerationMs;
+            g.stage0FrameResidencyMs += (std::max)( 0.0, requestMs - pureGenerationMs );
+        }
         if ( any )
         {
-            InvalidateTerrainMesh( "residency_expand" );
+            if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+            {
+                // Stage 0 owns stable local presentation blocks. New vertices dirty
+                // only the blocks whose quads can reference them.
+                if ( !g.terrainDirty ) { ++g.perfTerrainWakes; }
+                g.terrainDirty = true;
+                std::snprintf( g.lastTerrainWakeReason,
+                    sizeof( g.lastTerrainWakeReason ), "stage0_residency_expand" );
+            }
+            else
+            {
+                InvalidateTerrainMesh( "residency_expand" );
+            }
+        }
+    }
+
+    bool Stage0CellHasPersistentAuthority( CellSample const& cell )
+    {
+        return cell.edited || cell.carved || cell.hasFillZ || !cell.fill.empty()
+            || cell.hasCavity || cell.editedRegionId != 0 || cell.hasOccCrest;
+    }
+
+    Stage0PresentationBounds Stage0CurrentPresentationBounds()
+    {
+        // Presentation changes package ownership only on the common 8 m package
+        // cadence.  Exact and latent surfaces use this identical rectangle, so
+        // residency never exposes a circular render edge.
+        constexpr int kSnapM = kStage0TerrainBlockCells;
+        // Live player-space extent. Exact packages cost roughly 0.19 ms each and
+        // enter along the perimeter, so this scales with radius while the latent
+        // far field scales with area. Widening it here also pushes the far-field
+        // inner boundary outward, because the far field stitches to these same
+        // bounds. Snapped to the package cadence so ownership stays on grid.
+        int const kHalfM = ( g.stage0LiveRadiusM / kSnapM ) * kSnapM;
+        Stage0PresentationBounds b;
+        b.anchorX = FloorDivCell( (int)std::floor( g.feetX ), kSnapM ) * kSnapM;
+        b.anchorY = FloorDivCell( (int)std::floor( g.feetY ), kSnapM ) * kSnapM;
+        b.bx0 = FloorDivCell( b.anchorX - kHalfM, kStage0TerrainBlockCells );
+        b.by0 = FloorDivCell( b.anchorY - kHalfM, kStage0TerrainBlockCells );
+        b.bx1 = FloorDivCell( b.anchorX + kHalfM, kStage0TerrainBlockCells );
+        b.by1 = FloorDivCell( b.anchorY + kHalfM, kStage0TerrainBlockCells );
+        bool const dualSurface = IsVisibleExposureView( g.stage0PlayView )
+            || IsDifferentialErosionView( g.stage0PlayView )
+            || IsGraniteIntrusionView( g.stage0PlayView )
+            || IsContactMineralizationView( g.stage0PlayView )
+            || IsFaultDisplacementView( g.stage0PlayView )
+            || IsCutCOccupancyView( g.stage0PlayView );
+        float const dualOffset = dualSurface ? -0.25f : 0.f;
+        b.minX = b.bx0 * kStage0TerrainBlockCells + dualOffset;
+        b.minY = b.by0 * kStage0TerrainBlockCells + dualOffset;
+        b.maxX = ( b.bx1 + 1 ) * kStage0TerrainBlockCells + dualOffset;
+        b.maxY = ( b.by1 + 1 ) * kStage0TerrainBlockCells + dualOffset;
+        return b;
+    }
+
+    void EvictStage0Residency( int centerX, int centerY )
+    {
+        if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline ) { return; }
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        constexpr int kCacheRadius = 68;
+        constexpr int kCacheRadiusSq = kCacheRadius * kCacheRadius;
+
+        std::vector<uint64_t> cellsToErase;
+        cellsToErase.reserve( 256 );
+        for ( auto const& kv : g.cells )
+        {
+            int const cx = (int)(int32_t)( kv.first >> 32 );
+            int const cy = (int)(int32_t)( kv.first & 0xffffffffu );
+            int const dx = cx - centerX;
+            int const dy = cy - centerY;
+            if ( dx * dx + dy * dy <= kCacheRadiusSq ) { continue; }
+            if ( Stage0CellHasPersistentAuthority( kv.second ) ) { continue; }
+            cellsToErase.push_back( kv.first );
+        }
+        for ( uint64_t const key : cellsToErase )
+        {
+            g.cells.erase( key );
+        }
+        g.perfGeoCellsEvicted += (int)cellsToErase.size();
+        g.playWorldgenEvicted = g.perfGeoCellsEvicted;
+        g.cellsLoaded = (int)g.cells.size();
+
+        // Presentation has its own bounded lifecycle. Keep the exact rectangular
+        // ownership set (plus one package of cache) even when its corners lie
+        // outside the circular authority residency.
+        Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+        std::vector<uint64_t> blocksToErase;
+        for ( auto const& kv : g.stage0TerrainBlocks )
+        {
+            int const bx = (int)(int32_t)( kv.first >> 32 );
+            int const by = (int)(int32_t)( kv.first & 0xffffffffu );
+            if ( bx < bounds.bx0 - 1 || bx > bounds.bx1 + 1
+              || by < bounds.by0 - 1 || by > bounds.by1 + 1 )
+            {
+                blocksToErase.push_back( kv.first );
+            }
+        }
+        for ( uint64_t const key : blocksToErase )
+        {
+            auto const it = g.stage0TerrainBlocks.find( key );
+            if ( it == g.stage0TerrainBlocks.end() ) { continue; }
+            RetireTerrainDisplayList( it->second.list );
+            g.perfHfTris -= it->second.tris;
+            g.stage0TerrainBlocks.erase( it );
+            g.stage0DirtyTerrainBlocks.erase( key );
+        }
+        g.perfHfBlocksEvicted += (int)blocksToErase.size();
+        QueryPerformanceCounter( &q1 );
+        if ( qpf.QuadPart > 0 )
+        {
+            g.stage0FrameResidencyMs += 1000.0 * (double)( q1.QuadPart - q0.QuadPart )
+                / (double)qpf.QuadPart;
         }
     }
 
@@ -2397,19 +3818,65 @@ namespace
             SetCursorPos( pt.x, pt.y );
             g.lastMouseX = ( rc.right - rc.left ) / 2;
             g.lastMouseY = ( rc.bottom - rc.top ) / 2;
+            // Focus, capture and clip are acquired TOGETHER, here, so that no call
+            // site can take the mouse without the keyboard. Six paths still call
+            // this directly -- closing the journal, closing a menu or drawer, the
+            // toggle key -- and chasing each one to add a SetFocus would leave the
+            // next new path free to reintroduce the split. Owning the whole
+            // contract in one place is what makes that impossible rather than
+            // merely unlikely.
+            SetFocus( hwnd );
             SetCapture( hwnd );
+            POINT tl = { rc.left, rc.top }, br = { rc.right, rc.bottom };
+            ClientToScreen( hwnd, &tl ); ClientToScreen( hwnd, &br );
+            RECT clip = { tl.x, tl.y, br.x, br.y };
+            ClipCursor( &clip );
             while ( ShowCursor( FALSE ) >= 0 ) {}
             g.cursorCaptured = true;
+            g.gameplayInput = true;
         }
         else
         {
-            if ( g.cursorCaptured )
-            {
-                ReleaseCapture();
-                while ( ShowCursor( TRUE ) < 0 ) {}
-                g.cursorCaptured = false;
-            }
+            // Release UNCONDITIONALLY. This was guarded by g.cursorCaptured, and
+            // that flag can desynchronise from the real capture state -- Windows
+            // revokes capture on its own (WM_CAPTURECHANGED, focus loss, a system
+            // dialog) without telling us. Once it did, Esc released nothing while
+            // g.mouseLook stayed true, so the viewport kept swallowing movement
+            // keys and the cursor never came back: pressing Esc a second time did
+            // nothing and Alt+Tab could not escape it. Releasing something that
+            // was never captured is harmless; failing to release is a trap.
+            ReleaseCapture();
+            while ( ShowCursor( TRUE ) < 0 ) {}
+            g.cursorCaptured = false;
+            ClipCursor( nullptr );
+            // Movement keys held at the moment of release would otherwise stay
+            // latched, so the camera drifts once the user is back in the UI.
+            for ( int i = 0; i < 256; ++i ) { g.keys[i] = false; }
         }
+    }
+
+    // ONE way into the viewport state, one way out. Nothing else may acquire
+    // capture or mouse-look independently.
+    //
+    // The re-entry trap lived here. SetCapture routes MOUSE messages to a window;
+    // WM_KEYDOWN goes to the FOCUSED window, which is a different thing. When the
+    // runtime is embedded as a WS_CHILD in the ProvRender shell, keyboard focus
+    // belongs to the WinForms host. The first entry worked only because the shell
+    // handed focus over at startup. After Esc, focus returned to the shell, and
+    // clicking the viewport re-took the mouse without ever asking for the
+    // keyboard -- so look worked, WASD did not, and the surrounding buttons kept
+    // receiving keystrokes. Capture and focus are now acquired together or not at
+    // all.
+    void EnterViewportInput( HWND hwnd ) { SetMouseLook( hwnd, true ); }
+
+    // Any path that takes focus away from the viewport funnels through here, so
+    // there is exactly one way to end up in the UI state and no path that leaves
+    // the application owning the pointer.
+    void ReleaseViewportInput( HWND hwnd )
+    {
+        g.gameplayInput = false;
+        if ( g.mouseLook || g.cursorCaptured ) { SetMouseLook( hwnd, false ); }
+        ClipCursor( nullptr );
     }
 
     void DrawWireSphere( float cx, float cy, float cz, float radius, float cr, float cg, float cb, int seg = 20 )
@@ -5503,6 +6970,17 @@ namespace
         for ( FractureSurface::Patch const& patch : g.fracturePatches )
         {
             if ( patch.tris.empty() ) { continue; }
+            if(!patch.footprintTris.empty())
+            {
+                glBegin(GL_TRIANGLES);
+                for(FractureSurface::Tri const& t:patch.footprintTris)
+                {
+                    glVertex3f(t.a.x,t.a.y,t.a.z);glVertex3f(t.b.x,t.b.y,t.b.z);
+                    glVertex3f(t.c.x,t.c.y,t.c.z);
+                }
+                glEnd();
+                continue;
+            }
             float const step = (std::max)( 0.03125f, patch.spacing * 4.f );
             std::vector<FractureSurface::Region> const& footprints =
                 patch.footprintRegions.empty() ? patch.regions : patch.footprintRegions;
@@ -5548,6 +7026,17 @@ namespace
                     float const my = ( t.a.y + t.b.y + t.c.y ) / 3.f;
                     float const mz = ( t.a.z + t.b.z + t.c.z ) / 3.f;
                     SampleGroundZBase( mx, my, gz );
+                    bool opensHf=false;
+                    for(PickFracture::FractureEvent const& ev:patch.events)
+                    {
+                        if(PickFracture::PointInEnvelopeWorld(ev,mx,my,gz))
+                        {opensHf=true;break;}
+                    }
+                    // The boolean patch contains a virgin-surface collar so its
+                    // cavity closes, but that collar must not be painted over the
+                    // still-resident HF. Drawing it after stencil disable exposed the
+                    // reconstruction AABB as a differently shaded square.
+                    if(std::fabs(mz-gz)<patch.spacing*0.75f&&!opensHf)continue;
                     float const cavity = ( mz < gz - patch.spacing * 0.35f ) ? 1.f : 0.f;
                     EmitPhase3Tri( t.a.x,t.a.y,t.a.z, t.b.x,t.b.y,t.b.z,
                         t.c.x,t.c.y,t.c.z, cavity );
@@ -5617,7 +7106,8 @@ namespace
     void ShadeLitFace( float nx, float ny, float nz,
         float px, float py, float pz,
         float br, float bg, float bb,
-        float& outR, float& outG, float& outB )
+        float& outR, float& outG, float& outB,
+        bool stableTerrainView = false )
     {
         // Local → world normal / position (held samples use tumble matrix).
         float wx = gLitM[0] * nx + gLitM[3] * ny + gLitM[6] * nz;
@@ -5630,7 +7120,13 @@ namespace
         float oy = gLitM[1] * px + gLitM[4] * py + gLitM[7] * pz + gLitM[10];
         float oz = gLitM[2] * px + gLitM[5] * py + gLitM[8] * pz + gLitM[11];
 
-        float vx = g.camX - ox, vy = g.camY - oy, vz = g.camZ - oz;
+        // Terrain is retained in display lists. Baking the compiling camera into
+        // those lists made a regenerated package change colour depending on the
+        // direction from which the player returned. Terrain uses one stable
+        // diagnostic view vector; immediate/dynamic bodies retain eye lighting.
+        float vx = stableTerrainView ? 0.f : g.camX - ox;
+        float vy = stableTerrainView ? 0.f : g.camY - oy;
+        float vz = stableTerrainView ? 1.f : g.camZ - oz;
         float vl = std::sqrt( vx * vx + vy * vy + vz * vz );
         if ( vl > 1e-6f ) { vx /= vl; vy /= vl; vz /= vl; }
 
@@ -6487,8 +7983,14 @@ namespace
         };
 
         float const spacing = kVoxelEdgeM * 2.6f;
-        float const baseX = 128.5f + 3.0f;
-        float const rowY[4] = { 128.5f, 128.05f, 127.60f, 127.15f };
+        // The mineral/ore gallery is pinned to fixed world cells near (131,128).
+        // The workbench palette anchors off the player's feet, which lands tens of
+        // metres away, so the samples spawned correctly but out of sight. In
+        // workbench mode lay them out beside the palette board instead.
+        bool const atWorkbench = g.provRenderWorkbench && g.stage0PaletteAnchored;
+        float const baseX = atWorkbench ? g.stage0PaletteAnchorX + 0.55f : 128.5f + 3.0f;
+        float const galleryY = atWorkbench ? g.stage0PaletteAnchorY + 6.10f : 128.5f;
+        float const rowY[4] = { galleryY, galleryY - 0.45f, galleryY - 0.90f, galleryY - 1.35f };
 
         auto addRow = [&]( char const* const* ids, int count, float py )
         {
@@ -7225,6 +8727,20 @@ namespace
         g.glrc = wglCreateContext( g.hdc );
         if ( !g.glrc || !wglMakeCurrent( g.hdc, g.glrc ) ) { return false; }
 
+        if ( g.playWorldgenBaseline || g.certWorldgenLadderLivePerf )
+        {
+            using WglSwapIntervalExt = BOOL (WINAPI*)( int );
+            auto const setSwapInterval = reinterpret_cast<WglSwapIntervalExt>(
+                wglGetProcAddress( "wglSwapIntervalEXT" ) );
+            if ( setSwapInterval )
+            {
+                g.stage0SwapControlAvailable = true;
+                int const requested=(g.certPresentationIsolation
+                    &&g.presentationIsolationMode==5)?1:0;
+                if ( setSwapInterval( requested ) ) { g.stage0SwapInterval = requested; }
+            }
+        }
+
         glEnable( GL_DEPTH_TEST );
         glEnable( GL_CULL_FACE );
         glCullFace( GL_BACK );
@@ -7246,7 +8762,46 @@ namespace
 
     void ShutdownGL()
     {
+        // Package workers may still hold immutable CPU results.  Join them
+        // before terrain authority or the GL context can be torn down.
+        ShutdownStage8PackageWorkers();
         if ( g.terrainList ) { glDeleteLists( g.terrainList, 1 ); g.terrainList = 0; }
+        for ( auto& kv : g.stage0TerrainBlocks )
+        {
+            if ( kv.second.list ) { glDeleteLists( kv.second.list, 1 ); }
+        }
+        g.stage0TerrainBlocks.clear();
+        for ( auto& kv : g.stage7TerrainBlocks )
+        {
+            if ( kv.second.list ) { glDeleteLists( kv.second.list, 1 ); }
+        }
+        g.stage7TerrainBlocks.clear();
+        for ( auto& kv : g.stage8TerrainBlocks )
+        {
+            if ( kv.second.list ) { glDeleteLists( kv.second.list, 1 ); }
+        }
+        g.stage8TerrainBlocks.clear();
+        for ( auto const& retired : g.stage8RetiredDisplayLists )
+        { if ( retired.list ) { glDeleteLists( retired.list, 1 ); } }
+        g.stage8RetiredDisplayLists.clear();
+        for ( GLuint const list : g.stage8ReusableDisplayLists )
+        { if ( list ) { glDeleteLists( list, 1 ); } }
+        g.stage8ReusableDisplayLists.clear();
+        if ( g.stage0FarFieldList )
+        { glDeleteLists( g.stage0FarFieldList, 1 ); g.stage0FarFieldList = 0; }
+        for(auto const& kv:g.stage0FarCoarseTiles)
+        {if(kv.second.list)glDeleteLists(kv.second.list,1);}
+        for(auto const& kv:g.stage0FarStitchTiles)
+        {if(kv.second.list)glDeleteLists(kv.second.list,1);}
+        for(GLuint const list:g.stage0FarFreeLists)
+        {if(list)glDeleteLists(list,1);}
+        for(auto const& retired:g.stage0FarRetiredLists)
+        {if(retired.list)glDeleteLists(retired.list,1);}
+        g.stage0FarCoarseTiles.clear();g.stage0FarStitchTiles.clear();
+        g.stage0FarFreeLists.clear();g.stage0FarRetiredLists.clear();
+        g.stage0DirtyTerrainBlocks.clear();
+        if ( g.stage0RulerList ) { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+        if ( g.stage0PaletteList ) { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
         if ( g.fontBase ) { glDeleteLists( g.fontBase, 96 ); g.fontBase = 0; }
         UnloadIconTextures();
         wglMakeCurrent( nullptr, nullptr );
@@ -7271,6 +8826,16 @@ namespace
 
     GLuint AllocDisplayListOutsideFonts()
     {
+        // Terrain resources are aged before entering this pool, so redefining
+        // one cannot race a command list the GPU is still consuming. Reuse
+        // avoids both driver allocation churn and the synchronous glDeleteLists
+        // stalls previously observed during ordinary traversal.
+        if ( !g.stage8ReusableDisplayLists.empty() )
+        {
+            GLuint const id = g.stage8ReusableDisplayLists.back();
+            g.stage8ReusableDisplayLists.pop_back();
+            return id;
+        }
         // Keep world geometry lists out of the bitmap-font ID range.
         GLuint const fontLo = g.fontBase;
         GLuint const fontHi = g.fontBase ? ( g.fontBase + 95 ) : 0;
@@ -8041,6 +9606,80 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
+        if ( g.playWorldgenBaseline && IsCutCOccupancyView( g.stage0PlayView )
+          && g.cutCOccupancyRuntime && g.causalMineralizationRuntime )
+        {
+            // Collision uses the exact integrated boundary used by rendering:
+            // occupancy in the owned proof package, a bounded handoff collar,
+            // and the unchanged Stage-10 surface everywhere else. No grade
+            // scalar is accepted by this path.
+            outZ=(float)CutCOccupancy::IntegratedSurfaceZ(*g.cutCOccupancyRuntime,
+                *g.causalMineralizationRuntime,x,y);
+            return std::isfinite( outZ );
+        }
+        // Stage 7 collision is the visible reconstruction itself. Do not bilerp
+        // the older one-metre residency samples: that would create invisible
+        // collision offsets from the certified half-metre triangle surface.
+        if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsVisibleExposureView( g.stage0PlayView )
+          && g.causalVisibleRuntime )
+        {
+            outZ = (float)g.causalVisibleRuntime->ReconstructedZ( x, y );
+            return std::isfinite( outZ );
+        }
+        auto sampleResidentCausalPackage = [&]( float& z )
+        {
+            double const shiftedX = (double)x + 0.5 * CausalVisibleExposure::kDualStepM;
+            double const shiftedY = (double)y + 0.5 * CausalVisibleExposure::kDualStepM;
+            int const bx = (int)std::floor( shiftedX / CausalVisibleExposure::kBlockSizeM );
+            int const by = (int)std::floor( shiftedY / CausalVisibleExposure::kBlockSizeM );
+            auto const block = g.stage8TerrainBlocks.find( CellKey( bx, by ) );
+            if ( block == g.stage8TerrainBlocks.end() || !block->second.collisionSurface )
+            { return false; }
+            double resolved = 0.0;
+            if ( !CausalVisibleExposure::ReconstructedZ(
+                    *block->second.collisionSurface, x, y, resolved ) )
+            { return false; }
+            z = (float)resolved;
+            return std::isfinite( z );
+        };
+        if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsDifferentialErosionView( g.stage0PlayView )
+          && g.causalErosionRuntime )
+        {
+            if ( sampleResidentCausalPackage( outZ ) ) { return true; }
+            outZ = (float)g.causalErosionRuntime->ReconstructedZ( g.stage8Control, x, y );
+            return std::isfinite( outZ );
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsFaultDisplacementView( g.stage0PlayView )
+          && g.causalFaultRuntime )
+        {
+            if ( sampleResidentCausalPackage( outZ ) ) { return true; }
+            outZ = (float)g.causalFaultRuntime->ReconstructedZ( x, y );
+            return std::isfinite( outZ );
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsContactMineralizationView( g.stage0PlayView )
+          && g.causalMineralizationRuntime )
+        {
+            if ( sampleResidentCausalPackage( outZ ) ) { return true; }
+            outZ = (float)g.causalMineralizationRuntime->ReconstructedZ( x, y );
+            return std::isfinite( outZ );
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
+          && IsGraniteIntrusionView( g.stage0PlayView )
+          && g.causalIntrusionRuntime )
+        {
+            if ( sampleResidentCausalPackage( outZ ) ) { return true; }
+            outZ = (float)g.causalIntrusionRuntime->ReconstructedZ( x, y );
+            return std::isfinite( outZ );
+        }
         // Grade continuum: resident cells, else analytic Esoterica geography (absolute coords).
         // Dig/place are live cups — never sink whole cell plates via fillZ.
         int const x0 = (int)std::floor( x );
@@ -8054,6 +9693,20 @@ namespace
         auto zAtCell = [&]( int cx, int cy, CellSample const* c ) -> float
         {
             if ( c ) { return GradeToZ( c->grade ); }
+            if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf )
+              && IsCausalPlayableView( g.stage0PlayView ) )
+            {
+                float surfaceZ = 0.0f;
+                std::string cap;
+                if ( SampleCausalPlayableCell( g.stage0PlayView,
+                        (double)cx + 0.5, (double)cy + 0.5, surfaceZ, cap ) )
+                { return surfaceZ; }
+                // Fail closed at the last known physical position. Selection is
+                // already authority-gated, so this path only protects a transient
+                // missing query from turning into unrelated baseline geography.
+                return g.feetZ;
+            }
             ProvenanceGeo::EnsureReady();
             auto s = ProvenanceGeo::SampleSurface(
                 (double)cx + 0.5, (double)cy + 0.5,
@@ -8106,6 +9759,12 @@ namespace
 
     bool SampleGroundZ( float x, float y, float& outZ )
     {
+        if ( g.playWorldgenBaseline )
+        {
+            // Stage-0 play uses the same constant HF floor without admitting the
+            // edited-region occupancy/support authority path into the measurement.
+            return SampleGroundZBase( x, y, outZ );
+        }
         // Feet / walk / body settle — Z-aware occupancy support (not column crest / D2 tris).
         float qz = (std::max)( g.camZ, g.feetZ + 1.2f );
         if ( std::fabs( x - g.feetX ) > 3.f || std::fabs( y - g.feetY ) > 3.f )
@@ -8303,7 +9962,8 @@ namespace
         float fx = sy * cp, fy = cy * cp, fz = sp;
         float ox = g.camX, oy = g.camY, oz = g.camZ;
 
-        float const maxT = g.walkMode ? ( kReachCells + 2.f ) : 80.f;
+        float const maxT = ( g.playWorldgenBaseline && g.stage0ToolGeologyCutaway )
+            ? 80.f : ( g.walkMode ? ( kReachCells + 2.f ) : 80.f );
         float hitT = -1.f;
         float hitX = 0.f, hitY = 0.f, hitZ = 0.f;
 
@@ -9099,6 +10759,7 @@ namespace
         // Expand analytic residency with the player (isotropic disk).
         // EnsureGeoDisk invalidates only when new cells appear — do NOT remesh every footstep.
         EnsureGeoDisk( cx, cy, (std::min)( kFarRadiusCells, 64 ) );
+        EvictStage0Residency( cx, cy );
         g.streamComplete = true;
         g.blocksLoaded = g.blocksWanted;
         g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
@@ -9121,6 +10782,25 @@ namespace
             if ( c && c->valid )
             {
                 r = (float)c->r; gcol = (float)c->g; b = (float)c->b;
+                return;
+            }
+            if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+            {
+                std::string material = "dirt";
+                if ( IsCausalPlayableView( g.stage0PlayView ) )
+                {
+                    float surfaceZ = 0.f;
+                    // Missing cache neighbors must use the same stage-specific
+                    // surface oracle as admitted cells. A raw geology query at
+                    // the Stage-6 erosion surface can legitimately name the body
+                    // below a certified exposure contact and made package colour
+                    // depend on which neighbors happened to be resident.
+                    SampleCausalPlayableCell( g.stage0PlayView,
+                        cx + 0.5, cy + 0.5, surfaceZ, material );
+                }
+                uint8_t rr = 94, gg = 77, bb = 56;
+                CapColor( material.c_str(), rr, gg, bb );
+                r = (float)rr; gcol = (float)gg; b = (float)bb;
                 return;
             }
             r = 90.f; gcol = 120.f; b = 70.f;
@@ -9265,6 +10945,16 @@ namespace
         SampleCapColor( mx, my, cr, cg, cb );
 
         char const* cap = "dirt";
+        std::string authoritativeCap;
+        if ( ( g.playWorldgenBaseline || g.certWorldgenBaselinePerf )
+          && IsCausalPlayableView( g.stage0PlayView ) )
+        {
+            float authoritativeZ = 0.f;
+            if ( SampleCausalPlayableCell( g.stage0PlayView,
+                mx, my, authoritativeZ, authoritativeCap ) )
+            { cap = authoritativeCap.c_str(); }
+        }
+        else
         {
             CellSample const* mc = GetCell( (int)std::floor( mx ), (int)std::floor( my ) );
             if ( mc && mc->valid && !mc->cap.empty() ) { cap = mc->cap.c_str(); }
@@ -9273,7 +10963,7 @@ namespace
 
         float outR = 0.f, outG = 0.f, outB = 0.f;
         ShadeLitFace( nx, ny, nz, mx, my, mz,
-            cr / 255.f, cg / 255.f, cb / 255.f, outR, outG, outB );
+            cr / 255.f, cg / 255.f, cb / 255.f, outR, outG, outB, true );
 
         // cavity > 0 dig darken; cavity < 0 place brighten — enclosure cue, not sun direction.
         if ( cavity > 0.f )
@@ -9372,6 +11062,5967 @@ namespace
         glEnable( GL_CULL_FACE );
     }
 
+    int FloorDivCell( int v, int divisor )
+    {
+        int q = v / divisor;
+        int const r = v % divisor;
+        if ( r < 0 ) { --q; }
+        return q;
+    }
+
+    void MarkStage0TerrainVertexDirty( int cx, int cy )
+    {
+        // A lattice vertex can participate in quads based at (x-1,y-1)..(x,y).
+        for ( int oy = -1; oy <= 0; ++oy )
+        for ( int ox = -1; ox <= 0; ++ox )
+        {
+            int const bx = FloorDivCell( cx + ox, kStage0TerrainBlockCells );
+            int const by = FloorDivCell( cy + oy, kStage0TerrainBlockCells );
+            g.stage0DirtyTerrainBlocks.insert( CellKey( bx, by ) );
+        }
+    }
+
+    void RebuildStage0TerrainBlock( int bx, int by )
+    {
+        uint64_t const key = CellKey( bx, by );
+        auto old = g.stage0TerrainBlocks.find( key );
+        int oldTris = 0;
+        GLuint list = 0;
+        if ( old != g.stage0TerrainBlocks.end() )
+        {
+            oldTris = old->second.tris;
+            list = old->second.list;
+            g.stage0TerrainBlocks.erase( old );
+        }
+
+        int const x0 = bx * kStage0TerrainBlockCells;
+        int const y0 = by * kStage0TerrainBlockCells;
+        int drawableCells = 0;
+        for ( int y = y0; y < y0 + kStage0TerrainBlockCells; ++y )
+        for ( int x = x0; x < x0 + kStage0TerrainBlockCells; ++x )
+        {
+            // Presentation coverage is descriptor-backed. Residency controls
+            // authoritative cells, not whether an edge package may draw its full
+            // footprint. SampleGroundZBase supplies the same latent surface for
+            // vertices just outside the active disk.
+            ++drawableCells;
+        }
+        g.perfHfTris -= oldTris;
+        if ( drawableCells == 0 ) { return; }
+
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        if ( !list ) { list = AllocDisplayListOutsideFonts(); }
+        if ( !list ) { return; }
+        LitSetIdentity();
+        glNewList( list, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+        for ( int y = y0; y < y0 + kStage0TerrainBlockCells; ++y )
+        for ( int x = x0; x < x0 + kStage0TerrainBlockCells; ++x )
+        {
+            constexpr int kBase = 2;
+            for ( int j = 0; j < kBase; ++j )
+            for ( int i = 0; i < kBase; ++i )
+            {
+                float const u0 = (float)i / (float)kBase;
+                float const v0 = (float)j / (float)kBase;
+                float const u1 = (float)( i + 1 ) / (float)kBase;
+                float const v1 = (float)( j + 1 ) / (float)kBase;
+                EmitTerrainQuadAdaptive(
+                    (float)x + u0, (float)y + v0,
+                    (float)x + u1, (float)y + v1, 0 );
+            }
+        }
+        glEnd();
+        glEndList();
+        QueryPerformanceCounter( &q1 );
+
+        int const tris = drawableCells * 8;
+        g.stage0TerrainBlocks.emplace( key, Stage0TerrainBlock{ list, tris } );
+        g.perfHfTris += tris;
+        double const ms = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        ++g.perfHfLocalUpdates;
+        g.stage0FrameHfBuildMs += ms;
+        g.perfHfRemeshMsTotal += (float)ms;
+        g.perfHfRemeshMsMax = (std::max)( g.perfHfRemeshMsMax, (float)ms );
+        g.certLastRemeshMs = (float)ms;
+        g.certMaxRemeshMs = (std::max)( g.certMaxRemeshMs, (float)ms );
+    }
+
+    void DrawStage0TerrainBlocks()
+    {
+        ServiceRetiredTerrainDisplayLists();
+        bool const stage0PresentationRuntime = g.playWorldgenBaseline
+            || g.certWorldgenBaselinePerf
+            || g.certWorldgenLadderAudit
+            || g.certWorldgenLadderLivePerf;
+        bool const immutableDescriptorView = stage0PresentationRuntime
+            && ( g.stage0PlayView == Stage0PlayView::Clean
+              || IsCausalGeologyView( g.stage0PlayView )
+              || IsCausalExposureView( g.stage0PlayView ) );
+        if ( immutableDescriptorView )
+        {
+            // Virgin residency admission does not revise these certified
+            // descriptor-backed surfaces. Rebuilding their existing packages
+            // merely because a cell entered the authority cache caused severe
+            // Stage 5/6 travel stalls with no geometry change.
+            g.stage0DirtyTerrainBlocks.clear();
+            g.terrainDirty = false;
+        }
+        else if ( !g.stage0DirtyTerrainBlocks.empty() )
+        {
+            std::vector<uint64_t> dirty(
+                g.stage0DirtyTerrainBlocks.begin(), g.stage0DirtyTerrainBlocks.end() );
+            g.stage0DirtyTerrainBlocks.clear();
+            for ( uint64_t const key : dirty )
+            {
+                int const bx = (int)(int32_t)( key >> 32 );
+                int const by = (int)(int32_t)( key & 0xffffffffu );
+                RebuildStage0TerrainBlock( bx, by );
+            }
+            g.terrainDirty = false;
+        }
+
+        Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+        int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
+        int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
+        for ( int by = bounds.by0; by <= bounds.by1; ++by )
+        for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
+        {
+            if ( !g.stage0TerrainBlocks.count( CellKey( bx, by ) ) )
+            { RebuildStage0TerrainBlock( bx, by ); }
+            auto const it = g.stage0TerrainBlocks.find( CellKey( bx, by ) );
+            if ( it != g.stage0TerrainBlocks.end() && it->second.list )
+            {
+                bool const submit=!PresentationSuppressesTerrainSubmission()
+                    &&(!PresentationUsesMinimalTerrainSubmission()
+                        ||(bx==playerBx&&by==playerBy));
+                if(submit){glCallList( it->second.list );}
+            }
+        }
+        // Stage 5/6 color each immutable package from causal authority. Keep the
+        // offscreen ring ahead of motion, but compile only one such package per
+        // frame so prefetch cannot create a visible 4-package burst.
+        int prefetchBudget = immutableDescriptorView
+            && g.stage0PlayView != Stage0PlayView::Clean ? 1 : 4;
+        for ( int by = bounds.by0 - 1; by <= bounds.by1 + 1 && prefetchBudget > 0; ++by )
+        for ( int bx = bounds.bx0 - 1; bx <= bounds.bx1 + 1 && prefetchBudget > 0; ++bx )
+        {
+            if ( bx >= bounds.bx0 && bx <= bounds.bx1
+              && by >= bounds.by0 && by <= bounds.by1 ) { continue; }
+            if ( g.stage0TerrainBlocks.count( CellKey( bx, by ) ) ) { continue; }
+            RebuildStage0TerrainBlock( bx, by );
+            --prefetchBudget;
+        }
+    }
+
+    void EmitStage7Triangle( CausalVisibleExposure::Tri const& tri )
+    {
+        float const x0 = (float)tri.a.x, y0 = (float)tri.a.y, z0 = (float)tri.a.z;
+        float const x1 = (float)tri.b.x, y1 = (float)tri.b.y, z1 = (float)tri.b.z;
+        float const x2 = (float)tri.c.x, y2 = (float)tri.c.y, z2 = (float)tri.c.z;
+        float const ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+        float const bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        float const nl = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( nl > 1e-6f ) { nx /= nl; ny /= nl; nz /= nl; }
+
+        float const mx = ( x0 + x1 + x2 ) / 3.f;
+        float const my = ( y0 + y1 + y2 ) / 3.f;
+        float const mz = ( z0 + z1 + z2 ) / 3.f;
+        CausalWorldExposure::ExposureSample const authority =
+            g.causalVisibleRuntime->AuthorityAt( mx, my );
+        char const* material = authority.found ? authority.geology.material.c_str() : "dirt";
+        uint8_t r = 90, green = 120, b = 70;
+        CapColor( material, r, green, b );
+        LitBindMaterial( material );
+        float outR = 0.f, outG = 0.f, outB = 0.f;
+        ShadeLitFace( nx, ny, nz, mx, my, mz,
+            r / 255.f, green / 255.f, b / 255.f, outR, outG, outB, true );
+        glColor3f( outR, outG, outB );
+        glVertex3f( x0, y0, z0 );
+        glVertex3f( x1, y1, z1 );
+        glVertex3f( x2, y2, z2 );
+    }
+
+    void RebuildStage7TerrainBlock( int bx, int by )
+    {
+        if ( !g.causalVisibleRuntime ) { return; }
+        uint64_t const key = CellKey( bx, by );
+        auto const old = g.stage7TerrainBlocks.find( key );
+        if ( old != g.stage7TerrainBlocks.end() ) { return; }
+
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        CausalVisibleExposure::BlockMesh const mesh =
+            g.causalVisibleRuntime->BuildBlock( bx, by );
+        GLuint const list = AllocDisplayListOutsideFonts();
+        if ( !list ) { return; }
+        LitSetIdentity();
+        glNewList( list, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+        for ( CausalVisibleExposure::Tri const& tri : mesh.triangles )
+        { EmitStage7Triangle( tri ); }
+        glEnd();
+        glEndList();
+        QueryPerformanceCounter( &q1 );
+
+        int const tris = (int)mesh.triangles.size();
+        g.stage7TerrainBlocks.emplace( key, Stage0TerrainBlock{ list, tris } );
+        g.stage7TerrainTriangles += tris;
+        g.perfHfTris += tris;
+        double const ms = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        g.stage7LastBuildMs = ms;
+        ++g.perfHfLocalUpdates;
+        g.stage0FrameHfBuildMs += ms;
+        g.perfHfRemeshMsTotal += (float)ms;
+        g.perfHfRemeshMsMax = (std::max)( g.perfHfRemeshMsMax, (float)ms );
+    }
+
+    void DrawStage7TerrainBlocks()
+    {
+        if ( !g.causalVisibleRuntime ) { return; }
+        ServiceRetiredTerrainDisplayLists();
+        Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+
+        for ( int by = bounds.by0; by <= bounds.by1; ++by )
+        for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
+        { RebuildStage7TerrainBlock( bx, by ); }
+
+        // Give the Stage-7 cache the same deterministic one-package collar as
+        // the other live terrain paths. Without explicit prefetch the cache was
+        // path-shaped: cold origin held 289 packages, while a returned origin
+        // retained a 17-package strip from the final approach.
+        int prefetchBudget = 4;
+        for ( int by = bounds.by0 - 1; by <= bounds.by1 + 1 && prefetchBudget > 0; ++by )
+        for ( int bx = bounds.bx0 - 1; bx <= bounds.bx1 + 1 && prefetchBudget > 0; ++bx )
+        {
+            if ( bx >= bounds.bx0 && bx <= bounds.bx1
+              && by >= bounds.by0 && by <= bounds.by1 ) { continue; }
+            if ( g.stage7TerrainBlocks.count( CellKey( bx, by ) ) ) { continue; }
+            RebuildStage7TerrainBlock( bx, by );
+            --prefetchBudget;
+        }
+
+        std::vector<uint64_t> evict;
+        for ( auto const& entry : g.stage7TerrainBlocks )
+        {
+            int const bx = (int)(int32_t)( entry.first >> 32 );
+            int const by = (int)(int32_t)( entry.first & 0xffffffffu );
+            if ( bx < bounds.bx0 - 1 || bx > bounds.bx1 + 1
+              || by < bounds.by0 - 1 || by > bounds.by1 + 1 )
+            { evict.push_back( entry.first ); }
+        }
+        for ( uint64_t const key : evict )
+        {
+            auto const it = g.stage7TerrainBlocks.find( key );
+            if ( it == g.stage7TerrainBlocks.end() ) { continue; }
+            RetireTerrainDisplayList( it->second.list );
+            g.stage7TerrainTriangles -= it->second.tris;
+            g.perfHfTris -= it->second.tris;
+            g.stage7TerrainBlocks.erase( it );
+        }
+        g.perfHfBlocksEvicted += (int)evict.size();
+
+        for ( int by = bounds.by0; by <= bounds.by1; ++by )
+        for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
+        {
+            auto const it = g.stage7TerrainBlocks.find( CellKey( bx, by ) );
+            if ( it != g.stage7TerrainBlocks.end() && it->second.list )
+            { glCallList( it->second.list ); }
+        }
+    }
+
+    void EmitResolvedTerrainTriangle( CausalVisibleExposure::Tri const& tri,
+        char const* material, float r, float green, float b )
+    {
+        float const x0 = (float)tri.a.x, y0 = (float)tri.a.y, z0 = (float)tri.a.z;
+        float const x1 = (float)tri.b.x, y1 = (float)tri.b.y, z1 = (float)tri.b.z;
+        float const x2 = (float)tri.c.x, y2 = (float)tri.c.y, z2 = (float)tri.c.z;
+        float const ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+        float const bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        float const nl = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( nl > 1e-6f ) { nx /= nl; ny /= nl; nz /= nl; }
+        float const mx = ( x0 + x1 + x2 ) / 3.f;
+        float const my = ( y0 + y1 + y2 ) / 3.f;
+        float const mz = ( z0 + z1 + z2 ) / 3.f;
+        LitBindMaterial( material );
+        float outR = 0.f, outG = 0.f, outB = 0.f;
+        ShadeLitFace( nx, ny, nz, mx, my, mz,
+            r / 255.f, green / 255.f, b / 255.f, outR, outG, outB, true );
+        glColor3f( outR, outG, outB );
+        glVertex3f( x0, y0, z0 );
+        glVertex3f( x1, y1, z1 );
+        glVertex3f( x2, y2, z2 );
+    }
+
+    void EmitStage8Triangle( CausalVisibleExposure::Tri const& tri, char const* material )
+    {
+        uint8_t r=90,green=120,b=70;CapColor(material,r,green,b);
+        EmitResolvedTerrainTriangle(tri,material,(float)r,(float)green,(float)b);
+    }
+
+    void RetireTerrainDisplayList( GLuint list )
+    {
+        if(!list){return;}
+        // Deleting the just-drawn outgoing row forces this legacy OpenGL driver
+        // to wait for presentation, producing the observed 150-230 ms residency
+        // hitch.  Remove ownership immediately, but let the GPU age the command
+        // list before bounded destruction.  This changes lifecycle scheduling,
+        // never terrain authority or visible package selection.
+        g.stage8RetiredDisplayLists.push_back(
+            Stage0RetiredDisplayList{list,GetTickCount64()+1000ull});
+    }
+
+    void ServiceRetiredTerrainDisplayLists()
+    {
+        // One-second GPU grace spans even the most aggressive certified flight
+        // rung. Fully aged IDs become reusable CPU-side inventory; destruction
+        // is reserved for ShutdownGL so gameplay never asks this legacy driver
+        // to synchronize a glDeleteLists call.
+        ULONGLONG const now=GetTickCount64();
+        LARGE_INTEGER q0{},q1{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        while(!g.stage8RetiredDisplayLists.empty())
+        {
+            auto const& pending=g.stage8RetiredDisplayLists.front();
+            if(pending.safeAfterMs>now){break;}
+            if(pending.list){g.stage8ReusableDisplayLists.push_back(pending.list);}
+            g.stage8RetiredDisplayLists.pop_front();
+        }
+        QueryPerformanceCounter(&q1);
+        if(qpf.QuadPart>0)
+        {
+            g.stage0FrameHfRetireMs+=1000.0*(double)(q1.QuadPart-q0.QuadPart)
+                /(double)qpf.QuadPart;
+        }
+    }
+
+    // CPU-side package product.  It contains every authoritative value needed
+    // for render and collision publication, but deliberately owns no GL object.
+    // That boundary is the thread-ownership law for the live terrain stream.
+    struct Stage8CpuPackage
+    {
+        uint64_t epoch=0;
+        Stage0PlayView view=Stage0PlayView::Clean;
+        CausalDifferentialErosion::Control control=
+            CausalDifferentialErosion::Control::DifferentialResistance;
+        int bx=0,by=0;
+        bool legacyStage56=false;
+        bool legacyStage7=false;
+        bool integratedCutC=false;
+        CausalVisibleExposure::BlockMesh mesh;
+        std::vector<std::string> materials;
+        struct TriangleColor { float r=0.f,g=0.f,b=0.f; };
+        std::vector<TriangleColor> triangleColors;
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const> collisionSurface;
+        int materialMisses=0;
+        double sampleMs=0.0,descriptorMs=0.0,materialMs=0.0;
+        double meshEmitMs=0.0,collisionMs=0.0,cpuTotalMs=0.0;
+    };
+
+    struct Stage8PackageJob
+    {
+        uint64_t epoch=0;
+        Stage0PlayView view=Stage0PlayView::Clean;
+        CausalDifferentialErosion::Control control=
+            CausalDifferentialErosion::Control::DifferentialResistance;
+        int bx=0,by=0;
+    };
+
+    struct Stage8PackageWorkerState
+    {
+        std::mutex mutex;
+        std::condition_variable wake;
+        std::deque<Stage8PackageJob> pending;
+        std::deque<Stage8CpuPackage> completed;
+        std::unordered_set<uint64_t> scheduled;
+        std::vector<std::thread> threads;
+        uint64_t epoch=1;
+        int active=0;
+        bool stopping=false;
+    };
+    Stage8PackageWorkerState s_stage8PackageWorkers;
+    // Four independent immutable package jobs keep the complete 192 m window
+    // ahead of the deliberately extreme 16 m/frame (960 m/s at 60 Hz) flight
+    // rung.  GL publication remains single-owner and frame-budgeted.
+    constexpr int kStage8CpuWorkerCount=4;
+
+    bool IsStage56WorkerView(Stage0PlayView view)
+    {return view==Stage0PlayView::Clean||IsCausalGeologyView(view)||IsCausalExposureView(view);}
+
+    std::unordered_map<uint64_t,Stage0TerrainBlock>& WorkerTerrainBlocks(
+        Stage0PlayView view)
+    {
+        if(IsStage56WorkerView(view))return g.stage0TerrainBlocks;
+        if(IsVisibleExposureView(view))return g.stage7TerrainBlocks;
+        return g.stage8TerrainBlocks;
+    }
+
+    Stage8CpuPackage BuildStage7CpuPackage(Stage8PackageJob const& job)
+    {
+        Stage8CpuPackage out;
+        out.epoch=job.epoch;out.view=job.view;out.control=job.control;
+        out.bx=job.bx;out.by=job.by;out.legacyStage7=true;
+        LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},meshEnd{},materialEnd{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        auto surfaceSamples=g.causalVisibleRuntime->SampleBlock(job.bx,job.by);
+        QueryPerformanceCounter(&sampleEnd);
+        auto descriptors=CausalVisibleExposure::DescribeBlock(surfaceSamples);
+        QueryPerformanceCounter(&descriptorEnd);
+        out.mesh=CausalVisibleExposure::EmitBlockMesh(surfaceSamples,descriptors);
+        QueryPerformanceCounter(&meshEnd);
+        out.materials.reserve(out.mesh.triangles.size());
+        for(auto const& tri:out.mesh.triangles)
+        {
+            double const x=(tri.a.x+tri.b.x+tri.c.x)/3.0;
+            double const y=(tri.a.y+tri.b.y+tri.c.y)/3.0;
+            auto const authority=g.causalVisibleRuntime->AuthorityAt(x,y);
+            if(!authority.found){++out.materialMisses;out.materials.emplace_back("dirt");}
+            else{out.materials.emplace_back(authority.geology.material);}
+        }
+        QueryPerformanceCounter(&materialEnd);
+        out.collisionSurface=std::make_shared<
+            CausalVisibleExposure::BlockSurfaceSamples const>(std::move(surfaceSamples));
+        auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
+        {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
+            /(double)qpf.QuadPart:0.0;};
+        out.sampleMs=ms(q0,sampleEnd);
+        out.descriptorMs=ms(sampleEnd,descriptorEnd);
+        out.meshEmitMs=ms(descriptorEnd,meshEnd);
+        out.materialMs=ms(meshEnd,materialEnd);out.collisionMs=0.0;
+        out.cpuTotalMs=ms(q0,materialEnd);
+        return out;
+    }
+
+    // Preserve the original Stage-5/6 presentation law exactly while moving
+    // its immutable authority work off the frame thread.  Vertices remain on
+    // the old 0.5 m world-aligned lattice, their Z is the same bilerp of four
+    // one-metre causal samples, and material remains a per-triangle query.
+    Stage8CpuPackage BuildStage56CpuPackage(Stage8PackageJob const& job)
+    {
+        Stage8CpuPackage out;
+        out.epoch=job.epoch;out.view=job.view;out.control=job.control;
+        out.bx=job.bx;out.by=job.by;out.legacyStage56=true;
+        LARGE_INTEGER q0{},sampleEnd{},meshEnd{},materialEnd{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+
+        constexpr int kCellSamples=10;
+        struct CellAuthority
+        {float z=0.f,r=94.f,g=77.f,b=56.f;};
+        std::array<CellAuthority,kCellSamples*kCellSamples> cells{};
+        int const worldX=job.bx*kStage0TerrainBlockCells;
+        int const worldY=job.by*kStage0TerrainBlockCells;
+        auto cellAt=[&](int x,int y)->CellAuthority&
+        {return cells[(size_t)y*kCellSamples+(size_t)x];};
+        for(int y=0;y<kCellSamples;++y)for(int x=0;x<kCellSamples;++x)
+        {
+            auto& c=cellAt(x,y);std::string material="dirt";
+            SampleCausalPlayableCell(job.view,(double)(worldX+x)+0.5,
+                (double)(worldY+y)+0.5,c.z,material);
+            uint8_t r=94,gc=77,b=56;CapColor(material.c_str(),r,gc,b);
+            c.r=(float)r;c.g=(float)gc;c.b=(float)b;
+        }
+        QueryPerformanceCounter(&sampleEnd);
+
+        auto surfaceZ=[&](int halfX,int halfY)
+        {
+            float const x=.5f*(float)halfX,y=.5f*(float)halfY;
+            int const ix=(int)std::floor(x),iy=(int)std::floor(y);
+            float const tx=x-(float)ix,ty=y-(float)iy;
+            auto const& c00=cellAt(ix,iy);auto const& c10=cellAt(ix+1,iy);
+            auto const& c01=cellAt(ix,iy+1);auto const& c11=cellAt(ix+1,iy+1);
+            float const z0=c00.z*(1.f-tx)+c10.z*tx;
+            float const z1=c01.z*(1.f-tx)+c11.z*tx;
+            return z0*(1.f-ty)+z1*ty;
+        };
+        auto vertex=[&](int halfX,int halfY)
+        {
+            return CausalVisibleExposure::Vec3{(double)worldX+.5*(double)halfX,
+                (double)worldY+.5*(double)halfY,(double)surfaceZ(halfX,halfY)};
+        };
+        out.mesh.triangles.reserve(512u);
+        for(int y=0;y<16;++y)for(int x=0;x<16;++x)
+        {
+            auto const v00=vertex(x,y),v10=vertex(x+1,y);
+            auto const v01=vertex(x,y+1),v11=vertex(x+1,y+1);
+            out.mesh.triangles.push_back({v00,v10,v01});
+            out.mesh.triangles.push_back({v10,v11,v01});
+        }
+        QueryPerformanceCounter(&meshEnd);
+
+        out.materials.reserve(out.mesh.triangles.size());
+        out.triangleColors.reserve(out.mesh.triangles.size());
+        for(auto const& tri:out.mesh.triangles)
+        {
+            double const mx=(tri.a.x+tri.b.x+tri.c.x)/3.0;
+            double const my=(tri.a.y+tri.b.y+tri.c.y)/3.0;
+            float ignoredZ=0.f;std::string material="dirt";
+            if(!SampleCausalPlayableCell(job.view,mx,my,ignoredZ,material))
+            {++out.materialMisses;}
+            out.materials.emplace_back(std::move(material));
+
+            int const cx=(int)std::floor(mx)-(int)worldX;
+            int const cy=(int)std::floor(my)-(int)worldY;
+            float const tx=(float)(mx-std::floor(mx));
+            float const ty=(float)(my-std::floor(my));
+            auto const& c00=cellAt(cx,cy);auto const& c10=cellAt(cx+1,cy);
+            auto const& c01=cellAt(cx,cy+1);auto const& c11=cellAt(cx+1,cy+1);
+            auto blend=[&](float CellAuthority::*member)
+            {
+                float const a=c00.*member*(1.f-tx)+c10.*member*tx;
+                float const b=c01.*member*(1.f-tx)+c11.*member*tx;
+                return a*(1.f-ty)+b*ty;
+            };
+            out.triangleColors.push_back({blend(&CellAuthority::r),
+                blend(&CellAuthority::g),blend(&CellAuthority::b)});
+        }
+        QueryPerformanceCounter(&materialEnd);
+        auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
+        {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
+            /(double)qpf.QuadPart:0.0;};
+        out.sampleMs=ms(q0,sampleEnd);out.descriptorMs=0.0;
+        out.meshEmitMs=ms(sampleEnd,meshEnd);
+        out.materialMs=ms(meshEnd,materialEnd);out.collisionMs=0.0;
+        out.cpuTotalMs=ms(q0,materialEnd);
+        return out;
+    }
+
+    Stage8CpuPackage BuildStage8CpuPackage(Stage8PackageJob const& job)
+    {
+        if(IsStage56WorkerView(job.view))return BuildStage56CpuPackage(job);
+        if(IsVisibleExposureView(job.view)&&g.causalVisibleRuntime)
+        {return BuildStage7CpuPackage(job);}
+        Stage8CpuPackage out;
+        out.epoch=job.epoch;out.view=job.view;out.control=job.control;
+        out.bx=job.bx;out.by=job.by;
+        out.integratedCutC=IsCutCOccupancyView(job.view)
+            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime;
+        CausalVisibleExposure::BlockSurfaceSamples surfaceSamples;
+        CausalVisibleExposure::BlockSurfaceDescriptors descriptors;
+        LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},materialEnd{},meshEnd{},
+            collisionEnd{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+
+        if(out.integratedCutC)
+        {
+            out.mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
+                *g.causalMineralizationRuntime,job.bx,job.by);
+        }
+        else if(IsFaultDisplacementView(job.view)&&g.causalFaultRuntime)
+        {surfaceSamples=g.causalFaultRuntime->SampleBlock(job.bx,job.by);}
+        else if(IsContactMineralizationView(job.view)&&g.causalMineralizationRuntime)
+        {surfaceSamples=g.causalMineralizationRuntime->SampleBlock(job.bx,job.by);}
+        else if(IsGraniteIntrusionView(job.view)&&g.causalIntrusionRuntime)
+        {surfaceSamples=g.causalIntrusionRuntime->SampleBlock(job.bx,job.by);}
+        else if(g.causalErosionRuntime)
+        {surfaceSamples=g.causalErosionRuntime->SampleBlock(job.control,job.bx,job.by);}
+        QueryPerformanceCounter(&sampleEnd);
+
+        if(!out.integratedCutC)
+        {descriptors=CausalVisibleExposure::DescribeBlock(surfaceSamples);}
+        QueryPerformanceCounter(&descriptorEnd);
+
+        size_t const quadCount=out.integratedCutC?(out.mesh.triangles.size()+1u)/2u
+            :descriptors.crossings.size();
+        out.materials.reserve(quadCount);
+        for(size_t i=0;i<quadCount;++i)
+        {
+            CausalVisibleExposure::Vec3 point;
+            if(out.integratedCutC)
+            {
+                auto const& a=out.mesh.triangles[i*2u];
+                auto const& b=out.mesh.triangles[(std::min)(i*2u+1u,
+                    out.mesh.triangles.size()-1u)];
+                point={(a.a.x+a.b.x+a.c.x+b.a.x+b.b.x+b.c.x)/6.0,
+                       (a.a.y+a.b.y+a.c.y+b.a.y+b.b.y+b.c.y)/6.0,
+                       (a.a.z+a.b.z+a.c.z+b.a.z+b.b.z+b.c.z)/6.0};
+                auto const geology=CausalGeologyAt(job.view,
+                    point.x,point.y,point.z-0.001);
+                out.materials.emplace_back(geology.found?geology.material:"dirt");
+            }
+            else
+            {
+                point=CausalVisibleExposure::PresentationSamplePoint(
+                    surfaceSamples,descriptors.crossings[i]);
+                auto const geology=CausalMaterialAt(job.view,
+                    point.x,point.y,point.z-0.001);
+                out.materials.emplace_back(geology.found&&geology.material
+                    ?geology.material:"dirt");
+            }
+            ++out.materialMisses;
+        }
+        QueryPerformanceCounter(&materialEnd);
+
+        if(!out.integratedCutC)
+        {out.mesh=CausalVisibleExposure::EmitBlockMesh(surfaceSamples,descriptors);}
+        QueryPerformanceCounter(&meshEnd);
+        if(!out.integratedCutC)
+        {
+            out.collisionSurface=
+                std::make_shared<CausalVisibleExposure::BlockSurfaceSamples const>(
+                    std::move(surfaceSamples));
+        }
+        QueryPerformanceCounter(&collisionEnd);
+        auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
+        {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
+            /(double)qpf.QuadPart:0.0;};
+        out.sampleMs=ms(q0,sampleEnd);
+        out.descriptorMs=ms(sampleEnd,descriptorEnd);
+        out.materialMs=ms(descriptorEnd,materialEnd);
+        out.meshEmitMs=ms(materialEnd,meshEnd);
+        out.collisionMs=ms(meshEnd,collisionEnd);
+        out.cpuTotalMs=ms(q0,collisionEnd);
+        return out;
+    }
+
+    void Stage8PackageWorkerMain()
+    {
+        // Terrain derivation is throughput work. The frame/GL owner must win
+        // scheduling contention even while all four workers are filling a cold
+        // 192 m window; completeness is certified independently, so lowering
+        // worker priority cannot disguise missing residency as smooth play.
+        SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+        for(;;)
+        {
+            Stage8PackageJob job;
+            {
+                std::unique_lock<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                s_stage8PackageWorkers.wake.wait(lock,[]
+                {return s_stage8PackageWorkers.stopping
+                    ||!s_stage8PackageWorkers.pending.empty();});
+                if(s_stage8PackageWorkers.stopping)return;
+                job=s_stage8PackageWorkers.pending.front();
+                s_stage8PackageWorkers.pending.pop_front();
+                ++s_stage8PackageWorkers.active;
+            }
+            Stage8CpuPackage result=BuildStage8CpuPackage(job);
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                --s_stage8PackageWorkers.active;
+                if(result.epoch==s_stage8PackageWorkers.epoch)
+                {s_stage8PackageWorkers.completed.emplace_back(std::move(result));}
+            }
+            s_stage8PackageWorkers.wake.notify_all();
+        }
+    }
+
+    void EnsureStage8PackageWorkers()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        if(!s_stage8PackageWorkers.threads.empty())return;
+        s_stage8PackageWorkers.stopping=false;
+        for(int i=0;i<kStage8CpuWorkerCount;++i)
+        {s_stage8PackageWorkers.threads.emplace_back(Stage8PackageWorkerMain);}
+    }
+
+    void ResetStage8PackageJobs()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        ++s_stage8PackageWorkers.epoch;
+        s_stage8PackageWorkers.pending.clear();
+        s_stage8PackageWorkers.completed.clear();
+        s_stage8PackageWorkers.scheduled.clear();
+        s_stage8PackageWorkers.wake.notify_all();
+    }
+
+    void ShutdownStage8PackageWorkers()
+    {
+        {
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            if(s_stage8PackageWorkers.threads.empty())return;
+            s_stage8PackageWorkers.stopping=true;
+            ++s_stage8PackageWorkers.epoch;
+            s_stage8PackageWorkers.pending.clear();
+            s_stage8PackageWorkers.completed.clear();
+            s_stage8PackageWorkers.scheduled.clear();
+        }
+        s_stage8PackageWorkers.wake.notify_all();
+        for(auto& worker:s_stage8PackageWorkers.threads)
+        {if(worker.joinable())worker.join();}
+        s_stage8PackageWorkers.threads.clear();
+        s_stage8PackageWorkers.active=0;
+    }
+
+    bool Stage8PackageJobsIdle()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        return s_stage8PackageWorkers.pending.empty()
+            &&s_stage8PackageWorkers.active==0;
+    }
+
+    std::unordered_set<uint64_t> Stage8ScheduledPackageSnapshot()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        return s_stage8PackageWorkers.scheduled;
+    }
+
+    void QueueStage8Package(int bx,int by)
+    {
+        EnsureStage8PackageWorkers();
+        uint64_t const key=CellKey(bx,by);
+        {
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            if(WorkerTerrainBlocks(g.stage0PlayView).count(key)
+                ||!s_stage8PackageWorkers.scheduled.insert(key).second)return;
+            s_stage8PackageWorkers.pending.push_back(Stage8PackageJob{
+                s_stage8PackageWorkers.epoch,g.stage0PlayView,g.stage8Control,bx,by});
+        }
+        s_stage8PackageWorkers.wake.notify_one();
+    }
+
+    bool PublishStage8CpuPackage(Stage8CpuPackage&& package)
+    {
+        uint64_t const key=CellKey(package.bx,package.by);
+        auto& terrainBlocks=WorkerTerrainBlocks(package.view);
+        if(package.view!=g.stage0PlayView||package.control!=g.stage8Control
+            ||terrainBlocks.count(key))return false;
+        LARGE_INTEGER q0{},allocEnd{},compileEnd{},publishEnd{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        GLuint const list=AllocDisplayListOutsideFonts();
+        if(!list)return false;
+        QueryPerformanceCounter(&allocEnd);
+        LitSetIdentity();glNewList(list,GL_COMPILE);glShadeModel(GL_FLAT);
+        glBegin(GL_TRIANGLES);
+        if(package.legacyStage56)
+        {
+            for(size_t i=0;i<package.mesh.triangles.size();++i)
+            {
+                auto const& color=package.triangleColors[i];
+                EmitResolvedTerrainTriangle(package.mesh.triangles[i],
+                    package.materials[i].c_str(),color.r,color.g,color.b);
+            }
+        }
+        else if(package.legacyStage7)
+        {
+            for(size_t i=0;i<package.mesh.triangles.size();++i)
+            {EmitStage8Triangle(package.mesh.triangles[i],package.materials[i].c_str());}
+        }
+        else
+        {
+            for(size_t i=0;i<package.mesh.triangles.size();i+=2)
+            {
+                auto const& a=package.mesh.triangles[i];
+                auto const& b=package.mesh.triangles[(std::min)(i+1,
+                    package.mesh.triangles.size()-1)];
+                std::string const& material=package.materials[i/2u];
+                EmitStage8Triangle(a,material.c_str());
+                if(i+1<package.mesh.triangles.size())
+                {EmitStage8Triangle(b,material.c_str());}
+            }
+        }
+        glEnd();glEndList();QueryPerformanceCounter(&compileEnd);
+        int const tris=(int)package.mesh.triangles.size();
+        terrainBlocks.emplace(key,Stage0TerrainBlock{
+            list,tris,std::move(package.collisionSurface)});
+        if(package.legacyStage7)g.stage7TerrainTriangles+=tris;
+        else if(!package.legacyStage56)g.stage8TerrainTriangles+=tris;
+        g.perfHfTris+=tris;
+        QueryPerformanceCounter(&publishEnd);
+        auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
+        {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
+            /(double)qpf.QuadPart:0.0;};
+        double const allocMs=ms(q0,allocEnd),glMs=ms(allocEnd,compileEnd);
+        double const publishMs=ms(compileEnd,publishEnd);
+        double const mainMs=ms(q0,publishEnd);
+        double const totalMs=package.cpuTotalMs+mainMs;
+        g.stage8LastBuildMs=totalMs;++g.perfHfLocalUpdates;
+        g.stage0FrameHfBuildMs+=mainMs;
+        g.perfHfRemeshMsTotal+=(float)totalMs;
+        g.perfHfRemeshMsMax=(std::max)(g.perfHfRemeshMsMax,(float)totalMs);
+
+        bool const profileWaterfall=s_stage11Waterfall.collecting
+            &&(g.certStage11ResidencyWaterfall||g.certStage11ShiftScaling
+               ||g.certStage11FreeFly)
+            &&IsFaultDisplacementView(package.view);
+        if(profileWaterfall)
+        {
+            ++s_stage11Waterfall.packagesBuilt;
+            ++s_stage11Waterfall.offFrameThreadBuilds;
+            s_stage11Waterfall.packageMaterialSamples+=(int)package.materials.size();
+            s_stage11Waterfall.packageSampleMs+=package.sampleMs;
+            s_stage11Waterfall.packageSurfaceDescriptorMs+=package.descriptorMs;
+            s_stage11Waterfall.packageMaterialMs+=package.materialMs;
+            s_stage11Waterfall.packageMeshEmitMs+=package.meshEmitMs;
+            s_stage11Waterfall.packageCollisionMs+=package.collisionMs;
+            s_stage11Waterfall.packageMeshMs+=package.sampleMs+package.descriptorMs
+                +package.meshEmitMs+package.collisionMs;
+            s_stage11Waterfall.packageAllocationMs+=allocMs;
+            s_stage11Waterfall.packageGlCompileMs+=glMs;
+            s_stage11Waterfall.packagePublishMs+=publishMs;
+            int newVariants=0;
+            for(auto const& material:package.materials)
+            {if(s_seenPackageMaterials.insert(material).second)++newVariants;}
+            if(s_packageBuildProfiling&&s_packageBuildSamples.size()<200000u)
+            {
+                Stage0PackageBuildSample sample;
+                sample.bx=package.bx;sample.by=package.by;sample.tris=tris;
+                sample.materialSamples=(int)package.materials.size();
+                sample.materialMisses=package.materialMisses;
+                sample.newMaterialVariants=newVariants;sample.totalMs=totalMs;
+                sample.sampleMs=package.sampleMs;
+                sample.surfaceDescriptorMs=package.descriptorMs;
+                sample.materialMs=package.materialMs;
+                sample.meshEmitMs=package.meshEmitMs;
+                sample.collisionMs=package.collisionMs;
+                sample.buildBlockMs=package.sampleMs+package.descriptorMs
+                    +package.meshEmitMs+package.collisionMs;
+                sample.allocMs=allocMs;sample.glCompileMs=glMs;
+                sample.publishMs=publishMs;
+                s_packageBuildSamples.push_back(sample);
+            }
+        }
+        return true;
+    }
+
+    void ServiceStage8CompletedPackages(Stage0PresentationBounds const& bounds)
+    {
+        LARGE_INTEGER start{},now{},qpf{};QueryPerformanceFrequency(&qpf);
+        QueryPerformanceCounter(&start);
+        int published=0;
+        size_t available=0;
+        {
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            available=s_stage8PackageWorkers.completed.size();
+        }
+        for(size_t inspected=0;inspected<available;++inspected)
+        {
+            Stage8CpuPackage result;
+            bool have=false;
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                if(!s_stage8PackageWorkers.completed.empty())
+                {
+                    result=std::move(s_stage8PackageWorkers.completed.front());
+                    s_stage8PackageWorkers.completed.pop_front();
+                    have=true;
+                }
+            }
+            if(!have)break;
+            bool const spatial=result.bx>=bounds.bx0-kStage0PackageApron
+                &&result.bx<=bounds.bx1+kStage0PackageApron
+                &&result.by>=bounds.by0-kStage0PackageApron
+                &&result.by<=bounds.by1+kStage0PackageApron;
+            uint64_t currentEpoch=0;
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                currentEpoch=s_stage8PackageWorkers.epoch;
+            }
+            if(result.epoch==currentEpoch&&spatial)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                    s_stage8PackageWorkers.scheduled.erase(CellKey(result.bx,result.by));
+                }
+                PublishStage8CpuPackage(std::move(result));
+            }
+            else if(result.epoch==currentEpoch&&result.view==g.stage0PlayView)
+            {
+                // CPU lookahead is allowed to finish outside the resident
+                // apron, but it cannot publish there. Keep the bounded result
+                // until travel moves its package into the certified window.
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                s_stage8PackageWorkers.completed.emplace_back(std::move(result));
+            }
+            else
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                s_stage8PackageWorkers.scheduled.erase(CellKey(result.bx,result.by));
+            }
+            ++published;
+            QueryPerformanceCounter(&now);
+            double const spent=qpf.QuadPart>0?1000.0*(double)(now.QuadPart-start.QuadPart)
+                /(double)qpf.QuadPart:0.0;
+            // The reserve belongs to the work that follows publication.  The
+            // previous comparison accidentally treated the 6 ms reserve as the
+            // publication budget itself, capping an extreme two-row shift at
+            // ~84 of its 102 entering packages even though the frame still had
+            // more than 10 ms available.
+            if(published>0&&spent>=
+                kStage0FrameBudgetMs-kStage0LivePackageReserveMs)break;
+        }
+    }
+
+    void RebuildStage8TerrainBlock( int bx, int by )
+    {
+        if ( !g.causalErosionRuntime && !g.causalIntrusionRuntime
+          && !g.causalMineralizationRuntime && !g.causalFaultRuntime
+          && !g.cutCOccupancyRuntime ) { return; }
+        uint64_t const key = CellKey( bx, by );
+        if ( g.stage8TerrainBlocks.count( key ) ) { return; }
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf ); QueryPerformanceCounter( &q0 );
+        bool const profileWaterfall=s_stage11Waterfall.collecting
+            &&(g.certStage11ResidencyWaterfall||g.certStage11ShiftScaling
+               ||g.certStage11FreeFly)
+            &&IsFaultDisplacementView(g.stage0PlayView);
+        if(profileWaterfall&&GetCurrentThreadId()!=s_stage11Waterfall.frameThreadId)
+        {++s_stage11Waterfall.offFrameThreadBuilds;}
+        bool const integratedCutC=IsCutCOccupancyView(g.stage0PlayView)
+            &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime;
+        CausalVisibleExposure::BlockSurfaceSamples surfaceSamples;
+        CausalVisibleExposure::BlockSurfaceDescriptors surfaceDescriptors;
+        CausalVisibleExposure::BlockMesh mesh;
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const> collisionSurface;
+        LARGE_INTEGER sampleEnd{},descriptorEnd{},materialEnd{},meshEnd{},collisionEnd{},
+            allocEnd{},compileEnd{},publishEnd{};
+
+        // Stage 1: authority sampling. The regular causal stages fill one linear
+        // 17x17 field. Cut C retains its separately certified 12.5 cm integrated
+        // path and remains outside this Stage-11 performance experiment.
+        if(integratedCutC)
+        {
+            mesh=CutCOccupancy::BuildIntegratedBlock(*g.cutCOccupancyRuntime,
+                *g.causalMineralizationRuntime,bx,by);
+        }
+        else if(IsFaultDisplacementView(g.stage0PlayView)&&g.causalFaultRuntime)
+        {surfaceSamples=g.causalFaultRuntime->SampleBlock(bx,by);}
+        else if(IsContactMineralizationView(g.stage0PlayView)&&g.causalMineralizationRuntime)
+        {surfaceSamples=g.causalMineralizationRuntime->SampleBlock(bx,by);}
+        else if(IsGraniteIntrusionView(g.stage0PlayView)&&g.causalIntrusionRuntime)
+        {surfaceSamples=g.causalIntrusionRuntime->SampleBlock(bx,by);}
+        else
+        {surfaceSamples=g.causalErosionRuntime->SampleBlock(g.stage8Control,bx,by);}
+        if(profileWaterfall)QueryPerformanceCounter(&sampleEnd);
+
+        // Stage 2: topology/surface descriptors. No authority query is legal
+        // past this boundary for ordinary causal packages.
+        if(!integratedCutC)
+        {surfaceDescriptors=CausalVisibleExposure::DescribeBlock(surfaceSamples);}
+        if(profileWaterfall)QueryPerformanceCounter(&descriptorEnd);
+
+        // Stage 3: bulk material/identity resolution over descriptor sample
+        // points. The point expression preserves the former triangle-pair
+        // centroid exactly, so material and FeatureId boundaries cannot move.
+        int sampleMaterialMisses=0,sampleNewVariants=0;
+        size_t const quadCount=integratedCutC?(mesh.triangles.size()+1u)/2u
+            :surfaceDescriptors.crossings.size();
+        std::vector<std::string> resolvedMaterials;
+        resolvedMaterials.reserve(quadCount);
+        for(size_t i=0;i<quadCount;++i)
+        {
+            CausalVisibleExposure::Vec3 point;
+            if(integratedCutC)
+            {
+                auto const& a=mesh.triangles[i*2u];
+                auto const& b=mesh.triangles[(std::min)(i*2u+1u,mesh.triangles.size()-1u)];
+                point={ (a.a.x+a.b.x+a.c.x+b.a.x+b.b.x+b.c.x)/6.0,
+                        (a.a.y+a.b.y+a.c.y+b.a.y+b.b.y+b.c.y)/6.0,
+                        (a.a.z+a.b.z+a.c.z+b.a.z+b.b.z+b.c.z)/6.0 };
+            }
+            else
+            {point=CausalVisibleExposure::PresentationSamplePoint(
+                surfaceSamples,surfaceDescriptors.crossings[i]);}
+            uint64_t const materialKey=CellKey((int)std::lround(point.x*4.0),
+                (int)std::lround(point.y*4.0));
+            auto const cached=g.stage0FarMaterialCache.find(materialKey);
+            if(cached!=g.stage0FarMaterialCache.end())
+            {
+                resolvedMaterials.push_back(cached->second);
+                if(profileWaterfall)++s_stage11Waterfall.packageMaterialCacheHits;
+            }
+            else
+            {
+                if(integratedCutC)
+                {
+                    auto const geology=CausalGeologyAt(g.stage0PlayView,
+                        point.x,point.y,point.z-0.001);
+                    resolvedMaterials.push_back(geology.found?geology.material:"dirt");
+                }
+                else
+                {
+                    auto const geology=CausalMaterialAt(g.stage0PlayView,
+                        point.x,point.y,point.z-0.001);
+                    resolvedMaterials.push_back(geology.found&&geology.material
+                        ?geology.material:"dirt");
+                }
+                g.stage0FarMaterialCache.emplace(materialKey,resolvedMaterials.back());
+                ++sampleMaterialMisses;
+                if(s_packageBuildProfiling
+                    &&s_seenPackageMaterials.insert(resolvedMaterials.back()).second)
+                {++sampleNewVariants;}
+            }
+            if(profileWaterfall)++s_stage11Waterfall.packageMaterialSamples;
+        }
+        if(profileWaterfall)QueryPerformanceCounter(&materialEnd);
+
+        // Stage 4: pure descriptor-to-triangle emission.
+        if(!integratedCutC)
+        {mesh=CausalVisibleExposure::EmitBlockMesh(surfaceSamples,surfaceDescriptors);}
+        if(profileWaterfall)QueryPerformanceCounter(&meshEnd);
+
+        // Stage 5: collision adopts the identical immutable sample field. The
+        // player query path interpolates this field with the same fixed diagonal.
+        if(!integratedCutC)
+        {collisionSurface=std::make_shared<CausalVisibleExposure::BlockSurfaceSamples const>(
+            std::move(surfaceSamples));}
+        if(profileWaterfall)QueryPerformanceCounter(&collisionEnd);
+
+        GLuint const list = AllocDisplayListOutsideFonts();
+        if ( !list ) { return; }
+        if(profileWaterfall)QueryPerformanceCounter(&allocEnd);
+        LitSetIdentity();
+        glNewList( list, GL_COMPILE );
+        glShadeModel( GL_FLAT );
+        glBegin( GL_TRIANGLES );
+        // Each pair is one canonical 0.5 m D2 quad. Its material is sampled
+        // once at the quad center and shared by the two presentation triangles.
+        // Material is already a linear resolved field; presentation emission
+        // cannot re-enter geology or invent a label here.
+        for ( size_t i = 0; i < mesh.triangles.size(); i += 2 )
+        {
+            auto const& a = mesh.triangles[i];
+            auto const& b = mesh.triangles[(std::min)(i + 1, mesh.triangles.size() - 1)];
+            std::string const& material=resolvedMaterials[i/2u];
+            EmitStage8Triangle( a, material.c_str() );
+            if ( i + 1 < mesh.triangles.size() )
+            { EmitStage8Triangle( b, material.c_str() ); }
+        }
+        glEnd(); glEndList();
+        QueryPerformanceCounter( &q1 );
+        if(profileWaterfall)compileEnd=q1;
+        int const tris = (int)mesh.triangles.size();
+        g.stage8TerrainBlocks.emplace( key,
+            Stage0TerrainBlock{ list, tris, std::move(collisionSurface) } );
+        g.stage8TerrainTriangles += tris;
+        g.perfHfTris += tris;
+        double const ms = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        g.stage8LastBuildMs = ms;
+        ++g.perfHfLocalUpdates;
+        g.stage0FrameHfBuildMs += ms;
+        g.perfHfRemeshMsTotal += (float)ms;
+        g.perfHfRemeshMsMax = (std::max)( g.perfHfRemeshMsMax, (float)ms );
+        if(profileWaterfall)
+        {
+            QueryPerformanceCounter(&publishEnd);
+            auto msBetween=[&](LARGE_INTEGER a,LARGE_INTEGER b)
+            {return 1000.0*(double)(b.QuadPart-a.QuadPart)/(double)qpf.QuadPart;};
+            ++s_stage11Waterfall.packagesBuilt;
+            double const sampleMs=msBetween(q0,sampleEnd);
+            double const descriptorMs=msBetween(sampleEnd,descriptorEnd);
+            double const materialMs=msBetween(descriptorEnd,materialEnd);
+            double const meshEmitMs=msBetween(materialEnd,meshEnd);
+            double const collisionMs=msBetween(meshEnd,collisionEnd);
+            s_stage11Waterfall.packageSampleMs+=sampleMs;
+            s_stage11Waterfall.packageSurfaceDescriptorMs+=descriptorMs;
+            s_stage11Waterfall.packageMaterialMs+=materialMs;
+            s_stage11Waterfall.packageMeshEmitMs+=meshEmitMs;
+            s_stage11Waterfall.packageCollisionMs+=collisionMs;
+            s_stage11Waterfall.packageMeshMs+=sampleMs+descriptorMs+meshEmitMs+collisionMs;
+            s_stage11Waterfall.packageAllocationMs+=msBetween(collisionEnd,allocEnd);
+            s_stage11Waterfall.packageGlCompileMs+=msBetween(allocEnd,compileEnd);
+            s_stage11Waterfall.packagePublishMs+=msBetween(compileEnd,publishEnd);
+            if(s_packageBuildProfiling&&s_packageBuildSamples.size()<200000u)
+            {
+                Stage0PackageBuildSample sample;
+                sample.bx=bx;sample.by=by;sample.tris=tris;
+                sample.materialSamples=(int)resolvedMaterials.size();
+                sample.materialMisses=sampleMaterialMisses;
+                sample.newMaterialVariants=sampleNewVariants;
+                sample.totalMs=msBetween(q0,publishEnd);
+                sample.sampleMs=sampleMs;
+                sample.surfaceDescriptorMs=descriptorMs;
+                sample.materialMs=materialMs;
+                sample.meshEmitMs=meshEmitMs;
+                sample.collisionMs=collisionMs;
+                sample.buildBlockMs=sampleMs+descriptorMs+meshEmitMs+collisionMs;
+                sample.allocMs=msBetween(collisionEnd,allocEnd);
+                sample.glCompileMs=msBetween(allocEnd,compileEnd);
+                sample.publishMs=msBetween(compileEnd,publishEnd);
+                s_packageBuildSamples.push_back(sample);
+            }
+        }
+    }
+
+    void DrawStage8TerrainBlocks()
+    {
+        bool const stage56=IsStage56WorkerView(g.stage0PlayView);
+        bool const stage7=IsVisibleExposureView(g.stage0PlayView);
+        if ( stage56 && g.stage0PlayView!=Stage0PlayView::Clean
+          && !g.causalGeologyRuntime && !g.causalExposureRuntime ) { return; }
+        if ( stage7 && !g.causalVisibleRuntime ) { return; }
+        if ( !stage56 && !stage7 && !g.causalErosionRuntime && !g.causalIntrusionRuntime
+          && !g.causalMineralizationRuntime && !g.causalFaultRuntime
+          && !g.cutCOccupancyRuntime ) { return; }
+        auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
+        ServiceRetiredTerrainDisplayLists();
+        Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+        // CPU products completed by the workers are the only packages allowed
+        // to cross into GL ownership.  Publication is bounded independently of
+        // authority sampling so a fast flight cannot force either phase into a
+        // monolithic frame-thread burst.
+        ServiceStage8CompletedPackages(bounds);
+        auto const scheduled=Stage8ScheduledPackageSnapshot();
+        bool const profileWaterfall=s_stage11Waterfall.collecting
+            &&(g.certStage11ResidencyWaterfall||g.certStage11ShiftScaling
+               ||g.certStage11FreeFly)
+            &&IsFaultDisplacementView(g.stage0PlayView);
+        LARGE_INTEGER discover0{},discover1{},retireScan0{},retireScan1{},qpf{};
+        if(profileWaterfall)
+        {QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&discover0);}
+        std::vector<std::pair<int,int>> requiredBuilds;
+        for ( int by = bounds.by0; by <= bounds.by1; ++by )
+        for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
+        {
+            uint64_t const key=CellKey(bx,by);
+            if(!terrainBlocks.count(key)&&!scheduled.count(key))
+            {requiredBuilds.emplace_back(bx,by);}
+        }
+
+        // Pre-build the collar ahead of travel. Idle frames between anchor
+        // crossings cost about 0.19 ms and previously did nothing while the
+        // crossing frame built an entire row at once; this spends them instead.
+        // The collar is deepest along the observed bearing because that is the
+        // only side new packages actually enter from.
+        // Retention stays exactly the in-bounds window plus a symmetric one
+        // package ring. Widening or bearing-shaping it changes the resident
+        // population, which the cardinal audit compares between origin, outer
+        // station and return; that equality is a real invariant and is not
+        // negotiable for a pacing change. Bearing biases build *order* only.
+        int const aheadX=g.stage0FarTravelDirX,aheadY=g.stage0FarTravelDirY;
+        constexpr int collar=1;
+        int const loX=bounds.bx0-collar,hiX=bounds.bx1+collar;
+        int const loY=bounds.by0-collar,hiY=bounds.by1+collar;
+        std::vector<std::pair<int,int>> collarBuilds;
+        for ( int by = loY; by <= hiY; ++by )
+        for ( int bx = loX; bx <= hiX; ++bx )
+        {
+            if ( bx >= bounds.bx0 && bx <= bounds.bx1
+              && by >= bounds.by0 && by <= bounds.by1 ) { continue; }
+            uint64_t const key=CellKey(bx,by);
+            if(terrainBlocks.count(key)||scheduled.count(key)){continue;}
+            collarBuilds.emplace_back(bx,by);
+        }
+        // CPU-only omnidirectional lookahead. Two rows beyond the one-package
+        // resident apron cover a 16 m/frame move or abrupt turn in any cardinal
+        // plane without changing the 2,601 published-package ownership law.
+        // ServiceStage8CompletedPackages holds these products until their
+        // coordinates enter the legal apron.
+        std::vector<std::pair<int,int>> lookaheadBuilds;
+        constexpr int lookaheadRows=2;
+        int const deriveLoX=loX-lookaheadRows,deriveHiX=hiX+lookaheadRows;
+        int const deriveLoY=loY-lookaheadRows,deriveHiY=hiY+lookaheadRows;
+        for(int by=deriveLoY;by<=deriveHiY;++by)
+        for(int bx=deriveLoX;bx<=deriveHiX;++bx)
+        {
+            if(bx>=loX&&bx<=hiX&&by>=loY&&by<=hiY){continue;}
+            uint64_t const key=CellKey(bx,by);
+            if(!terrainBlocks.count(key)&&!scheduled.count(key))
+            {lookaheadBuilds.emplace_back(bx,by);}
+        }
+        if(profileWaterfall)
+        {
+            QueryPerformanceCounter(&discover1);
+            s_stage11Waterfall.packageDiscoveryCandidates+=
+                (int)(requiredBuilds.size()+collarBuilds.size()+lookaheadBuilds.size());
+            if(qpf.QuadPart>0)s_stage11Waterfall.packageDiscoveryMs+=1000.0
+                *(double)(discover1.QuadPart-discover0.QuadPart)/(double)qpf.QuadPart;
+        }
+
+        // Build nearest-first inside a frame budget. Building every newly
+        // required package on the frame the anchor crosses a row is what put
+        // traversal frames over 16.67 ms; the near field must always be
+        // complete, so only the outermost ring may trail during extreme speed.
+        float const feetBx=g.feetX/(float)kStage0TerrainBlockCells;
+        float const feetBy=g.feetY/(float)kStage0TerrainBlockCells;
+        auto nearestFirst=[&](std::pair<int,int> const& a,std::pair<int,int> const& b)
+        {
+            float const ax=(float)a.first+.5f-feetBx,ay=(float)a.second+.5f-feetBy;
+            float const bx=(float)b.first+.5f-feetBx,by=(float)b.second+.5f-feetBy;
+            return ax*ax+ay*ay<bx*bx+by*by;
+        };
+        std::sort(requiredBuilds.begin(),requiredBuilds.end(),nearestFirst);
+        // Collar packages ahead of travel are the ones about to be needed, so
+        // they are built first; the rest of the ring fills with leftover budget.
+        auto aheadFirst=[&](std::pair<int,int> const& a,std::pair<int,int> const& b)
+        {
+            float const ax=(float)a.first+.5f-feetBx,ay=(float)a.second+.5f-feetBy;
+            float const bx=(float)b.first+.5f-feetBx,by=(float)b.second+.5f-feetBy;
+            bool const aAhead=ax*(float)aheadX+ay*(float)aheadY>0.f;
+            bool const bAhead=bx*(float)aheadX+by*(float)aheadY>0.f;
+            if(aAhead!=bAhead)return aAhead;
+            return ax*ax+ay*ay<bx*bx+by*by;
+        };
+        std::sort(collarBuilds.begin(),collarBuilds.end(),aheadFirst);
+        // Queueing is cheap and complete: required packages are nearest-first,
+        // then the forward-biased apron. Workers consume the immutable CPU
+        // stages while the render thread continues with eviction and drawing.
+        for(auto const& package:requiredBuilds)
+        {QueueStage8Package(package.first,package.second);}
+        for(auto const& package:collarBuilds)
+        {QueueStage8Package(package.first,package.second);}
+        for(auto const& package:lookaheadBuilds)
+        {QueueStage8Package(package.first,package.second);}
+        std::vector<uint64_t> evict;
+        if(profileWaterfall)QueryPerformanceCounter(&retireScan0);
+        for ( auto const& entry : terrainBlocks )
+        {
+            int const bx = (int)(int32_t)( entry.first >> 32 );
+            int const by = (int)(int32_t)( entry.first & 0xffffffffu );
+            // Retain the whole pre-built collar. Evicting to a fixed +/-1 ring
+            // would discard the packages the bearing-deep collar just built,
+            // reintroducing the burst the collar exists to prevent.
+            if ( bx < loX || bx > hiX || by < loY || by > hiY )
+            { evict.push_back( entry.first ); }
+        }
+        if(profileWaterfall)
+        {
+            QueryPerformanceCounter(&retireScan1);
+            s_stage11Waterfall.packagesRetired+=(int)evict.size();
+            if(qpf.QuadPart>0)s_stage11Waterfall.packageRetirementScanMs+=1000.0
+                *(double)(retireScan1.QuadPart-retireScan0.QuadPart)/(double)qpf.QuadPart;
+        }
+        for ( uint64_t const key : evict )
+        {
+            auto const it = terrainBlocks.find( key );
+            if ( it == terrainBlocks.end() ) { continue; }
+            RetireTerrainDisplayList(it->second.list);
+            if(stage7)g.stage7TerrainTriangles-=it->second.tris;
+            else if(!stage56)g.stage8TerrainTriangles -= it->second.tris;
+            g.perfHfTris -= it->second.tris;
+            terrainBlocks.erase( it );
+        }
+        g.perfHfBlocksEvicted += (int)evict.size();
+        int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
+        int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
+        for ( int by = bounds.by0; by <= bounds.by1; ++by )
+        for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
+        {
+            auto const it = terrainBlocks.find( CellKey( bx, by ) );
+            if ( it != terrainBlocks.end() && it->second.list )
+            {
+                bool const submit=!PresentationSuppressesTerrainSubmission()
+                    &&(!PresentationUsesMinimalTerrainSubmission()
+                        ||(bx==playerBx&&by==playerBy));
+                if(submit){glCallList( it->second.list );}
+            }
+        }
+    }
+
+    int Stage0TerrainRuntimeKind( Stage0PlayView view )
+    {
+        if ( IsCausalGeologyView( view ) ) { return 1; }
+        if ( IsCausalExposureView( view ) ) { return 2; }
+        if ( IsVisibleExposureView( view ) ) { return 3; }
+        if ( IsDifferentialErosionView( view ) ) { return 4; }
+        if ( IsGraniteIntrusionView( view ) ) { return 5; }
+        if ( IsContactMineralizationView( view ) ) { return 6; }
+        if ( IsCutCOccupancyView( view ) ) { return 7; }
+        if ( IsFaultDisplacementView( view ) ) { return 8; }
+        return 0;
+    }
+
+    bool Stage0ViewShowsRuler( Stage0PlayView view )
+    {
+        return g.stage0ToolRuler || view == Stage0PlayView::DistanceRuler;
+    }
+
+    bool Stage0ViewShowsPalette( Stage0PlayView view )
+    {
+        return g.stage0ToolPalette || view == Stage0PlayView::TerrainPalette;
+    }
+
+    struct CertificationBrowserEntry
+    {
+        char const* category;
+        char const* id;
+        char const* label;
+        char const* dependency;
+        char const* provides;
+        Stage0PlayView view;
+    };
+
+    static CertificationBrowserEntry const s_certificationBrowser[] = {
+        { "FOUNDATION", "PERF.CLEAN_WORLD", "Clean Performance Floor",
+          "none", "bounded 64m residency and traversal performance floor", Stage0PlayView::Clean },
+        { "FOUNDATION", "CAL.COMBINED", "Combined Calibration",
+          "PERF.CLEAN_WORLD", "known-scale ruler and material calibration tools", Stage0PlayView::Combined },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.KERNEL", "Stage 5 - Geology Kernel",
+          "causal geology descriptor", "persistent folded formations and FeatureIds", Stage0PlayView::CausalGeologyKernel },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.EXPOSURE", "Stage 6 - Geologic Exposure",
+          "GEO.KERNEL", "present-surface intersections with geology authority", Stage0PlayView::GeologicExposure },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.VISIBLE_EXPOSURE", "Stage 7 - Visible Geologic Exposure",
+          "GEO.EXPOSURE", "watertight partition-invariant visible terrain", Stage0PlayView::VisibleGeologicExposure },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.DIFFERENTIAL_EROSION", "Stage 8 - Differential Erosion",
+          "GEO.VISIBLE_EXPOSURE", "material resistance shapes compiled relief", Stage0PlayView::DifferentialErosion },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.GRANITE_INTRUSION", "Stage 9 - Granite Intrusion",
+          "GEOMORPH.DIFFERENTIAL_EROSION", "intrusion chronology, truncation, and granite FeatureId", Stage0PlayView::GraniteIntrusion },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.CONTACT_MINERALIZATION", "Stage 10 - Contact Mineralization",
+          "GEO.GRANITE_INTRUSION", "host-valid quartz deposit ancestry and mineralizing event", Stage0PlayView::ContactMineralization },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEO.FAULT_DISPLACEMENT", "Stage 11 - Fault Displacement",
+          "GEO.CONTACT_MINERALIZATION", "identity-preserving displacement of the assembled Stage-10 history", Stage0PlayView::FaultDisplacement },
+        { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
+          "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
+    };
+
+    constexpr int kCertificationBrowserCount =
+        (int)( sizeof( s_certificationBrowser ) / sizeof( s_certificationBrowser[0] ) );
+
+    constexpr int kCertificationBrowserCategoryCount = 3;
+
+    char const* CertificationBrowserCategoryName( int category )
+    {
+        static char const* const names[kCertificationBrowserCategoryCount] = {
+            "FOUNDATION", "GEOLOGY / GEOMORPHOLOGY", "INTEGRATION" };
+        return names[std::clamp(category,0,kCertificationBrowserCategoryCount-1)];
+    }
+
+    int CertificationBrowserCategoryForIndex( int index )
+    {
+        if(index<0||index>=kCertificationBrowserCount)return 0;
+        char const* const category=s_certificationBrowser[index].category;
+        for(int i=0;i<kCertificationBrowserCategoryCount;++i)
+        {if(std::strcmp(category,CertificationBrowserCategoryName(i))==0)return i;}
+        return 0;
+    }
+
+    std::vector<int> CertificationBrowserEntriesInCategory( int category )
+    {
+        std::vector<int> entries;
+        char const* const name=CertificationBrowserCategoryName(category);
+        for(int i=0;i<kCertificationBrowserCount;++i)
+        {if(std::strcmp(s_certificationBrowser[i].category,name)==0)entries.push_back(i);}
+        return entries;
+    }
+
+    void SyncCertificationBrowserCategoryToSelection()
+    {g.stage0BrowserCategory=CertificationBrowserCategoryForIndex(g.stage0BrowserSelection);}
+
+    void MoveCertificationBrowserCategory( int step )
+    {
+        g.stage0BrowserCategory=(g.stage0BrowserCategory+step
+            +kCertificationBrowserCategoryCount)%kCertificationBrowserCategoryCount;
+        std::vector<int> const entries=
+            CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
+        if(!entries.empty())g.stage0BrowserSelection=entries.front();
+    }
+
+    void MoveCertificationBrowserStage( int step )
+    {
+        std::vector<int> const entries=
+            CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
+        if(entries.empty())return;
+        auto const found=std::find(entries.begin(),entries.end(),g.stage0BrowserSelection);
+        int position=found==entries.end()?0:(int)(found-entries.begin());
+        position=(position+step+(int)entries.size())%(int)entries.size();
+        g.stage0BrowserSelection=entries[position];
+    }
+
+    int BrowserIndexForView( Stage0PlayView view )
+    {
+        for ( int i = 0; i < kCertificationBrowserCount; ++i )
+        { if ( s_certificationBrowser[i].view == view ) { return i; } }
+        return 0;
+    }
+
+    char const* CertificationRuntimeStatus( CertificationBrowserEntry const& entry )
+    {
+        if ( entry.view == g.stage0PlayView ) { return "CURRENT"; }
+        if ( entry.view == Stage0PlayView::Clean || entry.view == Stage0PlayView::Combined )
+        { return "CERTIFIED"; }
+        bool attempted = false;
+        bool certified = false;
+        if ( IsCausalGeologyView( entry.view ) )
+        { attempted = g.causalGeologyAuthorityAttempted; certified = g.causalGeologyCertified; }
+        else if ( IsCausalExposureView( entry.view ) )
+        { attempted = g.causalExposureAuthorityAttempted; certified = g.causalExposureCertified; }
+        else if ( IsVisibleExposureView( entry.view ) )
+        { attempted = g.causalVisibleAuthorityAttempted; certified = g.causalVisibleCertified; }
+        else if ( IsDifferentialErosionView( entry.view ) )
+        { attempted = g.causalErosionAuthorityAttempted; certified = g.causalErosionCertified; }
+        else if ( IsGraniteIntrusionView( entry.view ) )
+        { attempted = g.causalIntrusionAuthorityAttempted; certified = g.causalIntrusionCertified; }
+        else if ( IsContactMineralizationView( entry.view ) )
+        { attempted = g.causalMineralizationAuthorityAttempted; certified = g.causalMineralizationCertified; }
+        else if ( IsFaultDisplacementView( entry.view ) )
+        { attempted = g.causalFaultAuthorityAttempted; certified = g.causalFaultCertified; }
+        else if ( IsCutCOccupancyView( entry.view ) )
+        { attempted = g.cutCOccupancyAuthorityAttempted; certified = g.cutCOccupancyCertified; }
+        return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
+    }
+
+    bool SelectCertificationBrowserEntry( int index )
+    {
+        if ( index < 0 || index >= kCertificationBrowserCount ) { return false; }
+        g.stage0BrowserSelection = index;
+        SyncCertificationBrowserCategoryToSelection();
+        CertificationBrowserEntry const& entry = s_certificationBrowser[index];
+        if ( entry.view == Stage0PlayView::Combined )
+        {
+            g.stage0ToolRuler = true;
+            g.stage0ToolPalette = true;
+        }
+        bool const selected = SelectStage0PlayView( entry.view );
+        if ( selected && ( entry.view == Stage0PlayView::Combined
+          || entry.view == Stage0PlayView::TerrainPalette ) )
+        { SummonStage0Palette(); }
+        return selected;
+    }
+
+    constexpr int kStage0ToolCount = 16;
+
+    char const* Stage0ToolDrawerName( int index )
+    {
+        static char const* const names[kStage0ToolCount] = {
+            "Distance ruler", "Material palette", "Geology identity",
+            "Formation contacts", "Bedding / structure vectors", "Occupancy / fill",
+            "D2 topology", "Collision", "Residency rings", "Package boundaries",
+            "Water authority", "Structural faces", "Performance HUD",
+            "Mutation / revision HUD", "Provenance trace", "Geology x-ray flashlight"
+        };
+        return index >= 0 && index < kStage0ToolCount ? names[index] : "Unknown";
+    }
+
+    char const* Stage0ToolDrawerAvailability( int index )
+    {
+        if ( index == 5 ) { return "LOCKED: Stage 0 has no occupancy"; }
+        if ( index == 6 ) { return "LOCKED: Stage 0 keeps D2 dormant"; }
+        if ( index == 7 || index == 9 || index == 11 ) { return "PLANNED"; }
+        if ( index == 10 ) { return "LOCKED: P5b closed"; }
+        if ( index == 15 && !IsCausalPlayableView( g.stage0PlayView ) )
+        { return "LOCKED: select geology Stage 5-10"; }
+        return "READY";
+    }
+
+    bool Stage0ToolDrawerEnabled( int index )
+    {
+        switch ( index )
+        {
+            case 0: return g.stage0ToolRuler;
+            case 1: return g.stage0ToolPalette;
+            case 2: return g.stage0ToolGeologyIdentity;
+            case 3: return g.stage0ToolFormationContacts;
+            case 4: return g.stage0ToolBedding;
+            case 8: return g.playWorldgenResidencyOverlay;
+            case 12: return g.stage0ToolPerformanceHud;
+            case 13: return g.stage0ToolMutationHud;
+            case 14: return g.stage0ToolProvenance;
+            case 15: return g.stage0ToolGeologyCutaway;
+            default: return false;
+        }
+    }
+
+    bool ToggleStage0ToolDrawerEntry( int index )
+    {
+        if ( std::strcmp( Stage0ToolDrawerAvailability( index ), "READY" ) != 0 )
+        {
+            g.statusLine = std::string( Stage0ToolDrawerName( index ) ) + " - "
+                + Stage0ToolDrawerAvailability( index );
+            return false;
+        }
+        switch ( index )
+        {
+            case 0:
+                g.stage0ToolRuler = !g.stage0ToolRuler;
+                if ( !g.stage0ToolRuler && g.stage0RulerList )
+                { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+                break;
+            case 1:
+                g.stage0ToolPalette = !g.stage0ToolPalette;
+                if ( g.stage0ToolPalette ) { SummonStage0Palette(); }
+                else
+                {
+                    if ( g.stage0PaletteList )
+                    { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
+                    g.stage0PaletteAnchored = false;
+                }
+                break;
+            case 2: g.stage0ToolGeologyIdentity = !g.stage0ToolGeologyIdentity; break;
+            case 3: g.stage0ToolFormationContacts = !g.stage0ToolFormationContacts; break;
+            case 4: g.stage0ToolBedding = !g.stage0ToolBedding; break;
+            case 8: g.playWorldgenResidencyOverlay = !g.playWorldgenResidencyOverlay; break;
+            case 12: g.stage0ToolPerformanceHud = !g.stage0ToolPerformanceHud; break;
+            case 13: g.stage0ToolMutationHud = !g.stage0ToolMutationHud; break;
+            case 14: g.stage0ToolProvenance = !g.stage0ToolProvenance; break;
+            case 15: g.stage0ToolGeologyCutaway = !g.stage0ToolGeologyCutaway; break;
+            default: return false;
+        }
+        g.statusLine = std::string( Stage0ToolDrawerName( index ) )
+            + ( Stage0ToolDrawerEnabled( index ) ? " ON" : " OFF" );
+        return true;
+    }
+
+    void RebuildStage0PlayableRuntime()
+    {
+        // Invalidates queued/in-flight results from the previous stage or
+        // authority epoch.  Active pure CPU jobs may finish, but their epoch can
+        // no longer publish into the replacement runtime.
+        ResetStage8PackageJobs();
+        for ( auto& kv : g.stage0TerrainBlocks )
+        {
+            RetireTerrainDisplayList( kv.second.list );
+        }
+        g.stage0TerrainBlocks.clear();
+        g.stage0DirtyTerrainBlocks.clear();
+        for ( auto& kv : g.stage7TerrainBlocks )
+        {
+            RetireTerrainDisplayList( kv.second.list );
+        }
+        g.stage7TerrainBlocks.clear();
+        g.stage7TerrainTriangles = 0;
+        g.stage7LastBuildMs = 0.0;
+        for ( auto& kv : g.stage8TerrainBlocks )
+        {
+            RetireTerrainDisplayList( kv.second.list );
+        }
+        g.stage8TerrainBlocks.clear();
+        g.stage8TerrainTriangles = 0;
+        if ( g.stage0FarFieldList )
+        { glDeleteLists( g.stage0FarFieldList, 1 ); g.stage0FarFieldList = 0; }
+        for(auto const& kv:g.stage0FarCoarseTiles)
+        {if(kv.second.list)g.stage0FarRetiredLists.push_back(
+            Stage0RetiredDisplayList{kv.second.list,GetTickCount64()+100ull});}
+        for(auto const& kv:g.stage0FarStitchTiles)
+        {if(kv.second.list)g.stage0FarRetiredLists.push_back(
+            Stage0RetiredDisplayList{kv.second.list,GetTickCount64()+100ull});}
+        g.stage0FarCoarseTiles.clear();g.stage0FarStitchTiles.clear();
+        g.stage0FarFieldAnchorX = g.stage0FarFieldAnchorY = INT_MIN;
+        g.stage0FarFieldRuntimeKind = -1;
+        g.stage0FarFieldControl = -1;
+        g.stage0FarLastPruneAnchorX = g.stage0FarLastPruneAnchorY = INT_MIN;
+        g.stage0FarTravelDirX = g.stage0FarTravelDirY = 0;
+        g.stage0FarLastFeetValid = false;
+        g.stage0FarFieldTriangles = 0;
+        g.stage0FarSurfaceCache.clear();
+        g.stage0FarFilteredCache.clear();
+        g.stage0FarMaterialCache.clear();
+        g.stage8LastBuildMs = 0.0;
+        g.cells.clear();
+        // Analytic cell residency is bounded by its 68 m eviction disk.  Without
+        // an explicit capacity the map crossed a growth threshold at exactly
+        // 320 m on the 480 m/s route; one EnsureGeoCell insertion then rehashed
+        // the whole store and produced a repeatable 16-17 ms generation stall.
+        // Reserving the certified bound changes allocation only, never cell
+        // identity, material, authority, or eviction semantics.
+        g.cells.reserve( 16384 );
+        g.cellsLoaded = 0;
+        g.perfHfTris = 0;
+        g.terrainDirty = true;
+
+        int const cx = (int)std::floor( g.feetX );
+        int const cy = (int)std::floor( g.feetY );
+        EnsureGeoDisk( cx, cy, 64 );
+        EvictStage0Residency( cx, cy );
+        float groundZ = g.feetZ;
+        if ( SampleGroundZBase( g.feetX, g.feetY, groundZ ) )
+        {
+            g.feetZ = groundZ;
+            g.camZ = groundZ + kEyeHeightM;
+            g.velZ = 0.0f;
+            g.grounded = true;
+        }
+    }
+
+    bool SelectStage0PlayView( Stage0PlayView view )
+    {
+        if ( IsCausalPlayableView( view ) && !EnsureCausalPlayableAuthority( view ) )
+        {
+            std::string const& reason = IsFaultDisplacementView( view )
+                ? g.causalFaultAuthorityReason
+                : ( IsCutCOccupancyView( view )
+                ? g.cutCOccupancyAuthorityReason
+                : ( IsContactMineralizationView( view )
+                ? g.causalMineralizationAuthorityReason
+                : ( IsGraniteIntrusionView( view ) ? g.causalIntrusionAuthorityReason
+                : ( IsDifferentialErosionView( view )
+                ? g.causalErosionAuthorityReason
+                : ( IsVisibleExposureView( view )
+                ? g.causalVisibleAuthorityReason
+                : ( IsCausalExposureView( view )
+                    ? g.causalExposureAuthorityReason : g.causalGeologyAuthorityReason ) ) ) ) ) );
+            g.statusLine = "CAUSAL WORLD REFUSED - " + reason;
+            return false;
+        }
+        Stage0PlayView const oldView = g.stage0PlayView;
+        int const oldRuntime = Stage0TerrainRuntimeKind( oldView );
+        int const newRuntime = Stage0TerrainRuntimeKind( view );
+        g.stage0PlayView = view;
+        if ( IsCausalGeologyView( view ) && g.causalGeologyRuntime )
+        {
+            auto const& authority = g.causalGeologyRuntime->GetDescriptor().authority;
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsCausalExposureView( view ) && g.causalExposureRuntime )
+        {
+            auto const& authority = g.causalExposureRuntime->GetDescriptor();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsVisibleExposureView( view ) && g.causalVisibleRuntime )
+        {
+            auto const& authority = g.causalVisibleRuntime->Exposure().GetDescriptor();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsDifferentialErosionView( view ) && g.causalErosionRuntime )
+        {
+            auto const& authority = g.causalErosionRuntime->Exposure().GetDescriptor();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsGraniteIntrusionView( view ) && g.causalIntrusionRuntime )
+        {
+            auto const& authority =
+                g.causalIntrusionRuntime->Erosion().Exposure().GetDescriptor();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
+        {
+            auto const& authority = g.causalFaultRuntime->GetProgram();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else if ( ( IsContactMineralizationView( view ) || IsCutCOccupancyView( view ) )
+          && g.causalMineralizationRuntime )
+        {
+            auto const& authority = g.causalMineralizationRuntime->
+                Intrusion().Erosion().Exposure().GetDescriptor();
+            g.worldIdentityHash = CausalWorldGeology::Hex64( authority.worldIdentityHash );
+            g.generatorId = authority.worldgenId;
+            g.generatorVersion = (int)authority.worldgenVersion;
+        }
+        else
+        {
+            g.worldIdentityHash = "worldgen_baseline_seed_wgbase01";
+            g.generatorId = "provenance_worldgen_baseline_v1";
+            g.generatorVersion = 1;
+        }
+        if ( g.playWorldgenInitialized && oldRuntime != newRuntime )
+        { RebuildStage0PlayableRuntime(); }
+        if ( g.playWorldgenInitialized && oldView != view )
+        { InvalidateStage0CalibrationSurface(); }
+        g.stage0BrowserSelection = BrowserIndexForView( view );
+        SyncCertificationBrowserCategoryToSelection();
+        if ( g.playWorldgenInitialized && IsFaultDisplacementView( view ) && oldView != view )
+        {
+            g.feetX=2.0f;g.feetY=-12.0f;
+            g.yaw=0.0f;g.pitch=-0.78f;
+            g.stage0GeologyInspectorDepthM=15.0f;
+            g.stage0GeologyInspectorWidthM=3.048f;
+            g.stage0GeologyInspectorMode=1;
+            g.stage0ToolGeologyCutaway=false;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+        }
+        if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
+        {
+            // Player-scale certified outcrop and readable oblique flashlight
+            // path.  Its terminal crosses the certified quartz FeatureId seven
+            // metres into the folded host sequence.
+            g.feetX = -3.25f; g.feetY = -13.94f;
+            g.yaw = 1.7078625f; g.pitch = -0.7500265f;
+            g.stage0GeologyInspectorDepthM = 7.0f;
+            g.stage0GeologyInspectorWidthM = 3.048f;
+            g.stage0ToolGeologyCutaway = g.certCutCXrayVisual;
+            if(g.certCutCXrayVisual)
+            {
+                // Cert-only normal-incidence view through the exact buried
+                // quartz terminal proven by the headless Cut-C receipt.
+                g.feetX=-6.8125f;g.feetY=-9.6875f;
+                g.yaw=0.f;g.pitch=-1.5707f;
+                g.stage0GeologyInspectorDepthM=1.9987f;
+            }
+            RebuildStage0PlayableRuntime();
+            g.camX = g.feetX; g.camY = g.feetY;
+            g.camZ = g.feetZ + kEyeHeightM;
+        }
+        g.statusLine = Stage0PlayViewName( view );
+        return true;
+    }
+
+    char const* Stage0PlayViewName( Stage0PlayView view )
+    {
+        switch ( view )
+        {
+            case Stage0PlayView::DistanceRuler: return "DISTANCE RULER";
+            case Stage0PlayView::TerrainPalette: return "TERRAIN PALETTE";
+            case Stage0PlayView::Combined: return "COMBINED CALIBRATION";
+            case Stage0PlayView::CausalGeologyKernel: return "CERTIFIED GEOLOGY KERNEL SLICE";
+            case Stage0PlayView::GeologicExposure: return "CERTIFIED GEOLOGIC EXPOSURE";
+            case Stage0PlayView::VisibleGeologicExposure: return "CERTIFIED VISIBLE GEOLOGIC EXPOSURE";
+            case Stage0PlayView::DifferentialErosion: return "CERTIFIED DIFFERENTIAL EROSION";
+            case Stage0PlayView::GraniteIntrusion: return "CERTIFIED GRANITE INTRUSION";
+            case Stage0PlayView::ContactMineralization: return "CERTIFIED CONTACT MINERALIZATION";
+            case Stage0PlayView::CutCOccupancyParity: return "CERTIFIED CUT C OCCUPANCY PARITY";
+            case Stage0PlayView::FaultDisplacement: return "CERTIFIED FAULT DISPLACEMENT";
+            default: return "CLEAN PERFORMANCE FLOOR";
+        }
+    }
+
+    bool Stage0CalibrationSurfaceZ( float x, float y, float& outZ )
+    {
+        if ( !IsCausalPlayableView( g.stage0PlayView ) )
+        {
+            outZ = GradeToZ( g.gradeDatum );
+            return true;
+        }
+        return SampleGroundZBase( x, y, outZ );
+    }
+
+    void EmitStage0FarFieldTriangle( float x0,float y0,float z0,
+        float x1,float y1,float z1,float x2,float y2,float z2,char const* material,
+        float nx,float ny,float nz,float r,float green,float b )
+    {
+        float const length=std::sqrt(nx*nx+ny*ny+nz*nz);
+        if(length>1e-6f){nx/=length;ny/=length;nz/=length;}
+        float const mx=(x0+x1+x2)/3.f,my=(y0+y1+y2)/3.f,mz=(z0+z1+z2)/3.f;
+        float rr=0.f,gg=0.f,bb=0.f;
+        LitBindMaterial(material);
+        ShadeLitFace(nx,ny,nz,mx,my,mz,r/255.f,green/255.f,b/255.f,rr,gg,bb,true);
+        glColor3f(rr,gg,bb);
+        glVertex3f(x0,y0,z0);glVertex3f(x1,y1,z1);glVertex3f(x2,y2,z2);
+    }
+
+    // Travel bearing, tracked from observed player motion every frame. It cannot
+    // be inferred from the player's offset inside the anchor cell: a floor-snapped
+    // anchor makes that offset non-negative on both axes, which predicted +X/+Y
+    // unconditionally and left westward and southward travel unassisted. Reading
+    // motion directly also gives a usable bearing before the first anchor
+    // crossing, so the first shift of a traversal is assisted too. Both the live
+    // package pre-builder and the far-field lookahead consume this, so it must be
+    // updated even when the far field is disabled.
+    void UpdateStage0TravelBearing()
+    {
+        if(g.stage0FarLastFeetValid)
+        {
+            float const deltaX=g.feetX-g.stage0FarLastFeetX;
+            float const deltaY=g.feetY-g.stage0FarLastFeetY;
+            // A teleport is not travel and must not seed a bearing.
+            if(std::fabs(deltaX)>64.f||std::fabs(deltaY)>64.f)
+            {g.stage0FarTravelDirX=0;g.stage0FarTravelDirY=0;}
+            else if(std::fabs(deltaX)>=std::fabs(deltaY)&&std::fabs(deltaX)>.01f)
+            {g.stage0FarTravelDirX=deltaX>0.f?1:-1;g.stage0FarTravelDirY=0;}
+            else if(std::fabs(deltaY)>.01f)
+            {g.stage0FarTravelDirX=0;g.stage0FarTravelDirY=deltaY>0.f?1:-1;}
+        }
+        else{g.stage0FarTravelDirX=0;g.stage0FarTravelDirY=0;}
+        g.stage0FarLastFeetX=g.feetX;g.stage0FarLastFeetY=g.feetY;
+        g.stage0FarLastFeetValid=true;
+    }
+
+    void DrawStage0FarField()
+    {
+        if(!g.playWorldgenBaseline){return;}
+        UpdateStage0TravelBearing();
+        if(g.stage0FarExtentM<=0){return;}
+        int const kExtentM=g.stage0FarExtentM;
+        constexpr int kFarStepM=4,kCoarseTileM=32,kStitchTileM=8;
+        constexpr float kStitchM=8.f,kStitchStepM=.5f;
+        Stage0PresentationBounds const bounds=Stage0CurrentPresentationBounds();
+        int const anchorX=bounds.anchorX,anchorY=bounds.anchorY;
+        int const runtimeKind=Stage0TerrainRuntimeKind(g.stage0PlayView);
+        int const control=(int)g.stage8Control;
+        bool const authorityChanged=runtimeKind!=g.stage0FarFieldRuntimeKind
+            ||control!=g.stage0FarFieldControl;
+        bool const anchorChanged=authorityChanged||anchorX!=g.stage0FarFieldAnchorX
+            ||anchorY!=g.stage0FarFieldAnchorY||g.stage0FarCoarseTiles.empty();
+
+        if(authorityChanged){g.stage0FarLastFeetValid=false;}
+        bool const profileWaterfall=s_stage11Waterfall.collecting
+            &&(g.certStage11ResidencyWaterfall||g.certStage11ShiftScaling
+               ||g.certStage11FreeFly)
+            &&IsFaultDisplacementView(g.stage0PlayView);
+        LARGE_INTEGER waterfallStart{},waterfallQpf{};
+        if(anchorChanged&&profileWaterfall)
+        {
+            QueryPerformanceFrequency(&waterfallQpf);QueryPerformanceCounter(&waterfallStart);
+            ++s_stage11Waterfall.farFieldRebuilds;
+            if(GetCurrentThreadId()!=s_stage11Waterfall.frameThreadId)
+            {++s_stage11Waterfall.offFrameThreadBuilds;}
+        }
+
+        // Aged far resources return to a private pool. They are not recompiled
+        // while the driver may still be consuming the previous frame.
+        ULONGLONG const now=GetTickCount64();
+        while(!g.stage0FarRetiredLists.empty()
+            &&g.stage0FarRetiredLists.front().safeAfterMs<=now)
+        {
+            if(g.stage0FarRetiredLists.front().list)
+            {g.stage0FarFreeLists.push_back(g.stage0FarRetiredLists.front().list);}
+            g.stage0FarRetiredLists.pop_front();
+        }
+        auto retireFarList=[&](GLuint list)
+        {
+            if(list)g.stage0FarRetiredLists.push_back(
+                Stage0RetiredDisplayList{list,GetTickCount64()+100ull});
+        };
+        auto allocFarList=[&]()->GLuint
+        {
+            if(g.stage0FarFreeLists.empty())
+            {
+                // Reserve the complete bounded far-field working set during
+                // cold warmup. Anchor shifts then reuse persistent IDs instead
+                // of asking the driver for another range on a traversal frame.
+                constexpr GLsizei kBatch=4096;
+                GLuint const base=glGenLists(kBatch);
+                if(base)
+                {
+                    for(GLuint i=1;i<(GLuint)kBatch;++i)
+                    {g.stage0FarFreeLists.push_back(base+i);}
+                    return base;
+                }
+                return AllocDisplayListOutsideFonts();
+            }
+            GLuint const list=g.stage0FarFreeLists.back();
+            g.stage0FarFreeLists.pop_back();return list;
+        };
+
+        if(anchorChanged)
+        {
+            if(authorityChanged)
+            {
+                for(auto const& kv:g.stage0FarCoarseTiles)retireFarList(kv.second.list);
+                for(auto const& kv:g.stage0FarStitchTiles)retireFarList(kv.second.list);
+                g.stage0FarCoarseTiles.clear();g.stage0FarStitchTiles.clear();
+                g.stage0FarSurfaceCache.clear();g.stage0FarFilteredCache.clear();
+                g.stage0FarMaterialCache.clear();
+            }
+            g.stage0FarFieldAnchorX=anchorX;g.stage0FarFieldAnchorY=anchorY;
+            g.stage0FarFieldRuntimeKind=runtimeKind;g.stage0FarFieldControl=control;
+
+            if(authorityChanged||g.stage0FarLastPruneAnchorX==INT_MIN)
+            {g.stage0FarLastPruneAnchorX=anchorX;g.stage0FarLastPruneAnchorY=anchorY;}
+            g.stage0FarSurfaceCache.reserve(32768);g.stage0FarFilteredCache.reserve(32768);
+            g.stage0FarMaterialCache.reserve(32768);
+
+            auto exactSurface=[&](float x,float y)->float
+            {
+                uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                auto const it=g.stage0FarSurfaceCache.find(key);
+                if(it!=g.stage0FarSurfaceCache.end())return it->second;
+                LARGE_INTEGER q0{},q1{};if(profileWaterfall)QueryPerformanceCounter(&q0);
+                float z=0.f;Stage0CalibrationSurfaceZ(x,y,z);
+                if(profileWaterfall)
+                {
+                    QueryPerformanceCounter(&q1);++s_stage11Waterfall.farSurfaceQueries;
+                    s_stage11Waterfall.farSurfaceMs+=1000.0*(double)(q1.QuadPart-q0.QuadPart)
+                        /(double)waterfallQpf.QuadPart;
+                }
+                g.stage0FarSurfaceCache.emplace(key,z);return z;
+            };
+            float const outerMinX=bounds.minX-kStitchM,outerMinY=bounds.minY-kStitchM;
+            float const outerMaxX=bounds.maxX+kStitchM,outerMaxY=bounds.maxY+kStitchM;
+            float const stitchOffsetX=outerMinX
+                -std::floor(outerMinX/kStitchStepM)*kStitchStepM;
+            float const stitchOffsetY=outerMinY
+                -std::floor(outerMinY/kStitchStepM)*kStitchStepM;
+            float const coarseOffsetX=outerMinX
+                -std::floor(outerMinX/(float)kFarStepM)*(float)kFarStepM;
+            float const coarseOffsetY=outerMinY
+                -std::floor(outerMinY/(float)kFarStepM)*(float)kFarStepM;
+            float gridMinX=outerMinX,gridMinY=outerMinY;
+            while(gridMinX>anchorX-kExtentM)gridMinX-=kFarStepM;
+            while(gridMinY>anchorY-kExtentM)gridMinY-=kFarStepM;
+            float const gridMaxX=(float)(anchorX+kExtentM),gridMaxY=(float)(anchorY+kExtentM);
+            auto filteredCoarseVertex=[&](float x,float y)->float
+            {
+                uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                auto const cached=g.stage0FarFilteredCache.find(key);
+                if(cached!=g.stage0FarFilteredCache.end())return cached->second;
+                float const centerZ=exactSurface(x,y);float result=centerZ;
+                if((IsDifferentialErosionView(g.stage0PlayView)||IsGraniteIntrusionView(g.stage0PlayView)
+                    ||IsContactMineralizationView(g.stage0PlayView)||IsFaultDisplacementView(g.stage0PlayView)
+                    ||IsCutCOccupancyView(g.stage0PlayView))&&g.causalVisibleRuntime)
+                {
+                    float const stage7=(float)g.causalVisibleRuntime->AuthoritySurfaceZ(x,y);
+                    result=stage7+.30f*(centerZ-stage7);
+                }
+                g.stage0FarFilteredCache.emplace(key,result);return result;
+            };
+            std::unordered_map<uint64_t,float> localCoarseSurface;
+            std::unordered_map<uint64_t,float> localStitchSurface;
+            localCoarseSurface.reserve(32768);localStitchSurface.reserve(32768);
+            auto rawCoarseSurface=[&](float x,float y)->float
+            {
+                int const gx=(int)std::floor((x-outerMinX)/(float)kFarStepM);
+                int const gy=(int)std::floor((y-outerMinY)/(float)kFarStepM);
+                float const x0=outerMinX+gx*kFarStepM,y0=outerMinY+gy*kFarStepM;
+                float const tx=(x-x0)/(float)kFarStepM,ty=(y-y0)/(float)kFarStepM;
+                float const z00=filteredCoarseVertex(x0,y0);
+                float const z10=filteredCoarseVertex(x0+kFarStepM,y0);
+                float const z01=filteredCoarseVertex(x0,y0+kFarStepM);
+                float const z11=filteredCoarseVertex(x0+kFarStepM,y0+kFarStepM);
+                if(tx+ty<=1.f)return z00+tx*(z10-z00)+ty*(z01-z00);
+                return z11+(1.f-tx)*(z01-z11)+(1.f-ty)*(z10-z11);
+            };
+            auto coarseSurface=[&](float x,float y)->float
+            {
+                uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                auto const cached=localCoarseSurface.find(key);
+                if(cached!=localCoarseSurface.end())return cached->second;
+                float const z=rawCoarseSurface(x,y);localCoarseSurface.emplace(key,z);return z;
+            };
+            auto stitchSurface=[&](float x,float y)->float
+            {
+                uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                auto const cached=localStitchSurface.find(key);
+                if(cached!=localStitchSurface.end())return cached->second;
+                float const outsideX=(std::max)({bounds.minX-x,0.f,x-bounds.maxX});
+                float const outsideY=(std::max)({bounds.minY-y,0.f,y-bounds.maxY});
+                float t=std::clamp((std::max)(outsideX,outsideY)/kStitchM,0.f,1.f);
+                t=t*t*(3.f-2.f*t);
+                float const z=exactSurface(x,y)*(1.f-t)+coarseSurface(x,y)*t;
+                localStitchSurface.emplace(key,z);return z;
+            };
+            auto materialAt=[&](float x,float y,float z,std::string& owned)->char const*
+            {
+                if(IsCausalPlayableView(g.stage0PlayView))
+                {
+                    uint64_t const key=CellKey((int)std::lround(x*4.f),(int)std::lround(y*4.f));
+                    auto const cached=g.stage0FarMaterialCache.find(key);
+                    if(cached!=g.stage0FarMaterialCache.end())
+                    {
+                        if(profileWaterfall)++s_stage11Waterfall.farMaterialCacheHits;
+                        owned=cached->second;return owned.c_str();
+                    }
+                    LARGE_INTEGER q0{},q1{};if(profileWaterfall)QueryPerformanceCounter(&q0);
+                    auto const geology=CausalGeologyAt(g.stage0PlayView,x,y,z-.001f);
+                    if(profileWaterfall)
+                    {
+                        QueryPerformanceCounter(&q1);++s_stage11Waterfall.farMaterialQueries;
+                        s_stage11Waterfall.farMaterialMs+=1000.0*(double)(q1.QuadPart-q0.QuadPart)
+                            /(double)waterfallQpf.QuadPart;
+                    }
+                    if(geology.found)
+                    {owned=geology.material;g.stage0FarMaterialCache.emplace(key,owned);return owned.c_str();}
+                }
+                return "dirt";
+            };
+            struct CachedColor{float r=0.f,g=0.f,b=0.f;};
+            std::unordered_map<uint64_t,CachedColor> localColorCache;
+            localColorCache.reserve(65536);
+            auto emitCell=[&](float x,float y,float step,bool stitch,int& tris)
+            {
+                float const z00=stitch?stitchSurface(x,y):coarseSurface(x,y);
+                float const z10=stitch?stitchSurface(x+step,y):coarseSurface(x+step,y);
+                float const z01=stitch?stitchSurface(x,y+step):coarseSurface(x,y+step);
+                float const z11=stitch?stitchSurface(x+step,y+step):coarseSurface(x+step,y+step);
+                float const dzdx=((z10+z11)-(z00+z01))/(2.f*step);
+                float const dzdy=((z01+z11)-(z00+z10))/(2.f*step);
+                float const nx=-dzdx,ny=-dzdy,nz=1.f;
+                std::string owned;char const* material=materialAt(x+.5f*step,y+.5f*step,
+                    .25f*(z00+z10+z01+z11),owned);
+                uint8_t centerR8=94,centerG8=77,centerB8=56;CapColor(material,centerR8,centerG8,centerB8);
+                auto cornerColor=[&](float sx,float sy,float sz,float& r,float& green,float& b)
+                {
+                    uint64_t const key=CellKey((int)std::lround(sx*4.f),(int)std::lround(sy*4.f));
+                    auto const cached=localColorCache.find(key);
+                    if(cached!=localColorCache.end())
+                    {r=cached->second.r;green=cached->second.g;b=cached->second.b;return;}
+                    std::string cornerOwned;char const* cornerMaterial=materialAt(sx,sy,sz-.001f,cornerOwned);
+                    uint8_t r8=94,g8=77,b8=56;CapColor(cornerMaterial,r8,g8,b8);
+                    r=(float)r8;green=(float)g8;b=(float)b8;
+                    localColorCache.emplace(key,CachedColor{r,green,b});
+                };
+                float r00,g00,b00,r10,g10,b10,r01,g01,b01,r11,g11,b11;
+                cornerColor(x,y,z00,r00,g00,b00);cornerColor(x+step,y,z10,r10,g10,b10);
+                cornerColor(x,y+step,z01,r01,g01,b01);cornerColor(x+step,y+step,z11,r11,g11,b11);
+                float blend=1.f;
+                if(stitch)
+                {
+                    float const outsideX=(std::max)({bounds.minX-(x+.5f*step),0.f,(x+.5f*step)-bounds.maxX});
+                    float const outsideY=(std::max)({bounds.minY-(y+.5f*step),0.f,(y+.5f*step)-bounds.maxY});
+                    blend=std::clamp((std::max)(outsideX,outsideY)/kStitchM,0.f,1.f);
+                    blend=blend*blend*(3.f-2.f*blend);
+                }
+                float const r=(1.f-blend)*(float)centerR8+blend*.25f*(r00+r10+r01+r11);
+                float const green=(1.f-blend)*(float)centerG8+blend*.25f*(g00+g10+g01+g11);
+                float const b=(1.f-blend)*(float)centerB8+blend*.25f*(b00+b10+b01+b11);
+                EmitStage0FarFieldTriangle(x,y,z00,x+step,y,z10,x,y+step,z01,
+                    material,nx,ny,nz,r,green,b);
+                EmitStage0FarFieldTriangle(x+step,y,z10,x+step,y+step,z11,x,y+step,z01,
+                    material,nx,ny,nz,r,green,b);tris+=2;
+            };
+            auto hashValue=[](uint64_t& hash,void const* data,size_t bytes)
+            {
+                auto const* p=(unsigned char const*)data;
+                for(size_t i=0;i<bytes;++i){hash^=p[i];hash*=1099511628211ull;}
+            };
+            LARGE_INTEGER tileDiscoveryStart{},tileDiscoveryEnd{};
+            if(profileWaterfall)QueryPerformanceCounter(&tileDiscoveryStart);
+            struct TileSpec{int tx=0,ty=0;uint64_t key=0,signature=0;bool stitch=false;};
+            std::vector<TileSpec> desired;desired.reserve(800);
+            std::unordered_set<uint64_t> desiredCoarse,desiredStitch;
+            int const stx0=(int)std::floor((outerMinX-stitchOffsetX)/kStitchTileM);
+            int const sty0=(int)std::floor((outerMinY-stitchOffsetY)/kStitchTileM);
+            int const stx1=(int)std::floor((outerMaxX-stitchOffsetX-.001f)/kStitchTileM);
+            int const sty1=(int)std::floor((outerMaxY-stitchOffsetY-.001f)/kStitchTileM);
+            for(int ty=sty0;ty<=sty1;++ty)for(int tx=stx0;tx<=stx1;++tx)
+            {
+                uint64_t signature=14695981039346656037ull;bool any=false;
+                float const tileX=(float)(tx*kStitchTileM)+stitchOffsetX;
+                float const tileY=(float)(ty*kStitchTileM)+stitchOffsetY;
+                for(float y=tileY;y<tileY+kStitchTileM-.001f;y+=kStitchStepM)
+                for(float x=tileX;x<tileX+kStitchTileM-.001f;x+=kStitchStepM)
+                {
+                    float const mx=x+.5f*kStitchStepM,my=y+.5f*kStitchStepM;
+                    bool const include=mx>=outerMinX&&mx<outerMaxX&&my>=outerMinY&&my<outerMaxY
+                        &&!(mx>bounds.minX&&mx<bounds.maxX&&my>bounds.minY&&my<bounds.maxY);
+                    hashValue(signature,&include,sizeof(include));
+                    if(include)
+                    {
+                        float const outsideX=(std::max)({bounds.minX-mx,0.f,mx-bounds.maxX});
+                        float const outsideY=(std::max)({bounds.minY-my,0.f,my-bounds.maxY});
+                        float t=std::clamp((std::max)(outsideX,outsideY)/kStitchM,0.f,1.f);
+                        hashValue(signature,&t,sizeof(t));any=true;
+                    }
+                }
+                if(any)
+                {
+                    uint64_t const key=CellKey(tx,ty);desiredStitch.insert(key);
+                    desired.push_back(TileSpec{tx,ty,key,signature,true});
+                }
+            }
+            int const ctx0=(int)std::floor((gridMinX-coarseOffsetX)/kCoarseTileM);
+            int const cty0=(int)std::floor((gridMinY-coarseOffsetY)/kCoarseTileM);
+            int const ctx1=(int)std::floor((gridMaxX-coarseOffsetX-.001f)/kCoarseTileM);
+            int const cty1=(int)std::floor((gridMaxY-coarseOffsetY-.001f)/kCoarseTileM);
+            for(int ty=cty0;ty<=cty1;++ty)for(int tx=ctx0;tx<=ctx1;++tx)
+            {
+                uint64_t signature=14695981039346656037ull;bool any=false;
+                float const tileX=(float)(tx*kCoarseTileM)+coarseOffsetX;
+                float const tileY=(float)(ty*kCoarseTileM)+coarseOffsetY;
+                for(float y=tileY;y<tileY+kCoarseTileM-.001f;y+=kFarStepM)
+                for(float x=tileX;x<tileX+kCoarseTileM-.001f;x+=kFarStepM)
+                {
+                    float const mx=x+.5f*kFarStepM,my=y+.5f*kFarStepM;
+                    bool const include=!(mx>outerMinX&&mx<outerMaxX
+                        &&my>outerMinY&&my<outerMaxY);
+                    hashValue(signature,&include,sizeof(include));any=any||include;
+                }
+                if(any)
+                {
+                    uint64_t const key=CellKey(tx,ty);desiredCoarse.insert(key);
+                    desired.push_back(TileSpec{tx,ty,key,signature,false});
+                }
+            }
+            if(profileWaterfall)
+            {
+                QueryPerformanceCounter(&tileDiscoveryEnd);
+                s_stage11Waterfall.farTileDiscoveryMs+=1000.0
+                    *(double)(tileDiscoveryEnd.QuadPart-tileDiscoveryStart.QuadPart)
+                    /(double)waterfallQpf.QuadPart;
+            }
+
+            auto retireAbsent=[&](auto& tiles,std::unordered_set<uint64_t> const& required)
+            {
+                for(auto it=tiles.begin();it!=tiles.end();)
+                {
+                    if(!required.count(it->first))
+                    {
+                        retireFarList(it->second.list);it=tiles.erase(it);
+                        if(profileWaterfall)++s_stage11Waterfall.farTilesRetired;
+                    }else{++it;}
+                }
+            };
+            retireAbsent(g.stage0FarStitchTiles,desiredStitch);
+            retireAbsent(g.stage0FarCoarseTiles,desiredCoarse);
+            int discovered=0;
+            for(TileSpec const& spec:desired)
+            {
+                auto& tiles=spec.stitch?g.stage0FarStitchTiles:g.stage0FarCoarseTiles;
+                auto existing=tiles.find(spec.key);
+                if(existing!=tiles.end()&&existing->second.contentSignature==spec.signature)
+                {if(profileWaterfall)++s_stage11Waterfall.farTilesRetained;continue;}
+                ++discovered;
+                if(profileWaterfall)++s_stage11Waterfall.farTilesDiscovered;
+                if(existing!=tiles.end())
+                {retireFarList(existing->second.list);tiles.erase(existing);}
+                LARGE_INTEGER resource0{},resource1{},compile0{},compile1{},publish0{},publish1{};
+                if(profileWaterfall)QueryPerformanceCounter(&resource0);
+                GLuint const list=allocFarList();
+                if(profileWaterfall)
+                {
+                    QueryPerformanceCounter(&resource1);
+                    s_stage11Waterfall.farTileResourceMs+=1000.0
+                        *(double)(resource1.QuadPart-resource0.QuadPart)/(double)waterfallQpf.QuadPart;
+                }
+                if(!list)continue;
+                int tris=0;float const tileM=spec.stitch?(float)kStitchTileM:(float)kCoarseTileM;
+                float const step=spec.stitch?kStitchStepM:(float)kFarStepM;
+                float const tileX=(float)spec.tx*tileM
+                    +(spec.stitch?stitchOffsetX:coarseOffsetX);
+                float const tileY=(float)spec.ty*tileM
+                    +(spec.stitch?stitchOffsetY:coarseOffsetY);
+                if(profileWaterfall)QueryPerformanceCounter(&compile0);
+                glNewList(list,GL_COMPILE);glShadeModel(GL_FLAT);glBegin(GL_TRIANGLES);
+                for(float y=tileY;y<tileY+tileM-.001f;y+=step)
+                for(float x=tileX;x<tileX+tileM-.001f;x+=step)
+                {
+                    float const mx=x+.5f*step,my=y+.5f*step;
+                    bool const include=spec.stitch
+                        ?(mx>=outerMinX&&mx<outerMaxX&&my>=outerMinY&&my<outerMaxY
+                          &&!(mx>bounds.minX&&mx<bounds.maxX&&my>bounds.minY&&my<bounds.maxY))
+                        :!(mx>outerMinX&&mx<outerMaxX&&my>outerMinY&&my<outerMaxY);
+                    if(include)emitCell(x,y,step,spec.stitch,tris);
+                }
+                glEnd();glEndList();
+                if(profileWaterfall)
+                {
+                    QueryPerformanceCounter(&compile1);
+                    s_stage11Waterfall.farTileCompileMs+=1000.0
+                        *(double)(compile1.QuadPart-compile0.QuadPart)/(double)waterfallQpf.QuadPart;
+                    QueryPerformanceCounter(&publish0);
+                }
+                tiles.emplace(spec.key,Stage0FarFieldTile{list,tris,spec.signature});
+                if(profileWaterfall)
+                {
+                    QueryPerformanceCounter(&publish1);
+                    s_stage11Waterfall.farTilePublishMs+=1000.0
+                        *(double)(publish1.QuadPart-publish0.QuadPart)/(double)waterfallQpf.QuadPart;
+                }
+                if(profileWaterfall)
+                {
+                    ++s_stage11Waterfall.farTilesBuilt;
+                    if(spec.stitch)++s_stage11Waterfall.farStitchTilesBuilt;
+                    else ++s_stage11Waterfall.farCoarseTilesBuilt;
+                    ++s_stage11Waterfall.farTilesPublished;
+                }
+            }
+            if(profileWaterfall)
+            {s_stage11Waterfall.farTilesPendingMax=(std::max)(s_stage11Waterfall.farTilesPendingMax,discovered);}
+            g.stage0FarFieldTriangles=0;
+            for(auto const& kv:g.stage0FarCoarseTiles)g.stage0FarFieldTriangles+=kv.second.tris;
+            for(auto const& kv:g.stage0FarStitchTiles)g.stage0FarFieldTriangles+=kv.second.tris;
+            if(profileWaterfall)
+            {
+                LARGE_INTEGER q1{};QueryPerformanceCounter(&q1);
+                s_stage11Waterfall.farFieldTotalMs+=1000.0
+                    *(double)(q1.QuadPart-waterfallStart.QuadPart)/(double)waterfallQpf.QuadPart;
+            }
+        }
+        // Retire the exiting cache fringe on the first ordinary frame after a
+        // shift. Publication has already completed, so cache lifecycle work
+        // cannot lengthen the boundary-crossing frame.
+        if(!anchorChanged&&g.stage0FarLastPruneAnchorX!=INT_MIN
+            &&(g.stage0FarLastPruneAnchorX!=anchorX||g.stage0FarLastPruneAnchorY!=anchorY))
+        {
+            LARGE_INTEGER prune0{},prune1{},pruneQpf{};
+            if(profileWaterfall){QueryPerformanceFrequency(&pruneQpf);QueryPerformanceCounter(&prune0);}
+            int const oldAnchorX=g.stage0FarLastPruneAnchorX;
+            int const oldAnchorY=g.stage0FarLastPruneAnchorY;
+            auto retireExitedFringe=[&](auto& cache,int scale)
+            {
+                int const radius=(kExtentM+2*(int)kStitchM+kCoarseTileM)*scale;
+                int const oldX=oldAnchorX*scale,oldY=oldAnchorY*scale;
+                int const newX=anchorX*scale,newY=anchorY*scale;
+                if(newX>oldX)for(int qx=oldX-radius;qx<newX-radius;++qx)
+                for(int qy=oldY-radius;qy<=oldY+radius;++qy){cache.erase(CellKey(qx,qy));}
+                else if(newX<oldX)for(int qx=newX+radius+1;qx<=oldX+radius;++qx)
+                for(int qy=oldY-radius;qy<=oldY+radius;++qy){cache.erase(CellKey(qx,qy));}
+                if(newY>oldY)for(int qy=oldY-radius;qy<newY-radius;++qy)
+                for(int qx=newX-radius;qx<=newX+radius;++qx){cache.erase(CellKey(qx,qy));}
+                else if(newY<oldY)for(int qy=newY+radius+1;qy<=oldY+radius;++qy)
+                for(int qx=newX-radius;qx<=newX+radius;++qx){cache.erase(CellKey(qx,qy));}
+            };
+            retireExitedFringe(g.stage0FarSurfaceCache,2);
+            retireExitedFringe(g.stage0FarFilteredCache,2);
+            retireExitedFringe(g.stage0FarMaterialCache,4);
+            g.stage0FarLastPruneAnchorX=anchorX;g.stage0FarLastPruneAnchorY=anchorY;
+            if(profileWaterfall)
+            {
+                QueryPerformanceCounter(&prune1);
+                if(pruneQpf.QuadPart>0)s_stage11Waterfall.farCachePruneMs+=1000.0
+                    *(double)(prune1.QuadPart-prune0.QuadPart)/(double)pruneQpf.QuadPart;
+            }
+        }
+        // Derive the exact vertices for four likely future stitch positions
+        // while ordinary frames have headroom. This changes no authority and
+        // publishes no geometry; it only prevents the next anchor frame from
+        // synchronously querying an entire newly exposed high-resolution strip.
+        if(!anchorChanged&&IsCausalPlayableView(g.stage0PlayView))
+        {
+            int const dirX=g.stage0FarTravelDirX,dirY=g.stage0FarTravelDirY;
+            // Lookahead may only spend headroom that actually exists inside the
+            // 16.67 ms gameplay budget. A fixed sample count is not a budget: at
+            // one sample cost it was costing about 11.6 ms of every walking
+            // frame and 16.0 ms of every sprinting frame, which is the whole
+            // budget before any real frame work. Deadline first, sample cap
+            // second, and both loops share one deadline so the frame total is
+            // bounded rather than each loop separately.
+            LARGE_INTEGER lookQpf{},lookStart{};
+            QueryPerformanceFrequency(&lookQpf);QueryPerformanceCounter(&lookStart);
+            double lookaheadBudgetMs=0.0;
+            if(lookQpf.QuadPart>0)
+            {
+                double const spentMs=g.stage0TickStartQpc!=0
+                    ?1000.0*(double)(lookStart.QuadPart-g.stage0TickStartQpc)
+                        /(double)lookQpf.QuadPart
+                    :0.0;
+                lookaheadBudgetMs=kStage0FrameBudgetMs-kStage0LookaheadReserveMs-spentMs;
+            }
+            auto lookaheadExpired=[&]()->bool
+            {
+                if(lookaheadBudgetMs<=0.0||lookQpf.QuadPart<=0)return true;
+                LARGE_INTEGER nowQpc{};QueryPerformanceCounter(&nowQpc);
+                return 1000.0*(double)(nowQpc.QuadPart-lookStart.QuadPart)
+                    /(double)lookQpf.QuadPart>=lookaheadBudgetMs;
+            };
+            if((dirX||dirY)&&lookaheadBudgetMs>0.0)
+            {
+                LARGE_INTEGER q0{},q1{},qpf{};
+                if(profileWaterfall){QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);}
+                int budget=5000;
+                int sinceDeadlineCheck=0;
+                bool outOfTime=false;
+                for(int ahead=1;ahead<=4&&budget>0&&!outOfTime;++ahead)
+                {
+                    float const shiftX=(float)(dirX*ahead*kStage0TerrainBlockCells);
+                    float const shiftY=(float)(dirY*ahead*kStage0TerrainBlockCells);
+                    float const exactMinX=bounds.minX+shiftX,exactMinY=bounds.minY+shiftY;
+                    float const exactMaxX=bounds.maxX+shiftX,exactMaxY=bounds.maxY+shiftY;
+                    float const outerMinX=exactMinX-kStitchM,outerMinY=exactMinY-kStitchM;
+                    float const outerMaxX=exactMaxX+kStitchM,outerMaxY=exactMaxY+kStitchM;
+                    float const x0=outerMinX,y0=outerMinY;
+                    float const x1=outerMaxX,y1=outerMaxY;
+                    for(float y=y0;y<=y1+.001f&&budget>0&&!outOfTime;y+=kStitchStepM)
+                    for(float x=x0;x<=x1+.001f&&budget>0&&!outOfTime;x+=kStitchStepM)
+                    {
+                        bool const inOuter=x>=outerMinX-.5f&&x<=outerMaxX+.5f
+                            &&y>=outerMinY-.5f&&y<=outerMaxY+.5f;
+                        bool const strictlyInside=x>exactMinX&&x<exactMaxX
+                            &&y>exactMinY&&y<exactMaxY;
+                        if(!inOuter||strictlyInside)continue;
+                        uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                        if(g.stage0FarSurfaceCache.count(key))continue;
+                        float z=0.f;Stage0CalibrationSurfaceZ(x,y,z);
+                        g.stage0FarSurfaceCache.emplace(key,z);--budget;
+                        if(profileWaterfall)++s_stage11Waterfall.farPrefetchSurfaceQueries;
+                        if(++sinceDeadlineCheck>=64)
+                        {sinceDeadlineCheck=0;outOfTime=lookaheadExpired();}
+                    }
+                }
+                // Material is depth-sensitive while the stitch blends from the
+                // exact live boundary to the coarse far field. Prefetch future
+                // anchors strictly nearest-first and in the same cell/corner order
+                // used by tile compilation. This keeps cache ownership equivalent
+                // to encountering those anchors in traversal order.
+                int materialBudget=5000;
+                for(int materialAhead=1;materialAhead<=4&&materialBudget>0&&!outOfTime;++materialAhead)
+                {
+                float const shiftX=(float)(dirX*materialAhead*kStage0TerrainBlockCells);
+                float const shiftY=(float)(dirY*materialAhead*kStage0TerrainBlockCells);
+                float const nextExactMinX=bounds.minX+shiftX;
+                float const nextExactMinY=bounds.minY+shiftY;
+                float const nextExactMaxX=bounds.maxX+shiftX;
+                float const nextExactMaxY=bounds.maxY+shiftY;
+                float const nextOuterMinX=nextExactMinX-kStitchM;
+                float const nextOuterMinY=nextExactMinY-kStitchM;
+                float const nextOuterMaxX=nextExactMaxX+kStitchM;
+                float const nextOuterMaxY=nextExactMaxY+kStitchM;
+                auto tryNextExact=[&](float x,float y,float& z)->bool
+                {
+                    uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                    auto const it=g.stage0FarSurfaceCache.find(key);
+                    if(it==g.stage0FarSurfaceCache.end())return false;
+                    z=it->second;return true;
+                };
+                auto tryNextFiltered=[&](float x,float y,float& z)->bool
+                {
+                    uint64_t const key=CellKey((int)std::lround(x*2.f),(int)std::lround(y*2.f));
+                    auto const cached=g.stage0FarFilteredCache.find(key);
+                    if(cached!=g.stage0FarFilteredCache.end()){z=cached->second;return true;}
+                    float center=0.f;if(!tryNextExact(x,y,center))return false;
+                    z=center;
+                    if((IsDifferentialErosionView(g.stage0PlayView)
+                        ||IsGraniteIntrusionView(g.stage0PlayView)
+                        ||IsContactMineralizationView(g.stage0PlayView)
+                        ||IsFaultDisplacementView(g.stage0PlayView)
+                        ||IsCutCOccupancyView(g.stage0PlayView))&&g.causalVisibleRuntime)
+                    {
+                        float const stage7=(float)g.causalVisibleRuntime->AuthoritySurfaceZ(x,y);
+                        z=stage7+.30f*(center-stage7);
+                    }
+                    g.stage0FarFilteredCache.emplace(key,z);return true;
+                };
+                auto tryNextCoarse=[&](float x,float y,float& z)->bool
+                {
+                    int const gx=(int)std::floor((x-nextOuterMinX)/(float)kFarStepM);
+                    int const gy=(int)std::floor((y-nextOuterMinY)/(float)kFarStepM);
+                    float const x0=nextOuterMinX+gx*kFarStepM;
+                    float const y0=nextOuterMinY+gy*kFarStepM;
+                    float z00=0.f,z10=0.f,z01=0.f,z11=0.f;
+                    if(!tryNextFiltered(x0,y0,z00)
+                        ||!tryNextFiltered(x0+kFarStepM,y0,z10)
+                        ||!tryNextFiltered(x0,y0+kFarStepM,z01)
+                        ||!tryNextFiltered(x0+kFarStepM,y0+kFarStepM,z11))return false;
+                    float const tx=(x-x0)/(float)kFarStepM;
+                    float const ty=(y-y0)/(float)kFarStepM;
+                    z=tx+ty<=1.f?z00+tx*(z10-z00)+ty*(z01-z00)
+                        :z11+(1.f-tx)*(z01-z11)+(1.f-ty)*(z10-z11);
+                    return true;
+                };
+                auto tryNextStitch=[&](float x,float y,float& z)->bool
+                {
+                    float exact=0.f,coarse=0.f;
+                    if(!tryNextExact(x,y,exact)||!tryNextCoarse(x,y,coarse))return false;
+                    float const outsideX=(std::max)({nextExactMinX-x,0.f,x-nextExactMaxX});
+                    float const outsideY=(std::max)({nextExactMinY-y,0.f,y-nextExactMaxY});
+                    float t=std::clamp((std::max)(outsideX,outsideY)/kStitchM,0.f,1.f);
+                    t=t*t*(3.f-2.f*t);z=exact*(1.f-t)+coarse*t;return true;
+                };
+                auto prefetchMaterial=[&](float x,float y,float queryZ)
+                {
+                    if(materialBudget<=0||outOfTime)return;
+                    uint64_t const key=CellKey((int)std::lround(x*4.f),(int)std::lround(y*4.f));
+                    if(g.stage0FarMaterialCache.count(key))return;
+                    auto const geology=CausalGeologyAt(g.stage0PlayView,x,y,queryZ);
+                    --materialBudget;
+                    if(profileWaterfall)++s_stage11Waterfall.farPrefetchMaterialQueries;
+                    if(geology.found)g.stage0FarMaterialCache.emplace(key,geology.material);
+                    if(++sinceDeadlineCheck>=64)
+                    {sinceDeadlineCheck=0;outOfTime=lookaheadExpired();}
+                };
+                for(float y=nextOuterMinY;y<nextOuterMaxY-.001f&&materialBudget>0&&!outOfTime;y+=kStitchStepM)
+                for(float x=nextOuterMinX;x<nextOuterMaxX-.001f&&materialBudget>0&&!outOfTime;x+=kStitchStepM)
+                {
+                    float const mx=x+.5f*kStitchStepM,my=y+.5f*kStitchStepM;
+                    bool const include=mx>=nextOuterMinX&&mx<nextOuterMaxX
+                        &&my>=nextOuterMinY&&my<nextOuterMaxY
+                        &&!(mx>nextExactMinX&&mx<nextExactMaxX
+                            &&my>nextExactMinY&&my<nextExactMaxY);
+                    if(!include)continue;
+                    auto materialCached=[&](float sx,float sy)
+                    {
+                        uint64_t const key=CellKey((int)std::lround(sx*4.f),
+                            (int)std::lround(sy*4.f));
+                        return g.stage0FarMaterialCache.count(key)!=0;
+                    };
+                    if(materialCached(mx,my)&&materialCached(x,y)
+                        &&materialCached(x+kStitchStepM,y)
+                        &&materialCached(x,y+kStitchStepM)
+                        &&materialCached(x+kStitchStepM,y+kStitchStepM))continue;
+                    float z00=0.f,z10=0.f,z01=0.f,z11=0.f;
+                    if(!tryNextStitch(x,y,z00)
+                        ||!tryNextStitch(x+kStitchStepM,y,z10)
+                        ||!tryNextStitch(x,y+kStitchStepM,z01)
+                        ||!tryNextStitch(x+kStitchStepM,y+kStitchStepM,z11))continue;
+                    prefetchMaterial(mx,my,.25f*(z00+z10+z01+z11)-.001f);
+                    prefetchMaterial(x,y,z00-.002f);
+                    prefetchMaterial(x+kStitchStepM,y,z10-.002f);
+                    prefetchMaterial(x,y+kStitchStepM,z01-.002f);
+                    prefetchMaterial(x+kStitchStepM,y+kStitchStepM,z11-.002f);
+                }
+                }
+                if(profileWaterfall)
+                {
+                    QueryPerformanceCounter(&q1);
+                    if(qpf.QuadPart>0)s_stage11Waterfall.farPrefetchMs+=1000.0
+                        *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+                }
+            }
+        }
+        for(auto const& kv:g.stage0FarCoarseTiles)if(kv.second.list)glCallList(kv.second.list);
+        for(auto const& kv:g.stage0FarStitchTiles)if(kv.second.list)glCallList(kv.second.list);
+    }
+
+    void Stage0CalibrationSurfaceNormal( float anchorX, float anchorY, float out[3] )
+    {
+        constexpr float kNormalProbeM = 0.125f;
+        float zxp = 0.f, zxm = 0.f, zyp = 0.f, zym = 0.f;
+        Stage0CalibrationSurfaceZ( anchorX + kNormalProbeM, anchorY, zxp );
+        Stage0CalibrationSurfaceZ( anchorX - kNormalProbeM, anchorY, zxm );
+        Stage0CalibrationSurfaceZ( anchorX, anchorY + kNormalProbeM, zyp );
+        Stage0CalibrationSurfaceZ( anchorX, anchorY - kNormalProbeM, zym );
+        float const dzdx = ( zxp - zxm ) / ( 2.f * kNormalProbeM );
+        float const dzdy = ( zyp - zym ) / ( 2.f * kNormalProbeM );
+        float nx = -dzdx, ny = -dzdy, nz = 1.f;
+        float const length = std::sqrt( nx * nx + ny * ny + nz * nz );
+        if ( length > 1e-6f ) { nx /= length; ny /= length; nz /= length; }
+        out[0] = nx; out[1] = ny; out[2] = nz;
+    }
+
+    void Stage0CalibrationRenderPointAtZ( float anchorX, float anchorY, float surfaceZ,
+        float materialLiftM, float out[3], float normalOut[3] = nullptr )
+    {
+        constexpr float kDiagnosticOffsetM = 0.008f;
+        float normal[3];
+        Stage0CalibrationSurfaceNormal( anchorX, anchorY, normal );
+        float const lift = kDiagnosticOffsetM + materialLiftM;
+        out[0] = anchorX + normal[0] * lift;
+        out[1] = anchorY + normal[1] * lift;
+        out[2] = surfaceZ + normal[2] * lift;
+        if ( normalOut )
+        { normalOut[0] = normal[0]; normalOut[1] = normal[1]; normalOut[2] = normal[2]; }
+    }
+
+    void Stage0CalibrationRenderPoint( float anchorX, float anchorY,
+        float materialLiftM, float out[3], float normalOut[3] = nullptr )
+    {
+        float z = 0.f;
+        Stage0CalibrationSurfaceZ( anchorX, anchorY, z );
+        Stage0CalibrationRenderPointAtZ(
+            anchorX, anchorY, z, materialLiftM, out, normalOut );
+    }
+
+    struct Stage0OverlayPoint2 { float x = 0.f, y = 0.f; };
+
+    template<typename Inside, typename Intersect>
+    void ClipStage0OverlayPolygon( std::vector<Stage0OverlayPoint2>& polygon,
+        Inside inside, Intersect intersect )
+    {
+        if ( polygon.empty() ) { return; }
+        std::vector<Stage0OverlayPoint2> output;
+        output.reserve( polygon.size() + 2 );
+        Stage0OverlayPoint2 previous = polygon.back();
+        bool previousInside = inside( previous );
+        for ( Stage0OverlayPoint2 const& current : polygon )
+        {
+            bool const currentInside = inside( current );
+            if ( currentInside != previousInside )
+            { output.push_back( intersect( previous, current ) ); }
+            if ( currentInside ) { output.push_back( current ); }
+            previous = current;
+            previousInside = currentInside;
+        }
+        polygon.swap( output );
+    }
+
+    void ClipStage0OverlayTriangleToRect( Stage0OverlayPoint2 const triangle[3],
+        float x0, float y0, float x1, float y1,
+        std::vector<Stage0OverlayPoint2>& polygon )
+    {
+        polygon.assign( triangle, triangle + 3 );
+        auto atX = []( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b, float x ) {
+            float const t = std::fabs( b.x - a.x ) > 1e-7f ? ( x - a.x ) / ( b.x - a.x ) : 0.f;
+            return Stage0OverlayPoint2{ x, a.y + ( b.y - a.y ) * t };
+        };
+        auto atY = []( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b, float y ) {
+            float const t = std::fabs( b.y - a.y ) > 1e-7f ? ( y - a.y ) / ( b.y - a.y ) : 0.f;
+            return Stage0OverlayPoint2{ a.x + ( b.x - a.x ) * t, y };
+        };
+        ClipStage0OverlayPolygon( polygon,
+            [=]( Stage0OverlayPoint2 p ) { return p.x >= x0 - 1e-6f; },
+            [=]( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b ) { return atX( a, b, x0 ); } );
+        ClipStage0OverlayPolygon( polygon,
+            [=]( Stage0OverlayPoint2 p ) { return p.x <= x1 + 1e-6f; },
+            [=]( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b ) { return atX( a, b, x1 ); } );
+        ClipStage0OverlayPolygon( polygon,
+            [=]( Stage0OverlayPoint2 p ) { return p.y >= y0 - 1e-6f; },
+            [=]( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b ) { return atY( a, b, y0 ); } );
+        ClipStage0OverlayPolygon( polygon,
+            [=]( Stage0OverlayPoint2 p ) { return p.y <= y1 + 1e-6f; },
+            [=]( Stage0OverlayPoint2 a, Stage0OverlayPoint2 b ) { return atY( a, b, y1 ); } );
+    }
+
+    float Stage0OverlayTriangleZ( Stage0OverlayPoint2 const triangle[3],
+        float const z[3], Stage0OverlayPoint2 p )
+    {
+        float const denominator = ( triangle[1].y - triangle[2].y )
+            * ( triangle[0].x - triangle[2].x )
+            + ( triangle[2].x - triangle[1].x )
+            * ( triangle[0].y - triangle[2].y );
+        if ( std::fabs( denominator ) < 1e-8f ) { return z[0]; }
+        float const w0 = ( ( triangle[1].y - triangle[2].y ) * ( p.x - triangle[2].x )
+            + ( triangle[2].x - triangle[1].x ) * ( p.y - triangle[2].y ) ) / denominator;
+        float const w1 = ( ( triangle[2].y - triangle[0].y ) * ( p.x - triangle[2].x )
+            + ( triangle[0].x - triangle[2].x ) * ( p.y - triangle[2].y ) ) / denominator;
+        return w0 * z[0] + w1 * z[1] + ( 1.f - w0 - w1 ) * z[2];
+    }
+
+    void InvalidateStage0CalibrationSurface()
+    {
+        if ( g.stage0RulerList ) { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+        if ( g.stage0PaletteList ) { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
+        g.stage0RulerResidencyDigest = 0;
+        static float const offsets[3] = { 0.46f, 0.40f, 0.61f };
+        for ( int i = 0; i < 3; ++i )
+        {
+            float z = GradeToZ( g.gradeDatum );
+            Stage0CalibrationSurfaceZ( g.stage0Tools[i].x, g.stage0Tools[i].y, z );
+            g.stage0Tools[i].z = z + offsets[i];
+        }
+    }
+
+    std::unordered_map<uint64_t, Stage0TerrainBlock> const& Stage0DiagnosticTerrainPackages()
+    {
+        if ( IsVisibleExposureView( g.stage0PlayView ) ) { return g.stage7TerrainBlocks; }
+        if ( IsDifferentialErosionView( g.stage0PlayView )
+          || IsGraniteIntrusionView( g.stage0PlayView )
+          || IsContactMineralizationView( g.stage0PlayView )
+          || IsFaultDisplacementView( g.stage0PlayView )
+          || IsCutCOccupancyView( g.stage0PlayView ) )
+        { return g.stage8TerrainBlocks; }
+        return g.stage0TerrainBlocks;
+    }
+
+    uint64_t Stage0DiagnosticPackageKeyAt( float x, float y )
+    {
+        float const blockSize = IsVisibleExposureView( g.stage0PlayView )
+          || IsDifferentialErosionView( g.stage0PlayView )
+          || IsGraniteIntrusionView( g.stage0PlayView )
+          || IsContactMineralizationView( g.stage0PlayView )
+          || IsFaultDisplacementView( g.stage0PlayView )
+            ? (float)CausalVisibleExposure::kBlockSizeM
+            : (float)kStage0TerrainBlockCells;
+        int const bx = (int)std::floor( x / blockSize );
+        int const by = (int)std::floor( y / blockSize );
+        return CellKey( bx, by );
+    }
+
+    bool Stage0DiagnosticPackageActive( uint64_t key )
+    {
+        float const blockSize = IsVisibleExposureView( g.stage0PlayView )
+          || IsDifferentialErosionView( g.stage0PlayView )
+          || IsGraniteIntrusionView( g.stage0PlayView )
+          || IsContactMineralizationView( g.stage0PlayView )
+          || IsFaultDisplacementView( g.stage0PlayView )
+            ? (float)CausalVisibleExposure::kBlockSizeM
+            : (float)kStage0TerrainBlockCells;
+        int const bx = (int)(int32_t)( key >> 32 );
+        int const by = (int)(int32_t)( key & 0xffffffffu );
+        float const x0 = (float)bx * blockSize;
+        float const y0 = (float)by * blockSize;
+        float const nearX = std::clamp( g.feetX, x0, x0 + blockSize );
+        float const nearY = std::clamp( g.feetY, y0, y0 + blockSize );
+        float const dx = nearX - g.feetX, dy = nearY - g.feetY;
+        return dx * dx + dy * dy <= 64.f * 64.f;
+    }
+
+    bool Stage0DiagnosticPackageResidentAt( float x, float y )
+    {
+        auto const& packages = Stage0DiagnosticTerrainPackages();
+        uint64_t const key = Stage0DiagnosticPackageKeyAt( x, y );
+        return packages.count( key ) != 0 && Stage0DiagnosticPackageActive( key );
+    }
+
+    uint64_t Stage0DiagnosticResidencyDigest()
+    {
+        std::vector<uint64_t> keys;
+        auto const& packages = Stage0DiagnosticTerrainPackages();
+        keys.reserve( packages.size() );
+        for ( auto const& package : packages )
+        { if ( Stage0DiagnosticPackageActive( package.first ) ) { keys.push_back( package.first ); } }
+        std::sort( keys.begin(), keys.end() );
+        uint64_t digest = 14695981039346656037ull;
+        int const runtime = Stage0TerrainRuntimeKind( g.stage0PlayView );
+        int const laneBucket = (int)std::floor( g.feetX / 8.f );
+        CausalWorldGeology::HashAppend( digest, &runtime, sizeof( runtime ) );
+        CausalWorldGeology::HashAppend( digest, &g.terrainRev, sizeof( g.terrainRev ) );
+        CausalWorldGeology::HashAppend( digest, &laneBucket, sizeof( laneBucket ) );
+        for ( uint64_t const key : keys )
+        { CausalWorldGeology::HashAppend( digest, &key, sizeof( key ) ); }
+        return digest;
+    }
+
+    void SummonStage0Palette()
+    {
+        g.stage0CharacterOnly = false;
+        if ( g.stage0PaletteList )
+        { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
+        // The 4 x 25 m board is centered beside the player on a deterministic
+        // half-metre grid. Every emitted vertex is still fitted to live terrain.
+        g.stage0PaletteAnchorX = std::floor( g.feetX * 2.f ) * 0.5f + 5.f;
+        g.stage0PaletteAnchorY = std::floor( g.feetY * 2.f ) * 0.5f - 12.5f;
+        g.stage0PaletteHostPackage = Stage0DiagnosticPackageKeyAt(
+            g.stage0PaletteAnchorX + 2.f, g.stage0PaletteAnchorY + 12.5f );
+        g.stage0PaletteHostRuntime = Stage0TerrainRuntimeKind( g.stage0PlayView );
+        g.stage0PaletteHostRevision = g.terrainRev;
+        g.stage0PaletteAnchored = true;
+        g.stage0ToolPalette = true;
+
+        // The inspection tools are part of the summoned palette fixture. Reset
+        // and place all three beside the board instead of leaving them at the
+        // original Stage-0 origin when the palette follows the player.
+        g.stage0HeldTool = Stage0ToolKind::None;
+        g.stage0Tools[0] = { Stage0ToolKind::Pickaxe, true,
+            g.stage0PaletteAnchorX - 0.95f, g.stage0PaletteAnchorY + 0.65f, 0.f, 0.f };
+        g.stage0Tools[1] = { Stage0ToolKind::Axe, true,
+            g.stage0PaletteAnchorX - 0.95f, g.stage0PaletteAnchorY + 2.05f, 0.f, 0.f };
+        g.stage0Tools[2] = { Stage0ToolKind::Shovel, true,
+            g.stage0PaletteAnchorX - 0.95f, g.stage0PaletteAnchorY + 3.48f, 0.f, 0.f };
+        static float const toolOffsets[3] = { 0.46f, 0.40f, 0.61f };
+        for ( int i = 0; i < 3; ++i )
+        {
+            float ground = GradeToZ( g.gradeDatum );
+            Stage0CalibrationSurfaceZ( g.stage0Tools[i].x, g.stage0Tools[i].y, ground );
+            g.stage0Tools[i].z = ground + toolOffsets[i];
+        }
+        g.stage0StrikeStartMs = g.stage0StrikeImpactMs = 0;
+        g.stage0StrikePrevValid = false;
+    }
+
+    void SummonStage0CharacterOnly()
+    {
+        // Reuse the palette's terrain-authoritative anchor calculation, then retire
+        // every other fixture. This guarantees inspection and palette modes draw
+        // the identical character implementation rather than a comparison proxy.
+        SummonStage0Palette();
+        g.stage0CharacterOnly = true;
+        if ( g.stage0PaletteList )
+        { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
+        g.stage0HeldTool = Stage0ToolKind::None;
+        for ( Stage0ToolProp& tool : g.stage0Tools ) { tool.present = false; }
+        g.stage0ToolPerformanceHud = false;
+        g.stage0ToolMutationHud = false;
+    }
+
+    void BuildStage0RulerList()
+    {
+        if ( g.stage0RulerList ) { return; }
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        g.stage0RulerList = AllocDisplayListOutsideFonts();
+        if ( !g.stage0RulerList ) { return; }
+
+        float const originX = std::floor( g.feetX / 8.f ) * 8.f + 4.f;
+        float const originY = 128.5f;
+        g.stage0RulerLaneX = originX;
+        int triangles = 0;
+        int vertices = 0;
+        double maxSurfaceErrorM = 0.0;
+        glNewList( g.stage0RulerList, GL_COMPILE );
+        glBegin( GL_TRIANGLES );
+        glNormal3f( 0.f, 0.f, 1.f );
+        auto band = [&]( float distanceM, float widthM, float depthM,
+            float r, float gc, float b )
+        {
+            float const x0 = originX - widthM * 0.5f;
+            float const x1 = originX + widthM * 0.5f;
+            float const y0 = originY + distanceM - depthM * 0.5f;
+            float const y1 = originY + distanceM + depthM * 0.5f;
+            glColor3f( r, gc, b );
+            constexpr float kTerrainTriangleStepM = 0.5f;
+            bool const dualLattice = IsVisibleExposureView( g.stage0PlayView )
+                || IsDifferentialErosionView( g.stage0PlayView )
+                || IsGraniteIntrusionView( g.stage0PlayView )
+                || IsContactMineralizationView( g.stage0PlayView )
+                || IsFaultDisplacementView( g.stage0PlayView )
+                || IsCutCOccupancyView( g.stage0PlayView );
+            float const latticeOrigin = dualLattice ? 0.25f : 0.f;
+            int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const ix1 = (int)std::floor( ( x1 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const iy0 = (int)std::floor( ( y0 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const iy1 = (int)std::floor( ( y1 - latticeOrigin ) / kTerrainTriangleStepM );
+            std::vector<Stage0OverlayPoint2> clipped;
+            clipped.reserve( 7 );
+            for ( int iy = iy0; iy <= iy1; ++iy )
+            for ( int ix = ix0; ix <= ix1; ++ix )
+            {
+                float const lx0 = latticeOrigin + (float)ix * kTerrainTriangleStepM;
+                float const ly0 = latticeOrigin + (float)iy * kTerrainTriangleStepM;
+                float const lx1 = lx0 + kTerrainTriangleStepM;
+                float const ly1 = ly0 + kTerrainTriangleStepM;
+                if ( !Stage0DiagnosticPackageResidentAt(
+                    ( lx0 + lx1 ) * 0.5f, ( ly0 + ly1 ) * 0.5f ) )
+                { continue; }
+                Stage0OverlayPoint2 const terrainTriangles[2][3] = {
+                    { { lx0, ly0 }, { lx1, ly0 }, { lx0, ly1 } },
+                    { { lx1, ly0 }, { lx1, ly1 }, { lx0, ly1 } }
+                };
+                for ( int terrainTriangle = 0; terrainTriangle < 2; ++terrainTriangle )
+                {
+                    Stage0OverlayPoint2 const* source = terrainTriangles[terrainTriangle];
+                    ClipStage0OverlayTriangleToRect( source, x0, y0, x1, y1, clipped );
+                    if ( clipped.size() < 3 ) { continue; }
+                    float sourceZ[3];
+                    for ( int i = 0; i < 3; ++i )
+                    { Stage0CalibrationSurfaceZ( source[i].x, source[i].y, sourceZ[i] ); }
+                    for ( size_t fan = 1; fan + 1 < clipped.size(); ++fan )
+                    {
+                        Stage0OverlayPoint2 const emitted[3] = {
+                            clipped[0], clipped[fan], clipped[fan + 1]
+                        };
+                        float const twiceArea = ( emitted[1].x - emitted[0].x )
+                            * ( emitted[2].y - emitted[0].y )
+                            - ( emitted[1].y - emitted[0].y )
+                            * ( emitted[2].x - emitted[0].x );
+                        if ( std::fabs( twiceArea ) < 1e-8f ) { continue; }
+                        for ( Stage0OverlayPoint2 const p : emitted )
+                        {
+                            float const surfaceZ = Stage0OverlayTriangleZ( source, sourceZ, p );
+                            float rendered[3];
+                            Stage0CalibrationRenderPointAtZ( p.x, p.y, surfaceZ, 0.f, rendered );
+                            glVertex3fv( rendered );
+                        }
+                        Stage0OverlayPoint2 const centroid = {
+                            ( emitted[0].x + emitted[1].x + emitted[2].x ) / 3.f,
+                            ( emitted[0].y + emitted[1].y + emitted[2].y ) / 3.f
+                        };
+                        float const fittedZ = (
+                            Stage0OverlayTriangleZ( source, sourceZ, emitted[0] )
+                            + Stage0OverlayTriangleZ( source, sourceZ, emitted[1] )
+                            + Stage0OverlayTriangleZ( source, sourceZ, emitted[2] ) ) / 3.f;
+                        float const authoritativeZ = Stage0OverlayTriangleZ( source, sourceZ, centroid );
+                        maxSurfaceErrorM = (std::max)( maxSurfaceErrorM,
+                            (double)std::fabs( fittedZ - authoritativeZ ) );
+                        ++triangles;
+                        vertices += 3;
+                    }
+                }
+            }
+        };
+
+        // Only the portion hosted by current resident terrain is materialized.
+        int const distanceMin = (int)std::ceil( g.feetY - 64.f - originY );
+        int const distanceMax = (int)std::floor( g.feetY + 64.f - originY );
+        for ( int d = distanceMin; d <= distanceMax; ++d )
+        {
+            int const magnitude = std::abs( d );
+            if ( d % 10 != 0 )
+            {
+                if ( magnitude <= 50 )
+                { band( (float)d, 0.61f, 0.08f, 0.82f, 1.0f, 0.05f ); }
+                continue;
+            }
+            if ( magnitude > 0 && magnitude % 1000 == 0 )
+            {
+                band( (float)d, 7.32f, 0.91f, 1.0f, 1.0f, 0.05f );
+                band( (float)d - 1.15f, 5.49f, 0.20f, 1.0f, 0.62f, 0.02f );
+                band( (float)d + 1.15f, 5.49f, 0.20f, 1.0f, 0.62f, 0.02f );
+            }
+            else if ( magnitude > 0 && magnitude % 100 == 0 )
+            {
+                band( (float)d, 3.66f, 0.91f, 1.0f, 0.92f, 0.03f );
+                band( (float)d + 0.72f, 2.74f, 0.16f, 1.0f, 0.55f, 0.02f );
+            }
+            else
+            {
+                band( (float)d, 1.83f, 0.91f, 0.92f, 1.0f, 0.03f );
+            }
+        }
+        glEnd();
+        glEndList();
+        QueryPerformanceCounter( &q1 );
+        g.stage0RulerTriangles = triangles;
+        g.stage0RulerVertices = vertices;
+        g.stage0RulerMaxSurfaceErrorM = maxSurfaceErrorM;
+        g.stage0RulerBuildMs = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        g.stage0RulerHostPackages = 0;
+        for ( auto const& package : Stage0DiagnosticTerrainPackages() )
+        { if ( Stage0DiagnosticPackageActive( package.first ) ) { ++g.stage0RulerHostPackages; } }
+    }
+
+    void BuildStage0PaletteList()
+    {
+        if ( g.stage0PaletteList || !g.stage0PaletteAnchored ) { return; }
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        g.stage0PaletteList = AllocDisplayListOutsideFonts();
+        if ( !g.stage0PaletteList ) { return; }
+
+        char const* names[5] = { "dirt", "disturbed dirt", "gravel", "clay", "sand" };
+        char const* reps[5] = {
+            "base HF + color roughness",
+            "HF + compacted/rutted normals",
+            "HF + aggregate normals + meso",
+            "smooth cohesive HF normals",
+            "HF + deterministic ripple normals"
+        };
+        float const colors[5][3] = {
+            { 0.42f, 0.28f, 0.15f }, { 0.29f, 0.19f, 0.11f },
+            { 0.43f, 0.42f, 0.38f }, { 0.50f, 0.31f, 0.22f },
+            { 0.72f, 0.62f, 0.40f }
+        };
+        for ( int s = 0; s < 5; ++s )
+        {
+            std::snprintf( g.stage0Swatches[s].name,
+                sizeof( g.stage0Swatches[s].name ), "%s", names[s] );
+            std::snprintf( g.stage0Swatches[s].representation,
+                sizeof( g.stage0Swatches[s].representation ), "%s", reps[s] );
+            g.stage0Swatches[s].triangles = 0;
+            g.stage0Swatches[s].vertices = 0;
+            g.stage0Swatches[s].mesoDetails = 0;
+            g.stage0Swatches[s].bodies = 0;
+        }
+
+        float const boardX = g.stage0PaletteAnchorX;
+        float const boardY = g.stage0PaletteAnchorY;
+        constexpr float kSize = 4.f;
+        double maxSurfaceErrorM = 0.0;
+        glNewList( g.stage0PaletteList, GL_COMPILE );
+        glBegin( GL_TRIANGLES );
+        for ( int s = 0; s < 5; ++s )
+        {
+            float const yBase = boardY + (float)s * 5.25f;
+            auto height = [&]( float x, float y )
+            {
+                float const u = ( x - boardX ) / kSize;
+                float const v = ( y - yBase ) / kSize;
+                if ( s == 1 ) { return 0.012f * std::sin( v * 25.1327f ); }
+                if ( s == 2 )
+                {
+                    return 0.013f + 0.013f
+                        * std::sin( x * 17.13f + y * 11.71f + (float)s * 2.3f );
+                }
+                if ( s == 3 ) { return 0.004f * std::sin( ( u + v ) * 6.2831f ); }
+                if ( s == 4 ) { return 0.018f * std::sin( u * 18.8495f + v * 3.1f ); }
+                return 0.003f * std::sin( ( u * 3.f + v * 5.f ) * 6.2831f );
+            };
+            float const x0 = boardX, x1 = boardX + kSize;
+            float const y0 = yBase, y1 = yBase + kSize;
+            constexpr float kTerrainTriangleStepM = 0.5f;
+            bool const dualLattice = IsVisibleExposureView( g.stage0PlayView )
+                || IsDifferentialErosionView( g.stage0PlayView )
+                || IsGraniteIntrusionView( g.stage0PlayView )
+                || IsContactMineralizationView( g.stage0PlayView );
+            float const latticeOrigin = dualLattice ? 0.25f : 0.f;
+            int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const ix1 = (int)std::floor( ( x1 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const iy0 = (int)std::floor( ( y0 - latticeOrigin ) / kTerrainTriangleStepM );
+            int const iy1 = (int)std::floor( ( y1 - latticeOrigin ) / kTerrainTriangleStepM );
+            std::vector<Stage0OverlayPoint2> clipped;
+            clipped.reserve( 7 );
+            for ( int iy = iy0; iy <= iy1; ++iy )
+            for ( int ix = ix0; ix <= ix1; ++ix )
+            {
+                float const lx0 = latticeOrigin + (float)ix * kTerrainTriangleStepM;
+                float const ly0 = latticeOrigin + (float)iy * kTerrainTriangleStepM;
+                float const lx1 = lx0 + kTerrainTriangleStepM;
+                float const ly1 = ly0 + kTerrainTriangleStepM;
+                if ( !Stage0DiagnosticPackageResidentAt(
+                    ( lx0 + lx1 ) * 0.5f, ( ly0 + ly1 ) * 0.5f ) )
+                { continue; }
+                Stage0OverlayPoint2 const terrainTriangles[2][3] = {
+                    { { lx0, ly0 }, { lx1, ly0 }, { lx0, ly1 } },
+                    { { lx1, ly0 }, { lx1, ly1 }, { lx0, ly1 } }
+                };
+                for ( int terrainTriangle = 0; terrainTriangle < 2; ++terrainTriangle )
+                {
+                    Stage0OverlayPoint2 const* source = terrainTriangles[terrainTriangle];
+                    ClipStage0OverlayTriangleToRect( source, x0, y0, x1, y1, clipped );
+                    if ( clipped.size() < 3 ) { continue; }
+                    float sourceZ[3];
+                    for ( int i = 0; i < 3; ++i )
+                    { Stage0CalibrationSurfaceZ( source[i].x, source[i].y, sourceZ[i] ); }
+                    for ( size_t fan = 1; fan + 1 < clipped.size(); ++fan )
+                    {
+                        Stage0OverlayPoint2 const emitted[3] = {
+                            clipped[0], clipped[fan], clipped[fan + 1]
+                        };
+                        float const twiceArea = ( emitted[1].x - emitted[0].x )
+                            * ( emitted[2].y - emitted[0].y )
+                            - ( emitted[1].y - emitted[0].y )
+                            * ( emitted[2].x - emitted[0].x );
+                        if ( std::fabs( twiceArea ) < 1e-8f ) { continue; }
+                        float const shade = 0.92f + 0.08f
+                            * (float)( ( ix * 11 + iy * 7 + s * 3 ) & 3 ) / 3.f;
+                        glColor3f( colors[s][0] * shade,
+                            colors[s][1] * shade, colors[s][2] * shade );
+                        glNormal3f( 0.f, 0.f, 1.f );
+                        for ( Stage0OverlayPoint2 const p : emitted )
+                        {
+                            float const surfaceZ = Stage0OverlayTriangleZ( source, sourceZ, p );
+                            float rendered[3];
+                            Stage0CalibrationRenderPointAtZ(
+                                p.x, p.y, surfaceZ, height( p.x, p.y ) + 0.004f, rendered );
+                            glVertex3fv( rendered );
+                        }
+                        Stage0OverlayPoint2 const centroid = {
+                            ( emitted[0].x + emitted[1].x + emitted[2].x ) / 3.f,
+                            ( emitted[0].y + emitted[1].y + emitted[2].y ) / 3.f
+                        };
+                        float const fittedBaseZ = (
+                            Stage0OverlayTriangleZ( source, sourceZ, emitted[0] )
+                            + Stage0OverlayTriangleZ( source, sourceZ, emitted[1] )
+                            + Stage0OverlayTriangleZ( source, sourceZ, emitted[2] ) ) / 3.f;
+                        float const authoritativeBaseZ =
+                            Stage0OverlayTriangleZ( source, sourceZ, centroid );
+                        maxSurfaceErrorM = (std::max)( maxSurfaceErrorM,
+                            (double)std::fabs( fittedBaseZ - authoritativeBaseZ ) );
+                        ++g.stage0Swatches[s].triangles;
+                        g.stage0Swatches[s].vertices += 3;
+                    }
+                }
+            }
+        }
+
+        // Gravel meso protrusions: meaningful silhouette only, still one batched
+        // presentation list and never MatterBody/occupancy/support authority.
+        int const gravel = 2;
+        float const gravelY = boardY + (float)gravel * 5.25f;
+        for ( int i = 0; i < 16; ++i )
+        {
+            float const px = boardX + 0.35f + (float)( ( i * 7 ) % 13 ) / 13.f * 3.3f;
+            float const py = gravelY + 0.35f + (float)( ( i * 11 ) % 15 ) / 15.f * 3.3f;
+            if ( !Stage0DiagnosticPackageResidentAt( px, py ) ) { continue; }
+            float const r = 0.055f + (float)( i % 3 ) * 0.018f;
+            float c[3], n[3];
+            Stage0CalibrationRenderPoint( px, py, 0.025f, c, n );
+            float t[3] = { n[2], 0.f, -n[0] };
+            float tl = std::sqrt( t[0] * t[0] + t[2] * t[2] );
+            if ( tl < 1e-6f ) { t[0] = 1.f; t[1] = 0.f; t[2] = 0.f; tl = 1.f; }
+            t[0] /= tl; t[2] /= tl;
+            float const bvec[3] = {
+                n[1] * t[2] - n[2] * t[1],
+                n[2] * t[0] - n[0] * t[2],
+                n[0] * t[1] - n[1] * t[0]
+            };
+            float corners[4][3];
+            for ( int corner = 0; corner < 4; ++corner )
+            {
+                float const sx = corner == 0 || corner == 3 ? -1.f : 1.f;
+                float const sy = corner < 2 ? -1.f : 1.f;
+                for ( int axis = 0; axis < 3; ++axis )
+                { corners[corner][axis] = c[axis] + t[axis] * sx * r + bvec[axis] * sy * r; }
+            }
+            float apex[3] = { c[0] + n[0] * r, c[1] + n[1] * r, c[2] + n[2] * r };
+            glColor3f( 0.36f + 0.025f * (float)( i % 4 ), 0.35f, 0.32f );
+            glVertex3fv( corners[0] ); glVertex3fv( corners[1] ); glVertex3fv( apex );
+            glVertex3fv( corners[1] ); glVertex3fv( corners[2] ); glVertex3fv( apex );
+            glVertex3fv( corners[2] ); glVertex3fv( corners[3] ); glVertex3fv( apex );
+            glVertex3fv( corners[3] ); glVertex3fv( corners[0] ); glVertex3fv( apex );
+            g.stage0Swatches[gravel].triangles += 4;
+            g.stage0Swatches[gravel].vertices += 12;
+            ++g.stage0Swatches[gravel].mesoDetails;
+        }
+        glEnd();
+        glEndList();
+        QueryPerformanceCounter( &q1 );
+        g.stage0PaletteTriangles = 0;
+        g.stage0PaletteVertices = 0;
+        for ( Stage0SwatchStat const& stat : g.stage0Swatches )
+        {
+            g.stage0PaletteTriangles += stat.triangles;
+            g.stage0PaletteVertices += stat.vertices;
+        }
+        g.stage0PaletteBuildMs = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        g.stage0PaletteMaxSurfaceErrorM = maxSurfaceErrorM;
+    }
+
+    void EmitStage0ToolCylinder( float z0, float z1, float r0, float r1,
+        int sides, float cr, float cg, float cb )
+    {
+        for ( int i = 0; i < sides; ++i )
+        {
+            float const a0 = 6.2831853f * (float)i / (float)sides;
+            float const a1 = 6.2831853f * (float)( i + 1 ) / (float)sides;
+            float const c0 = std::cos( a0 ), s0 = std::sin( a0 );
+            float const c1 = std::cos( a1 ), s1 = std::sin( a1 );
+            float const grain = 0.86f + 0.12f * (float)( i % 3 ) / 2.f;
+            EmitGalleryTri( c0 * r0, s0 * r0, z0, c1 * r0, s1 * r0, z0,
+                c0 * r1, s0 * r1, z1, cr * grain, cg * grain, cb * grain );
+            EmitGalleryTri( c1 * r0, s1 * r0, z0, c1 * r1, s1 * r1, z1,
+                c0 * r1, s0 * r1, z1, cr * grain, cg * grain, cb * grain );
+            EmitGalleryTri( 0.f, 0.f, z0, c1 * r0, s1 * r0, z0,
+                c0 * r0, s0 * r0, z0, cr * 0.72f, cg * 0.72f, cb * 0.72f );
+            EmitGalleryTri( 0.f, 0.f, z1, c0 * r1, s0 * r1, z1,
+                c1 * r1, s1 * r1, z1, cr, cg, cb );
+        }
+    }
+
+    void EmitStage0StonePickaxe()
+    {
+        // 0.90 m haft and 0.67 m knapped head: deliberately legible against the
+        // 1.70 m eye-height player rather than enlarged gallery-icon scale.
+        EmitStage0ToolCylinder( -0.46f, 0.34f, 0.034f, 0.028f, 10,
+            132.f, 83.f, 43.f );
+
+        // Leather hand grip and crossed-looking collar wraps.
+        EmitStage0ToolCylinder( -0.38f, -0.23f, 0.039f, 0.039f, 10,
+            72.f, 43.f, 29.f );
+        for ( int band = 0; band < 5; ++band )
+        {
+            float const z0 = 0.235f + (float)band * 0.024f;
+            EmitStage0ToolCylinder( z0, z0 + 0.014f, 0.040f, 0.040f, 10,
+                91.f + (float)( band % 2 ) * 12.f, 57.f, 31.f );
+        }
+
+        // Closed, irregular stone head. Sections taper from a chipped poll at -X
+        // through the haft collar to a narrow working point at +X.
+        constexpr int kRing = 6;
+        float const xs[5] = { -0.305f, -0.145f, 0.0f, 0.225f, 0.365f };
+        float const ry[5] = { 0.032f, 0.068f, 0.078f, 0.040f, 0.006f };
+        float const rz[5] = { 0.042f, 0.076f, 0.082f, 0.043f, 0.006f };
+        float const headZ = 0.335f;
+        for ( int section = 0; section < 4; ++section )
+        for ( int i = 0; i < kRing; ++i )
+        {
+            int const j = ( i + 1 ) % kRing;
+            float const a0 = 6.2831853f * (float)i / (float)kRing + 0.18f;
+            float const a1 = 6.2831853f * (float)j / (float)kRing + 0.18f;
+            float const y00 = std::cos( a0 ) * ry[section];
+            float const z00 = headZ + std::sin( a0 ) * rz[section];
+            float const y01 = std::cos( a1 ) * ry[section];
+            float const z01 = headZ + std::sin( a1 ) * rz[section];
+            float const y10 = std::cos( a0 ) * ry[section + 1];
+            float const z10 = headZ + std::sin( a0 ) * rz[section + 1];
+            float const y11 = std::cos( a1 ) * ry[section + 1];
+            float const z11 = headZ + std::sin( a1 ) * rz[section + 1];
+            float const chip = 0.80f + 0.15f * (float)( ( i + section * 2 ) % 4 ) / 3.f;
+            float const r = 112.f * chip, gr = 110.f * chip, b = 104.f * chip;
+            EmitGalleryTri( xs[section], y00, z00, xs[section + 1], y10, z10,
+                xs[section], y01, z01, r, gr, b );
+            EmitGalleryTri( xs[section + 1], y10, z10, xs[section + 1], y11, z11,
+                xs[section], y01, z01, r, gr, b );
+        }
+        for ( int i = 0; i < kRing; ++i )
+        {
+            int const j = ( i + 1 ) % kRing;
+            float const a0 = 6.2831853f * (float)i / (float)kRing + 0.18f;
+            float const a1 = 6.2831853f * (float)j / (float)kRing + 0.18f;
+            EmitGalleryTri( xs[0], 0.f, headZ,
+                xs[0], std::cos( a1 ) * ry[0], headZ + std::sin( a1 ) * rz[0],
+                xs[0], std::cos( a0 ) * ry[0], headZ + std::sin( a0 ) * rz[0],
+                82.f, 81.f, 78.f );
+            EmitGalleryTri( xs[4], 0.f, headZ,
+                xs[4], std::cos( a0 ) * ry[4], headZ + std::sin( a0 ) * rz[4],
+                xs[4], std::cos( a1 ) * ry[4], headZ + std::sin( a1 ) * rz[4],
+                105.f, 104.f, 99.f );
+        }
+    }
+
+    void EmitStage0ToolPrismY( float const* xs, float const* zs, int count,
+        float halfY, float cr, float cg, float cb )
+    {
+        if ( count < 3 ) { return; }
+        for ( int side = -1; side <= 1; side += 2 )
+        {
+            float const y = halfY * (float)side;
+            for ( int i = 1; i + 1 < count; ++i )
+            {
+                if ( side > 0 )
+                { EmitGalleryTri( xs[0], y, zs[0], xs[i], y, zs[i], xs[i + 1], y, zs[i + 1], cr, cg, cb ); }
+                else
+                { EmitGalleryTri( xs[0], y, zs[0], xs[i + 1], y, zs[i + 1], xs[i], y, zs[i], cr * 0.78f, cg * 0.78f, cb * 0.78f ); }
+            }
+        }
+        for ( int i = 0; i < count; ++i )
+        {
+            int const j = ( i + 1 ) % count;
+            EmitGalleryTri( xs[i], -halfY, zs[i], xs[j], -halfY, zs[j], xs[i], halfY, zs[i], cr * 0.66f, cg * 0.66f, cb * 0.66f );
+            EmitGalleryTri( xs[j], -halfY, zs[j], xs[j], halfY, zs[j], xs[i], halfY, zs[i], cr * 0.66f, cg * 0.66f, cb * 0.66f );
+        }
+    }
+
+    void EmitStage0ToolBeamXZ( float x0, float z0, float x1, float z1,
+        float halfWidth, float halfY, float cr, float cg, float cb )
+    {
+        float const dx = x1 - x0, dz = z1 - z0;
+        float const length = std::sqrt( dx * dx + dz * dz );
+        if ( length < 1e-5f ) { return; }
+        float const px = -dz * halfWidth / length;
+        float const pz = dx * halfWidth / length;
+        float const xs[4] = { x0 + px, x1 + px, x1 - px, x0 - px };
+        float const zs[4] = { z0 + pz, z1 + pz, z1 - pz, z0 - pz };
+        EmitStage0ToolPrismY( xs, zs, 4, halfY, cr, cg, cb );
+    }
+
+    void EmitStage0StoneAxe()
+    {
+        EmitStage0ToolCylinder( -0.40f, 0.31f, 0.042f, 0.034f, 10, 126.f, 78.f, 40.f );
+        EmitStage0ToolCylinder( -0.37f, -0.20f, 0.047f, 0.047f, 10, 68.f, 39.f, 26.f );
+        for ( int band = 0; band < 5; ++band )
+        {
+            float const z0 = 0.225f + (float)band * 0.023f;
+            EmitStage0ToolCylinder( z0, z0 + 0.013f, 0.047f, 0.047f, 10, 100.f, 63.f, 34.f );
+        }
+        // One-sided knapped wedge; +X is the rendered and colliding cutting edge.
+        float const bx[6] = { -0.08f, 0.10f, 0.29f, 0.315f, 0.23f, 0.03f };
+        float const bz[6] = { 0.37f, 0.405f, 0.37f, 0.16f, 0.105f, 0.25f };
+        EmitStage0ToolPrismY( bx, bz, 6, 0.038f, 103.f, 104.f, 101.f );
+    }
+
+    void EmitStage0Shovel()
+    {
+        EmitStage0ToolCylinder( -0.28f, 0.39f, 0.031f, 0.027f, 10, 130.f, 82.f, 43.f );
+        EmitStage0ToolCylinder( -0.27f, -0.20f, 0.039f, 0.039f, 10, 73.f, 43.f, 28.f );
+        // Closed, tapered wooden D-handle. The diagonal braces join the shaft
+        // continuously instead of leaving two floating vertical stubs.
+        EmitStage0ToolBeamXZ( -0.018f, 0.375f, -0.118f, 0.505f, 0.022f, 0.027f, 118.f, 73.f, 39.f );
+        EmitStage0ToolBeamXZ(  0.018f, 0.375f,  0.118f, 0.505f, 0.022f, 0.027f, 118.f, 73.f, 39.f );
+        EmitGalleryBox( 0.f, 0.f, 0.535f, 0.145f, 0.036f, 0.032f, 120.f, 75.f, 40.f );
+        EmitStage0ToolCylinder( 0.350f, 0.405f, 0.038f, 0.038f, 10, 76.f, 45.f, 29.f );
+        for ( int band = 0; band < 4; ++band )
+        {
+            float const z0 = 0.355f + (float)band * 0.014f;
+            EmitStage0ToolCylinder( z0, z0 + 0.008f, 0.041f, 0.041f, 10, 91.f, 53.f, 31.f );
+        }
+        float const sx[7] = { -0.17f, 0.17f, 0.17f, 0.135f, 0.f, -0.135f, -0.17f };
+        float const sz[7] = { -0.245f, -0.245f, -0.39f, -0.515f, -0.60f, -0.515f, -0.39f };
+        EmitStage0ToolPrismY( sx, sz, 7, 0.027f, 112.f, 113.f, 110.f );
+        // Bright forged cutting shoe. Its center point at local (0,0,-0.61) is the
+        // authoritative reticle/contact point used by the swept strike test.
+        float const tx[3] = { -0.135f, 0.f, 0.135f };
+        float const tz[3] = { -0.515f, -0.61f, -0.515f };
+        EmitStage0ToolPrismY( tx, tz, 3, 0.030f, 188.f, 191.f, 194.f );
+        float const rx[4] = { -0.035f, 0.035f, 0.052f, -0.052f };
+        float const rz[4] = { -0.17f, -0.17f, -0.46f, -0.46f };
+        EmitStage0ToolPrismY( rx, rz, 4, 0.035f, 88.f, 89.f, 87.f );
+    }
+
+    char const* Stage0ToolName( Stage0ToolKind kind )
+    {
+        switch ( kind )
+        {
+            case Stage0ToolKind::Pickaxe: return "stone pickaxe";
+            case Stage0ToolKind::Axe: return "stone axe";
+            case Stage0ToolKind::Shovel: return "shovel";
+            default: return "empty hand";
+        }
+    }
+
+    float Stage0ToolCenterHeight( Stage0ToolKind kind )
+    {
+        return kind == Stage0ToolKind::Shovel ? 0.61f : ( kind == Stage0ToolKind::Axe ? 0.40f : 0.46f );
+    }
+
+    void Stage0TransformPoint( float const M[16], float x, float y, float z, float& ox, float& oy, float& oz )
+    {
+        ox = M[0] * x + M[4] * y + M[8] * z + M[12];
+        oy = M[1] * x + M[5] * y + M[9] * z + M[13];
+        oz = M[2] * x + M[6] * y + M[10] * z + M[14];
+    }
+
+    void BuildStage0DroppedToolMatrix( Stage0ToolProp const& prop, float M[16] )
+    {
+        std::memset( M, 0, sizeof( float ) * 16 );
+        float const c = std::cos( prop.yaw ), s = std::sin( prop.yaw );
+        M[0] = c; M[1] = s; M[4] = -s; M[5] = c; M[10] = M[15] = 1.f;
+        M[12] = prop.x; M[13] = prop.y; M[14] = prop.z;
+    }
+
+    float Stage0SegmentSegmentDistanceSq( float const p1[3], float const q1[3],
+        float const p2[3], float const q2[3], float& outS )
+    {
+        float u[3] = { q1[0] - p1[0], q1[1] - p1[1], q1[2] - p1[2] };
+        float v[3] = { q2[0] - p2[0], q2[1] - p2[1], q2[2] - p2[2] };
+        float w[3] = { p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2] };
+        auto dot = []( float const a[3], float const b[3] ) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; };
+        float const a = dot(u,u), b = dot(u,v), c = dot(v,v), d = dot(u,w), e = dot(v,w);
+        float const D = a*c - b*b;
+        float sN = 0.f, sD = D, tN = 0.f, tD = D;
+        if ( D < 1e-7f ) { sN = 0.f; sD = 1.f; tN = e; tD = c; }
+        else
+        {
+            sN = b*e - c*d; tN = a*e - b*d;
+            if ( sN < 0.f ) { sN = 0.f; tN = e; tD = c; }
+            else if ( sN > sD ) { sN = sD; tN = e + b; tD = c; }
+        }
+        if ( tN < 0.f )
+        {
+            tN = 0.f;
+            if ( -d < 0.f ) { sN = 0.f; }
+            else if ( -d > a ) { sN = sD; }
+            else { sN = -d; sD = a; }
+        }
+        else if ( tN > tD )
+        {
+            tN = tD;
+            if ( -d + b < 0.f ) { sN = 0.f; }
+            else if ( -d + b > a ) { sN = sD; }
+            else { sN = -d + b; sD = a; }
+        }
+        float const sc = std::fabs(sN) < 1e-7f ? 0.f : sN/sD;
+        float const tc = std::fabs(tN) < 1e-7f ? 0.f : tN/tD;
+        outS = sc;
+        float const dx = w[0] + sc*u[0] - tc*v[0];
+        float const dy = w[1] + sc*u[1] - tc*v[1];
+        float const dz = w[2] + sc*u[2] - tc*v[2];
+        return dx*dx + dy*dy + dz*dz;
+    }
+
+    bool Stage0RayHitsTool( Stage0ToolProp const& prop, float maxDist, float& outT )
+    {
+        if ( !prop.present ) { return false; }
+        float const cp = std::cos(g.pitch), sp = std::sin(g.pitch), cy = std::cos(g.yaw), sy = std::sin(g.yaw);
+        float const p0[3] = { g.camX, g.camY, g.camZ };
+        float const p1[3] = { g.camX + sy*cp*maxDist, g.camY + cy*cp*maxDist, g.camZ + sp*maxDist };
+        float M[16]; BuildStage0DroppedToolMatrix( prop, M );
+        bool hit = false; outT = maxDist;
+        auto capsule = [&]( float ax, float ay, float az, float bx, float by, float bz, float r )
+        {
+            float ca[3], cb[3];
+            Stage0TransformPoint(M,ax,ay,az,ca[0],ca[1],ca[2]);
+            Stage0TransformPoint(M,bx,by,bz,cb[0],cb[1],cb[2]);
+            float s = 0.f;
+            if ( Stage0SegmentSegmentDistanceSq(p0,p1,ca,cb,s) <= r*r )
+            {
+                float const t = s*maxDist;
+                if ( t >= 0.15f && t < outT ) { outT = t; hit = true; }
+            }
+        };
+        if ( prop.kind == Stage0ToolKind::Pickaxe )
+        {
+            capsule(0,0,-0.46f,0,0,0.34f,0.043f); capsule(-0.305f,0,0.335f,0.365f,0,0.335f,0.086f);
+        }
+        else if ( prop.kind == Stage0ToolKind::Axe )
+        {
+            capsule(0,0,-0.40f,0,0,0.31f,0.050f); capsule(0.02f,0,0.34f,0.29f,0,0.30f,0.070f);
+            capsule(0.30f,0,0.16f,0.30f,0,0.37f,0.042f);
+        }
+        else if ( prop.kind == Stage0ToolKind::Shovel )
+        {
+            capsule(0,0,-0.28f,0,0,0.40f,0.040f); capsule(-0.16f,0,-0.27f,0.16f,0,-0.27f,0.035f);
+            capsule(-0.13f,0,-0.48f,0.13f,0,-0.48f,0.060f); capsule(0,0,-0.61f,0,0,-0.30f,0.115f);
+            capsule(-0.018f,0,0.375f,-0.118f,0,0.505f,0.035f);
+            capsule(0.018f,0,0.375f,0.118f,0,0.505f,0.035f);
+            capsule(-0.145f,0,0.535f,0.145f,0,0.535f,0.042f);
+        }
+        return hit;
+    }
+
+    int Stage0AimedToolIndex( float maxDist )
+    {
+        if ( !g.playWorldgenBaseline || g.stage0HeldTool != Stage0ToolKind::None || !Stage0ViewShowsPalette(g.stage0PlayView) ) { return -1; }
+        int best = -1; float bestT = maxDist;
+        for ( int i = 0; i < 3; ++i )
+        {
+            float t = maxDist;
+            if ( Stage0RayHitsTool(g.stage0Tools[i],maxDist,t) && t < bestT ) { best = i; bestT = t; }
+        }
+        return best;
+    }
+
+    bool Stage0PickaxeRayHit( float maxDist )
+    {
+        int const i = Stage0AimedToolIndex( maxDist );
+        return i >= 0 && g.stage0Tools[i].kind == Stage0ToolKind::Pickaxe;
+    }
+
+    bool TryStage0PickaxeInteraction()
+    {
+        if ( !g.playWorldgenBaseline || g.stage0StageMenuOpen ) { return false; }
+        if ( g.stage0HeldTool != Stage0ToolKind::None )
+        {
+            float const cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+            Stage0ToolKind const held = g.stage0HeldTool;
+            for ( Stage0ToolProp& prop : g.stage0Tools )
+            {
+                if ( prop.kind != held ) { continue; }
+                prop.x = g.feetX + sy * 0.72f; prop.y = g.feetY + cy * 0.72f;
+                prop.z = GradeToZ(g.gradeDatum) + Stage0ToolCenterHeight(prop.kind);
+                prop.yaw = g.yaw; prop.present = true; break;
+            }
+            g.stage0HeldTool = Stage0ToolKind::None; g.stage0StrikeStartMs = 0;
+            g.statusLine = std::string("E drop — ") + Stage0ToolName(held);
+            return true;
+        }
+        int const hit = Stage0AimedToolIndex(3.5f);
+        if ( hit < 0 ) { return false; }
+        Stage0ToolProp& prop = g.stage0Tools[hit]; prop.present = false;
+        g.stage0HeldTool = prop.kind; g.stage0ToolSpin = 0.f; g.stage0ToolRoll = 0.f;
+        g.stage0StrikeStartMs = 0;
+        g.statusLine = std::string("E pickup — holding ") + Stage0ToolName(prop.kind);
+        return true;
+    }
+
+    float Stage0ToolStrikeDurationMs( Stage0ToolKind kind )
+    {
+        return kind == Stage0ToolKind::Shovel ? 880.f : ( kind == Stage0ToolKind::Axe ? 760.f : 720.f );
+    }
+
+    float Stage0Smooth01( float t )
+    {
+        t = std::clamp(t,0.f,1.f); return t*t*(3.f-2.f*t);
+    }
+
+    void Stage0ReticleActionPoint( float fallbackDistance, float target[3] )
+    {
+        float const cp=std::cos(g.pitch),sp=std::sin(g.pitch);
+        float const cy=std::cos(g.yaw),sy=std::sin(g.yaw);
+        float const V[3]={sy*cp,cy*cp,sp};
+        target[0]=g.camX+V[0]*fallbackDistance;
+        target[1]=g.camY+V[1]*fallbackDistance;
+        target[2]=g.camZ+V[2]*fallbackDistance;
+
+        // The palette strike post is a real vertical target. When the reticle ray
+        // crosses it, the visible surface becomes the exact action point.
+        float const ground=GradeToZ(g.gradeDatum),px=135.75f,py=134.20f,r=0.18f;
+        float const ox=g.camX-px,oy=g.camY-py;
+        float const a=V[0]*V[0]+V[1]*V[1];
+        float const b=2.f*(ox*V[0]+oy*V[1]);
+        float const c=ox*ox+oy*oy-r*r;
+        float const disc=b*b-4.f*a*c;
+        if(a>1e-6f&&disc>=0.f)
+        {
+            float const t=(-b-std::sqrt(disc))/(2.f*a);
+            float const z=g.camZ+V[2]*t;
+            if(t>=0.90f&&t<=3.5f&&z>=ground&&z<=ground+1.20f)
+            {target[0]=g.camX+V[0]*t;target[1]=g.camY+V[1]*t;target[2]=z;return;}
+        }
+        if(V[2]<-0.04f)
+        {
+            float const t=(ground-g.camZ)/V[2];
+            if(t>=0.90f&&t<=3.5f)
+            {target[0]=g.camX+V[0]*t;target[1]=g.camY+V[1]*t;target[2]=ground;}
+        }
+    }
+
+    void BuildStage0HeldShovelMatrix( ULONGLONG now, float M[16] )
+    {
+        // The shovel is one rigid frame: local X spans the blade, local Z follows
+        // handle-to-tip, and local +Y is the bowl/top normal. X cross Y == Z.
+        // Alpha ranges from a 45-degree cut to a 30-degree tip-up lift. Throughout
+        // that pitch-only arc bowlNormal.z stays above 0.70 and never turns over.
+        constexpr float kTipZ = -0.61f;
+        constexpr float kRightGripZ = 0.535f;
+        constexpr float kHandSpacing = 0.6096f; // exactly two feet
+        float const cy=std::cos(g.yaw+g.stage0ToolSpin),sy=std::sin(g.yaw+g.stage0ToolSpin);
+        float const F[3]={sy,cy,0.f},R[3]={cy,-sy,0.f};
+        // In the right-handed pose the shaft travels from the D-grip toward the
+        // player's left. Handedness reflection later reverses this whole frame.
+        float const lean=0.383972f,lc=std::cos(lean),ls=std::sin(lean);
+        float const B[3]={F[0]*lc-R[0]*ls,F[1]*lc-R[1]*ls,0.f};
+        float const X[3]={R[0]*lc+F[0]*ls,R[1]*lc+F[1]*ls,0.f};
+
+        // Six-foot-player base pose: the right hand is centered on the D grip;
+        // the left hand is exactly two feet down the rigid shaft. The hand anchor
+        // remains comfortably beyond the near plane even while looking level.
+        float const rightHand[3]={g.camX+F[0]*0.38f+R[0]*0.24f,
+            g.camY+F[1]*0.38f+R[1]*0.24f,g.camZ-0.52f};
+
+        float raw=g.stage0StrikeStartMs?(float)(now-g.stage0StrikeStartMs)/Stage0ToolStrikeDurationMs(Stage0ToolKind::Shovel):-1.f;
+        float target[3];Stage0ReticleActionPoint(1.25f,target);
+
+        auto basisAndOrigin=[&](float alpha,float const tip[3],float out[16])
+        {
+            // User pitch adjustment is clamped and remains pitch-only. No value of
+            // wheel input is permitted to introduce roll into the bowl normal.
+            alpha+=std::clamp(g.stage0ToolRoll,-0.15f,0.15f);
+            alpha=std::clamp(alpha,-0.523599f,0.785398f);
+            float const c=std::cos(alpha),s=std::sin(alpha);
+            // Handle rises back toward the player; the blade at local -Z therefore
+            // projects forward/down. The bowl normal (+Y) stays forward/up.
+            float const Z[3]={-B[0]*c,-B[1]*c,s};
+            float const Y[3]={B[0]*s,B[1]*s,c}; // top/bowl normal; always upward
+            std::memset(out,0,sizeof(float)*16);
+            out[0]=X[0];out[1]=X[1];out[2]=X[2];
+            out[4]=Y[0];out[5]=Y[1];out[6]=Y[2];
+            out[8]=Z[0];out[9]=Z[1];out[10]=Z[2];
+            // Solve origin from the authoritative silver tip. This construction
+            // makes the impact keyframe coincide with reticle center exactly.
+            out[12]=tip[0]-Z[0]*kTipZ;out[13]=tip[1]-Z[1]*kTipZ;out[14]=tip[2]-Z[2]*kTipZ;out[15]=1.f;
+        };
+
+        float readyTip[3];
+        float const readyAlpha=0.558505f; // 32 degrees: ~58 degrees from standing body
+        float const rc=std::cos(readyAlpha),rs=std::sin(readyAlpha);
+        float const readyZ[3]={-B[0]*rc,-B[1]*rc,rs};
+        float const readyOrigin[3]={rightHand[0]-readyZ[0]*kRightGripZ,
+            rightHand[1]-readyZ[1]*kRightGripZ,rightHand[2]-readyZ[2]*kRightGripZ};
+        // Document and enforce the second hand point on the same rigid body.
+        float const leftHand[3]={rightHand[0]-readyZ[0]*kHandSpacing,
+            rightHand[1]-readyZ[1]*kHandSpacing,rightHand[2]-readyZ[2]*kHandSpacing};
+        (void)leftHand;
+        readyTip[0]=readyOrigin[0]+readyZ[0]*kTipZ;
+        readyTip[1]=readyOrigin[1]+readyZ[1]*kTipZ;
+        readyTip[2]=readyOrigin[2]+readyZ[2]*kTipZ;
+        if(raw<0.f){basisAndOrigin(readyAlpha,readyTip,M);return;}
+
+        float alpha=readyAlpha,tip[3]={readyTip[0],readyTip[1],readyTip[2]};
+        auto blendTip=[&](float const a[3],float const b[3],float t)
+        {t=Stage0Smooth01(t);for(int i=0;i<3;++i)tip[i]=a[i]+(b[i]-a[i])*t;};
+        float impactTip[3]={target[0],target[1],target[2]};
+        float penetrateTip[3]={target[0]+F[0]*0.13f,target[1]+F[1]*0.13f,target[2]-0.10f};
+        float liftTip[3]={target[0]-F[0]*0.12f,target[1]-F[1]*0.12f,target[2]+0.28f};
+
+        if(g.stage0StrikeResponse==1&&g.stage0StrikeImpactMs)
+        {
+            float const u=Stage0Smooth01((float)(now-g.stage0StrikeImpactMs)/260.f);
+            alpha=0.785398f+(readyAlpha-0.785398f)*u;blendTip(impactTip,readyTip,u);
+        }
+        else if(raw<0.48f)
+        {float const u=raw/0.48f;alpha=readyAlpha+(0.785398f-readyAlpha)*Stage0Smooth01(u);blendTip(readyTip,impactTip,u);}
+        else if(raw<0.64f)
+        {float const u=(raw-0.48f)/0.16f;alpha=0.785398f+(0.523599f-0.785398f)*Stage0Smooth01(u);blendTip(impactTip,penetrateTip,u);}
+        else if(raw<0.86f)
+        {
+            // Lever: handle drops/back as rigid-body pitch flattens the bowl and
+            // the authoritative edge arcs upward through the cut carrying material.
+            float const u=(raw-0.64f)/0.22f;alpha=0.523599f+(-0.523599f-0.523599f)*Stage0Smooth01(u);blendTip(penetrateTip,liftTip,u);
+        }
+        else
+        {float const u=(raw-0.86f)/0.14f;alpha=-0.523599f+(readyAlpha+0.523599f)*Stage0Smooth01(u);blendTip(liftTip,readyTip,u);}
+        basisAndOrigin(alpha,tip,M);
+    }
+
+    void MirrorStage0HeldMatrixForLeftHand( float M[16] )
+    {
+        if ( !g.stage0LeftHanded ) { return; }
+        // Reflect across the vertical camera/reticle plane. This mirrors every
+        // point in ready and strike poses while leaving reticle center invariant.
+        float const R[3]={std::cos(g.yaw),-std::sin(g.yaw),0.f};
+        for ( int column : { 0, 4, 8 } )
+        {
+            float const d=M[column]*R[0]+M[column+1]*R[1];
+            M[column]-=2.f*d*R[0];M[column+1]-=2.f*d*R[1];
+        }
+        float const dx=M[12]-g.camX,dy=M[13]-g.camY;
+        float const d=dx*R[0]+dy*R[1];
+        M[12]-=2.f*d*R[0];M[13]-=2.f*d*R[1];
+    }
+
+    void BuildStage0HeldToolMatrix( Stage0ToolKind kind, ULONGLONG now, float M[16] )
+    {
+        if(kind==Stage0ToolKind::Shovel)
+        {BuildStage0HeldShovelMatrix(now,M);MirrorStage0HeldMatrixForLeftHand(M);return;}
+        float raw = g.stage0StrikeStartMs ? (float)(now-g.stage0StrikeStartMs)/Stage0ToolStrikeDurationMs(kind) : -1.f;
+        float pose = raw;
+        if ( g.stage0StrikeImpactMs && (g.stage0StrikeResponse == 2 || g.stage0StrikeResponse == 3) )
+        {
+            float const holdMs = g.stage0StrikeResponse == 2 ? 210.f : 125.f;
+            float const since = (float)(now-g.stage0StrikeImpactMs);
+            pose = since < holdMs ? 0.68f : 0.68f + Stage0Smooth01((since-holdMs)/260.f)*0.32f;
+        }
+        else if ( raw >= 0.68f )
+        {
+            // A short exact-impact dwell makes the reticle keyframe observable
+            // and gives swept collision a stable sample before tool-specific return.
+            pose = raw < 0.72f ? 0.68f
+                : 0.68f + Stage0Smooth01((raw-0.72f)/0.28f)*0.32f;
+        }
+        float const idle = kind == Stage0ToolKind::Shovel ? -0.42f : -0.10f;
+        float const wind = kind == Stage0ToolKind::Shovel ? 0.16f : (kind == Stage0ToolKind::Axe ? -1.18f : -1.08f);
+        float const impact = kind == Stage0ToolKind::Shovel ? -1.04f : (kind == Stage0ToolKind::Axe ? 0.92f : 0.86f);
+        float toolPitch = idle;
+        if ( pose >= 0.f && pose < 0.34f ) { toolPitch = idle+(wind-idle)*Stage0Smooth01(pose/0.34f); }
+        else if ( pose >= 0.34f && pose < 0.68f ) { toolPitch = wind+(impact-wind)*Stage0Smooth01((pose-0.34f)/0.34f); }
+        else if ( pose >= 0.68f ) { toolPitch = impact+(idle-impact)*Stage0Smooth01((pose-0.68f)/0.32f); }
+        if ( g.stage0StrikeImpactMs && g.stage0StrikeResponse == 1 )
+        {
+            float const u = std::clamp((float)(now-g.stage0StrikeImpactMs)/220.f,0.f,1.f);
+            toolPitch -= std::sin(u*3.14159265f)*(1.f-u)*0.38f;
+        }
+
+        float const cp=std::cos(g.pitch), sp=std::sin(g.pitch), cy=std::cos(g.yaw), sy=std::sin(g.yaw);
+        float X[3]={sy*cp,cy*cp,sp}, Y[3]={-cy,sy,0.f}, Z[3]={-sy*sp,-cy*sp,cp};
+        float spin = g.stage0ToolSpin;
+        if ( kind == Stage0ToolKind::Axe && pose >= 0.f )
+        {
+            float const u=Stage0Smooth01(std::clamp((pose-0.18f)/0.58f,0.f,1.f));
+            spin += -0.58f+u*0.82f; // reach back and return diagonally through the face
+        }
+        float c=std::cos(spin), s=std::sin(spin), X1[3],Y1[3],Z1[3]={Z[0],Z[1],Z[2]};
+        for(int i=0;i<3;++i){X1[i]=X[i]*c+Y[i]*s;Y1[i]=-X[i]*s+Y[i]*c;}
+        c=std::cos(g.stage0ToolRoll);s=std::sin(g.stage0ToolRoll);float Y2[3],Z2[3];
+        for(int i=0;i<3;++i){Y2[i]=Y1[i]*c+Z1[i]*s;Z2[i]=-Y1[i]*s+Z1[i]*c;}
+        c=std::cos(toolPitch);s=std::sin(toolPitch);float X3[3],Z3[3];
+        for(int i=0;i<3;++i){X3[i]=X1[i]*c-Z2[i]*s;Z3[i]=X1[i]*s+Z2[i]*c;}
+        float hx=0,hy=0,hz=0;HandHoldWorldPos(hx,hy,hz);hz-=0.04f;
+        float reach=0.f;
+        if(pose>=0.34f&&pose<0.68f)reach=Stage0Smooth01((pose-0.34f)/0.34f);
+        else if(pose>=0.68f)reach=1.f-Stage0Smooth01((pose-0.68f)/0.32f);
+        float target[3];Stage0ReticleActionPoint(1.25f,target);
+        float const workX=kind==Stage0ToolKind::Axe?0.31f:0.365f;
+        float const workZ=kind==Stage0ToolKind::Axe?0.265f:0.335f;
+        float const impactOrigin[3]={target[0]-X3[0]*workX-Z3[0]*workZ,
+            target[1]-X3[1]*workX-Z3[1]*workZ,target[2]-X3[2]*workX-Z3[2]*workZ};
+        hx+=(impactOrigin[0]-hx)*reach;hy+=(impactOrigin[1]-hy)*reach;hz+=(impactOrigin[2]-hz)*reach;
+        std::memset(M,0,sizeof(float)*16);
+        M[0]=X3[0];M[1]=X3[1];M[2]=X3[2];M[4]=Y2[0];M[5]=Y2[1];M[6]=Y2[2];
+        M[8]=Z3[0];M[9]=Z3[1];M[10]=Z3[2];M[12]=hx;M[13]=hy;
+        M[14]=hz;M[15]=1.f;
+        MirrorStage0HeldMatrixForLeftHand(M);
+    }
+
+    int Stage0ToolWorkingPoints( Stage0ToolKind kind, float const M[16], float out[3][3] )
+    {
+        float local[3][3]={};int count=0;
+        if(kind==Stage0ToolKind::Pickaxe){local[0][0]=0.365f;local[0][2]=0.335f;count=1;}
+        else if(kind==Stage0ToolKind::Axe)
+        {local[0][0]=0.31f;local[0][2]=0.265f;count=1;}
+        else if(kind==Stage0ToolKind::Shovel)
+        {
+            // Only the center of the silver cutting edge authors interaction.
+            // Blade shoulders remain visual/collision shape, never aim points.
+            local[0][2]=-0.61f;count=1;
+        }
+        for(int i=0;i<count;++i)Stage0TransformPoint(M,local[i][0],local[i][1],local[i][2],out[i][0],out[i][1],out[i][2]);
+        return count;
+    }
+
+    char const* Stage0GroundMaterialAt( float x, float y )
+    {
+        float const boardX=g.stage0PaletteAnchorX,boardY=g.stage0PaletteAnchorY;
+        if(g.stage0PaletteAnchored&&x>=boardX&&x<=boardX+4.f)for(int i=0;i<5;++i)
+        {float const y0=boardY+(float)i*5.25f;if(y>=y0&&y<=y0+4.f){static char const* m[5]={"dirt","disturbed dirt","gravel","clay","sand"};return m[i];}}
+        return "dirt";
+    }
+
+    bool Stage0StrikeSegmentContact( float const a[3], float const b[3], float radius, char const*& material )
+    {
+        float const postX=g.stage0PaletteAnchorX-1.75f,postY=g.stage0PaletteAnchorY+5.20f;
+        float ground=GradeToZ(g.gradeDatum);Stage0CalibrationSurfaceZ(postX,postY,ground);
+        float postA[3]={postX,postY,ground};float postB[3]={postX,postY,ground+1.20f};float s=0.f;
+        if(Stage0SegmentSegmentDistanceSq(a,b,postA,postB,s)<=(0.18f+radius)*(0.18f+radius)){material="wood";return true;}
+        float const da=a[2]-ground-radius,db=b[2]-ground-radius;
+        if(da>0.f&&db<=0.f){float const t=da/(da-db);material=Stage0GroundMaterialAt(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t);return true;}
+        return false;
+    }
+
+    bool BeginStage0ToolStrike()
+    {
+        if(!g.playWorldgenBaseline||g.stage0HeldTool==Stage0ToolKind::None||g.stage0StageMenuOpen)return false;
+        ULONGLONG const now=GetTickCount64();
+        if(g.stage0StrikeStartMs&&(float)(now-g.stage0StrikeStartMs)<Stage0ToolStrikeDurationMs(g.stage0HeldTool))return true;
+        g.stage0StrikeStartMs=now;g.stage0StrikeImpactMs=0;g.stage0StrikeImpactPhase=0.f;g.stage0StrikeResponse=0;
+        g.stage0StrikeContactDone=false;g.stage0StrikePrevValid=true;std::snprintf(g.stage0StrikeMaterial,sizeof(g.stage0StrikeMaterial),"air");
+        float M[16];BuildStage0HeldToolMatrix(g.stage0HeldTool,now,M);
+        g.stage0StrikePrevCount=Stage0ToolWorkingPoints(g.stage0HeldTool,M,g.stage0StrikePrevPoints);
+        g.statusLine=std::string("LMB swing — ")+Stage0ToolName(g.stage0HeldTool);return true;
+    }
+
+    void UpdateStage0ToolStrike()
+    {
+        if(!g.stage0StrikeStartMs||g.stage0HeldTool==Stage0ToolKind::None)return;
+        ULONGLONG const now=GetTickCount64();float const duration=Stage0ToolStrikeDurationMs(g.stage0HeldTool);
+        float const phase=(float)(now-g.stage0StrikeStartMs)/duration;float M[16],points[3][3]={};
+        BuildStage0HeldToolMatrix(g.stage0HeldTool,now,M);int const count=Stage0ToolWorkingPoints(g.stage0HeldTool,M,points);
+        float const contactStart=g.stage0HeldTool==Stage0ToolKind::Shovel?0.48f:0.68f;
+        if(!g.stage0StrikeContactDone&&g.stage0StrikePrevValid&&phase>=contactStart&&phase<=0.78f)
+        {
+            char const* material=nullptr;float const radius=g.stage0HeldTool==Stage0ToolKind::Pickaxe?0.024f:(g.stage0HeldTool==Stage0ToolKind::Axe?0.022f:0.f);
+            for(int i=0;i<count&&i<g.stage0StrikePrevCount;++i)if(Stage0StrikeSegmentContact(g.stage0StrikePrevPoints[i],points[i],radius,material))break;
+            if(material)
+            {
+                bool const hard=std::strcmp(material,"gravel")==0,wood=std::strcmp(material,"wood")==0;
+                if(g.stage0HeldTool==Stage0ToolKind::Axe)g.stage0StrikeResponse=wood?2:(hard?1:3);
+                else if(g.stage0HeldTool==Stage0ToolKind::Shovel)g.stage0StrikeResponse=(hard||wood)?1:3;
+                else g.stage0StrikeResponse=hard?1:(wood?2:3);
+                g.stage0StrikeContactDone=true;g.stage0StrikeImpactMs=now;g.stage0StrikeImpactPhase=phase;
+                std::snprintf(g.stage0StrikeMaterial,sizeof(g.stage0StrikeMaterial),"%s",material);
+                char note[180];char const* response=g.stage0StrikeResponse==1?"solid rebound":(g.stage0StrikeResponse==2?"lodged, pulling free":"material bite");
+                std::snprintf(note,sizeof(note),"%s strike — %s on %s",Stage0ToolName(g.stage0HeldTool),response,material);g.statusLine=note;
+            }
+        }
+        g.stage0StrikePrevCount=count;for(int i=0;i<count;++i)for(int j=0;j<3;++j)g.stage0StrikePrevPoints[i][j]=points[i][j];g.stage0StrikePrevValid=true;
+        if(phase>=1.08f){if(!g.stage0StrikeContactDone)g.statusLine=std::string(Stage0ToolName(g.stage0HeldTool))+" swing — air, no contact";
+            g.stage0StrikeStartMs=0;g.stage0StrikeImpactMs=0;g.stage0StrikePrevValid=false;}
+    }
+
+    void DrawStage0WoodStrikePost()
+    {
+        float const postX=g.stage0PaletteAnchorX-1.75f,postY=g.stage0PaletteAnchorY+5.20f;
+        float ground=GradeToZ(g.gradeDatum);Stage0CalibrationSurfaceZ(postX,postY,ground);
+        float M[16]={1,0,0,0,0,1,0,0,0,0,1,0,postX,postY,ground+0.60f,1};
+        LitSetFromMatrix(M);glPushMatrix();glMultMatrixf(M);glBegin(GL_TRIANGLES);
+        EmitStage0ToolCylinder(-0.60f,0.60f,0.18f,0.18f,12,112.f,70.f,38.f);
+        for(int i=0;i<4;++i){float const z=-0.45f+(float)i*0.30f;EmitStage0ToolCylinder(z,z+0.012f,0.184f,0.184f,12,78.f,47.f,28.f);}
+        glEnd();glPopMatrix();LitSetIdentity();
+    }
+
+    void DrawStage0PickaxePresentation()
+    {
+        bool const palette=Stage0ViewShowsPalette(g.stage0PlayView);
+        if(!palette&&g.stage0HeldTool==Stage0ToolKind::None)return;
+        glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glDisable(GL_CULL_FACE);glShadeModel(GL_FLAT);
+        if(palette)DrawStage0WoodStrikePost();
+        auto drawTool = [&]( Stage0ToolProp const& prop, float const M[16] )
+        {
+            LitSetFromMatrix(M);gLitRough=0.86f;gLitMetal=0.f;glPushMatrix();glMultMatrixf(M);glBegin(GL_TRIANGLES);
+            if(prop.kind==Stage0ToolKind::Pickaxe)EmitStage0StonePickaxe();
+            else if(prop.kind==Stage0ToolKind::Axe)EmitStage0StoneAxe();
+            else if(prop.kind==Stage0ToolKind::Shovel)EmitStage0Shovel();
+            glEnd();glPopMatrix();
+        };
+        if(palette)for(Stage0ToolProp const& prop:g.stage0Tools)
+        {
+            if(!prop.present||prop.kind==g.stage0HeldTool)continue;
+            float M[16];BuildStage0DroppedToolMatrix(prop,M);drawTool(prop,M);
+        }
+        if(g.stage0HeldTool!=Stage0ToolKind::None)for(Stage0ToolProp const& prop:g.stage0Tools)
+        {
+            if(prop.kind!=g.stage0HeldTool)continue;
+            float M[16];BuildStage0HeldToolMatrix(prop.kind,GetTickCount64(),M);
+            // A held tool is a first-person view model. Give it a close projection
+            // plane independent of the outdoor world plane so the camera cannot
+            // slice open the grip, shaft, or blade during ready/strike poses.
+            GLint viewport[4]={0,0,1,1};glGetIntegerv(GL_VIEWPORT,viewport);
+            float const aspect=(float)(std::max)(1,viewport[2])/(float)(std::max)(1,viewport[3]);
+            float const f=1.f/std::tan(60.f*3.14159265f/360.f),nearZ=0.03f,farZ=600.f;
+            float const P[16]={f/aspect,0,0,0,0,f,0,0,0,0,(farZ+nearZ)/(nearZ-farZ),-1,0,0,(2*farZ*nearZ)/(nearZ-farZ),0};
+            glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadMatrixf(P);glMatrixMode(GL_MODELVIEW);
+            glClear(GL_DEPTH_BUFFER_BIT);drawTool(prop,M);
+            glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);break;
+        }
+        glEnable( GL_CULL_FACE );
+        LitSetIdentity();
+    }
+
+    enum class Stage0HumanJoint : int
+    {
+        Root, LeftAnkle, RightAnkle, LeftKnee, RightKnee, LeftHip, RightHip,
+        Waist, LeftShoulder, RightShoulder, LeftElbow, RightElbow,
+        LeftWrist, RightWrist, Neck, Jaw, Lips, LeftEye, RightEye, Count
+    };
+
+    struct Stage0HumanRig
+    {
+        float p[(int)Stage0HumanJoint::Count][3] = {};
+    };
+
+    void Stage0HumanSetJoint( Stage0HumanRig& rig, Stage0HumanJoint joint,
+        float originX, float originY, float ground, float x, float y, float z )
+    {
+        // Character faces west toward the approach lane. Local X is anatomical
+        // right, local Y is forward, and local Z is height above the soles.
+        float* p=rig.p[(int)joint];p[0]=originX-y;p[1]=originY+x;p[2]=ground+z;
+    }
+
+    void EmitStage0HumanLimb( float const a[3], float const b[3], float ra, float rb,
+        float cr, float cg, float cb )
+    {
+        constexpr int kSides=16;
+        float w[3]={b[0]-a[0],b[1]-a[1],b[2]-a[2]};
+        float const length=std::sqrt(w[0]*w[0]+w[1]*w[1]+w[2]*w[2]);
+        if(length<1e-5f)return;for(float& q:w)q/=length;
+        float ref[3]={0.f,0.f,1.f};if(std::fabs(w[2])>0.88f){ref[0]=1.f;ref[2]=0.f;}
+        float u[3]={ref[1]*w[2]-ref[2]*w[1],ref[2]*w[0]-ref[0]*w[2],ref[0]*w[1]-ref[1]*w[0]};
+        float const ul=std::sqrt(u[0]*u[0]+u[1]*u[1]+u[2]*u[2]);for(float& q:u)q/=ul;
+        float v[3]={w[1]*u[2]-w[2]*u[1],w[2]*u[0]-w[0]*u[2],w[0]*u[1]-w[1]*u[0]};
+        auto color=[&](float const n[3],float bias=1.f)
+        {float const shade=bias*(0.84f+0.12f*(n[2]*0.5f+0.5f)+0.04f*(n[0]*0.5f+0.5f));
+         glColor3f(cr/255.f*shade,cg/255.f*shade,cb/255.f*shade);};
+        for(int i=0;i<kSides;++i)
+        {
+            float const a0=6.2831853f*(float)i/(float)kSides,a1=6.2831853f*(float)(i+1)/(float)kSides;
+            float n0[3]={u[0]*std::cos(a0)+v[0]*std::sin(a0),u[1]*std::cos(a0)+v[1]*std::sin(a0),u[2]*std::cos(a0)+v[2]*std::sin(a0)};
+            float n1[3]={u[0]*std::cos(a1)+v[0]*std::sin(a1),u[1]*std::cos(a1)+v[1]*std::sin(a1),u[2]*std::cos(a1)+v[2]*std::sin(a1)};
+            float a0p[3]={a[0]+n0[0]*ra,a[1]+n0[1]*ra,a[2]+n0[2]*ra};
+            float a1p[3]={a[0]+n1[0]*ra,a[1]+n1[1]*ra,a[2]+n1[2]*ra};
+            float b0p[3]={b[0]+n0[0]*rb,b[1]+n0[1]*rb,b[2]+n0[2]*rb};
+            float b1p[3]={b[0]+n1[0]*rb,b[1]+n1[1]*rb,b[2]+n1[2]*rb};
+            color(n0);glNormal3fv(n0);glVertex3fv(a0p);glVertex3fv(b0p);color(n1);glNormal3fv(n1);glVertex3fv(a1p);
+            color(n1);glNormal3fv(n1);glVertex3fv(a1p);color(n0);glNormal3fv(n0);glVertex3fv(b0p);color(n1);glNormal3fv(n1);glVertex3fv(b1p);
+            color(w,0.78f);glNormal3f(-w[0],-w[1],-w[2]);glVertex3fv(a);glVertex3fv(a1p);glVertex3fv(a0p);
+            color(w,0.90f);glNormal3fv(w);glVertex3fv(b);glVertex3fv(b0p);glVertex3fv(b1p);
+        }
+    }
+
+    void EmitStage0HumanEllipsoid( float x, float y, float z, float rx, float ry, float rz,
+        float cr, float cg, float cb, int slices=20, int rings=12 )
+    {
+        auto vertex=[&](float lat,float lon)
+        {
+            float const cl=std::cos(lat),sx=cl*std::cos(lon),sy=cl*std::sin(lon),sz=std::sin(lat);
+            float nx=sx/rx,ny=sy/ry,nz=sz/rz,nl=std::sqrt(nx*nx+ny*ny+nz*nz);
+            float const shade=0.84f+0.10f*(sz*0.5f+0.5f)+0.06f*(sx*0.5f+0.5f);
+            glColor3f(cr/255.f*shade,cg/255.f*shade,cb/255.f*shade);
+            glNormal3f(nx/nl,ny/nl,nz/nl);glVertex3f(x+sx*rx,y+sy*ry,z+sz*rz);
+        };
+        for(int j=0;j<rings;++j)for(int i=0;i<slices;++i)
+        {
+            float const p0=-1.5707963f+3.14159265f*(float)j/(float)rings;
+            float const p1=-1.5707963f+3.14159265f*(float)(j+1)/(float)rings;
+            float const t0=6.2831853f*(float)i/(float)slices,t1=6.2831853f*(float)(i+1)/(float)slices;
+            vertex(p0,t0);vertex(p0,t1);vertex(p1,t0);
+            vertex(p0,t1);vertex(p1,t1);vertex(p1,t0);
+        }
+    }
+
+    bool Stage0ApplyHeadNormalSheet( float px,float py,float pz,float ox,float oy,float ground,
+        float const geometric[3],float influence,float out[3] );
+    bool Stage0ApplyBodyNormalSheet( float px,float py,float pz,float ox,float oy,float ground,
+        float const geometric[3],float influence,float out[3] );
+
+    struct Stage0UnifiedBodyVertex
+    {
+        float p[3]={},n[3]={};
+        unsigned char joint[4]={};
+        float weight[4]={};
+    };
+
+    struct Stage0UnifiedBodyMesh
+    {
+        std::vector<Stage0UnifiedBodyVertex> vertices;
+        std::vector<unsigned int> indices;
+        int connectedComponents=0;
+        int boundaryEdges=0;
+        int nonManifoldEdges=0;
+        int eulerCharacteristic=0;
+        int genus=-1;
+        int weightedJoints=0;
+        int maxInfluences=4;
+        float maxWeightSumError=0.f;
+        bool built=false;
+    };
+
+    struct Stage0BodyPoint { float x=0.f,y=0.f,z=0.f; };
+
+    float Stage0BodyEllipsoidSdf( Stage0BodyPoint const& p, Stage0BodyPoint const& c,
+        Stage0BodyPoint const& r )
+    {
+        float const x=(p.x-c.x)/r.x,y=(p.y-c.y)/r.y,z=(p.z-c.z)/r.z;
+        float const k0=std::sqrt(x*x+y*y+z*z);
+        float const xx=(p.x-c.x)/(r.x*r.x),yy=(p.y-c.y)/(r.y*r.y),zz=(p.z-c.z)/(r.z*r.z);
+        float const k1=std::sqrt(xx*xx+yy*yy+zz*zz);
+        return k1>1e-6f?k0*(k0-1.f)/k1:k0-1.f;
+    }
+
+    float Stage0BodyCapsuleSdf( Stage0BodyPoint const& p, Stage0BodyPoint const& a,
+        Stage0BodyPoint const& b, float ra, float rb )
+    {
+        float const abx=b.x-a.x,aby=b.y-a.y,abz=b.z-a.z;
+        float const apx=p.x-a.x,apy=p.y-a.y,apz=p.z-a.z;
+        float const denom=abx*abx+aby*aby+abz*abz;
+        float const h=denom>1e-8f?std::clamp((apx*abx+apy*aby+apz*abz)/denom,0.f,1.f):0.f;
+        float const dx=apx-abx*h,dy=apy-aby*h,dz=apz-abz*h;
+        return std::sqrt(dx*dx+dy*dy+dz*dz)-(ra+(rb-ra)*h);
+    }
+
+    float Stage0BodySmoothUnion( float a, float b, float k )
+    {
+        float const h=std::clamp(0.5f+0.5f*(b-a)/k,0.f,1.f);
+        return b+(a-b)*h-k*h*(1.f-h);
+    }
+
+    float Stage0UnifiedBodySdf( Stage0BodyPoint const& p )
+    {
+        float d=1000.f;
+        auto ellipsoid=[&](float x,float y,float z,float rx,float ry,float rz,float k=0.018f)
+        {d=Stage0BodySmoothUnion(d,Stage0BodyEllipsoidSdf(p,{x,y,z},{rx,ry,rz}),k);};
+        auto capsule=[&](Stage0BodyPoint const& a,Stage0BodyPoint const& b,float ra,float rb,float k=0.018f)
+        {d=Stage0BodySmoothUnion(d,Stage0BodyCapsuleSdf(p,a,b,ra,rb),k);};
+
+        // Feet through pelvis.  Every joint volume overlaps its neighbours before
+        // smoothing, so this is a physical union rather than coincident shells.
+        for(float side:{-1.f,1.f})
+        {
+            // The authority stands with roughly 0.34 m between ankle centres.
+            // Keep each ankle itself in the supplied 2.5-3.0 in width range;
+            // the former narrow stance was incorrectly being read as thin legs.
+            float const ankleY=side*0.180f,kneeY=side*0.135f,hipY=side*0.105f;
+            ellipsoid(-0.078f,ankleY,0.048f,0.132f,0.056f,0.048f,0.012f);
+            ellipsoid(0.012f,ankleY,0.050f,0.065f,0.052f,0.050f,0.010f);
+            ellipsoid(-0.150f,ankleY,0.035f,0.055f,0.052f,0.032f,0.008f);
+            capsule({0.f,ankleY,0.095f},{side*0.010f,kneeY,0.515f},0.038f,0.071f);
+            // Elliptical malleolus volume preserves the measured narrow frontal
+            // ankle while supplying the deeper side silhouette the atlas shows.
+            ellipsoid(-0.005f,ankleY,0.135f,0.052f,0.038f,0.075f,0.010f);
+            ellipsoid(-0.006f,side*0.160f,0.340f,0.068f,0.082f,0.180f);
+            ellipsoid(-0.030f,kneeY,0.525f,0.044f,0.067f,0.066f,0.012f);
+            capsule({side*0.010f,kneeY,0.515f},{0.f,hipY,0.985f},0.075f,0.091f);
+            ellipsoid(-0.008f,side*0.110f,0.760f,0.090f,0.095f,0.230f);
+        }
+        ellipsoid(0.f,0.f,0.985f,0.120f,0.174f,0.155f,0.022f);
+        ellipsoid(0.f,0.f,1.115f,0.108f,0.158f,0.155f,0.020f);
+
+        // Waist, ribcage and shoulder girdle form one continuous trunk.
+        ellipsoid(0.f,0.f,1.245f,0.106f,0.164f,0.205f,0.018f);
+        ellipsoid(0.008f,0.f,1.405f,0.116f,0.196f,0.205f,0.020f);
+        ellipsoid(0.004f,0.f,1.500f,0.088f,0.168f,0.100f,0.016f);
+        capsule({0.012f,0.f,1.445f},{0.f,0.f,1.610f},0.070f,0.058f,0.014f);
+
+        // Connected front/back relief: these volumes are unioned into the trunk,
+        // supplying the pectoral shelf, abdominal plane and scapular mass without
+        // introducing a second skin or an internal closed surface.
+        for(float side:{-1.f,1.f})
+        {
+            ellipsoid(-0.078f,side*0.102f,1.410f,0.050f,0.098f,0.064f,0.010f);
+            ellipsoid(0.070f,side*0.082f,1.405f,0.038f,0.105f,0.150f,0.012f);
+            for(int row=0;row<3;++row)
+                ellipsoid(-0.088f,side*0.043f,1.315f-(float)row*0.088f,
+                    0.027f,0.048f,0.052f,0.008f);
+        }
+
+        // Shoulder-to-hand chains retain the named rig centres and leave enough
+        // local surface density at each pivot for the later deformation weights.
+        for(float side:{-1.f,1.f})
+        {
+            Stage0BodyPoint const shoulder{0.f,side*0.172f,1.490f};
+            Stage0BodyPoint const elbow{side*-0.005f,side*0.302f,1.175f};
+            Stage0BodyPoint const wrist{-0.020f,side*0.392f,0.925f};
+            ellipsoid(shoulder.x,shoulder.y,shoulder.z-0.012f,0.057f,0.062f,0.072f,0.012f);
+            capsule(shoulder,elbow,0.059f,0.051f,0.012f);
+            ellipsoid((shoulder.x+elbow.x)*0.5f,(shoulder.y+elbow.y)*0.5f,
+                (shoulder.z+elbow.z)*0.5f,0.056f,0.056f,0.135f,0.015f);
+            capsule(elbow,wrist,0.049f,0.041f,0.012f);
+            // One continuous hand: wrist -> palm -> overlapping finger columns.
+            // The four 4-inch finger paths share their roots with the palm and
+            // overlap one another slightly, so the carrier never becomes a set
+            // of disconnected feather-like digits.
+            ellipsoid(-0.038f,wrist.y,0.875f,0.048f,0.036f,0.063f,0.010f);
+            for(int digit=0;digit<4;++digit)
+            {
+                float const fx=-0.068f+(float)digit*0.020f;
+                float const tipZ=0.790f+0.008f*(float)(digit==1||digit==2);
+                capsule({fx,side*0.397f,0.858f},{fx-0.005f,side*0.401f,tipZ},
+                    0.0125f,0.0105f,0.006f);
+            }
+            capsule({-0.070f,side*0.405f,0.895f},{-0.076f,side*0.438f,0.842f},
+                0.0140f,0.0115f,0.007f);
+        }
+
+        // The full-body carrier includes the head now.  Close-head work will
+        // refine these same connected volumes after the body envelope is locked.
+        ellipsoid(0.004f,0.f,1.720f,0.086f,0.091f,0.086f,0.018f);
+        // Keep the measured jaw width, but taper the cheek and temple courses.
+        // Depth (x) remains independent from lateral width (y), which lets the
+        // profile gain its missing facial projection without broadening the face.
+        ellipsoid(-0.006f,0.f,1.665f,0.081f,0.073f,0.075f,0.016f);
+        ellipsoid(-0.020f,0.f,1.610f,0.083f,0.080f,0.038f,0.014f);
+        // An oval neck transition restores the deeper side silhouette while
+        // retaining the narrower frontal taper and one contiguous body surface.
+        ellipsoid(0.010f,0.f,1.575f,0.076f,0.071f,0.080f,0.012f);
+        // One connected bridge-to-tip course.  A tapered capsule supplies the
+        // nasion-to-tip ridge and the terminal ellipsoid rounds the tip/alar
+        // transition; both are smooth-unioned into the authoritative skin.
+        capsule({-0.046f,0.f,1.694f},{-0.099f,0.f,1.647f},0.014f,0.020f,0.008f);
+        ellipsoid(-0.096f,0.f,1.647f,0.026f,0.025f,0.019f,0.008f);
+        for(float side:{-1.f,1.f})
+            ellipsoid(0.006f,side*0.084f,1.687f,0.020f,0.009f,0.030f,0.008f);
+        return d;
+    }
+
+    Stage0UnifiedBodyVertex Stage0UnifiedBodyEdgeVertex( Stage0BodyPoint const& a,
+        Stage0BodyPoint const& b,float fa,float fb )
+    {
+        float const denom=fa-fb;
+        float const t=std::fabs(denom)>1e-8f?std::clamp(fa/denom,0.f,1.f):0.5f;
+        Stage0UnifiedBodyVertex v;
+        v.p[0]=a.x+(b.x-a.x)*t;v.p[1]=a.y+(b.y-a.y)*t;v.p[2]=a.z+(b.z-a.z)*t;
+        constexpr float e=0.0025f;
+        Stage0BodyPoint const p{v.p[0],v.p[1],v.p[2]};
+        v.n[0]=Stage0UnifiedBodySdf({p.x+e,p.y,p.z})-Stage0UnifiedBodySdf({p.x-e,p.y,p.z});
+        v.n[1]=Stage0UnifiedBodySdf({p.x,p.y+e,p.z})-Stage0UnifiedBodySdf({p.x,p.y-e,p.z});
+        v.n[2]=Stage0UnifiedBodySdf({p.x,p.y,p.z+e})-Stage0UnifiedBodySdf({p.x,p.y,p.z-e});
+        float nl=std::sqrt(v.n[0]*v.n[0]+v.n[1]*v.n[1]+v.n[2]*v.n[2]);if(nl<1e-7f)nl=1.f;
+        for(float& q:v.n)q/=nl;
+        return v;
+    }
+
+    struct Stage0BodyWidthProfile
+    {
+        std::vector<float> z, half;
+        bool attempted=false,loaded=false;
+        std::string path,error;
+        int appliedVertices=0;
+        float minRatio=1.f,maxRatio=1.f;
+    };
+
+    Stage0BodyWidthProfile& GetStage0BodyWidthProfile()
+    {
+        static Stage0BodyWidthProfile profile;
+        if(profile.attempted)return profile;
+        profile.attempted=true;
+        ResolveAssetsRoot();
+        profile.path=JoinPath(g.assetsRoot,"Characters\\Generated\\stage0_body_width_profile.json");
+        FILE* file=nullptr;
+        if(fopen_s(&file,profile.path.c_str(),"rb")!=0||!file){profile.error="not found";return profile;}
+        std::fseek(file,0,SEEK_END);long const size=std::ftell(file);std::fseek(file,0,SEEK_SET);
+        if(size<=0){std::fclose(file);profile.error="empty";return profile;}
+        std::vector<char> data((size_t)size+1u,'\0');
+        size_t const read=std::fread(data.data(),1u,(size_t)size,file);
+        std::fclose(file);data[read]='\0';
+        // The file is our own deterministic output, so a targeted scan for the two
+        // keys is enough and avoids dragging in a JSON dependency.
+        char const* cursor=data.data();
+        while((cursor=std::strstr(cursor,"\"z_m\":"))!=nullptr)
+        {
+            cursor+=6;
+            float const z=std::strtof(cursor,nullptr);
+            char const* widthKey=std::strstr(cursor,"\"half_width_m\":");
+            if(!widthKey)break;
+            float const half=std::strtof(widthKey+15,nullptr);
+            profile.z.push_back(z);profile.half.push_back(half);
+            cursor=widthKey+15;
+        }
+        profile.loaded=profile.z.size()>=8;
+        if(!profile.loaded&&profile.error.empty())profile.error="too few samples";
+        return profile;
+    }
+
+    void ApplyStage0MeasuredWidthProfile( Stage0UnifiedBodyMesh& mesh )
+    {
+        // DISABLED after measurement. This matched TOTAL silhouette half-width,
+        // which at torso heights is arm-tip to arm-tip, not torso width. Where the
+        // runtime holds its arms differently from the reference, forcing the total
+        // to agree squeezes the torso to compensate. Capture Six said so plainly:
+        // front section error 6.68 -> 15.76 pct, rear 3.66 -> 10.97, right profile
+        // 2.73 -> 6.25, and the front envelope aspect went 0.40 -> 10.12 pct, i.e.
+        // the carrier's overall width had been very nearly right and this made it
+        // ten percent too narrow.
+        //
+        // The fix is per-component width matching -- torso against torso, arm
+        // against arm -- which needs component labels on the carrier's vertices.
+        // The measured profile artifact stands; only this consumer was wrong.
+        constexpr bool kApplyMeasuredWidth = false;
+        Stage0BodyWidthProfile& profile=GetStage0BodyWidthProfile();
+        if(!kApplyMeasuredWidth||!profile.loaded||mesh.vertices.empty())return;
+        constexpr int kBins=192;
+        constexpr float kBinM=kCharHeightM/(float)kBins;
+        std::vector<float> current((size_t)kBins,0.f),target((size_t)kBins,0.f);
+        for(Stage0UnifiedBodyVertex const& v:mesh.vertices)
+        {
+            int const bin=std::clamp((int)(v.p[2]/kBinM),0,kBins-1);
+            current[(size_t)bin]=std::max(current[(size_t)bin],std::fabs(v.p[1]));
+        }
+        for(int bin=0;bin<kBins;++bin)
+        {
+            float const z=((float)bin+0.5f)*kBinM;
+            // Linear interpolation into the measured curve.
+            size_t hi=0;while(hi<profile.z.size()&&profile.z[hi]<z)++hi;
+            if(hi==0)target[(size_t)bin]=profile.half.front();
+            else if(hi>=profile.z.size())target[(size_t)bin]=profile.half.back();
+            else
+            {
+                float const z0=profile.z[hi-1],z1=profile.z[hi];
+                float const t=(z1>z0)?(z-z0)/(z1-z0):0.f;
+                target[(size_t)bin]=profile.half[hi-1]+(profile.half[hi]-profile.half[hi-1])*t;
+            }
+        }
+        std::vector<float> ratio((size_t)kBins,1.f);
+        for(int bin=0;bin<kBins;++bin)
+        {
+            // Bins with almost no lateral extent (crown, toe tips) produce wild
+            // ratios from rounding; leave them alone rather than explode them.
+            if(current[(size_t)bin]<0.012f||target[(size_t)bin]<=0.f)continue;
+            ratio[(size_t)bin]=std::clamp(target[(size_t)bin]/current[(size_t)bin],0.45f,2.2f);
+        }
+        // Smooth so a single noisy bin cannot pinch the carrier.
+        std::vector<float> smooth=ratio;
+        for(int bin=0;bin<kBins;++bin)
+        {
+            float sum=0.f;int count=0;
+            for(int k=bin-3;k<=bin+3;++k)
+            {
+                if(k<0||k>=kBins)continue;
+                sum+=ratio[(size_t)k];++count;
+            }
+            smooth[(size_t)bin]=count?sum/(float)count:1.f;
+        }
+        profile.minRatio=2.f;profile.maxRatio=0.f;
+        for(Stage0UnifiedBodyVertex& v:mesh.vertices)
+        {
+            float const zb=v.p[2]/kBinM-0.5f;
+            int const b0=std::clamp((int)std::floor(zb),0,kBins-1);
+            int const b1=std::clamp(b0+1,0,kBins-1);
+            float const t=std::clamp(zb-(float)b0,0.f,1.f);
+            float const r=smooth[(size_t)b0]+(smooth[(size_t)b1]-smooth[(size_t)b0])*t;
+            v.p[1]*=r;
+            // A non-uniform scale transforms normals by the inverse transpose, so
+            // the y component scales by 1/r before renormalizing.
+            if(r>1e-4f)v.n[1]/=r;
+            float const len=std::sqrt(v.n[0]*v.n[0]+v.n[1]*v.n[1]+v.n[2]*v.n[2]);
+            if(len>1e-6f){v.n[0]/=len;v.n[1]/=len;v.n[2]/=len;}
+            profile.minRatio=std::min(profile.minRatio,r);
+            profile.maxRatio=std::max(profile.maxRatio,r);
+            ++profile.appliedVertices;
+        }
+    }
+
+    void BuildStage0UnifiedBodyMesh( Stage0UnifiedBodyMesh& mesh )
+    {
+        if(mesh.built)return;mesh.built=true;
+        // About 14-16 mm lattice spacing preserves the palm/finger and ankle
+        // silhouette before normal detail. Optimisation follows measured image
+        // parity rather than discarding those forms during reconstruction.
+        constexpr int nx=30,ny=69,nz=120;
+        constexpr float minX=-0.225f,maxX=0.165f,minY=-0.475f,maxY=0.475f,minZ=-0.040f,maxZ=1.820f;
+        float const sx=(maxX-minX)/(float)(nx-1),sy=(maxY-minY)/(float)(ny-1),sz=(maxZ-minZ)/(float)(nz-1);
+        auto gridIndex=[&](int x,int y,int z){return (z*ny+y)*nx+x;};
+        std::vector<float> field((size_t)nx*(size_t)ny*(size_t)nz);
+        for(int z=0;z<nz;++z)for(int y=0;y<ny;++y)for(int x=0;x<nx;++x)
+            field[(size_t)gridIndex(x,y,z)]=Stage0UnifiedBodySdf({minX+sx*x,minY+sy*y,minZ+sz*z});
+        std::unordered_map<uint64_t,unsigned int> edgeVertices;
+        auto point=[&](int id)
+        {
+            int const x=id%nx,y=(id/nx)%ny,z=id/(nx*ny);
+            return Stage0BodyPoint{minX+sx*x,minY+sy*y,minZ+sz*z};
+        };
+        auto edgeVertex=[&](int ia,int ib)
+        {
+            uint32_t const lo=(uint32_t)(std::min)(ia,ib),hi=(uint32_t)(std::max)(ia,ib);
+            uint64_t const key=((uint64_t)lo<<32)|(uint64_t)hi;
+            auto const it=edgeVertices.find(key);if(it!=edgeVertices.end())return it->second;
+            unsigned int const index=(unsigned int)mesh.vertices.size();
+            mesh.vertices.push_back(Stage0UnifiedBodyEdgeVertex(point(ia),point(ib),field[(size_t)ia],field[(size_t)ib]));
+            edgeVertices.emplace(key,index);return index;
+        };
+        auto addTriangle=[&](unsigned int a,unsigned int b,unsigned int c)
+        {
+            Stage0UnifiedBodyVertex const& A=mesh.vertices[a];Stage0UnifiedBodyVertex const& B=mesh.vertices[b];
+            Stage0UnifiedBodyVertex const& C=mesh.vertices[c];
+            float const abx=B.p[0]-A.p[0],aby=B.p[1]-A.p[1],abz=B.p[2]-A.p[2];
+            float const acx=C.p[0]-A.p[0],acy=C.p[1]-A.p[1],acz=C.p[2]-A.p[2];
+            float const cx=aby*acz-abz*acy,cy=abz*acx-abx*acz,cz=abx*acy-aby*acx;
+            float const nx=A.n[0]+B.n[0]+C.n[0],ny=A.n[1]+B.n[1]+C.n[1],nz=A.n[2]+B.n[2]+C.n[2];
+            if(cx*nx+cy*ny+cz*nz<0.f)std::swap(b,c);
+            mesh.indices.push_back(a);mesh.indices.push_back(b);mesh.indices.push_back(c);
+        };
+        static int const tetra[6][4]={{0,1,2,6},{0,2,3,6},{0,3,7,6},{0,7,4,6},{0,4,5,6},{0,5,1,6}};
+        for(int z=0;z+1<nz;++z)for(int y=0;y+1<ny;++y)for(int x=0;x+1<nx;++x)
+        {
+            int const cube[8]={gridIndex(x,y,z),gridIndex(x+1,y,z),gridIndex(x+1,y+1,z),gridIndex(x,y+1,z),
+                gridIndex(x,y,z+1),gridIndex(x+1,y,z+1),gridIndex(x+1,y+1,z+1),gridIndex(x,y+1,z+1)};
+            for(auto const& tet:tetra)
+            {
+                int inside[4],outside[4],ni=0,no=0;
+                for(int q=0;q<4;++q){int const id=cube[tet[q]];(field[(size_t)id]<0.f?inside[ni++]:outside[no++])=id;}
+                if(ni==0||ni==4)continue;
+                if(ni==1)
+                {
+                    unsigned int const a=edgeVertex(inside[0],outside[0]),b=edgeVertex(inside[0],outside[1]),c=edgeVertex(inside[0],outside[2]);
+                    addTriangle(a,b,c);
+                }
+                else if(ni==3)
+                {
+                    unsigned int const a=edgeVertex(outside[0],inside[0]),b=edgeVertex(outside[0],inside[1]),c=edgeVertex(outside[0],inside[2]);
+                    addTriangle(a,b,c);
+                }
+                else
+                {
+                    unsigned int const a=edgeVertex(inside[0],outside[0]),b=edgeVertex(inside[0],outside[1]);
+                    unsigned int const c=edgeVertex(inside[1],outside[0]),dd=edgeVertex(inside[1],outside[1]);
+                    addTriangle(a,b,dd);addTriangle(a,dd,c);
+                }
+            }
+        }
+
+        // Certify the indexed carrier itself: one graph component, every edge
+        // shared by exactly two triangles, and no non-manifold junctions.
+        std::vector<unsigned int> parent(mesh.vertices.size());for(unsigned int i=0;i<parent.size();++i)parent[i]=i;
+        auto root=[&](unsigned int x){while(parent[x]!=x){parent[x]=parent[parent[x]];x=parent[x];}return x;};
+        auto unite=[&](unsigned int a,unsigned int b){a=root(a);b=root(b);if(a!=b)parent[b]=a;};
+        std::unordered_map<uint64_t,int> edgeUse;
+        for(size_t i=0;i+2<mesh.indices.size();i+=3)
+        {
+            unsigned int const tri[3]={mesh.indices[i],mesh.indices[i+1],mesh.indices[i+2]};
+            unite(tri[0],tri[1]);unite(tri[1],tri[2]);
+            for(int e=0;e<3;++e){uint32_t const a=(std::min)(tri[e],tri[(e+1)%3]),b=(std::max)(tri[e],tri[(e+1)%3]);++edgeUse[((uint64_t)a<<32)|b];}
+        }
+        std::unordered_set<unsigned int> roots;for(unsigned int i=0;i<parent.size();++i)roots.insert(root(i));
+        mesh.connectedComponents=(int)roots.size();
+        for(auto const& e:edgeUse){if(e.second==1)++mesh.boundaryEdges;else if(e.second!=2)++mesh.nonManifoldEdges;}
+        mesh.eulerCharacteristic=(int)mesh.vertices.size()-(int)edgeUse.size()+(int)(mesh.indices.size()/3u);
+        if(mesh.connectedComponents==1&&mesh.boundaryEdges==0&&mesh.nonManifoldEdges==0)
+            mesh.genus=(2-mesh.eulerCharacteristic)/2;
+
+        // Neutral-space atlas directions are invariant under the current idle
+        // offsets. Bake them once with the carrier instead of decoding and
+        // bilinearly sampling tens of thousands of vertices every frame.
+        for(Stage0UnifiedBodyVertex& v:mesh.vertices)
+        {
+            float mapped[3];
+            if(v.p[2]>1.565f)Stage0ApplyHeadNormalSheet(v.p[0],v.p[1],v.p[2],0.f,0.f,0.f,v.n,0.42f,mapped);
+            else Stage0ApplyBodyNormalSheet(v.p[0],v.p[1],v.p[2],0.f,0.f,0.f,v.n,0.30f,mapped);
+            for(int a=0;a<3;++a)v.n[a]=mapped[a];
+        }
+
+        // PASS A: make the carrier's proportions the measured proportions.
+        // The existing mesh is the initialization, not a placeholder to be replaced:
+        // it already carries topology, connectivity, pose, materials and rig. This
+        // scales body-local y so the front silhouette half-width at every height
+        // matches Build-ProvRenderWidthProfile.py. Depth, surface anatomy, hair and
+        // cloth are later passes and are untouched here.
+        ApplyStage0MeasuredWidthProfile( mesh );
+
+        // Four-influence neutral weights retain the named articulation hierarchy
+        // on the welded carrier.  They do not change today's neutral silhouette;
+        // crouch, slide and tool poses can deform this same indexed skin later.
+        static Stage0HumanJoint const joints[15]={Stage0HumanJoint::Root,
+            Stage0HumanJoint::LeftAnkle,Stage0HumanJoint::RightAnkle,
+            Stage0HumanJoint::LeftKnee,Stage0HumanJoint::RightKnee,
+            Stage0HumanJoint::LeftHip,Stage0HumanJoint::RightHip,Stage0HumanJoint::Waist,
+            Stage0HumanJoint::LeftShoulder,Stage0HumanJoint::RightShoulder,
+            Stage0HumanJoint::LeftElbow,Stage0HumanJoint::RightElbow,
+            Stage0HumanJoint::LeftWrist,Stage0HumanJoint::RightWrist,Stage0HumanJoint::Neck};
+        static Stage0BodyPoint const jointP[15]={{0.f,0.f,0.98f},{0.f,-0.180f,0.105f},{0.f,0.180f,0.105f},
+            {-0.012f,-0.135f,0.515f},{0.012f,0.135f,0.515f},{0.f,-0.105f,0.985f},{0.f,0.105f,0.985f},
+            {0.f,0.f,1.135f},{0.f,-0.172f,1.490f},{0.f,0.172f,1.490f},{0.005f,-0.302f,1.175f},
+            {-0.005f,0.302f,1.175f},{-0.020f,-0.392f,0.925f},{-0.020f,0.392f,0.925f},{0.f,0.f,1.585f}};
+        std::unordered_set<int> usedJoints;
+        for(Stage0UnifiedBodyVertex& v:mesh.vertices)
+        {
+            float bestD[4]={1e9f,1e9f,1e9f,1e9f};int bestJ[4]={0,0,0,0};
+            for(int j=0;j<15;++j)
+            {
+                float const dx=v.p[0]-jointP[j].x,dy=v.p[1]-jointP[j].y,dz=v.p[2]-jointP[j].z;
+                float const d=dx*dx+dy*dy+dz*dz;
+                for(int slot=0;slot<4;++slot)if(d<bestD[slot])
+                {for(int q=3;q>slot;--q){bestD[q]=bestD[q-1];bestJ[q]=bestJ[q-1];}bestD[slot]=d;bestJ[slot]=j;break;}
+            }
+            float sum=0.f;for(int slot=0;slot<4;++slot){v.weight[slot]=1.f/(bestD[slot]+0.0025f);sum+=v.weight[slot];}
+            for(int slot=0;slot<4;++slot)
+            {v.weight[slot]/=sum;v.joint[slot]=(unsigned char)joints[bestJ[slot]];if(v.weight[slot]>0.05f)usedJoints.insert((int)v.joint[slot]);}
+            float check=0.f;for(float w:v.weight)check+=w;
+            mesh.maxWeightSumError=(std::max)(mesh.maxWeightSumError,std::fabs(check-1.f));
+        }
+        mesh.weightedJoints=(int)usedJoints.size();
+    }
+
+    Stage0UnifiedBodyMesh& GetStage0UnifiedBodyMesh()
+    {
+        static Stage0UnifiedBodyMesh mesh;BuildStage0UnifiedBodyMesh(mesh);return mesh;
+    }
+
+    void Stage0UnifiedBodyPoseOffset( Stage0HumanJoint joint, int pose, float out[3] )
+    {
+        out[0]=out[1]=out[2]=0.f;
+        if(pose==1)
+        {
+            // Deep crouch audit. Local X is front/back (negative is forward),
+            // local Y is lateral and local Z is height. Feet remain planted,
+            // knees travel forward, and the pelvis settles back and down.
+            switch(joint)
+            {
+            case Stage0HumanJoint::LeftKnee:case Stage0HumanJoint::RightKnee:
+                out[0]=-0.115f;out[2]=-0.055f;break;
+            case Stage0HumanJoint::LeftHip:case Stage0HumanJoint::RightHip:
+                out[0]=0.075f;out[2]=-0.255f;break;
+            case Stage0HumanJoint::Root:
+                out[0]=0.070f;out[2]=-0.250f;break;
+            case Stage0HumanJoint::Waist:
+                out[0]=0.058f;out[2]=-0.270f;break;
+            case Stage0HumanJoint::LeftShoulder:case Stage0HumanJoint::RightShoulder:
+                out[0]=0.025f;out[2]=-0.295f;break;
+            case Stage0HumanJoint::LeftElbow:case Stage0HumanJoint::RightElbow:
+                out[0]=-0.020f;out[2]=-0.265f;break;
+            case Stage0HumanJoint::LeftWrist:case Stage0HumanJoint::RightWrist:
+                out[0]=-0.045f;out[2]=-0.235f;break;
+            case Stage0HumanJoint::Neck:
+                out[0]=0.012f;out[2]=-0.305f;break;
+            default:break;
+            }
+        }
+        else if(pose==2)
+        {
+            // Two-handed tool-ready audit. The hands converge around an
+            // imaginary shaft in front of the sternum while shoulders remain
+            // quiet; this is deliberately asymmetric enough to expose bad
+            // armpit, elbow and wrist weighting before tool animation is bound.
+            switch(joint)
+            {
+            case Stage0HumanJoint::LeftShoulder:case Stage0HumanJoint::RightShoulder:
+                out[0]=-0.012f;out[2]=0.008f;break;
+            case Stage0HumanJoint::LeftElbow:
+                out[0]=-0.155f;out[1]=0.062f;out[2]=0.032f;break;
+            case Stage0HumanJoint::RightElbow:
+                out[0]=-0.155f;out[1]=-0.062f;out[2]=0.032f;break;
+            case Stage0HumanJoint::LeftWrist:
+                out[0]=-0.305f;out[1]=0.238f;out[2]=0.175f;break;
+            case Stage0HumanJoint::RightWrist:
+                out[0]=-0.305f;out[1]=-0.238f;out[2]=0.175f;break;
+            default:break;
+            }
+        }
+    }
+
+    void Stage0UnifiedBodyPosePoint( Stage0UnifiedBodyVertex const& v, int pose, float out[3] )
+    {
+        out[0]=v.p[0];out[1]=v.p[1];out[2]=v.p[2];
+        if(pose<=0)return;
+        auto smooth=[](float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);};
+        if(pose==1)
+        {
+            // A monotonic sectional cage proves that the welded skin can assume
+            // a deep crouched envelope without folding. It deliberately avoids
+            // nearest-joint translations: those are discontinuity-prone and the
+            // first rejected audit correctly exposed 994 flipped faces.
+            float dx=0.f,dz=0.f;
+            if(v.p[2]>0.10f&&v.p[2]<=0.515f)
+            {
+                float const t=smooth((v.p[2]-0.10f)/0.415f);
+                dx=-0.100f*t;dz=-0.045f*t;
+            }
+            else if(v.p[2]>0.515f&&v.p[2]<=0.985f)
+            {
+                float const t=smooth((v.p[2]-0.515f)/0.470f);
+                dx=-0.100f+0.165f*t;dz=-0.045f-0.190f*t;
+            }
+            else if(v.p[2]>0.985f)
+            {
+                float const t=smooth((v.p[2]-0.985f)/0.600f);
+                dx=0.065f-0.045f*t;dz=-0.235f-0.060f*t;
+            }
+            out[0]+=dx;out[2]+=dz;
+        }
+        else if(pose==2)
+        {
+            // Smoothly converge only the arm span toward an imaginary shaft.
+            // The lateral derivative stays positive, so the armpit-to-wrist
+            // carrier cannot turn inside-out as the hands move forward/up.
+            float const side=v.p[1]<0.f?-1.f:1.f;
+            float const q=smooth((std::fabs(v.p[1])-0.170f)/0.220f);
+            out[0]-=0.250f*q;
+            out[1]-=side*0.130f*q;
+            out[2]+=0.140f*q;
+        }
+    }
+
+    int Stage0UnifiedBodyPoseInvertedTriangles( int pose, float& minZ, float& maxZ,
+        float& minJacobian, float& meanJacobian )
+    {
+        Stage0UnifiedBodyMesh const& mesh=GetStage0UnifiedBodyMesh();
+        minZ=1000.f;maxZ=-1000.f;minJacobian=1000.f;meanJacobian=0.f;
+        double jacobianSum=0.0;int jacobianSamples=0,inverted=0;
+        for(Stage0UnifiedBodyVertex const& v:mesh.vertices)
+        {
+            float p[3];Stage0UnifiedBodyPosePoint(v,pose,p);
+            minZ=(std::min)(minZ,p[2]);maxZ=(std::max)(maxZ,p[2]);
+        }
+        for(size_t i=0;i+2<mesh.indices.size();i+=3)
+        {
+            Stage0UnifiedBodyVertex probe{};
+            for(int q=0;q<3;++q)
+            {
+                Stage0UnifiedBodyVertex const& v=mesh.vertices[mesh.indices[i+(size_t)q]];
+                for(int axis=0;axis<3;++axis)probe.p[axis]+=v.p[axis]/3.f;
+            }
+            constexpr float e=0.0005f;
+            float base[3],column[3][3];Stage0UnifiedBodyPosePoint(probe,pose,base);
+            for(int input=0;input<3;++input)
+            {
+                Stage0UnifiedBodyVertex sample=probe;sample.p[input]+=e;
+                float moved[3];Stage0UnifiedBodyPosePoint(sample,pose,moved);
+                for(int output=0;output<3;++output)column[input][output]=(moved[output]-base[output])/e;
+            }
+            float const determinant=
+                column[0][0]*(column[1][1]*column[2][2]-column[1][2]*column[2][1])
+                -column[1][0]*(column[0][1]*column[2][2]-column[0][2]*column[2][1])
+                +column[2][0]*(column[0][1]*column[1][2]-column[0][2]*column[1][1]);
+            minJacobian=(std::min)(minJacobian,determinant);
+            jacobianSum+=(double)determinant;++jacobianSamples;
+            if(determinant<=0.f)++inverted;
+        }
+        meanJacobian=jacobianSamples>0?(float)(jacobianSum/(double)jacobianSamples):0.f;
+        return inverted;
+    }
+
+    bool Stage0SegmentTriangleIntersection( Stage0BodyPoint const& p0,Stage0BodyPoint const& p1,
+        Stage0BodyPoint const& a,Stage0BodyPoint const& b,Stage0BodyPoint const& c )
+    {
+        Stage0BodyPoint const d{p1.x-p0.x,p1.y-p0.y,p1.z-p0.z};
+        Stage0BodyPoint const e1{b.x-a.x,b.y-a.y,b.z-a.z};
+        Stage0BodyPoint const e2{c.x-a.x,c.y-a.y,c.z-a.z};
+        Stage0BodyPoint const h{d.y*e2.z-d.z*e2.y,d.z*e2.x-d.x*e2.z,d.x*e2.y-d.y*e2.x};
+        float const det=e1.x*h.x+e1.y*h.y+e1.z*h.z;
+        if(std::fabs(det)<1e-9f)return false;
+        float const inv=1.f/det;
+        Stage0BodyPoint const s{p0.x-a.x,p0.y-a.y,p0.z-a.z};
+        float const u=inv*(s.x*h.x+s.y*h.y+s.z*h.z);if(u<-1e-5f||u>1.00001f)return false;
+        Stage0BodyPoint const q{s.y*e1.z-s.z*e1.y,s.z*e1.x-s.x*e1.z,s.x*e1.y-s.y*e1.x};
+        float const v=inv*(d.x*q.x+d.y*q.y+d.z*q.z);if(v<-1e-5f||u+v>1.00001f)return false;
+        float const t=inv*(e2.x*q.x+e2.y*q.y+e2.z*q.z);
+        return t>1e-5f&&t<0.99999f;
+    }
+
+    int Stage0UnifiedBodyPoseSelfIntersections( int pose )
+    {
+        // Spatially hashed exact edge/triangle tests. Adjacent indexed faces are
+        // excluded; every remaining intersecting pair is counted once. Neutral
+        // implicit extraction is embedded by construction, so this expensive
+        // gate is reserved for authored/deformation audit poses.
+        Stage0UnifiedBodyMesh const& mesh=GetStage0UnifiedBodyMesh();
+        struct PoseTri{Stage0BodyPoint p[3];unsigned int id[3];};
+        std::vector<PoseTri> triangles(mesh.indices.size()/3u);
+        Stage0BodyPoint globalMin{1e9f,1e9f,1e9f};
+        for(size_t t=0;t<triangles.size();++t)for(int q=0;q<3;++q)
+        {
+            unsigned int const id=mesh.indices[t*3u+(size_t)q];float p[3];Stage0UnifiedBodyPosePoint(mesh.vertices[id],pose,p);
+            triangles[t].p[q]={p[0],p[1],p[2]};triangles[t].id[q]=id;
+            globalMin.x=(std::min)(globalMin.x,p[0]);globalMin.y=(std::min)(globalMin.y,p[1]);globalMin.z=(std::min)(globalMin.z,p[2]);
+        }
+        constexpr float cell=0.040f;
+        std::unordered_map<uint64_t,std::vector<unsigned int>> buckets;
+        std::unordered_set<uint64_t> tested;
+        int intersections=0;
+        auto key=[&](int x,int y,int z){return ((uint64_t)(uint32_t)x<<42)|((uint64_t)(uint32_t)y<<21)|(uint64_t)(uint32_t)z;};
+        auto bounds=[&](PoseTri const& tri,Stage0BodyPoint& lo,Stage0BodyPoint& hi)
+        {
+            lo=hi=tri.p[0];for(int q=1;q<3;++q){lo.x=(std::min)(lo.x,tri.p[q].x);lo.y=(std::min)(lo.y,tri.p[q].y);lo.z=(std::min)(lo.z,tri.p[q].z);
+                hi.x=(std::max)(hi.x,tri.p[q].x);hi.y=(std::max)(hi.y,tri.p[q].y);hi.z=(std::max)(hi.z,tri.p[q].z);}
+        };
+        for(unsigned int i=0;i<(unsigned int)triangles.size();++i)
+        {
+            PoseTri const& a=triangles[i];Stage0BodyPoint alo,ahi;bounds(a,alo,ahi);
+            int const x0=(int)std::floor((alo.x-globalMin.x)/cell),x1=(int)std::floor((ahi.x-globalMin.x)/cell);
+            int const y0=(int)std::floor((alo.y-globalMin.y)/cell),y1=(int)std::floor((ahi.y-globalMin.y)/cell);
+            int const z0=(int)std::floor((alo.z-globalMin.z)/cell),z1=(int)std::floor((ahi.z-globalMin.z)/cell);
+            for(int z=z0;z<=z1;++z)for(int y=y0;y<=y1;++y)for(int x=x0;x<=x1;++x)
+            {
+                uint64_t const bucketKey=key(x,y,z);auto const found=buckets.find(bucketKey);if(found==buckets.end())continue;
+                for(unsigned int j:found->second)
+                {
+                    uint64_t const pair=((uint64_t)j<<32)|i;if(!tested.insert(pair).second)continue;
+                    PoseTri const& b=triangles[j];bool adjacent=false;
+                    for(int qa=0;qa<3;++qa)for(int qb=0;qb<3;++qb)adjacent=adjacent||a.id[qa]==b.id[qb];
+                    if(adjacent)continue;
+                    Stage0BodyPoint blo,bhi;bounds(b,blo,bhi);
+                    if(ahi.x<blo.x||bhi.x<alo.x||ahi.y<blo.y||bhi.y<alo.y||ahi.z<blo.z||bhi.z<alo.z)continue;
+                    bool hit=false;
+                    for(int e=0;e<3&&!hit;++e)hit=Stage0SegmentTriangleIntersection(a.p[e],a.p[(e+1)%3],b.p[0],b.p[1],b.p[2]);
+                    for(int e=0;e<3&&!hit;++e)hit=Stage0SegmentTriangleIntersection(b.p[e],b.p[(e+1)%3],a.p[0],a.p[1],a.p[2]);
+                    if(hit)++intersections;
+                }
+            }
+            for(int z=z0;z<=z1;++z)for(int y=y0;y<=y1;++y)for(int x=x0;x<=x1;++x)buckets[key(x,y,z)].push_back(i);
+        }
+        return intersections;
+    }
+
+    void EmitStage0UnifiedBodySkin( float ox,float oy,float ground,float sway,float breathe,
+        bool headOnly,int pose,int partFilter=0 )
+    {
+        Stage0UnifiedBodyMesh& mesh=GetStage0UnifiedBodyMesh();
+        for(size_t tri=0;tri+2<mesh.indices.size();tri+=3)
+        {
+            float centreX=0.f,centreY=0.f,centreZ=0.f;
+            for(int q=0;q<3;++q)
+            {
+                Stage0UnifiedBodyVertex const& v=mesh.vertices[mesh.indices[tri+(size_t)q]];
+                centreX+=v.p[0]/3.f;centreY+=v.p[1]/3.f;centreZ+=v.p[2]/3.f;
+            }
+            int part=1; // connected facial/body skin
+            if(centreZ<1.625f&&centreZ>1.520f)part=8; // neck
+            if(centreZ>1.620f&&centreZ<1.710f&&std::fabs(centreY)>0.070f)part=7; // ear
+            if(centreX<-0.050f&&std::fabs(centreY)<0.034f&&centreZ>1.610f&&centreZ<1.710f)part=5; // nose
+            if(partFilter>0&&part!=partFilter)continue;
+            if(headOnly)
+            {
+                bool below=false;float centreZ=0.f,maxLateral=0.f;
+                for(int q=0;q<3;++q)
+                {
+                    Stage0UnifiedBodyVertex const& v=mesh.vertices[mesh.indices[tri+(size_t)q]];
+                    below=below||v.p[2]<1.545f;centreZ+=v.p[2]/3.f;
+                    maxLateral=(std::max)(maxLateral,std::fabs(v.p[1]));
+                }
+                // Preserve the tapered neck but exclude the high shoulder cap
+                // that shares the same continuous carrier. This is a capture
+                // ownership clip only; no production geometry is disconnected.
+                if(below||(centreZ<1.630f&&maxLateral>0.115f))continue;
+            }
+            for(int q=0;q<3;++q)
+            {
+                Stage0UnifiedBodyVertex const& v=mesh.vertices[mesh.indices[tri+(size_t)q]];
+                float const upper=std::clamp((v.p[2]-1.18f)/0.42f,0.f,1.f);
+                float const anchor=std::clamp((v.p[2]-0.08f)/1.35f,0.f,1.f);
+                float local[3];Stage0UnifiedBodyPosePoint(v,pose,local);
+                float const p[3]={ox+local[0],oy+local[1]+sway*anchor,ground+local[2]+breathe*upper};
+                float n[3]={v.n[0],v.n[1],v.n[2]};
+                float const shade=0.84f+0.10f*(n[2]*0.5f+0.5f)+0.06f*(n[0]*0.5f+0.5f);
+                glColor3f(174.f/255.f*shade,112.f/255.f*shade,76.f/255.f*shade);
+                glNormal3fv(n);glVertex3fv(p);
+            }
+        }
+    }
+
+    void EmitStage0HumanHairShell( float x,float y,float z,float rx,float ry,float rz,
+        float cr,float cg,float cb,int slices,int rings,float atlasOx,float atlasOy,float ground,
+        float crownDrop,float crownDepthBulge,float napeStrength,float templeStrength )
+    {
+        // Closed shared mass with a normal-map analogue: positions remain on one
+        // continuous shell while combed high-frequency tangent perturbations and
+        // colour bands describe many hairs without modeling individual strands.
+        auto vertex=[&](float lat,float lon)
+        {
+            float const cl=std::cos(lat),sx=cl*std::cos(lon),sy=cl*std::sin(lon),sz=std::sin(lat);
+            // Keep the attachment watertight while tapering its lower half into a
+            // neck-following nape.  The small low-course displacement breaks the
+            // helmet-like hem without separating any lock from the shared shell.
+            float const lower=(std::max)(0.f,-sz);
+            float const napeTaper=1.f-napeStrength*lower*lower;
+            float const hemFlow=cl*lower*lower*(0.055f*std::sin(lon*5.f+0.4f)
+                +0.025f*std::sin(lon*9.f-0.7f));
+            float n[3]={sx/rx,sy/ry,sz/rz};
+            float nl=std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);if(nl<1e-6f)nl=1.f;
+            for(float& q:n)q/=nl;
+            float lonT[3]={-std::sin(lon),std::cos(lon),0.f};
+            float latT[3]={-std::sin(lat)*std::cos(lon),-std::sin(lat)*std::sin(lon),std::cos(lat)};
+            // Frequencies stay below the shell's sampling limit, producing a
+            // stable combed normal field rather than aliased geometric ribbons.
+            float const fine=std::sin(lon*7.f+lat*2.5f)+0.52f*std::sin(lon*11.f-lat*4.f);
+            float const flow=std::sin(lon*5.f+lat*3.f);
+            for(int a=0;a<3;++a)n[a]+=lonT[a]*(0.240f*fine)+latT[a]*(0.075f*flow);
+            nl=std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);if(nl<1e-6f)nl=1.f;
+            for(float& q:n)q/=nl;
+            float const strand=0.60f+0.40f*(0.5f+0.5f*std::sin(lon*9.f+lat*3.5f));
+            float const rootShade=0.80f+0.18f*(sz*0.5f+0.5f);
+            glColor3f(cr/255.f*strand*rootShade,cg/255.f*strand*rootShade,cb/255.f*strand*rootShade);
+            float const upper=sz*0.5f+0.5f;
+            // Preserve the measured crown while dropping the upper side courses.
+            // A shallow symmetric ellipsoid presented as a flat bowl even when
+            // its maximum height was correct; this makes the same watertight
+            // shell read as a layered crown without adding strand geometry.
+            float const crownShape=crownDrop*cl*cl*upper;
+            // Supply the reference's upper-crown depth without expanding the
+            // equator/hem that owns total profile aspect. A single larger rx made
+            // the crown section fit while falsely widening the complete profile.
+            float const crownDepthCourse=1.f+crownDepthBulge
+                *std::exp(-((sz-0.62f)*(sz-0.62f))/0.055f);
+            // Carry the mid-course silhouette with the same closed shell rather
+            // than detached fringe/side ribbons.  The front course reaches just
+            // beyond the forehead and drops into an irregular but continuous
+            // hairline; the rear lower course lengthens into the reference nape.
+            float const templeBand=std::exp(-(sz*sz)/0.12f);
+            float const frontWeight=(std::max)(0.f,-sx);
+            float const backWeight=(std::max)(0.f,sx);
+            float const templeDepthCourse=1.f+templeBand
+                *(0.140f*frontWeight+0.060f*backWeight);
+            float const lowerTempleBand=std::exp(-((sz+0.55f)*(sz+0.55f))/0.08f);
+            float const lateralCourse=1.f+0.06f*lowerTempleBand;
+            float const parted=std::pow(std::fabs(std::sin(lon)),0.65f);
+            float const fringeReach=(0.006f+0.020f*parted)*frontWeight*templeBand;
+            float const hairlineDrop=(0.004f+0.018f*parted)*frontWeight*templeBand;
+            float const napeDrop=0.085f*std::sqrt(napeStrength)*lower*lower
+                *(0.35f+0.65f*backWeight);
+            // The side courses are a deformation of this same closed shell, not
+            // coverage-matching paddles.  They descend beside the face, lean
+            // slightly forward over the temple, and remain rooted in the crown.
+            float const sideCourse=cl*std::pow(std::fabs(std::sin(lon)),4.f)
+                *std::exp(-((sz+0.30f)*(sz+0.30f))/0.20f);
+            float const templeDrop=templeStrength*sideCourse;
+            float const templeForward=templeStrength*0.28f*sideCourse;
+            // Low-amplitude course waves alter the shared silhouette only a few
+            // millimetres. They provide grouped locks without returning to
+            // detached geometric feathers or changing the exact crown height.
+            float const courseRipple=1.f+cl*cl*(0.009f*std::sin(lon*5.f+lat*2.f)
+                +0.005f*std::sin(lon*9.f-lat*3.f));
+            float const p[3]={x+sx*rx*crownDepthCourse*templeDepthCourse*courseRipple-fringeReach-templeForward,
+                y+sy*ry*napeTaper*lateralCourse*courseRipple,
+                z+(sz+hemFlow)*rz-crownShape-hairlineDrop-napeDrop-templeDrop};
+            float mapped[3];Stage0ApplyHeadNormalSheet(p[0],p[1],p[2],atlasOx,atlasOy,ground,n,0.72f,mapped);
+            glNormal3fv(mapped);glVertex3fv(p);
+        };
+        for(int j=0;j<rings;++j)for(int i=0;i<slices;++i)
+        {
+            float const p0=-1.5707963f+3.14159265f*(float)j/(float)rings;
+            float const p1=-1.5707963f+3.14159265f*(float)(j+1)/(float)rings;
+            float const t0=6.2831853f*(float)i/(float)slices,t1=6.2831853f*(float)(i+1)/(float)slices;
+            vertex(p0,t0);vertex(p0,t1);vertex(p1,t0);
+            vertex(p0,t1);vertex(p1,t1);vertex(p1,t0);
+        }
+    }
+
+    bool Stage0NearestLivingFocus( float x, float y, float z, float out[3] )
+    {
+        constexpr float kLivingFocusRangeM=3.6576f; // 12 ft
+        float bestSq=kLivingFocusRangeM*kLivingFocusRangeM;
+        bool found=false;
+        // The controlled player is the current living-entity authority. Additional
+        // living actors can enter this nearest-candidate pass without changing eyes.
+        if(g.havePlayer)
+        {
+            float const dx=g.camX-x,dy=g.camY-y,dz=g.camZ-z;
+            float const d2=dx*dx+dy*dy+dz*dz;
+            if(d2<=bestSq){bestSq=d2;out[0]=g.camX;out[1]=g.camY;out[2]=g.camZ;found=true;}
+        }
+        return found;
+    }
+
+    void EmitStage0HumanClothWrap( float ox, float oy, float ground )
+    {
+        constexpr int kSides=20;
+        for(int i=0;i<kSides;++i)
+        {
+            float const a0=6.2831853f*(float)i/(float)kSides,a1=6.2831853f*(float)(i+1)/(float)kSides;
+            float const x0=ox+std::cos(a0)*0.130f,y0=oy+std::sin(a0)*0.205f;
+            float const x1=ox+std::cos(a1)*0.130f,y1=oy+std::sin(a1)*0.205f;
+            float const h0=ground+0.82f+0.025f*(float)((i*7)%4);
+            float const h1=ground+0.82f+0.025f*(float)(((i+1)*7)%4);
+            float const bx0=ox+std::cos(a0)*0.145f,by0=oy+std::sin(a0)*0.22f;
+            float const bx1=ox+std::cos(a1)*0.145f,by1=oy+std::sin(a1)*0.22f;
+            float const shade=0.86f+0.12f*(float)(i%5)/4.f;
+            EmitGalleryTri(x0,y0,ground+1.11f,x1,y1,ground+1.11f,bx0,by0,h0,112.f*shade,100.f*shade,82.f*shade);
+            EmitGalleryTri(x1,y1,ground+1.11f,bx1,by1,h1,bx0,by0,h0,102.f*shade,91.f*shade,75.f*shade);
+        }
+        // Front apron shares its top edge with the wrap: no detached feather panel.
+        EmitGalleryTri(ox-0.177f,oy-0.16f,ground+1.11f,ox-0.177f,oy+0.16f,ground+1.11f,
+            ox-0.195f,oy,ground+0.69f,120.f,107.f,87.f);
+        EmitGalleryTri(ox-0.176f,oy+0.16f,ground+1.11f,ox-0.176f,oy+0.205f,ground+1.07f,
+            ox-0.19f,oy+0.22f,ground+0.88f,94.f,82.f,67.f);
+    }
+
+    float Stage0AngleDelta( float a, float b )
+    {
+        float d=a-b;while(d>3.14159265f)d-=6.2831853f;while(d<-3.14159265f)d+=6.2831853f;return d;
+    }
+
+    struct Stage0HeadNormalSheet
+    {
+        unsigned char* pixels=nullptr;
+        int width=0,height=0,channels=0;
+        bool attempted=false;
+        bool fileExists=false;
+        std::string path,error;
+    };
+
+    Stage0HeadNormalSheet& GetStage0HeadNormalSheet()
+    {
+        static Stage0HeadNormalSheet sheet;
+        if(sheet.attempted)return sheet;
+        sheet.attempted=true;
+        ResolveAssetsRoot();
+        sheet.path=JoinPath(g.assetsRoot,"Characters\\stage0_head_normal_sixview.png");
+        sheet.fileExists=FileExistsA(sheet.path.c_str());
+        stbi_set_flip_vertically_on_load(0);
+        sheet.pixels=stbi_load(sheet.path.c_str(),&sheet.width,&sheet.height,&sheet.channels,3);
+        if(!sheet.pixels)
+        {
+            char const* reason=stbi_failure_reason();sheet.error=reason?reason:"unknown";
+        }
+        sheet.channels=3;
+        stbi_set_flip_vertically_on_load(1);
+        return sheet;
+    }
+
+    Stage0HeadNormalSheet& GetStage0BodyNormalSheet()
+    {
+        static Stage0HeadNormalSheet sheet;
+        if(sheet.attempted)return sheet;
+        sheet.attempted=true;
+        ResolveAssetsRoot();
+        sheet.path=JoinPath(g.assetsRoot,"Characters\\stage0_player_normal_sixview.png");
+        sheet.fileExists=FileExistsA(sheet.path.c_str());
+        stbi_set_flip_vertically_on_load(0);
+        sheet.pixels=stbi_load(sheet.path.c_str(),&sheet.width,&sheet.height,&sheet.channels,3);
+        if(!sheet.pixels)
+        {
+            char const* reason=stbi_failure_reason();sheet.error=reason?reason:"unknown";
+        }
+        sheet.channels=3;
+        stbi_set_flip_vertically_on_load(1);
+        return sheet;
+    }
+
+    bool Stage0ApplyBodyNormalSheet( float px,float py,float pz,float ox,float oy,float ground,
+        float const geometric[3],float influence,float out[3] )
+    {
+        Stage0HeadNormalSheet& sheet=GetStage0BodyNormalSheet();
+        if(!sheet.pixels||sheet.width<6||sheet.height<4)
+        {for(int a=0;a<3;++a)out[a]=geometric[a];return false;}
+        // Object-space directions for the atlas panels.  Top-oblique remains a
+        // comparison authority; its strong perspective makes it unsuitable as a
+        // direct UV projection, so shallow runtime sampling selects the best of
+        // the four cardinals and the calibrated thirty-degree view.
+        static float const view[5][2]={{-1.f,0.f},{1.f,0.f},{0.f,-1.f},{0.f,1.f},{-0.8660254f,-0.5f}};
+        static float const right[5][2]={{0.f,1.f},{0.f,-1.f},{1.f,0.f},{-1.f,0.f},{0.5f,-0.8660254f}};
+        static int const panel[5]={0,1,2,3,5};
+        // Bounds are emitted by Audit-ProvRenderReferences.ps1.  The rear normal
+        // panel has a blue-gradient false-positive at its edge, so its subject
+        // width uses the matched front carrier span while retaining full height.
+        static float const bounds[6][4]={{180.f,12.f,243.f,498.f},{136.f,0.f,240.f,510.f},
+            {162.f,15.f,93.f,495.f},{246.f,9.f,93.f,486.f},{21.f,3.f,471.f,507.f},{93.f,6.f,210.f,489.f}};
+        int choice=0;float best=-2.f;
+        for(int i=0;i<5;++i)
+        {float const d=geometric[0]*view[i][0]+geometric[1]*view[i][1];if(d>best){best=d;choice=i;}}
+        float const lx=px-ox,ly=py-oy,lz=pz-ground;
+        float const projected=lx*right[choice][0]+ly*right[choice][1];
+        float span=0.86f;if(choice==2||choice==3)span=0.30f;else if(choice==4)span=0.75f;
+        float u=0.5f+projected/span;
+        float v=(1.8288f-lz)/1.8288f;
+        if(u<0.f||u>1.f||v<0.f||v>1.f)
+        {for(int a=0;a<3;++a)out[a]=geometric[a];return false;}
+        int const p=panel[choice],panelW=sheet.width/3,panelH=sheet.height/2;
+        float const* box=bounds[p];
+        float const fx=(float)((p%3)*panelW)+box[0]+u*(box[2]-1.f);
+        float const fy=(float)((p/3)*panelH)+box[1]+v*(box[3]-1.f);
+        int const x0=std::clamp((int)std::floor(fx),0,sheet.width-1),y0=std::clamp((int)std::floor(fy),0,sheet.height-1);
+        int const x1=(std::min)(sheet.width-1,x0+1),y1=(std::min)(sheet.height-1,y0+1);
+        float const tx=fx-(float)x0,ty=fy-(float)y0;
+        auto channel=[&](int x,int y,int c)
+        {return ((float)sheet.pixels[((size_t)y*(size_t)sheet.width+(size_t)x)*3u+(size_t)c]/255.f)*2.f-1.f;};
+        float map[3]{};
+        for(int c=0;c<3;++c)
+        {
+            float const a=channel(x0,y0,c)*(1.f-tx)+channel(x1,y0,c)*tx;
+            float const b=channel(x0,y1,c)*(1.f-tx)+channel(x1,y1,c)*tx;
+            map[c]=a*(1.f-ty)+b*ty;
+        }
+        float mapped[3]={right[choice][0]*map[0]+view[choice][0]*map[2],
+            right[choice][1]*map[0]+view[choice][1]*map[2],map[1]};
+        float ml=std::sqrt(mapped[0]*mapped[0]+mapped[1]*mapped[1]+mapped[2]*mapped[2]);
+        if(ml<0.50f){for(int a=0;a<3;++a)out[a]=geometric[a];}
+        if(ml<0.50f)return false;
+        for(float& q:mapped)q/=ml;
+        float const facing=mapped[0]*geometric[0]+mapped[1]*geometric[1]+mapped[2]*geometric[2];
+        if(facing<0.15f){for(int a=0;a<3;++a)out[a]=geometric[a];return false;}
+        for(int a=0;a<3;++a)out[a]=geometric[a]*(1.f-influence)+mapped[a]*influence;
+        float ol=std::sqrt(out[0]*out[0]+out[1]*out[1]+out[2]*out[2]);if(ol<1e-6f)ol=1.f;
+        for(int a=0;a<3;++a)out[a]/=ol;
+        return true;
+    }
+
+    bool Stage0ApplyHeadNormalSheet( float px,float py,float pz,float ox,float oy,float ground,
+        float const geometric[3],float influence,float out[3] )
+    {
+        Stage0HeadNormalSheet& sheet=GetStage0HeadNormalSheet();
+        if(!sheet.pixels||sheet.width<6||sheet.height<4)
+        {
+            for(int a=0;a<3;++a)out[a]=geometric[a];
+            return false;
+        }
+        // The supplied normal reference is a 3 x 2 object-space view sheet:
+        // front, rear, right profile / left profile, right 3/4, left 3/4.
+        // Pick the view most aligned with this vertex, then project the known
+        // metre-scale head into that panel.  Fine direction survives even when
+        // the connected carrier mesh uses fewer rings.
+        static float const view[6][2]={{-1.f,0.f},{1.f,0.f},{0.f,-1.f},{0.f,1.f},
+            {-0.7071068f,-0.7071068f},{-0.7071068f,0.7071068f}};
+        static float const right[6][2]={{0.f,1.f},{0.f,-1.f},{1.f,0.f},{-1.f,0.f},
+            {0.7071068f,-0.7071068f},{-0.7071068f,-0.7071068f}};
+        int panel=0;float best=-2.f;
+        for(int i=0;i<6;++i)
+        {
+            float const d=geometric[0]*view[i][0]+geometric[1]*view[i][1];
+            if(d>best){best=d;panel=i;}
+        }
+        float const projectedRight=(px-ox)*right[panel][0]+(py-oy)*right[panel][1];
+        float u=0.5f+projectedRight/0.29f;
+        float v=(1.835f-(pz-ground))/0.285f;
+        u=std::clamp(u,0.015f,0.985f);v=std::clamp(v,0.015f,0.985f);
+        int const panelW=sheet.width/3,panelH=sheet.height/2;
+        int const panelX=panel%3,panelY=panel/3;
+        float const fx=(float)(panelX*panelW)+u*(float)(panelW-1);
+        float const fy=(float)(panelY*panelH)+v*(float)(panelH-1);
+        int const x0=std::clamp((int)std::floor(fx),0,sheet.width-1);
+        int const y0=std::clamp((int)std::floor(fy),0,sheet.height-1);
+        int const x1=(std::min)(sheet.width-1,x0+1),y1=(std::min)(sheet.height-1,y0+1);
+        float const tx=fx-(float)x0,ty=fy-(float)y0;
+        auto channel=[&](int x,int y,int c)
+        {return ((float)sheet.pixels[((size_t)y*(size_t)sheet.width+(size_t)x)*3u+(size_t)c]/255.f)*2.f-1.f;};
+        float map[3]{};
+        for(int c=0;c<3;++c)
+        {
+            float const a=channel(x0,y0,c)*(1.f-tx)+channel(x1,y0,c)*tx;
+            float const b=channel(x0,y1,c)*(1.f-tx)+channel(x1,y1,c)*tx;
+            map[c]=a*(1.f-ty)+b*ty;
+        }
+        float mapped[3]={right[panel][0]*map[0]+view[panel][0]*map[2],
+            right[panel][1]*map[0]+view[panel][1]*map[2],map[1]};
+        float ml=std::sqrt(mapped[0]*mapped[0]+mapped[1]*mapped[1]+mapped[2]*mapped[2]);
+        if(ml<0.20f){for(int a=0;a<3;++a)out[a]=geometric[a];return false;}
+        for(int a=0;a<3;++a)mapped[a]/=ml;
+        float const facing=mapped[0]*geometric[0]+mapped[1]*geometric[1]+mapped[2]*geometric[2];
+        if(facing<0.10f){for(int a=0;a<3;++a)out[a]=geometric[a];return false;}
+        for(int a=0;a<3;++a)out[a]=geometric[a]*(1.f-influence)+mapped[a]*influence;
+        float ol=std::sqrt(out[0]*out[0]+out[1]*out[1]+out[2]*out[2]);if(ol<1e-6f)ol=1.f;
+        for(int a=0;a<3;++a)out[a]/=ol;
+        return true;
+    }
+
+    void EmitStage0HumanHeadSurface( float ox, float oy, float ground, float sway, float breathe )
+    {
+        // One connected facial skin. Fifteen landmark rings retain silhouette,
+        // articulation, eyes, nose and lips; the supplied six-view normal sheet
+        // carries shallow planes and microstructure that formerly cost geometry.
+        constexpr int kRings=15,kSides=32;
+        float const zs[kRings]={1.595f,1.615f,1.636f,1.652f,1.663f,1.678f,1.693f,
+            1.707f,1.718f,1.732f,1.748f,1.764f,1.780f,1.792f,1.804f};
+        // The lower centres advance toward the face so the chin remains beneath
+        // the lips in profile instead of falling back into the throat.
+        float const cx[kRings]={-0.020f,-0.016f,-0.009f,-0.005f,-0.003f,-0.002f,0.000f,
+            0.001f,0.002f,0.003f,0.004f,0.005f,0.006f,0.006f,0.006f};
+        float const depth[kRings]={0.080f,0.082f,0.083f,0.083f,0.081f,0.081f,0.082f,
+            0.083f,0.084f,0.084f,0.083f,0.081f,0.076f,0.065f,0.022f};
+        // Front and profile sheets agree on a narrower, planar chin feeding a
+        // broader mandibular angle and cheekbone.  The old nearly constant width
+        // made the face a rounded rectangle at every camera angle.
+        float const lateral[kRings]={0.057f,0.064f,0.073f,0.078f,0.080f,0.082f,0.085f,
+            0.087f,0.087f,0.086f,0.084f,0.081f,0.076f,0.067f,0.025f};
+        auto position=[&](int ring,float theta,float p[3])
+        {
+            float const front=Stage0AngleDelta(theta,3.14159265f);
+            float const rear=Stage0AngleDelta(theta,0.f);
+            float const z=zs[ring];
+            float const frontMask=std::exp(-(front*front)/0.18f);
+            float nose=0.032f*std::exp(-(front*front)/0.026f-((z-1.678f)*(z-1.678f))/0.00018f)
+                +0.010f*std::exp(-(front*front)/0.052f-((z-1.708f)*(z-1.708f))/0.00105f);
+            float socket=0.f,brow=0.f,cheek=0.f;
+            for(float side:{-1.f,1.f})
+            {
+                float const eyeAngle=3.14159265f+side*0.425f;
+                float const da=Stage0AngleDelta(theta,eyeAngle);
+                socket+=0.0080f*std::exp(-(da*da)/0.016f-((z-1.716f)*(z-1.716f))/0.00013f);
+                brow+=0.0065f*std::exp(-(da*da)/0.032f-((z-1.735f)*(z-1.735f))/0.00014f);
+                cheek+=0.0085f*std::exp(-(da*da)/0.050f-((z-1.690f)*(z-1.690f))/0.00032f);
+            }
+            float const upperLip=0.0040f*frontMask*std::exp(-((z-1.658f)*(z-1.658f))/0.000045f);
+            float const lowerLip=0.0048f*frontMask*std::exp(-((z-1.646f)*(z-1.646f))/0.000050f);
+            float const philtrum=0.0025f*std::exp(-(front*front)/0.020f-((z-1.666f)*(z-1.666f))/0.00007f);
+            // A human cranium is not a front/back-symmetric ellipsoid. Give the
+            // occiput its measured rear bulge while leaving the facial plane alone.
+            float const rearMask=std::exp(-(rear*rear)/0.30f);
+            float const occiput=0.009f*rearMask*std::exp(-((z-1.742f)*(z-1.742f))/0.0038f);
+            float const rd=depth[ring]+nose+brow+cheek+upperLip+lowerLip-philtrum-socket+occiput;
+            p[0]=ox+cx[ring]+std::cos(theta)*rd;
+            p[1]=oy+sway+std::sin(theta)*lateral[ring];
+            // Break the old flat underside: the chin is lowest at the facial
+            // midline and the mandibular floor climbs naturally toward the nape.
+            float const lowRing=std::exp(-((z-1.605f)*(z-1.605f))/0.00032f);
+            // Keep the chin broad and nearly level across the front view, then
+            // concentrate the mandibular rise into the rear quadrant for profile.
+            float const jawRear=std::exp(-(rear*rear)/1.20f);
+            float const jawFloor=lowRing*(0.040f*jawRear-0.006f*frontMask);
+            p[2]=ground+z+jawFloor+breathe;
+        };
+        auto vertex=[&](int ring,float theta)
+        {
+            float p[3],ta[3],tb[3],za[3],zb[3];position(ring,theta,p);
+            position(ring,theta-0.012f,ta);position(ring,theta+0.012f,tb);
+            position((std::max)(0,ring-1),theta,za);position((std::min)(kRings-1,ring+1),theta,zb);
+            float t[3]={tb[0]-ta[0],tb[1]-ta[1],tb[2]-ta[2]};
+            float v[3]={zb[0]-za[0],zb[1]-za[1],zb[2]-za[2]};
+            float nx=t[1]*v[2]-t[2]*v[1],ny=t[2]*v[0]-t[0]*v[2],nz=t[0]*v[1]-t[1]*v[0];
+            float nl=std::sqrt(nx*nx+ny*ny+nz*nz);if(nl<1e-6f)nl=1.f;nx/=nl;ny/=nl;nz/=nl;
+            float const z=zs[ring],front=Stage0AngleDelta(theta,3.14159265f);
+            float cr=168.f,cg=111.f,cb=82.f;
+            float const seam=std::exp(-(front*front)/0.062f-((z-1.652f)*(z-1.652f))/0.000010f);
+            float const nostril=(std::exp(-((front-0.16f)*(front-0.16f))/0.010f)+std::exp(-((front+0.16f)*(front+0.16f))/0.010f))
+                *std::exp(-((z-1.675f)*(z-1.675f))/0.000035f);
+            float const beard=std::exp(-(front*front)/0.62f)*std::exp(-((z-1.628f)*(z-1.628f))/0.0038f)
+                *(z<1.684f?0.66f:0.f);
+            float const grain=beard*(0.025f+0.055f*(0.5f+0.5f*std::sin(theta*113.f+z*733.f)));
+            float feature=(std::min)(0.74f,seam*0.35f+nostril*0.20f+beard+grain);
+            cr=cr*(1.f-feature)+82.f*feature;cg=cg*(1.f-feature)+58.f*feature;cb=cb*(1.f-feature)+48.f*feature;
+            float const sideLight=0.70f+0.18f*((-nx)*0.5f+0.5f)
+                +0.08f*((-ny)*0.5f+0.5f)+0.08f*(nz*0.5f+0.5f);
+            float const skinMicro=0.97f+0.03f*std::sin(theta*37.f+z*419.f);
+            glColor3f(cr/255.f*sideLight*skinMicro,cg/255.f*sideLight*skinMicro,cb/255.f*sideLight*skinMicro);
+            float const geometric[3]={nx,ny,nz};float mapped[3];
+            Stage0ApplyHeadNormalSheet(p[0],p[1],p[2],ox,oy+sway,ground,geometric,0.42f,mapped);
+            glNormal3fv(mapped);glVertex3fv(p);
+        };
+        for(int r=0;r+1<kRings;++r)for(int i=0;i<kSides;++i)
+        {
+            float const a0=6.2831853f*(float)i/(float)kSides,a1=6.2831853f*(float)(i+1)/(float)kSides;
+            vertex(r,a0);vertex(r+1,a0);vertex(r,a1);vertex(r,a1);vertex(r+1,a0);vertex(r+1,a1);
+        }
+        glColor3f(160.f/255.f,98.f/255.f,68.f/255.f);
+        for(int i=0;i<kSides;++i)
+        {
+            float const a0=6.2831853f*(float)i/(float)kSides,a1=6.2831853f*(float)(i+1)/(float)kSides;
+            glNormal3f(0.f,0.f,-1.f);glVertex3f(ox+cx[0],oy+sway,ground+zs[0]+breathe);vertex(0,a1);vertex(0,a0);
+            glNormal3f(0.f,0.f,1.f);glVertex3f(ox+cx[kRings-1],oy+sway,ground+zs[kRings-1]+breathe);vertex(kRings-1,a0);vertex(kRings-1,a1);
+        }
+    }
+
+    void EmitStage0HumanHairChunk( float const root[3], float const control[3], float const tip[3],
+        float width, float cr, float cg, float cb, float const scalp[3],float const preferredWidth[3] )
+    {
+        // A scalp-tangent ribbon reads as a layered lock instead of the former
+        // round segmented cord. Seven curve sections are cheaper than five
+        // sixteen-sided tubes while producing a smoother silhouette.
+        constexpr int kSteps=7;
+        float p[kSteps+1][3]{},side[kSteps+1][3]{},normal[kSteps+1][3]{},half[kSteps+1]{};
+        for(int i=0;i<=kSteps;++i)
+        {
+            float const u=(float)i/(float)kSteps,v=1.f-u;
+            for(int a=0;a<3;++a)
+            {
+                p[i][a]=v*v*root[a]+2.f*v*u*control[a]+u*u*tip[a];
+                normal[i][a]=p[i][a]-scalp[a];
+            }
+            float nl=std::sqrt(normal[i][0]*normal[i][0]+normal[i][1]*normal[i][1]+normal[i][2]*normal[i][2]);
+            if(nl<1e-6f){normal[i][0]=1.f;normal[i][1]=normal[i][2]=0.f;nl=1.f;}
+            for(float& q:normal[i])q/=nl;
+            float tangent[3]={2.f*v*(control[0]-root[0])+2.f*u*(tip[0]-control[0]),
+                2.f*v*(control[1]-root[1])+2.f*u*(tip[1]-control[1]),
+                2.f*v*(control[2]-root[2])+2.f*u*(tip[2]-control[2])};
+            float tl=std::sqrt(tangent[0]*tangent[0]+tangent[1]*tangent[1]+tangent[2]*tangent[2]);
+            if(tl<1e-6f)tl=1.f;for(float& q:tangent)q/=tl;
+            float const project=preferredWidth[0]*tangent[0]+preferredWidth[1]*tangent[1]+preferredWidth[2]*tangent[2];
+            for(int a=0;a<3;++a)side[i][a]=preferredWidth[a]-project*tangent[a];
+            float sl=std::sqrt(side[i][0]*side[i][0]+side[i][1]*side[i][1]+side[i][2]*side[i][2]);
+            if(sl<1e-6f)
+            {
+                side[i][0]=tangent[1]*normal[i][2]-tangent[2]*normal[i][1];
+                side[i][1]=tangent[2]*normal[i][0]-tangent[0]*normal[i][2];
+                side[i][2]=tangent[0]*normal[i][1]-tangent[1]*normal[i][0];
+                sl=std::sqrt(side[i][0]*side[i][0]+side[i][1]*side[i][1]+side[i][2]*side[i][2]);
+                if(sl<1e-6f){side[i][0]=0.f;side[i][1]=1.f;side[i][2]=0.f;sl=1.f;}
+            }
+            for(float& q:side[i])q/=sl;
+            half[i]=width*(1.f-u)*0.78f+0.0015f;
+        }
+        for(int i=0;i<kSteps;++i)
+        {
+            float l0[3],r0[3],c0[3],l1[3],r1[3],c1[3];
+            for(int a=0;a<3;++a)
+            {
+                float const lift0=normal[i][a]*0.0012f,lift1=normal[i+1][a]*0.0012f;
+                c0[a]=p[i][a]+lift0;c1[a]=p[i+1][a]+lift1;
+                l0[a]=c0[a]-side[i][a]*half[i];r0[a]=c0[a]+side[i][a]*half[i];
+                l1[a]=c1[a]-side[i+1][a]*half[i+1];r1[a]=c1[a]+side[i+1][a]*half[i+1];
+            }
+            float const along=0.88f+0.10f*(float)i/(float)kSteps;
+            auto tri=[&](float const a[3],float const b[3],float const c[3],float shade,float const n[3])
+            {
+                glColor3f(cr/255.f*shade*along,cg/255.f*shade*along,cb/255.f*shade*along);
+                glNormal3fv(n);glVertex3fv(a);glVertex3fv(b);glVertex3fv(c);
+            };
+            tri(l0,c0,l1,0.78f,normal[i]);tri(l1,c0,c1,0.82f,normal[i+1]);
+            tri(c0,r0,c1,1.08f,normal[i]);tri(c1,r0,r1,1.02f,normal[i+1]);
+        }
+    }
+
+    void Stage0BindSemanticIdTexture( unsigned char r, unsigned char g, unsigned char b )
+    {
+        static GLuint texture=0;
+        if(texture==0)
+        {
+            glGenTextures(1,&texture);glBindTexture(GL_TEXTURE_2D,texture);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+        }
+        else glBindTexture(GL_TEXTURE_2D,texture);
+        unsigned char const pixel[4]={r,g,b,255};
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_REPLACE);
+    }
+
+    void DrawStage0PaletteCharacter()
+    {
+        float const ox=g.stage0PaletteAnchorX-2.25f,oy=g.stage0PaletteAnchorY+8.10f;float ground=GradeToZ(g.gradeDatum);
+        Stage0CalibrationSurfaceZ(ox,oy,ground);
+        float const t=(float)(GetTickCount64()%4096000ULL)*0.001f;
+        // Certification owns a repeatable pose, not a wall-clock sample of idle.
+        // Maximum inhale reaches the exact six-foot envelope; zero sway/arm drift
+        // prevents identical geometry from producing different sectional scores.
+        bool const deterministicCapture=g.certStage0CharacterPortrait;
+        float const breathe=deterministicCapture?0.008f:std::sin(t*1.55f)*0.008f;
+        float const sway=deterministicCapture?0.f:std::sin(t*0.72f)*0.018f;
+        float const armIdle=deterministicCapture?0.f:std::sin(t*0.91f)*0.012f;
+        Stage0HumanRig rig;
+        auto set=[&](Stage0HumanJoint j,float x,float y,float z){Stage0HumanSetJoint(rig,j,ox,oy,ground,x,y,z);};
+        set(Stage0HumanJoint::Root,sway*0.4f,0.f,0.98f);
+        set(Stage0HumanJoint::LeftAnkle,-0.180f,0.f,0.105f);set(Stage0HumanJoint::RightAnkle,0.180f,0.f,0.105f);
+        set(Stage0HumanJoint::LeftKnee,-0.135f,0.012f,0.515f);set(Stage0HumanJoint::RightKnee,0.135f,-0.012f,0.515f);
+        set(Stage0HumanJoint::LeftHip,-0.105f+sway*0.3f,0.f,0.985f);set(Stage0HumanJoint::RightHip,0.105f+sway*0.3f,0.f,0.985f);
+        set(Stage0HumanJoint::Waist,sway*0.65f,0.f,1.135f+breathe*0.3f);
+        set(Stage0HumanJoint::LeftShoulder,-0.172f+sway,0.f,1.490f+breathe);
+        set(Stage0HumanJoint::RightShoulder,0.172f+sway,0.f,1.490f+breathe);
+        set(Stage0HumanJoint::LeftElbow,-0.302f+sway,-0.005f,1.175f+armIdle);
+        set(Stage0HumanJoint::RightElbow,0.302f+sway,0.005f,1.175f-armIdle);
+        set(Stage0HumanJoint::LeftWrist,-0.392f+sway,0.020f,0.925f+armIdle);
+        set(Stage0HumanJoint::RightWrist,0.392f+sway,0.020f,0.925f-armIdle);
+        set(Stage0HumanJoint::Neck,sway,0.f,1.585f+breathe);
+        set(Stage0HumanJoint::Jaw,sway,0.070f,1.605f+breathe);
+        set(Stage0HumanJoint::Lips,sway,0.094f,1.630f+breathe);
+        // The eye centres sit forward of the recessed socket skin.  The earlier
+        // 95 mm plane was still inside the sculpted brow/cheek envelope and made
+        // the eyes disappear from the true west-facing palette portrait.
+        // Seat the spheres far enough forward in the connected sockets to expose
+        // a readable scleral aperture. The former 81 mm depth left only a sliver
+        // in front of the skin even though the registered eye line was correct.
+        set(Stage0HumanJoint::LeftEye,-0.0273f+sway,0.087f,1.689f+breathe);
+        set(Stage0HumanJoint::RightEye,0.0273f+sway,0.087f,1.689f+breathe);
+
+        auto P=[&](Stage0HumanJoint j)->float const*{return rig.p[(int)j];};
+        constexpr float sr=174.f,sg=112.f,sb=76.f;
+        glDisable(GL_CULL_FACE);glShadeModel(GL_SMOOTH);glBegin(GL_TRIANGLES);
+        bool const ownershipPass=g.certStage0CharacterSemanticIdPass;
+        bool const partPass=g.certStage0CharacterPartIdPass;
+        bool const exactIdPass=ownershipPass||partPass;
+        if(exactIdPass){glDisable(GL_BLEND);glDisable(GL_DITHER);}
+        auto semanticId=[&](unsigned char r,unsigned char green,unsigned char b)
+        {
+            if(!exactIdPass)return;
+            glEnd();glEnable(GL_TEXTURE_2D);Stage0BindSemanticIdTexture(r,green,b);glBegin(GL_TRIANGLES);
+        };
+        // Geometry ownership IDs: connected skin red, hair green, eyeball blue,
+        // garment cyan, legacy disconnected presentation relief magenta.
+        semanticId(255,0,0);
+        if(!g.certStage0CharacterGarmentMaskOnly&&!g.certStage0CharacterHeadHairMaskOnly)
+        {
+            if(partPass)
+            {
+                semanticId(255,0,0);EmitStage0UnifiedBodySkin(ox,oy,ground,sway,breathe,g.certStage0CharacterHeadMaskOnly,g.certStage0CharacterPoseAudit,1);
+                semanticId(255,128,0);EmitStage0UnifiedBodySkin(ox,oy,ground,sway,breathe,g.certStage0CharacterHeadMaskOnly,g.certStage0CharacterPoseAudit,5);
+                semanticId(128,255,0);EmitStage0UnifiedBodySkin(ox,oy,ground,sway,breathe,g.certStage0CharacterHeadMaskOnly,g.certStage0CharacterPoseAudit,7);
+                semanticId(0,128,255);EmitStage0UnifiedBodySkin(ox,oy,ground,sway,breathe,g.certStage0CharacterHeadMaskOnly,g.certStage0CharacterPoseAudit,8);
+            }
+            else if(Stage0CandidateLoaded())
+            {
+                // Draw the whole gallery side by side. The loop lives in a helper
+                // defined after the mesh struct -- here the struct is only forward
+                // declared, so it cannot be iterated inline.
+                DrawStage0CandidateGallery(ox,oy,ground,sway,breathe);
+            }
+            else EmitStage0UnifiedBodySkin(ox,oy,ground,sway,breathe,g.certStage0CharacterHeadMaskOnly,
+                g.certStage0CharacterPoseAudit);
+        }
+        if(g.certStage0CharacterPoseAudit>0)
+        {
+            // Pose receipts isolate the seamless carrier. Hair, eyes and cloth
+            // remain separate assets and will receive their own attachment
+            // transforms after the carrier passes these deformation extremes.
+            glEnd();glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();return;
+        }
+        if(g.certStage0CharacterBodyMaskOnly)
+        {
+            glEnd();glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();return;
+        }
+        if(g.certStage0CharacterGarmentMaskOnly)
+        {
+            // The garment mask is a receipt, and a receipt describing the wrong
+            // epoch is worse than a missing one. With a candidate loaded this pass
+            // draws the candidate's own GARMENT_LOINCLOTH_01 faces; if that region
+            // set is unavailable the frame stays empty and the receipt records
+            // garment_witness=UNAVAILABLE. It never falls back to the old cloth.
+            if(Stage0CandidateLoaded())EmitStage0CandidateBody(ox,oy,ground,sway,breathe,1);
+            else EmitStage0HumanClothWrap(ox,oy,ground);
+            glEnd();glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();return;
+        }
+        // Lips, eyeballs, irises, lids and brows all belong to the OLD sculpt and
+        // are pinned to its head position. A generated candidate brings its own
+        // head, so leaving these on left the previous model's features standing in
+        // world space -- and as the deflation fit moved the candidate surface
+        // inward they emerged through it and corrupted the very silhouettes the fit
+        // was scoring. Nothing from the prior model may remain in a candidate scene.
+        if(!g.certStage0CharacterHeadHairMaskOnly&&!Stage0OldSculptSuppressed())
+        {
+        semanticId(ownershipPass?255:128,ownershipPass?0:0,255); // debt ownership / lip part
+        // The nose is now exclusively the localized volume already unioned into
+        // Stage0UnifiedBodySdf. The retired wedge/alar shells were disconnected
+        // visible geometry and therefore could never satisfy connected-skin
+        // ownership, even when their landmark placement happened to be correct.
+        float mouthA[3]={ox-0.103f,oy+sway-0.029f,ground+1.628f+breathe};
+        float mouthB[3]={ox-0.108f,oy+sway,ground+1.630f+breathe};
+        float mouthC[3]={ox-0.103f,oy+sway+0.029f,ground+1.628f+breathe};
+        EmitStage0HumanLimb(mouthA,mouthB,0.0013f,0.0016f,105.f,55.f,50.f);
+        EmitStage0HumanLimb(mouthB,mouthC,0.0016f,0.0013f,105.f,55.f,50.f);
+        float lowerLipA[3]={ox-0.102f,oy+sway-0.024f,ground+1.6255f+breathe};
+        float lowerLipB[3]={ox-0.106f,oy+sway,ground+1.6245f+breathe};
+        float lowerLipC[3]={ox-0.102f,oy+sway+0.024f,ground+1.6255f+breathe};
+        EmitStage0HumanLimb(lowerLipA,lowerLipB,0.0008f,0.0011f,157.f,91.f,73.f);
+        EmitStage0HumanLimb(lowerLipB,lowerLipC,0.0011f,0.0008f,157.f,91.f,73.f);
+        // Ears likewise come only from the small volumes unioned into the carrier;
+        // the former duplicate presentation ellipsoids have been retired.
+        float focus[3]={ox-1.f,oy,ground+1.70f};
+        bool const focused=Stage0NearestLivingFocus(ox,oy+sway,ground+1.70f,focus);
+        for(Stage0HumanJoint eye:{Stage0HumanJoint::LeftEye,Stage0HumanJoint::RightEye})
+        {
+            semanticId(0,0,255);
+            float const* p=P(eye);EmitStage0HumanEllipsoid(p[0],p[1],p[2],0.0032f,0.0148f,0.0066f,218.f,214.f,199.f,24,14);
+            float dx=focused?focus[0]-p[0]:-1.f,dy=focused?focus[1]-p[1]:0.f,dz=focused?focus[2]-p[2]:0.f;
+            float dl=std::sqrt(dx*dx+dy*dy+dz*dz);if(dl<1e-5f)dl=1.f;dx/=dl;dy/=dl;dz/=dl;
+            float const irisX=p[0]+dx*0.0034f,irisY=p[1]+dy*0.0034f,irisZ=p[2]+dz*0.0034f;
+            EmitStage0HumanEllipsoid(irisX,irisY,irisZ,0.0013f,0.0055f,0.0055f,77.f,65.f,41.f,18,12);
+            EmitStage0HumanEllipsoid(irisX+dx*0.0010f,irisY+dy*0.0010f,irisZ+dz*0.0010f,0.0009f,0.0024f,0.0026f,18.f,16.f,14.f,16,10);
+            semanticId(ownershipPass?255:255,ownershipPass?0:0,ownershipPass?255:0); // debt ownership / skin lid
+            // Curved lids frame the eye rather than crossing it as opaque bars.
+            for(int i=0;i<5;++i)
+            {
+                float const u0=-1.f+2.f*(float)i/5.f,u1=-1.f+2.f*(float)(i+1)/5.f;
+                float upperA[3]={p[0]-0.0038f,p[1]+u0*0.0155f,p[2]+0.0008f+0.0032f*(1.f-u0*u0)};
+                float upperB[3]={p[0]-0.0038f,p[1]+u1*0.0155f,p[2]+0.0008f+0.0032f*(1.f-u1*u1)};
+                float lowerA[3]={p[0]-0.0036f,p[1]+u0*0.0150f,p[2]-0.0008f-0.0025f*(1.f-u0*u0)};
+                float lowerB[3]={p[0]-0.0036f,p[1]+u1*0.0150f,p[2]-0.0008f-0.0025f*(1.f-u1*u1)};
+                EmitStage0HumanLimb(upperA,upperB,0.0022f,0.0022f,166.f,105.f,78.f);
+                EmitStage0HumanLimb(lowerA,lowerB,0.0013f,0.0013f,158.f,98.f,73.f);
+            }
+            // Three-part brow follows the socket angle and supplies the reference's
+            // concentrated gaze without concealing the sclera.
+            if(partPass)semanticId(255,255,0);
+            float browA[3]={p[0]+0.006f,p[1]-0.018f,p[2]+0.007f};
+            float browB[3]={p[0]+0.001f,p[1]-0.006f,p[2]+0.0090f};
+            float browC[3]={p[0]-0.002f,p[1]+0.006f,p[2]+0.0085f};
+            float browD[3]={p[0]+0.003f,p[1]+0.018f,p[2]+0.0065f};
+            EmitStage0HumanLimb(browA,browB,0.0032f,0.0040f,61.f,38.f,25.f);
+            EmitStage0HumanLimb(browB,browC,0.0040f,0.0040f,61.f,38.f,25.f);
+            EmitStage0HumanLimb(browC,browD,0.0040f,0.0030f,61.f,38.f,25.f);
+        }
+        }
+        // A generated candidate carries its own head and, for now, its own cloth.
+        // Drawing the old sculpt's hair shell and loincloth on top of it would
+        // corrupt exactly the silhouettes Capture Six is measuring.
+        if(!g.certStage0CharacterHeadSkinMaskOnly&&!Stage0OldSculptSuppressed())
+        {
+        semanticId(0,255,0);
+        // Hair is a separate connected attachment: scalp cap plus measured tapered
+        // chunks laid along the skull instead of radial feather spikes.
+        // 1.7798 + 0.041 cap + 0.008 idle rise = 1.8288 m exactly.
+        float const hairX=ox+0.020f,hairY=oy+sway,hairZ=ground+1.7798f+breathe;
+        EmitStage0HumanHairShell(hairX,hairY,hairZ,0.083f,0.079f,0.041f,
+            66.f,39.f,22.f,32,18,ox,oy+sway,ground,0.018f,0.08f,0.20f,0.086f);
+        // Rear hair is one physical mass. Combed normal/color perturbations carry
+        // the strand information; only the fringe and silhouette ends use ribbons.
+        EmitStage0HumanHairShell(hairX+0.020f,hairY,hairZ-0.064f,
+            0.057f,0.092f,0.102f,56.f,33.f,20.f,32,16,ox,oy+sway,ground,0.012f,0.f,0.18f,0.032f);
+        }
+        if(!g.certStage0CharacterHeadMaskOnly&&!Stage0OldSculptSuppressed()){semanticId(0,255,255);EmitStage0HumanClothWrap(ox,oy,ground);}
+        glEnd();
+        if(exactIdPass)
+        {
+            glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+            glDisable(GL_TEXTURE_2D);glEnable(GL_DITHER);
+        }
+        glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();
+    }
+
+    // ---- ProvRender diagnostic: authored six-view visual-hull inspection ----
+    //
+    // Registration derivation, recorded here because a wrong sign here is exactly
+    // the mirror-invariant defect that already cost one rejected pass.
+    //
+    // Build-ProvRenderVisualHull.py builds the hull solely from each panel's
+    // project_u lambda; its project_depth lambdas only sort the preview PNG and
+    // carry no geometry. Reading the six project_u against the six runtime head
+    // camera routes gives one consistent solution: hull x is world X, hull z is
+    // height above the character ground, and hull y is the negated world Y.
+    //
+    //   panel               project_u        runtime head view / camera / screen-right
+    //   front                y               0  -X            -Y
+    //   right_profile        x               1  -Y            +X
+    //   rear                -y               2  +X            +Y
+    //   left_profile        -x               3  +Y            -X
+    //   right_threequarter  (x+y)/sqrt2      4  -X,-Y         (X-Y)/sqrt2
+    //   left_threequarter   (-x+y)/sqrt2     5  -X,+Y         (-X-Y)/sqrt2
+    //
+    // Every row agrees under y -> -Y and under no other single lateral sign, and
+    // the panel order is not the head-view order. Both facts are written into the
+    // receipt, and --cert-stage0-visual-hull-mirror captures the opposite sign so
+    // the plates measure the chirality rather than inheriting this derivation.
+    struct Stage0VisualHullMesh
+    {
+        std::vector<float> positions;   // 3 per vertex, hull-local metres
+        std::vector<float> colors;      // 3 per vertex when the OBJ carries albedo
+        std::vector<float> uvs;         // 2 per texcoord, atlas space
+        std::vector<int> uvIndices;     // 3 per triangle, parallel to indices
+        std::vector<float> normals;     // 3 per vertex, outward after orientation
+        std::vector<int> indices;       // 3 per triangle
+        bool attempted=false,fileExists=false,loaded=false;
+        bool renderOn=true;             // per-instance draw toggle, for FPS testing
+        int slotIndex=0;                // 0-based position in the gallery
+        std::string path,error;
+        float minX=0.f,maxX=0.f,minY=0.f,maxY=0.f,minZ=0.f,maxZ=0.f;
+        int components=0,boundaryEdges=0,nonManifoldEdges=0;
+        int eulerCharacteristic=0,genus=-1;
+        int unreferencedVertices=0;
+        size_t edges=0;
+        int orientationFlips=0;
+        double signedVolumeM3=0.0;
+        float lateralAsymmetryM=0.f;
+        float neckCutWidthM=0.f,neckCutDepthM=0.f;
+        float neckJointWidthM=0.f,neckJointDepthM=0.f;
+        // GARMENT_LOINCLOTH_01 face membership, one byte per triangle, loaded from
+        // the sidecar written beside the OBJ. Absent means the garment region is
+        // unavailable for this candidate -- never a licence to fall back to the old
+        // sculpt's cloth.
+        std::vector<unsigned char> garmentFace;
+        bool garmentSetLoaded=false;
+        int garmentFaceCount=0;
+        std::string garmentSetPath,garmentSetError;
+    };
+
+    uint64_t Stage0VisualHullEdgeKey( int a, int b )
+    {
+        unsigned int const lo=(unsigned int)(a<b?a:b),hi=(unsigned int)(a<b?b:a);
+        return ((uint64_t)lo<<32)|(uint64_t)hi;
+    }
+
+    int Stage0VisualHullFind( std::vector<int>& parent, int x )
+    {
+        while(parent[(size_t)x]!=x){parent[(size_t)x]=parent[(size_t)parent[(size_t)x]];x=parent[(size_t)x];}
+        return x;
+    }
+
+    void Stage0VisualHullParseObj( char const* data, size_t size, Stage0VisualHullMesh& mesh )
+    {
+        std::vector<int> face;
+        std::vector<int> faceUv;
+        size_t i=0;
+        while(i<size)
+        {
+            size_t const lineStart=i;
+            while(i<size&&data[i]!='\n')++i;
+            size_t lineEnd=i;
+            if(i<size)++i;
+            if(lineEnd>lineStart&&data[lineEnd-1]=='\r')--lineEnd;
+            char const* p=data+lineStart;char const* const end=data+lineEnd;
+            while(p<end&&(*p==' '||*p=='\t'))++p;
+            if(p>=end||*p=='#')continue;
+            if(*p=='v'&&p+1<end&&(p[1]==' '||p[1]=='\t'))
+            {
+                p+=2;char* next=nullptr;
+                float const x=std::strtof(p,&next);if(next==p)continue;p=next;
+                float const y=std::strtof(p,&next);if(next==p)continue;p=next;
+                float const z=std::strtof(p,&next);if(next==p)continue;p=next;
+                mesh.positions.push_back(x);mesh.positions.push_back(y);mesh.positions.push_back(z);
+                // Extended OBJ: "v x y z r g b" carries per-vertex albedo sampled
+                // from the authored beauty art. Absent on a plain OBJ, in which
+                // case the mesh renders with the neutral study colour.
+                float const r=std::strtof(p,&next);
+                if(next!=p)
+                {
+                    p=next;
+                    float const g2=std::strtof(p,&next);if(next==p)continue;p=next;
+                    float const b=std::strtof(p,&next);if(next==p)continue;
+                    mesh.colors.push_back(r);mesh.colors.push_back(g2);mesh.colors.push_back(b);
+                }
+            }
+            else if(*p=='v'&&p+2<end&&p[1]=='t'&&(p[2]==' '||p[2]=='\t'))
+            {
+                // Texture coordinates for the multiview atlas. The candidate carries
+                // one vt per face corner, so these are indexed independently of
+                // positions and must be kept in their own array.
+                p+=3;char* next=nullptr;
+                float const u=std::strtof(p,&next);if(next==p)continue;p=next;
+                float const v=std::strtof(p,&next);if(next==p)continue;
+                mesh.uvs.push_back(u);mesh.uvs.push_back(v);
+            }
+            else if(*p=='f'&&p+1<end&&(p[1]==' '||p[1]=='\t'))
+            {
+                p+=2;face.clear();faceUv.clear();
+                while(p<end)
+                {
+                    while(p<end&&(*p==' '||*p=='\t'))++p;
+                    if(p>=end)break;
+                    char* next=nullptr;
+                    long const raw=std::strtol(p,&next,10);
+                    if(next==p)break;
+                    p=next;
+                    // v/vt: capture the texture index when present rather than
+                    // skipping it, so the atlas can be addressed per corner.
+                    long uvRaw=0;
+                    if(p<end&&*p=='/')
+                    {
+                        ++p;
+                        char* uvNext=nullptr;
+                        long const parsed=std::strtol(p,&uvNext,10);
+                        if(uvNext!=p){uvRaw=parsed;p=uvNext;}
+                    }
+                    while(p<end&&*p!=' '&&*p!='\t')++p;
+                    int const count=(int)(mesh.positions.size()/3u);
+                    int const index=raw>0?(int)(raw-1):(raw<0?count+(int)raw:-1);
+                    if(index<0||index>=count){face.clear();faceUv.clear();break;}
+                    face.push_back(index);
+                    int const uvCount=(int)(mesh.uvs.size()/2u);
+                    int const uvIndex=uvRaw>0?(int)(uvRaw-1):(uvRaw<0?uvCount+(int)uvRaw:-1);
+                    faceUv.push_back((uvIndex>=0&&uvIndex<uvCount)?uvIndex:-1);
+                }
+                for(size_t k=2;k<faceUv.size();++k)
+                {
+                    mesh.uvIndices.push_back(faceUv[0]);
+                    mesh.uvIndices.push_back(faceUv[k-1]);
+                    mesh.uvIndices.push_back(faceUv[k]);
+                }
+                for(size_t k=2;k<face.size();++k)
+                {
+                    mesh.indices.push_back(face[0]);
+                    mesh.indices.push_back(face[k-1]);
+                    mesh.indices.push_back(face[k]);
+                }
+            }
+        }
+    }
+
+    void Stage0VisualHullSlabExtent( Stage0VisualHullMesh const& mesh, float z,
+        float halfThickness, float& widthM, float& depthM )
+    {
+        float minX=0.f,maxX=0.f,minY=0.f,maxY=0.f;bool any=false;
+        size_t const vertexCount=mesh.positions.size()/3u;
+        for(size_t v=0;v<vertexCount;++v)
+        {
+            float const* p=&mesh.positions[v*3u];
+            if(std::fabs(p[2]-z)>halfThickness)continue;
+            if(!any){minX=maxX=p[0];minY=maxY=p[1];any=true;continue;}
+            minX=std::min(minX,p[0]);maxX=std::max(maxX,p[0]);
+            minY=std::min(minY,p[1]);maxY=std::max(maxY,p[1]);
+        }
+        widthM=any?maxY-minY:0.f;depthM=any?maxX-minX:0.f;
+    }
+
+    void Stage0VisualHullAnalyze( Stage0VisualHullMesh& mesh )
+    {
+        size_t const vertexCount=mesh.positions.size()/3u;
+        size_t const faceCount=mesh.indices.size()/3u;
+        if(vertexCount==0u||faceCount==0u)return;
+        mesh.minX=mesh.maxX=mesh.positions[0];
+        mesh.minY=mesh.maxY=mesh.positions[1];
+        mesh.minZ=mesh.maxZ=mesh.positions[2];
+        for(size_t v=1;v<vertexCount;++v)
+        {
+            float const* p=&mesh.positions[v*3u];
+            mesh.minX=std::min(mesh.minX,p[0]);mesh.maxX=std::max(mesh.maxX,p[0]);
+            mesh.minY=std::min(mesh.minY,p[1]);mesh.maxY=std::max(mesh.maxY,p[1]);
+            mesh.minZ=std::min(mesh.minZ,p[2]);mesh.maxZ=std::max(mesh.maxZ,p[2]);
+        }
+
+        struct EdgeRecord{int uses=0;int face[2]={-1,-1};};
+        std::unordered_map<uint64_t,EdgeRecord> edges;
+        edges.reserve(faceCount*2u);
+        for(size_t f=0;f<faceCount;++f)
+        {
+            int const* t=&mesh.indices[f*3u];
+            for(int e=0;e<3;++e)
+            {
+                EdgeRecord& rec=edges[Stage0VisualHullEdgeKey(t[e],t[(e+1)%3])];
+                if(rec.uses<2)rec.face[rec.uses]=(int)f;
+                ++rec.uses;
+            }
+        }
+        mesh.edges=edges.size();
+        // Identical counting to Build-ProvRenderVisualHull.py validate_mesh, so the
+        // runtime receipt and the Python report are directly comparable: a boundary
+        // edge is also counted as non-manifold there.
+        for(std::pair<uint64_t const,EdgeRecord> const& entry:edges)
+        {
+            if(entry.second.uses==1)++mesh.boundaryEdges;
+            if(entry.second.uses!=2)++mesh.nonManifoldEdges;
+        }
+
+        std::vector<int> parent(vertexCount);
+        for(size_t v=0;v<vertexCount;++v)parent[v]=(int)v;
+        std::vector<unsigned char> referenced(vertexCount,0u);
+        for(int index:mesh.indices)referenced[(size_t)index]=1u;
+        for(std::pair<uint64_t const,EdgeRecord> const& entry:edges)
+        {
+            int const a=(int)(entry.first>>32),b=(int)(entry.first&0xFFFFFFFFull);
+            int const ra=Stage0VisualHullFind(parent,a),rb=Stage0VisualHullFind(parent,b);
+            if(ra!=rb)parent[(size_t)ra]=rb;
+        }
+        for(size_t v=0;v<vertexCount;++v)
+        {
+            if(!referenced[v]){++mesh.unreferencedVertices;continue;}
+            if(Stage0VisualHullFind(parent,(int)v)==(int)v)++mesh.components;
+        }
+        mesh.eulerCharacteristic=(int)vertexCount-(int)mesh.edges+(int)faceCount;
+        mesh.genus=(mesh.boundaryEdges==0&&mesh.nonManifoldEdges==0)
+            ?(2*mesh.components-mesh.eulerCharacteristic)/2:-1;
+
+        // Marching tetrahedra emits faces with no winding rule, so the source OBJ is
+        // unoriented and area-weighted vertex normals would partly self-cancel. A
+        // closed manifold always admits a consistent orientation; deriving it here
+        // is what makes the inspection shading show real form instead of noise.
+        std::vector<unsigned char> visited(faceCount,0u);
+        std::vector<int> stack;
+        for(size_t seed=0;seed<faceCount;++seed)
+        {
+            if(visited[seed])continue;
+            visited[seed]=1u;stack.push_back((int)seed);
+            while(!stack.empty())
+            {
+                int const f=stack.back();stack.pop_back();
+                int const tri[3]={mesh.indices[(size_t)f*3u],
+                    mesh.indices[(size_t)f*3u+1u],mesh.indices[(size_t)f*3u+2u]};
+                for(int e=0;e<3;++e)
+                {
+                    int const a=tri[e],b=tri[(e+1)%3];
+                    std::unordered_map<uint64_t,EdgeRecord>::const_iterator const found=
+                        edges.find(Stage0VisualHullEdgeKey(a,b));
+                    if(found==edges.end()||found->second.uses!=2)continue;
+                    int const other=found->second.face[0]==f
+                        ?found->second.face[1]:found->second.face[0];
+                    if(other<0||other==f||visited[(size_t)other])continue;
+                    int* o=&mesh.indices[(size_t)other*3u];
+                    bool sameDirection=false;
+                    for(int k=0;k<3;++k)
+                    {
+                        if(o[k]==a&&o[(k+1)%3]==b){sameDirection=true;break;}
+                    }
+                    // A shared edge traversed the same way by both faces means the
+                    // neighbour faces the other side of the surface.
+                    if(sameDirection){std::swap(o[1],o[2]);++mesh.orientationFlips;}
+                    visited[(size_t)other]=1u;stack.push_back(other);
+                }
+            }
+        }
+
+        double volume=0.0;
+        for(size_t f=0;f<faceCount;++f)
+        {
+            int const* t=&mesh.indices[f*3u];
+            float const* a=&mesh.positions[(size_t)t[0]*3u];
+            float const* b=&mesh.positions[(size_t)t[1]*3u];
+            float const* c=&mesh.positions[(size_t)t[2]*3u];
+            volume+=(double)a[0]*((double)b[1]*(double)c[2]-(double)b[2]*(double)c[1])
+                   -(double)a[1]*((double)b[0]*(double)c[2]-(double)b[2]*(double)c[0])
+                   +(double)a[2]*((double)b[0]*(double)c[1]-(double)b[1]*(double)c[0]);
+        }
+        volume/=6.0;
+        if(volume<0.0)
+        {
+            for(size_t f=0;f<faceCount;++f)std::swap(mesh.indices[f*3u+1u],mesh.indices[f*3u+2u]);
+            volume=-volume;
+        }
+        mesh.signedVolumeM3=volume;
+
+        mesh.normals.assign(vertexCount*3u,0.f);
+        for(size_t f=0;f<faceCount;++f)
+        {
+            int const* t=&mesh.indices[f*3u];
+            float const* a=&mesh.positions[(size_t)t[0]*3u];
+            float const* b=&mesh.positions[(size_t)t[1]*3u];
+            float const* c=&mesh.positions[(size_t)t[2]*3u];
+            float const ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2];
+            float const vx=c[0]-a[0],vy=c[1]-a[1],vz=c[2]-a[2];
+            // Unnormalized cross product weights each vertex by triangle area.
+            float const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+            for(int q=0;q<3;++q)
+            {
+                float* n=&mesh.normals[(size_t)t[q]*3u];
+                n[0]+=nx;n[1]+=ny;n[2]+=nz;
+            }
+        }
+        for(size_t v=0;v<vertexCount;++v)
+        {
+            float* n=&mesh.normals[v*3u];
+            float const len=std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+            if(len>1e-12f){n[0]/=len;n[1]/=len;n[2]/=len;}
+            else{n[0]=0.f;n[1]=0.f;n[2]=1.f;}
+        }
+
+        // Lateral chirality evidence. The builder's y axis is symmetric about zero,
+        // so a perfectly mirror-symmetric hull has maxY+minY==0 in every slice. The
+        // largest residual states in metres how much asymmetry the plates can even
+        // see; below one voxel the six views cannot settle handedness at all.
+        int const sliceCount=104; // the builder's own z resolution
+        std::vector<float> sliceMinY((size_t)sliceCount,0.f),sliceMaxY((size_t)sliceCount,0.f);
+        std::vector<unsigned char> sliceUsed((size_t)sliceCount,0u);
+        float const span=mesh.maxZ-mesh.minZ;
+        if(span>1e-6f)
+        {
+            for(size_t v=0;v<vertexCount;++v)
+            {
+                float const* p=&mesh.positions[v*3u];
+                int const s=std::clamp((int)((p[2]-mesh.minZ)/span*(float)(sliceCount-1)+0.5f),
+                    0,sliceCount-1);
+                if(!sliceUsed[(size_t)s]){sliceMinY[(size_t)s]=sliceMaxY[(size_t)s]=p[1];sliceUsed[(size_t)s]=1u;continue;}
+                sliceMinY[(size_t)s]=std::min(sliceMinY[(size_t)s],p[1]);
+                sliceMaxY[(size_t)s]=std::max(sliceMaxY[(size_t)s],p[1]);
+            }
+            for(int s=0;s<sliceCount;++s)
+            {
+                if(!sliceUsed[(size_t)s])continue;
+                mesh.lateralAsymmetryM=std::max(mesh.lateralAsymmetryM,
+                    std::fabs(sliceMaxY[(size_t)s]+sliceMinY[(size_t)s]));
+            }
+        }
+    }
+
+    // The garment region travels beside the candidate as a plain list of triangle
+    // indices, one per line, produced from provrender_material_regions.json.
+    // Deflation variants move vertices only, so a face set stays valid across them.
+    void Stage0LoadCandidateGarmentSet( Stage0VisualHullMesh& mesh )
+    {
+        mesh.garmentSetPath=JoinPath(g.assetsRoot,"Characters\\Generated\\stage0_body_candidate_001.garment");
+        if(!FileExistsA(mesh.garmentSetPath.c_str())){mesh.garmentSetError="file not found";return;}
+        FILE* file=nullptr;
+        if(fopen_s(&file,mesh.garmentSetPath.c_str(),"rb")!=0||!file){mesh.garmentSetError="open failed";return;}
+        size_t const faceCount=mesh.indices.size()/3u;
+        std::vector<unsigned char> flags(faceCount,0u);
+        int accepted=0,rejected=0;
+        char line[64];
+        while(std::fgets(line,(int)sizeof(line),file))
+        {
+            char* end=nullptr;
+            long const index=std::strtol(line,&end,10);
+            if(end==line)continue;
+            if(index<0||(size_t)index>=faceCount){++rejected;continue;}
+            if(!flags[(size_t)index]){flags[(size_t)index]=1u;++accepted;}
+        }
+        std::fclose(file);
+        if(rejected>0)
+        {
+            // An out-of-range index means the set was computed against a different
+            // topology. A partially valid region is not a region.
+            mesh.garmentSetError="index out of range for this mesh";
+            return;
+        }
+        if(accepted<=0){mesh.garmentSetError="no usable indices";return;}
+        mesh.garmentFace.swap(flags);
+        mesh.garmentFaceCount=accepted;
+        mesh.garmentSetLoaded=true;
+    }
+
+    // Candidate 001: the fresh body reconstructed from the reference bundle. It
+    // replaces the old carrier in the workbench rather than deforming it, so what
+    // is on screen is what the images produced.
+    bool Stage0LoadCandidateFile( char const* path, Stage0VisualHullMesh& mesh )
+    {
+        mesh.path=path;
+        mesh.fileExists=FileExistsA(path);
+        if(!mesh.fileExists){mesh.error="file not found";return false;}
+        FILE* file=nullptr;
+        if(fopen_s(&file,path,"rb")!=0||!file){mesh.error="open failed";return false;}
+        std::fseek(file,0,SEEK_END);long const size=std::ftell(file);std::fseek(file,0,SEEK_SET);
+        if(size<=0){std::fclose(file);mesh.error="empty file";return false;}
+        std::vector<char> data((size_t)size+1u,'\0');
+        size_t const read=std::fread(data.data(),1u,(size_t)size,file);
+        std::fclose(file);data[read]='\0';
+        Stage0VisualHullParseObj(data.data(),read,mesh);
+        if(mesh.positions.empty()||mesh.indices.empty()){mesh.error="no triangles parsed";return false;}
+        Stage0VisualHullAnalyze(mesh);
+        mesh.loaded=true;
+        return true;
+    }
+
+    // The gallery: every stage0_body_candidate_NNN.obj on disk, in order. Each
+    // GENERATE deposits the next number, so the gallery grows and the characters
+    // stand side by side. Numbering is contiguous from 001; the scan stops at the
+    // first gap.
+    std::vector<Stage0VisualHullMesh>& GetStage0CandidateGallery()
+    {
+        static std::vector<Stage0VisualHullMesh> gallery;
+        static bool attempted=false;
+        if(attempted)return gallery;
+        attempted=true;
+        ResolveAssetsRoot();
+        for(int i=1;i<=64;++i)
+        {
+            char rel[128];
+            std::snprintf(rel,sizeof(rel),
+                "Characters\\Generated\\stage0_body_candidate_%03d.obj",i);
+            std::string const path=JoinPath(g.assetsRoot,rel);
+            if(!FileExistsA(path.c_str()))break;
+            Stage0VisualHullMesh mesh;
+            mesh.attempted=true;
+            mesh.slotIndex=i-1;
+            if(Stage0LoadCandidateFile(path.c_str(),mesh))
+            {
+                if(i==1)Stage0LoadCandidateGarmentSet(mesh);   // garment sidecar: 001 only
+                gallery.push_back(std::move(mesh));
+            }
+        }
+        return gallery;
+    }
+
+    Stage0VisualHullMesh& GetStage0CandidateMesh()
+    {
+        static Stage0VisualHullMesh empty;
+        std::vector<Stage0VisualHullMesh>& gallery=GetStage0CandidateGallery();
+        return gallery.empty()?empty:gallery[0];
+    }
+
+    // Defined here, where the mesh struct is complete, so the gallery can be
+    // iterated. Called from DrawStage0PaletteCharacter, which precedes the struct.
+    void DrawStage0CandidateGallery( float ox, float oy, float ground, float sway, float breathe )
+    {
+        std::vector<Stage0VisualHullMesh>& gallery=GetStage0CandidateGallery();
+        constexpr float kCharacterSpacingM=1.524f;   // ~5 ft between characters
+        // The caller is mid-glBegin(GL_TRIANGLES) and the body emitter preserves
+        // that, so the foot pad is simply more triangles in the same stream: a
+        // green pad under a rendered character, red under one toggled off. Stand on
+        // a pad and press T to flip it -- toggling render for FPS testing without
+        // regenerating anything.
+        for(Stage0VisualHullMesh const& cand:gallery)
+        {
+            float const cy=oy+(float)cand.slotIndex*kCharacterSpacingM;
+            if(cand.renderOn)
+                EmitStage0CandidateBody(ox,cy,ground,sway,breathe,0,&cand);
+            float const s=0.34f,h=ground+0.012f;
+            if(cand.renderOn)glColor3f(0.16f,0.82f,0.28f);else glColor3f(0.82f,0.18f,0.16f);
+            glNormal3f(0.f,0.f,1.f);
+            glVertex3f(ox-s,cy-s,h);glVertex3f(ox+s,cy-s,h);glVertex3f(ox+s,cy+s,h);
+            glVertex3f(ox-s,cy-s,h);glVertex3f(ox+s,cy+s,h);glVertex3f(ox-s,cy+s,h);
+        }
+    }
+
+    // Toggle the render of the character whose foot pad the player is standing on
+    // (or nearest to, within reach). Called from the T key in the workbench.
+    void Stage0ToggleNearestCandidate()
+    {
+        std::vector<Stage0VisualHullMesh>& gallery=GetStage0CandidateGallery();
+        if(gallery.empty())return;
+        float const ox=g.stage0PaletteAnchorX-2.25f,oy=g.stage0PaletteAnchorY+8.10f;
+        constexpr float kCharacterSpacingM=1.524f;
+        int best=-1;float bestD2=1.7f*1.7f;   // within ~1.7 m
+        for(size_t i=0;i<gallery.size();++i)
+        {
+            float const cy=oy+(float)gallery[i].slotIndex*kCharacterSpacingM;
+            float const dx=ox-g.feetX,dy=cy-g.feetY;
+            float const d2=dx*dx+dy*dy;
+            if(d2<bestD2){bestD2=d2;best=(int)i;}
+        }
+        if(best>=0)gallery[(size_t)best].renderOn=!gallery[(size_t)best].renderOn;
+    }
+
+    // MACRO_FORM_V1 is the surface extracted from the literal intersection of
+    // the six filled blue silhouette volumes.  It is deliberately loaded as an
+    // independent object: the legacy/current character remains untouched and
+    // supplies no geometry, registration, or fallback data to this mesh.
+    Stage0VisualHullMesh& GetStage0MacroFormV1Mesh()
+    {
+        static Stage0VisualHullMesh mesh;
+        if(mesh.attempted)return mesh;
+        mesh.attempted=true;
+        ResolveAssetsRoot();
+        mesh.path=JoinPath(g.assetsRoot,
+            "Characters\\Generated\\stage0_character_macro_form_v1.obj");
+        mesh.fileExists=FileExistsA(mesh.path.c_str());
+        if(!mesh.fileExists){mesh.error="file not found";return mesh;}
+        FILE* file=nullptr;
+        if(fopen_s(&file,mesh.path.c_str(),"rb")!=0||!file)
+        {mesh.error="open failed";return mesh;}
+        std::fseek(file,0,SEEK_END);long const size=std::ftell(file);
+        std::fseek(file,0,SEEK_SET);
+        if(size<=0){std::fclose(file);mesh.error="empty file";return mesh;}
+        std::vector<char> data((size_t)size+1u,'\0');
+        size_t const read=std::fread(data.data(),1u,(size_t)size,file);
+        std::fclose(file);data[read]='\0';
+        Stage0VisualHullParseObj(data.data(),read,mesh);
+        if(mesh.positions.empty()||mesh.indices.empty())
+        {mesh.error="no triangles parsed";return mesh;}
+        Stage0VisualHullAnalyze(mesh);
+        mesh.loaded=true;
+        std::printf("Stage0 MACRO_FORM_V1 loaded: %zu vertices, %zu triangles, "
+                    "right_offset_m=1.524000 path=%s\n",
+                    mesh.positions.size()/3u,mesh.indices.size()/3u,mesh.path.c_str());
+        return mesh;
+    }
+
+    bool Stage0CandidateLoaded(){return GetStage0CandidateMesh().loaded;}
+    bool Stage0OldSculptSuppressed(){return Stage0CandidateLoaded();}
+
+    // Multiview reference atlas. Loaded once, only when a textured candidate is
+    // actually present -- an absent atlas falls back to per-vertex colour rather
+    // than to a placeholder, so a missing texture is visible as the old
+    // representation and never as a silently wrong one.
+    GLuint Stage0CandidateAtlasTexture()
+    {
+        static GLuint texture=0;
+        static bool attempted=false;
+        if(attempted)return texture;
+        attempted=true;
+        ResolveAssetsRoot();
+        std::string const path=JoinPath(g.assetsRoot,
+            "Characters\\Generated\\candidate_reference_projected_color.png");
+        g.atlasPath=path;
+        if(!FileExistsA(path.c_str())){g.atlasError="file not found";return 0;}
+        int w=0,h=0,n=0;
+        unsigned char* pixels=stbi_load(path.c_str(),&w,&h,&n,3);
+        if(!pixels||w<=0||h<=0)
+        {
+            g.atlasError=pixels?"zero dimensions":"stbi_load returned null";
+            if(pixels)stbi_image_free(pixels);
+            return 0;
+        }
+        if(!wglGetCurrentContext())
+        {
+            // A texture created without a current context is silently name 0 and
+            // the static guard would lock that in for the whole run. Refuse now and
+            // let the next call, from inside rendering, succeed.
+            g.atlasError="no GL context at first request";
+            stbi_image_free(pixels);
+            attempted=false;
+            return 0;
+        }
+        glGenTextures(1,&texture);
+        glBindTexture(GL_TEXTURE_2D,texture);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        // The Windows GL 1.1 headers predate GL_CLAMP_TO_EDGE; the enum is valid at
+        // runtime on any driver here. Plain GL_CLAMP would sample the border and
+        // bleed a seam along every chart edge.
+        constexpr GLint kClampToEdge=0x812F;
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,kClampToEdge);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,kClampToEdge);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,w,h,0,GL_RGB,GL_UNSIGNED_BYTE,pixels);
+        GLenum const uploadError=glGetError();
+        stbi_image_free(pixels);
+        glBindTexture(GL_TEXTURE_2D,0);
+        {
+            char note[160];
+            std::snprintf(note,sizeof(note),"loaded %dx%d name=%u glerr=0x%04X",
+                          w,h,(unsigned)texture,(unsigned)uploadError);
+            g.atlasError=note;
+        }
+        return texture;
+    }
+
+    bool Stage0CandidateTextured()
+    {
+        Stage0VisualHullMesh const& mesh=GetStage0CandidateMesh();
+        return g.candidateUseAtlas&&mesh.loaded
+            &&mesh.uvIndices.size()==mesh.indices.size()
+            &&!mesh.uvs.empty()&&Stage0CandidateAtlasTexture()!=0;
+    }
+
+    // Per-candidate beauty-projected base-colour texture, written beside each
+    // OBJ by the generation pipeline (stage0_body_candidate_NNN_basecolor.png).
+    // Each gallery slot owns its own texture, so several textured characters
+    // stand side by side without sharing one atlas. Loaded lazily on the first
+    // draw (a current GL context is required and only exists during rendering),
+    // cached per slot, and a missing file just means that character draws from
+    // its per-vertex colour instead -- never from another slot's texture.
+    GLuint Stage0CandidateSlotTexture(int slot)
+    {
+        if(slot<1||slot>64)return 0;
+        static GLuint tex[65]={0};
+        static bool tried[65]={false};
+        if(tried[slot])return tex[slot];
+        ResolveAssetsRoot();
+        char rel[160];
+        std::snprintf(rel,sizeof(rel),
+            "Characters\\Generated\\stage0_body_candidate_%03d_basecolor.png",slot);
+        std::string const path=JoinPath(g.assetsRoot,rel);
+        if(!FileExistsA(path.c_str())){tried[slot]=true;return 0;}
+        int w=0,h=0,n=0;
+        unsigned char* pixels=stbi_load(path.c_str(),&w,&h,&n,3);
+        if(!pixels||w<=0||h<=0){if(pixels)stbi_image_free(pixels);tried[slot]=true;return 0;}
+        if(!wglGetCurrentContext()){stbi_image_free(pixels);return 0;} // retry next frame
+        tried[slot]=true;
+        glGenTextures(1,&tex[slot]);
+        glBindTexture(GL_TEXTURE_2D,tex[slot]);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        constexpr GLint kClampToEdge=0x812F;
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,kClampToEdge);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,kClampToEdge);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,w,h,0,GL_RGB,GL_UNSIGNED_BYTE,pixels);
+        stbi_image_free(pixels);
+        glBindTexture(GL_TEXTURE_2D,0);
+        return tex[slot];
+    }
+
+    // Mixed-epoch scenes have fooled this pipeline more than once: a receipt that
+    // silently described the previous model while a generated candidate was on
+    // screen. This states, per capture, exactly how many old-sculpt emitter groups
+    // could still draw and where the garment mask came from.
+    void Stage0WriteCandidateScenePurity()
+    {
+        Stage0VisualHullMesh const& mesh=GetStage0CandidateMesh();
+        bool const suppressed=Stage0OldSculptSuppressed();
+        // Counts follow the live gate predicate rather than a hardcoded zero, so
+        // removing a gate later surfaces here instead of only in the pixels.
+        int const bodyEmitters=suppressed?0:1;      // EmitStage0UnifiedBodySkin carrier
+        int const faceEmitters=suppressed?0:1;      // lips, eyeballs, irises, lids, brows
+        int const hairEmitters=suppressed?0:1;      // EmitStage0HumanHairShell
+        int const clothEmitters=suppressed?0:2;     // presentation wrap + garment-mask pass
+        char const* garmentSource=!mesh.loaded?"OLD_SCULPT_CLOTH_WRAP"
+            :(mesh.garmentSetLoaded?"GARMENT_LOINCLOTH_01":"UNAVAILABLE");
+        bool const pure=!mesh.loaded
+            ||(bodyEmitters==0&&faceEmitters==0&&hairEmitters==0&&clothEmitters==0);
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_stage0_candidate_scene_purity.txt","w")!=0||!f)return;
+        std::fprintf(f,"stage0_candidate_scene_purity\n"
+            "candidate_loaded=%s\ncandidate_path=%s\n"
+            "old_sculpt_body_emitters=%d\nold_sculpt_face_emitters=%d\n"
+            "old_sculpt_hair_emitters=%d\nold_sculpt_cloth_emitters=%d\n"
+            "garment_mask_source=%s\ngarment_face_count=%d\ngarment_set_path=%s\n"
+            "garment_set_error=%s\ngarment_witness=%s\n"
+            "candidate_triangles=%zu\ncandidate_components=%d\n"
+            "atlas_requested=%d\natlas_uv_count=%zu\natlas_uvindex_count=%zu\n"
+            "atlas_index_count=%zu\natlas_texture_id=%u\natlas_active=%d\n"
+            "atlas_path=%s\natlas_error=%s\n"
+            "scene_purity=%s\n",
+            mesh.loaded?"true":"false",mesh.path.c_str(),
+            bodyEmitters,faceEmitters,hairEmitters,clothEmitters,
+            garmentSource,mesh.garmentFaceCount,mesh.garmentSetPath.c_str(),
+            mesh.garmentSetError.empty()?"none":mesh.garmentSetError.c_str(),
+            mesh.loaded&&!mesh.garmentSetLoaded?"UNAVAILABLE":"AVAILABLE",
+            mesh.indices.size()/3u,mesh.components,
+            g.candidateUseAtlas?1:0,mesh.uvs.size()/2u,mesh.uvIndices.size(),
+            mesh.indices.size(),(unsigned)Stage0CandidateAtlasTexture(),
+            Stage0CandidateTextured()?1:0,
+            g.atlasPath.empty()?"(unset)":g.atlasPath.c_str(),
+            g.atlasError.empty()?"none":g.atlasError.c_str(),
+            pure?"PASS":"FAIL");
+        std::fclose(f);
+    }
+
+    // filter: 0 emit every triangle, 1 emit only GARMENT_LOINCLOTH_01, 2 emit
+    // everything except the garment.
+    void EmitStage0CandidateBody( float ox, float oy, float ground, float sway, float breathe,
+                                  int filter, Stage0VisualHullMesh const* meshPtr )
+    {
+        Stage0VisualHullMesh const& mesh=meshPtr?*meshPtr:GetStage0CandidateMesh();
+        if(!mesh.loaded)return;
+        if(filter!=0&&!mesh.garmentSetLoaded)return;   // no region set, no guessing
+        // The caller is mid-glBegin. Close the primitive block BEFORE asking whether
+        // a texture exists, because that question creates it on first call, and
+        // glGenTextures inside glBegin/glEnd is illegal -- it returned name 0 with
+        // no error reported at the point I checked, so the atlas silently never
+        // bound and both render modes produced byte-identical captures.
+        glEnd();
+        // Each candidate carries its own beauty-projected texture. Bind it whenever
+        // the mesh has UVs and the slot's PNG loads -- no global flag, no shared
+        // atlas -- so every generated character shows its own high-resolution paint.
+        GLuint const slotTex=(mesh.uvIndices.size()==mesh.indices.size()&&!mesh.uvs.empty())
+            ?Stage0CandidateSlotTexture(mesh.slotIndex+1):0u;
+        bool const textured=slotTex!=0u&&filter==0;
+        if(textured)
+        {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D,slotTex);
+        }
+        glBegin(GL_TRIANGLES);
+        size_t const faceCount=mesh.indices.size()/3u;
+        for(size_t f=0;f<faceCount;++f)
+        {
+            if(filter!=0)
+            {
+                bool const isGarment=f<mesh.garmentFace.size()&&mesh.garmentFace[f]!=0u;
+                if((filter==1)!=isGarment)continue;
+            }
+            for(int e=0;e<3;++e)
+            {
+                int const index=mesh.indices[f*3u+(size_t)e];
+                float const* p=&mesh.positions[(size_t)index*3u];
+                float const* n=&mesh.normals[(size_t)index*3u];
+                float const upper=std::clamp((p[2]-1.18f)/0.42f,0.f,1.f);
+                float const anchor=std::clamp((p[2]-0.08f)/1.35f,0.f,1.f);
+                if(textured)
+                {
+                    int const uvIndex=mesh.uvIndices[f*3u+(size_t)e];
+                    if(uvIndex>=0)
+                    {
+                        glTexCoord2f(mesh.uvs[(size_t)uvIndex*2u+0u],
+                                     mesh.uvs[(size_t)uvIndex*2u+1u]);
+                    }
+                }
+                // UNLIT mode emits the sampled colour exactly, with no shade term.
+                // The paint overlay proof was measuring albedo x shade and calling
+                // the product a projection error: the runtime rendered 7% darker
+                // than the reference on the front view against a term whose range
+                // is 0.84..1.00, which accounted for most of a 22-unit mean error.
+                // A proof of paint has to render only paint.
+                float const shade=g.certStage0Unlit
+                    ?1.f
+                    :0.84f+0.10f*(n[2]*0.5f+0.5f)+0.06f*(n[0]*0.5f+0.5f);
+                // Per-vertex albedo sampled from the authored beauty art when the
+                // OBJ carries it; the neutral study colour otherwise.
+                bool const hasAlbedo=mesh.colors.size()==mesh.positions.size();
+                float const cr=hasAlbedo?mesh.colors[(size_t)index*3u+0u]:174.f/255.f;
+                float const cg=hasAlbedo?mesh.colors[(size_t)index*3u+1u]:112.f/255.f;
+                float const cb=hasAlbedo?mesh.colors[(size_t)index*3u+2u]:76.f/255.f;
+                // Textured: white modulate so the atlas supplies the colour and the
+                // shade term still applies (and is 1.0 when unlit).
+                if(textured){glColor3f(shade,shade,shade);}
+                else{glColor3f(cr*shade,cg*shade,cb*shade);}
+                glNormal3fv(n);
+                glVertex3f(ox+p[0],oy+p[1]+sway*anchor,ground+p[2]+breathe*upper);
+            }
+        }
+        if(textured)
+        {
+            glEnd();
+            glBindTexture(GL_TEXTURE_2D,0);
+            glDisable(GL_TEXTURE_2D);
+            glBegin(GL_TRIANGLES);
+        }
+    }
+
+    Stage0VisualHullMesh& GetStage0VisualHullMesh()
+    {
+        static Stage0VisualHullMesh mesh;
+        if(mesh.attempted)return mesh;
+        mesh.attempted=true;
+        ResolveAssetsRoot();
+        mesh.path=JoinPath(g.assetsRoot,"Characters\\Generated\\stage0_head_visual_hull.obj");
+        mesh.fileExists=FileExistsA(mesh.path.c_str());
+        if(!mesh.fileExists){mesh.error="file not found";return mesh;}
+        FILE* file=nullptr;
+        if(fopen_s(&file,mesh.path.c_str(),"rb")!=0||!file){mesh.error="open failed";return mesh;}
+        std::fseek(file,0,SEEK_END);
+        long const size=std::ftell(file);
+        std::fseek(file,0,SEEK_SET);
+        if(size<=0){std::fclose(file);mesh.error="empty file";return mesh;}
+        std::vector<char> data((size_t)size+1u,'\0');
+        size_t const read=std::fread(data.data(),1u,(size_t)size,file);
+        std::fclose(file);
+        data[read]='\0';
+        Stage0VisualHullParseObj(data.data(),read,mesh);
+        if(mesh.positions.empty()||mesh.indices.empty())
+        {
+            mesh.error="no triangles parsed";return mesh;
+        }
+        Stage0VisualHullAnalyze(mesh);
+        Stage0VisualHullSlabExtent(mesh,kStage0VisualHullNeckCutZM,0.003f,
+            mesh.neckCutWidthM,mesh.neckCutDepthM);
+        Stage0VisualHullSlabExtent(mesh,kStage0VisualHullNeckJointZM,0.003f,
+            mesh.neckJointWidthM,mesh.neckJointDepthM);
+        mesh.loaded=true;
+        return mesh;
+    }
+
+    void DrawStage0VisualHullInspection()
+    {
+        Stage0VisualHullMesh const& mesh=GetStage0VisualHullMesh();
+        if(!mesh.loaded)return;
+        float const ox=g.stage0PaletteAnchorX-2.25f,oy=g.stage0PaletteAnchorY+8.10f;
+        float ground=GradeToZ(g.gradeDatum);
+        Stage0CalibrationSurfaceZ(ox,oy,ground);
+        float const lateral=g.certStage0VisualHullMirror?1.f:-1.f;
+        bool const idPass=g.certStage0VisualHullMaskOnly;
+        glDisable(GL_CULL_FACE);glShadeModel(GL_SMOOTH);
+        if(idPass)
+        {
+            // The hull is a measured envelope, not declared anatomy. It carries the
+            // legacy-debt ownership ID so that if this diagnostic ever leaks into an
+            // ownership audit it fails loudly instead of passing as connected skin.
+            glDisable(GL_BLEND);glDisable(GL_DITHER);
+            glEnable(GL_TEXTURE_2D);Stage0BindSemanticIdTexture(255,0,255);
+        }
+        glBegin(GL_TRIANGLES);
+        size_t const faceCount=mesh.indices.size()/3u;
+        for(size_t f=0;f<faceCount;++f)
+        {
+            for(int e=0;e<3;++e)
+            {
+                int const index=mesh.indices[f*3u+(size_t)e];
+                float const* p=&mesh.positions[(size_t)index*3u];
+                float const* n=&mesh.normals[(size_t)index*3u];
+                float const nx=n[0],ny=lateral*n[1],nz=n[2];
+                if(!idPass)
+                {
+                    // Same shading model and per-vertex cost as the runtime carrier in
+                    // EmitStage0UnifiedBodySkin, so the FPS receipt compares triangle
+                    // budgets rather than two different lighting paths. Only the base
+                    // colour differs, keeping hull and skin visually separable.
+                    float const shade=0.84f+0.10f*(nz*0.5f+0.5f)+0.06f*(nx*0.5f+0.5f);
+                    glColor3f(198.f/255.f*shade,128.f/255.f*shade,86.f/255.f*shade);
+                }
+                glNormal3f(nx,ny,nz);
+                glVertex3f(ox+p[0],oy+lateral*p[1],ground+p[2]);
+            }
+        }
+        glEnd();
+        if(idPass)
+        {
+            glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+            glDisable(GL_TEXTURE_2D);glEnable(GL_DITHER);
+        }
+        glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();
+    }
+
+    GLuint Stage0MacroFormV1DisplayList()
+    {
+        static GLuint list=0;
+        if(list!=0)return list;
+        Stage0VisualHullMesh const& mesh=GetStage0MacroFormV1Mesh();
+        if(!mesh.loaded||!wglGetCurrentContext())return 0;
+        list=glGenLists(1);
+        if(list==0)return 0;
+        glNewList(list,GL_COMPILE);
+        glBegin(GL_TRIANGLES);
+        size_t const count=mesh.indices.size();
+        for(size_t i=0;i<count;++i)
+        {
+            int const index=mesh.indices[i];
+            float const* p=&mesh.positions[(size_t)index*3u];
+            float const* n=&mesh.normals[(size_t)index*3u];
+            float const shade=0.78f+0.16f*(n[2]*0.5f+0.5f)
+                                    +0.06f*(n[0]*0.5f+0.5f);
+            glColor3f(38.f/255.f*shade,156.f/255.f*shade,232.f/255.f*shade);
+            glNormal3fv(n);
+            glVertex3fv(p);
+        }
+        glEnd();
+        glEndList();
+        return list;
+    }
+
+    void DrawStage0MacroFormV1()
+    {
+        constexpr float kFiveFeetM=1.524f;
+        GLuint const list=Stage0MacroFormV1DisplayList();
+        if(list==0)return;
+        float const ox=g.stage0PaletteAnchorX-2.25f;
+        float const oy=g.stage0PaletteAnchorY+8.10f;
+        float ground=GradeToZ(g.gradeDatum);
+        Stage0CalibrationSurfaceZ(ox,oy,ground);
+        // The runtime character faces -X and the default front camera's screen-
+        // right is world -Y.  The body-hull builder already stores depth in X,
+        // lateral in Y, and height in Z, so no corrective registration, mesh
+        // scale, or axis swap is admissible here.
+        glDisable(GL_TEXTURE_2D);glEnable(GL_CULL_FACE);glShadeModel(GL_SMOOTH);
+        glPushMatrix();
+        glTranslatef(ox,oy-kFiveFeetM,ground);
+        glCallList(list);
+        glPopMatrix();
+        glShadeModel(GL_FLAT);glEnable(GL_CULL_FACE);LitSetIdentity();
+    }
+
+    void DrawStage0CharacterTruthRuler()
+    {
+        float const ox=g.stage0PaletteAnchorX-2.25f,oy=g.stage0PaletteAnchorY+8.10f;
+        float ground=GradeToZ(g.gradeDatum);Stage0CalibrationSurfaceZ(ox,oy,ground);
+        // Place the ruler just outside the widest relaxed hand. Its 72 one-inch
+        // intervals terminate at the exact 1.8288 m character envelope.
+        float const x=ox-0.13f,y=oy-0.52f;
+        glDisable(GL_CULL_FACE);glLineWidth(1.f);glBegin(GL_LINES);
+        glColor3f(0.96f,0.92f,0.35f);
+        glVertex3f(x,y,ground);glVertex3f(x,y,ground+kCharHeightM);
+        for(int inch=0;inch<=72;++inch)
+        {
+            float const z=ground+(float)inch*0.0254f;
+            bool const foot=(inch%12)==0;
+            bool const half=!foot&&(inch%6)==0;
+            float const width=foot?0.18f:(half?0.11f:0.055f);
+            if(foot)glColor3f(1.f,0.82f,0.12f);
+            else if(half)glColor3f(0.95f,0.72f,0.18f);
+            else glColor3f(0.70f,0.64f,0.30f);
+            glVertex3f(x,y-width*0.5f,z);glVertex3f(x,y+width*0.5f,z);
+        }
+        glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
+    }
+
+    void DrawStage0CalibrationPresentation()
+    {
+        LARGE_INTEGER q0{}, q1{}, qpf{};
+        QueryPerformanceFrequency( &qpf );
+        QueryPerformanceCounter( &q0 );
+        bool const showRuler = Stage0ViewShowsRuler( g.stage0PlayView );
+        bool const showPalette = Stage0ViewShowsPalette( g.stage0PlayView );
+        if ( showRuler )
+        {
+            uint64_t const residencyDigest = Stage0DiagnosticResidencyDigest();
+            if ( residencyDigest != g.stage0RulerResidencyDigest )
+            {
+                if ( g.stage0RulerList )
+                { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+                g.stage0RulerResidencyDigest = residencyDigest;
+            }
+            BuildStage0RulerList();
+        }
+        else if ( g.stage0RulerList )
+        { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+        if ( showPalette && g.stage0PaletteAnchored && !g.stage0CharacterOnly )
+        {
+            auto const& packages = Stage0DiagnosticTerrainPackages();
+            bool const valid = g.stage0PaletteHostRuntime
+                    == Stage0TerrainRuntimeKind( g.stage0PlayView )
+                && g.stage0PaletteHostRevision == g.terrainRev
+                && packages.count( g.stage0PaletteHostPackage ) != 0
+                && Stage0DiagnosticPackageActive( g.stage0PaletteHostPackage );
+            if ( valid ) { BuildStage0PaletteList(); }
+            else
+            {
+                if ( g.stage0PaletteList )
+                { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
+                g.stage0PaletteAnchored = false;
+                g.stage0ToolPalette = false;
+            }
+        }
+        glEnable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        if ( showRuler && g.stage0RulerList ) { glCallList( g.stage0RulerList ); }
+        if ( showPalette && !g.stage0CharacterOnly && g.stage0PaletteList )
+        { glCallList( g.stage0PaletteList ); }
+        if ( showPalette && g.stage0PaletteAnchored )
+        {
+            // The hull inspection replaces the character in the measured frame rather
+            // than overlaying it, so its FPS receipt describes the hull's own cost.
+            if(g.certStage0VisualHull)DrawStage0VisualHullInspection();
+            else
+            {
+                DrawStage0PaletteCharacter();
+                // Runtime comparison only.  Certification routes stay single-
+                // subject so their established camera and silhouette receipts do
+                // not silently start measuring a two-character frame.
+                if(!g.certStage0CharacterPortrait||g.certStage0MacroFormV1)
+                    DrawStage0MacroFormV1();
+            }
+            if(g.stage0CharacterOnly)DrawStage0CharacterTruthRuler();
+        }
+        if(!g.stage0CharacterOnly)DrawStage0PickaxePresentation();
+        QueryPerformanceCounter( &q1 );
+        g.stage0FrameCalibrationDrawMs = qpf.QuadPart > 0
+            ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+    }
+
     void RebuildTerrainMesh()
     {
         // Phase 3 vista only — virgin grades/fill. Scoops are live cups (DrawLiveScoopCups).
@@ -9455,6 +17106,7 @@ namespace
         if ( ms > g.certMaxRemeshMs ) { g.certMaxRemeshMs = ms; }
         ++g.perfHfRebuilds;
         g.perfHfRemeshMsTotal += ms;
+        g.perfHfRemeshMsMax = (std::max)( g.perfHfRemeshMsMax, ms );
         // Approximate tri count: base 2×2 quads × 2 tris × cells drawn (counted during emit is heavier).
         int cells = 0;
         for ( int y = y0; y < y1; ++y )
@@ -9681,8 +17333,221 @@ namespace
     }
 
     void DrawMatterBodies();
+
+    struct Stage0InspectorFrame
+    {
+        float px=0.f, py=0.f, pz=0.f;
+        float fx=0.f, fy=0.f, fz=-1.f;
+        float rx=1.f, ry=0.f, rz=0.f;
+        float ux=0.f, uy=0.f, uz=1.f;
+    };
+
+    bool Stage0GeologyInspectorFrame( Stage0InspectorFrame& out )
+    {
+        if ( !g.stage0ToolGeologyCutaway
+          || !IsCausalPlayableView( g.stage0PlayView ) ) { return false; }
+        if ( g.certStage11Visual && g.causalFaultRuntime )
+        {
+            // The permanent Stage-11 visual receipt must show both halves of the
+            // displaced quartz body at once.  Use a deterministic terminal plane
+            // containing the certified fault throw D=(3,1.5,4), rather than making
+            // the result depend on a one-pixel player aim difference.  This is a
+            // presentation-only certificate frame; ordinary play still starts at
+            // the authoritative terrain ray hit below.
+            constexpr float centerX=-5.5f,centerY=-8.75f,centerZ=-17.f;
+            constexpr float fy=.9363291775690445f;
+            constexpr float fz=-.3511234415883917f;
+            float depth=43.f,contactY=0.f,contactZ=0.f;
+            for(int i=0;i<12;++i)
+            {
+                contactY=centerY-fy*depth;
+                contactZ=(float)g.causalFaultRuntime->ReconstructedZ(centerX,contactY);
+                depth=(centerZ-contactZ)/fz;
+            }
+            contactY=centerY-fy*depth;
+            contactZ=(float)g.causalFaultRuntime->ReconstructedZ(centerX,contactY);
+            if ( !GetCell( (int)std::floor(centerX),
+                    (int)std::floor(contactY) ) ) { return false; }
+            out.px=centerX;out.py=contactY;out.pz=contactZ;
+            out.fx=0.f;out.fy=fy;out.fz=fz;
+            out.rx=-1.f;out.ry=0.f;out.rz=0.f;
+            out.ux=0.f;out.uy=-fz;out.uz=fy;
+            g.stage0GeologyInspectorDepthM=depth;
+            return true;
+        }
+        if ( !g.aimHit ) { return false; }
+        if ( !GetCell( (int)std::floor( g.aimX ), (int)std::floor( g.aimY ) ) )
+        { return false; }
+        float cp=std::cos(g.pitch), sp=std::sin(g.pitch);
+        float cy=std::cos(g.yaw), sy=std::sin(g.yaw);
+        out.px=g.aimX;out.py=g.aimY;out.pz=g.aimZ;
+        out.fx=sy*cp;out.fy=cy*cp;out.fz=sp;
+        float fl=std::sqrt(out.fx*out.fx+out.fy*out.fy+out.fz*out.fz);
+        if(fl<1e-5f){return false;}out.fx/=fl;out.fy/=fl;out.fz/=fl;
+        // R = cross(N,F), with a stable fallback for a near-normal view.
+        out.rx=g.aimNy*out.fz-g.aimNz*out.fy;
+        out.ry=g.aimNz*out.fx-g.aimNx*out.fz;
+        out.rz=g.aimNx*out.fy-g.aimNy*out.fx;
+        float rl=std::sqrt(out.rx*out.rx+out.ry*out.ry+out.rz*out.rz);
+        if(rl<1e-4f){out.rx=1.f;out.ry=out.rz=0.f;rl=1.f;}
+        out.rx/=rl;out.ry/=rl;out.rz/=rl;
+        out.ux=out.fy*out.rz-out.fz*out.ry;
+        out.uy=out.fz*out.rx-out.fx*out.rz;
+        out.uz=out.fx*out.ry-out.fy*out.rx;
+        float ul=std::sqrt(out.ux*out.ux+out.uy*out.uy+out.uz*out.uz);
+        if(ul<1e-5f){return false;}out.ux/=ul;out.uy/=ul;out.uz/=ul;
+        // Keep U consistently oriented to the hit normal so panning does not flip
+        // the flashlight image between adjacent surface triangles.
+        float const un=out.ux*g.aimNx+out.uy*g.aimNy+out.uz*g.aimNz;
+        if(un<0.f){out.ux=-out.ux;out.uy=-out.uy;out.uz=-out.uz;
+            out.rx=-out.rx;out.ry=-out.ry;out.rz=-out.rz;}
+        return true;
+    }
+
+    void Stage0InspectorPoint( Stage0InspectorFrame const& f,float d,float r,float u,
+        float& x,float& y,float& z )
+    {
+        x=f.px+f.fx*d+f.rx*r+f.ux*u;
+        y=f.py+f.fy*d+f.ry*r+f.uy*u;
+        z=f.pz+f.fz*d+f.rz*r+f.uz*u;
+    }
+
+    void Stage0InspectorColor( CausalWorldGeology::GeoSample const& geology )
+    {
+        float r=.45f,green=.32f,b=.20f;
+        if(g.stage0GeologyInspectorMode==1)
+        {
+            uint64_t h=geology.featureId*0x9e3779b97f4a7c15ULL;
+            r=.25f+.70f*(float)((h>>8)&255)/255.f;
+            green=.25f+.70f*(float)((h>>24)&255)/255.f;
+            b=.25f+.70f*(float)((h>>40)&255)/255.f;
+        }
+        else if(g.stage0GeologyInspectorMode==2)
+        {
+            uint32_t const age=geology.chronology.empty()?0u:geology.chronology.back();
+            float const t=(float)(age%17u)/16.f;
+            r=.30f+.65f*t;green=.72f-.42f*t;b=.90f-.55f*t;
+        }
+        else
+        {
+            if(geology.material=="sandstone"){r=.68f;green=.49f;b=.29f;}
+            else if(geology.material=="shale"){r=.20f;green=.23f;b=.25f;}
+            else if(geology.material=="granite"){r=.56f;green=.55f;b=.52f;}
+            else if(geology.material=="quartz"){r=.90f;green=.82f;b=.45f;}
+        }
+        glColor3f(r,green,b);
+    }
+
+    void DrawStage0GeologyInspectorMask()
+    {
+        Stage0InspectorFrame f{};if(!Stage0GeologyInspectorFrame(f)){return;}
+        float const half=.5f*g.stage0GeologyInspectorWidthM;
+        float const depth=g.stage0GeologyInspectorDepthM;
+        float p[8][3];int i=0;
+        for(int d=0;d<2;++d)for(int u=0;u<2;++u)for(int r=0;r<2;++r)
+        {
+            Stage0InspectorPoint(f,d?depth:.025f,r?half:-half,u?half:-half,
+                p[i][0],p[i][1],p[i][2]);
+            ++i;
+        }
+        glStencilMask(0xff);glClear(GL_STENCIL_BUFFER_BIT);glEnable(GL_STENCIL_TEST);
+        glStencilFunc(GL_ALWAYS,1,0xff);glStencilOp(GL_REPLACE,GL_REPLACE,GL_REPLACE);
+        glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);glDisable(GL_DEPTH_TEST);
+        static int const q[6][4]={{0,1,3,2},{4,6,7,5},{0,4,5,1},{2,3,7,6},{0,2,6,4},{1,5,7,3}};
+        glDisable(GL_CULL_FACE);glBegin(GL_QUADS);
+        for(auto const& face:q)for(int v:face)glVertex3fv(p[v]);
+        glEnd();glEnable(GL_CULL_FACE);glEnable(GL_DEPTH_TEST);
+        glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glStencilMask(0x00);
+        glStencilFunc(GL_NOTEQUAL,1,0xff);glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
+    }
+
+    void DrawStage0GeologyCutaway()
+    {
+        Stage0InspectorFrame f{};if(!Stage0GeologyInspectorFrame(f)){return;}
+        constexpr float step=.5f;float const half=.5f*g.stage0GeologyInspectorWidthM;
+        float const depth=g.stage0GeologyInspectorDepthM;
+        glDisable(GL_STENCIL_TEST);glDisable(GL_CULL_FACE);glBegin(GL_TRIANGLES);
+        auto tile=[&](float d0,float d1,float r0,float r1,float u0,float u1,bool terminal)
+        {
+            float cx,cy,cz;
+            Stage0InspectorPoint(f,(d0+d1)*.5f,(r0+r1)*.5f,(u0+u1)*.5f,cx,cy,cz);
+            if(!GetCell((int)std::floor(cx),(int)std::floor(cy))){return;}
+            auto const geology=CausalGeologyAt(g.stage0PlayView,cx,cy,cz);
+            if(!geology.found){return;}Stage0InspectorColor(geology);
+            float p0[3],p1[3],p2[3],p3[3];
+            if(terminal)
+            {
+                Stage0InspectorPoint(f,d0,r0,u0,p0[0],p0[1],p0[2]);
+                Stage0InspectorPoint(f,d0,r1,u0,p1[0],p1[1],p1[2]);
+                Stage0InspectorPoint(f,d0,r1,u1,p2[0],p2[1],p2[2]);
+                Stage0InspectorPoint(f,d0,r0,u1,p3[0],p3[1],p3[2]);
+            }
+            else
+            {
+                Stage0InspectorPoint(f,d0,r0,u0,p0[0],p0[1],p0[2]);
+                Stage0InspectorPoint(f,d1,r0,u0,p1[0],p1[1],p1[2]);
+                Stage0InspectorPoint(f,d1,r0,u1,p2[0],p2[1],p2[2]);
+                Stage0InspectorPoint(f,d0,r0,u1,p3[0],p3[1],p3[2]);
+            }
+            glVertex3fv(p0);glVertex3fv(p1);glVertex3fv(p2);
+            glVertex3fv(p0);glVertex3fv(p2);glVertex3fv(p3);
+        };
+        for(float r=-half;r<half-.001f;r+=step)for(float u=-half;u<half-.001f;u+=step)
+            tile(depth,depth,r,(std::min)(half,r+step),u,(std::min)(half,u+step),true);
+        glEnd();glEnable(GL_CULL_FACE);
+    }
+
     void DrawHeightfield()
     {
+        if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+        {
+            bool const cutaway = g.playWorldgenBaseline && g.stage0ToolGeologyCutaway
+                && IsCausalPlayableView( g.stage0PlayView );
+            if ( cutaway ) { DrawStage0GeologyInspectorMask(); }
+            // The 64 m disk owns live residency and collision. A coarse latent
+            // descriptor reading extends presentation beyond it so the residency
+            // boundary is never exposed as sky from free-fly or distant views.
+            DrawStage0FarField();
+            if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf )
+              && ( g.stage0PlayView==Stage0PlayView::Clean
+                || IsCausalGeologyView( g.stage0PlayView )
+                || IsCausalExposureView( g.stage0PlayView ) ) )
+            { DrawStage8TerrainBlocks(); }
+            else if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf )
+              && ( IsGraniteIntrusionView( g.stage0PlayView )
+              || IsContactMineralizationView( g.stage0PlayView )
+              || IsFaultDisplacementView( g.stage0PlayView )
+              || IsCutCOccupancyView( g.stage0PlayView ) ) )
+            { DrawStage8TerrainBlocks(); }
+            else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf )
+              && IsDifferentialErosionView( g.stage0PlayView ) )
+            { DrawStage8TerrainBlocks(); }
+            else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf )
+              && IsVisibleExposureView( g.stage0PlayView ) )
+            { DrawStage8TerrainBlocks(); }
+            else
+            { DrawStage0TerrainBlocks(); }
+            if ( cutaway )
+            {
+                glDisable( GL_STENCIL_TEST );
+                DrawStage0GeologyCutaway();
+            }
+            if ( g.provRenderWorkbench )
+            {
+                // This early return is why the ore gallery was invisible: the
+                // samples were spawned and reseated, but the Stage-0 terrain path
+                // exits here, long before DrawMaterialFormGallery further down. The
+                // gallery and the E-held sample are part of the workbench, so draw
+                // them before leaving.
+                DrawMaterialFormGallery();
+                DrawHeldGallerySample();
+            }
+            return;
+        }
         int const ax = (int)std::floor( g.feetX );
         int const ay = (int)std::floor( g.feetY );
         // --cert-geo / --cert-residency / --cert-stress: freeze 8-cell vista recenters so remesh=0 is measurable.
@@ -9708,6 +17573,13 @@ namespace
         // Depth-OFF stencil x-rayed through hills. Depth-ON + LEQUAL mouth left HF skin.
         // Punch bias wins vs coplanar HF; nearer hills still win depth by metres.
         if ( g.terrainList ) { glCallList( g.terrainList ); }
+
+        if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+        {
+            // Stage-0 is the current HF packaging around one lightweight floor only.
+            // Exclude galleries, interaction stencils, cavities, bodies, and support queries.
+            return;
+        }
 
         glClear( GL_STENCIL_BUFFER_BIT );
         glEnable( GL_STENCIL_TEST );
@@ -10176,18 +18048,20 @@ namespace
         float virginZ = g.feetZ;
         bool const belowVirgin = SampleGroundZBase( g.feetX, g.feetY, virginZ )
             && g.feetZ < virginZ - 0.10f;
+        float const desiredEyeHeight=kEyeHeightM
+            +(kCrouchEyeHeightM-kEyeHeightM)*g.playerCrouch;
         if ( !inCarve && !belowVirgin )
         {
             g.camX = g.feetX;
             g.camY = g.feetY;
-            g.camZ = g.feetZ + kEyeHeightM;
+            g.camZ = g.feetZ + desiredEyeHeight;
             g.projNearM = kProjNearDefaultM;
             return;
         }
 
         g.projNearM = kProjNearCavityM;
 
-        float eyeH = kEyeHeightM;
+        float eyeH = desiredEyeHeight;
         // Shallow/open pits: standing eye floats above the virgin lip (screenshot: feet 3.66, eye 5.36
         // over grade ~4.1). Prefer eyes under the crest when there is headroom in the pocket.
         if ( belowVirgin )
@@ -10346,6 +18220,9 @@ namespace
         {
             g.walkMode = !g.walkMode;
             g.keyToggleLatch['F'] = true;
+            g.flySprintDistanceM = 0.f;
+            g.flySprintTier = 0;
+            g.flyCurrentSpeedMps = g.walkMode ? 0.f : kFlySpeedMps;
             if ( g.walkMode )
             {
                 g.velZ = 0.f;
@@ -10359,11 +18236,17 @@ namespace
             }
             else
             {
+                g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;
                 g.statusLine = "FREE CAMERA — WASD move  Q/Ctrl down  E/Space up  F walk";
             }
             UpdateStreamHud();
         }
         if ( !g.keys['F'] ) { g.keyToggleLatch['F'] = false; }
+
+        float const crouchTarget=(g.playWorldgenBaseline&&g.walkMode&&g.playerCrouched)?1.f:0.f;
+        float const crouchStep=dt/0.18f;
+        if(g.playerCrouch<crouchTarget)g.playerCrouch=(std::min)(crouchTarget,g.playerCrouch+crouchStep);
+        else if(g.playerCrouch>crouchTarget)g.playerCrouch=(std::max)(crouchTarget,g.playerCrouch-crouchStep);
 
         float cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
         float fx = sy, fy = cy;
@@ -10371,7 +18254,8 @@ namespace
 
         if ( g.walkMode )
         {
-            float const speed = g.keys[VK_SHIFT] ? kSprintSpeedMps : kWalkSpeedMps;
+            float const speed = g.playerCrouched ? 2.7f
+                : (g.keys[VK_SHIFT] ? kSprintSpeedMps : kWalkSpeedMps);
             float wishX = 0.f, wishY = 0.f;
             if ( g.keys['W'] ) { wishX += fx; wishY += fy; }
             if ( g.keys['S'] ) { wishX -= fx; wishY -= fy; }
@@ -10382,6 +18266,13 @@ namespace
             {
                 wishX = ( wishX / wlen ) * speed * dt;
                 wishY = ( wishY / wlen ) * speed * dt;
+            }
+            bool const sliding=g.stage0SlideRemaining>0.f&&g.stage0SlideSpeed>0.f&&g.grounded;
+            if(sliding)
+            {
+                wishX=g.stage0SlideDirX*g.stage0SlideSpeed*dt;
+                wishY=g.stage0SlideDirY*g.stage0SlideSpeed*dt;
+                wlen=g.stage0SlideSpeed*dt;
             }
 
             float const fromX = g.feetX, fromY = g.feetY, fromZ = g.feetZ;
@@ -10398,15 +18289,23 @@ namespace
                 // Full wish, then axis slides along walls.
                 if ( !tryMove( wishX, wishY ) )
                 {
-                    if ( !tryMove( wishX, 0.f ) )
+                    if(sliding)
+                    {g.stage0SlideRemaining=0.f;g.stage0SlideSpeed=0.f;}
+                    else if ( !tryMove( wishX, 0.f ) )
                     {
                         tryMove( 0.f, wishY );
                     }
                 }
             }
+            if(sliding)
+            {
+                g.stage0SlideRemaining=(std::max)(0.f,g.stage0SlideRemaining-dt);
+                g.stage0SlideSpeed=(std::max)(0.f,g.stage0SlideSpeed-14.f*dt);
+            }
 
             if ( g.keys[VK_SPACE] && g.grounded )
             {
+                g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;
                 g.velZ = kJumpSpeedMps;
                 g.grounded = false;
             }
@@ -10428,6 +18327,7 @@ namespace
                     g.grounded = false;
                 }
             }
+            if(!g.grounded){g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;}
 
             ResolveWalkOutOfWall();
 
@@ -10488,13 +18388,37 @@ namespace
         else
         {
             // Free-fly (debug / aerial). Ctrl/Q down, E/Space up — no auto terrain stick.
-            float const speed = g.keys[VK_SHIFT] ? kFlySprintMps : kFlySpeedMps;
-            if ( g.keys['W'] ) { g.camX += fx * speed * dt; g.camY += fy * speed * dt; }
-            if ( g.keys['S'] ) { g.camX -= fx * speed * dt; g.camY -= fy * speed * dt; }
-            if ( g.keys['A'] ) { g.camX -= rx * speed * dt; g.camY -= ry * speed * dt; }
-            if ( g.keys['D'] ) { g.camX += rx * speed * dt; g.camY += ry * speed * dt; }
-            if ( g.keys['Q'] || g.keys[VK_CONTROL] ) { g.camZ -= speed * dt; }
-            if ( g.keys['E'] || g.keys[VK_SPACE] ) { g.camZ += speed * dt; }
+            float wishX = 0.f, wishY = 0.f, wishZ = 0.f;
+            if ( g.keys['W'] ) { wishX += fx; wishY += fy; }
+            if ( g.keys['S'] ) { wishX -= fx; wishY -= fy; }
+            if ( g.keys['A'] ) { wishX -= rx; wishY -= ry; }
+            if ( g.keys['D'] ) { wishX += rx; wishY += ry; }
+            if ( g.keys['Q'] || g.keys[VK_CONTROL] ) { wishZ -= 1.f; }
+            if ( g.keys['E'] || g.keys[VK_SPACE] ) { wishZ += 1.f; }
+            float const wishLength = std::sqrt( wishX * wishX + wishY * wishY + wishZ * wishZ );
+            bool const sprinting = g.keys[VK_SHIFT] && wishLength > 1e-6f;
+            if ( !g.keys[VK_SHIFT] )
+            {
+                g.flySprintDistanceM = 0.f;
+                g.flySprintTier = 0;
+            }
+            float const speed = sprinting
+                ? kFlySprintMps + (float)g.flySprintTier * kFlySprintTierStepMps
+                : kFlySpeedMps;
+            g.flyCurrentSpeedMps = speed;
+            if ( wishLength > 1e-6f )
+            {
+                float const distance = speed * dt;
+                g.camX += wishX / wishLength * distance;
+                g.camY += wishY / wishLength * distance;
+                g.camZ += wishZ / wishLength * distance;
+                if ( sprinting )
+                {
+                    g.flySprintDistanceM += distance;
+                    g.flySprintTier = (int)std::floor(
+                        g.flySprintDistanceM / kFlySprintTierDistanceM );
+                }
+            }
             g.feetX = g.camX;
             g.feetY = g.camY;
             g.feetZ = g.camZ - kEyeHeightM;
@@ -10506,7 +18430,9 @@ namespace
                 g.projNearM = ( cell && cell->carved ) ? kProjNearCavityM : kProjNearDefaultM;
             }
             FollowStreamCenter();
-            ResolveSolidSampleCollisions();
+            // Free-fly is a diagnostic camera, not a body. Collision belongs to
+            // walk mode; applying it here made distant aerial traversal feel as
+            // though the camera were striking invisible terrain.
         }
     }
 
@@ -10593,6 +18519,38 @@ namespace
     void Render()
     {
         if ( !g.glrc ) { return; }
+        bool const stage0 = g.certWorldgenBaselinePerf || g.playWorldgenBaseline;
+        LARGE_INTEGER render0{}, qpf{};
+        if ( stage0 )
+        {
+            QueryPerformanceFrequency( &qpf );
+            QueryPerformanceCounter( &render0 );
+        }
+        auto stage0Present = [&]()
+        {
+            LARGE_INTEGER beforePresent{}, afterPresent{};
+            QueryPerformanceCounter( &beforePresent );
+            double const renderMs = qpf.QuadPart > 0
+                ? 1000.0 * (double)( beforePresent.QuadPart - render0.QuadPart )
+                    / (double)qpf.QuadPart : 0.0;
+            g.stage0FrameDrawSubmitMs =
+                (std::max)( 0.0, renderMs - g.stage0FrameHfBuildMs );
+            if(Stage0UsesPrePresentCompletion())
+            {
+                LARGE_INTEGER finish0{},finish1{};
+                QueryPerformanceCounter(&finish0);
+                glFinish();
+                QueryPerformanceCounter(&finish1);
+                g.stage0FrameGpuFinishMs=qpf.QuadPart>0
+                    ?1000.0*(double)(finish1.QuadPart-finish0.QuadPart)
+                        /(double)qpf.QuadPart:0.0;
+            }
+            SwapBuffers( g.hdc );
+            QueryPerformanceCounter( &afterPresent );
+            g.stage0FramePresentWaitMs = qpf.QuadPart > 0
+                ? 1000.0 * (double)( afterPresent.QuadPart - beforePresent.QuadPart )
+                    / (double)qpf.QuadPart : 0.0;
+        };
 
         RECT rc; GetClientRect( g.hwnd, &rc );
         int w = (std::max)( 1, (int)rc.right );
@@ -10609,12 +18567,36 @@ namespace
         glMatrixMode( GL_PROJECTION );
         glLoadIdentity();
         float aspect = (float)w / (float)h;
-        float fov = 60.f * 3.14159265f / 180.f;
+        // Focal length must reach the projection matrix here, or the capture
+        // receipt describes a lens the renderer never used. This line read a
+        // hardcoded 60 deg while the receipt reported a swept projection_m11, so
+        // an entire focal sweep measured nothing but camera distance.
+        float const fovDegrees=(g.certStage0CharacterPortrait&&!g.certStage0CharacterFullBody)
+            ?kStage0PortraitFovYDeg:Stage0CaptureFovYDeg();
+        float fov = fovDegrees * 3.14159265f / 180.f;
+        // Hor+ clamp. The projection is vertical-FOV, so horizontal grows with
+        // aspect: a docked viewport at 826x232 (aspect 3.6) reached ~130 degrees
+        // horizontally and looked like a fishbowl. Narrow the vertical FOV instead
+        // once horizontal would exceed this, which leaves ordinary 16:9 untouched.
+        {
+            constexpr float kMaxHorizontalFovRad = 100.f * 3.14159265f / 180.f;
+            float const horizontal = 2.f * std::atan( std::tan( fov * 0.5f ) * aspect );
+            if ( horizontal > kMaxHorizontalFovRad && aspect > 1e-3f )
+            {
+                fov = 2.f * std::atan( std::tan( kMaxHorizontalFovRad * 0.5f ) / aspect );
+            }
+        }
         float nearZ = g.projNearM;
         if ( nearZ < 0.03f ) { nearZ = 0.03f; }
         if ( nearZ > 1.f ) { nearZ = 1.f; }
         float farZ = 600.f;
         float f = 1.f / std::tan( fov * 0.5f );
+        // Record the projection AS BUILT, not as recomputed elsewhere. A receipt
+        // derived independently once described a lens the renderer never used and
+        // made an entire focal sweep look valid.
+        g.renderedProjM00 = f / aspect;
+        g.renderedProjM11 = f;
+        g.renderedFovYDeg = fov * 180.f / 3.14159265f;
         float m[16] = {
             f / aspect, 0, 0, 0,
             0, f, 0, 0,
@@ -10674,6 +18656,46 @@ namespace
         glEnable( GL_DEPTH_TEST );
 
         DrawHeightfield();
+        if(g.certPresentationIsolation&&g.presentationIsolationMode==4)
+        {
+            stage0Present();
+            return;
+        }
+        if ( g.certWorldgenLadderLivePerf )
+        {
+            // The live ladder is a deterministic movement driver inside the same
+            // visible presentation path as the playable runtime.  Keep the HUD and
+            // surface-snapped diagnostics in the measured frame; only input and
+            // automatic exit differ from a human play session.
+            DrawStage0CalibrationPresentation();
+            if ( g.stage0ToolPerformanceHud ) { DrawWorldgenPlayHud( w, h ); }
+            DrawWorldgenStageMenu( w, h );
+            DrawWorldgenToolDrawer( w, h );
+            stage0Present();
+            return;
+        }
+        if ( g.certWorldgenBaselinePerf )
+        {
+            stage0Present();
+            return;
+        }
+        if ( g.playWorldgenBaseline )
+        {
+            DrawStage0CalibrationPresentation();
+            if ( g.stage0ToolPerformanceHud ) { DrawWorldgenPlayHud( w, h ); }
+            DrawWorldgenStageMenu( w, h );
+            DrawWorldgenToolDrawer( w, h );
+            // The ProvRender workbench is the two worlds merged: the Stage-0
+            // palette, character and tool props above, and the Phase-4 interaction
+            // layer below -- aim reticle with UV/cell contact, held sample, E
+            // pickup, journal and hotbar. Every other worldgen mode still returns
+            // here and keeps its bare presentation.
+            if ( !g.provRenderWorkbench )
+            {
+                stage0Present();
+                return;
+            }
+        }
         DrawScaleReference();
         DrawAimScoop();
         DrawActionCue( g.frameDt );
@@ -10691,6 +18713,12 @@ namespace
         glColor3f( 0.95f, 0.97f, 1.f );
 
         char line[256];
+        // The diagnostic readout covers the model in a docked viewport, and every
+        // fact it reports is already the ProvRender menu's job. F1 hides it while
+        // leaving the reticle, hotbar and journal alone.
+        bool const showHudText = !g.provRenderWorkbench || g.provRenderHudText;
+        if ( showHudText )
+        {
         DrawHudText( 16, (float)h - 24, "PROVENANCE" );
         DrawHudText( 16, (float)h - 44, "Phase 4 - Horizon-to-Hand + geography + 6ft walk" );
         {
@@ -10768,6 +18796,10 @@ namespace
             yHud -= 18;
             start = end + 1;
         }
+        }   // end diagnostic readout
+
+        // The crosshair and the aim identity are not diagnostics -- they are how
+        // you tell what you are about to pick up. They stay on with F1 off.
 
         // Crosshair
         glColor3f( 1.f, 1.f, 1.f );
@@ -10812,16 +18844,52 @@ namespace
 
         DrawCompass( (float)w - 56.f, (float)h - 70.f );
 
+        // Input-ownership witness. The viewport re-entry defect was invisible from
+        // the outside: capture and mouse-look looked correct while the keyboard
+        // belonged to the shell. Showing all four booleans plus the focused window
+        // and the live WASD bits makes the failing one nameable instead of guessed
+        // at. [F9] toggles; it is diagnostic scaffolding, not chrome.
+        if ( g.inputWitnessHud )
+        {
+            HWND const focused = GetFocus();
+            char line[220];
+            std::snprintf( line, sizeof( line ),
+                "INPUT  viewport=%d cursor_captured=%d mouse_look=%d gameplay=%d  "
+                "focus=%s(%p) self=%p  W%d A%d S%d D%d",
+                g.gameplayInput ? 1 : 0, g.cursorCaptured ? 1 : 0,
+                g.mouseLook ? 1 : 0, g.gameplayInput ? 1 : 0,
+                ( focused == g.hwnd ) ? "SELF" : "OTHER", (void*)focused, (void*)g.hwnd,
+                g.keys['W'] ? 1 : 0, g.keys['A'] ? 1 : 0,
+                g.keys['S'] ? 1 : 0, g.keys['D'] ? 1 : 0 );
+            bool const healthy = ( g.gameplayInput == g.mouseLook )
+                              && ( !g.gameplayInput || focused == g.hwnd );
+            if ( healthy ) { glColor3f( 0.45f, 0.90f, 0.55f ); }
+            else { glColor3f( 1.f, 0.35f, 0.35f ); }
+            DrawHudText( 16, (float)h - 24.f, line );
+            glColor3f( 0.95f, 0.97f, 1.f );
+        }
+
+        if ( showHudText )
+        {
         glColor3f( 0.95f, 0.97f, 1.f );
         if ( !g.walkMode )
         {
             glColor3f( 1.f, 0.85f, 0.35f );
-            DrawHudText( 16, 64, "FREE CAMERA  [F] back to walk" );
+            char flyLine[160];
+            std::snprintf( flyLine, sizeof( flyLine ),
+                "FREE CAMERA  speed=%.0fm/s tier=%d sprint_chain=%.1fm  [F] walk",
+                g.flyCurrentSpeedMps, g.flySprintTier, g.flySprintDistanceM );
+            DrawHudText( 16, 64, flyLine );
             glColor3f( 0.95f, 0.97f, 1.f );
         }
         DrawHudText( 16, 46, "LMB dig/pick  RMB place  [E] pick/drop  [B] cavity  [C] chips  [K] chip dump  scroll rolls held" );
         DrawHudText( 16, 28, "Sun+sky light materials (not painted dark sides)  tumble gold — highlight must travel" );
         DrawHudText( 16, 10, g.digestLine.c_str() );
+        }
+        else
+        {
+            DrawHudText( 16, 10, "[F1] readout" );
+        }
 
         g.uiWinW = w;
         g.uiWinH = h;
@@ -10860,6 +18928,195 @@ namespace
         }
         std::fclose( f );
         return true;
+    }
+
+    bool DumpDepthPpm( char const* path, float nearZ, float farZ )
+    {
+        // Encode linear eye-space depth at 0.1 mm precision in R:G. B is an
+        // explicit validity channel, so the comparison tool never mistakes the
+        // cleared far plane for facial relief. This pass is read from the exact
+        // skin-only depth buffer before presentation; it is not inferred from
+        // lighting or the beauty colour.
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 || nearZ <= 0.f || farZ <= nearZ ) { return false; }
+        std::vector<float> depth( (size_t)w * (size_t)h, 1.f );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadPixels( 0, 0, w, h, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data() );
+        FILE* f = nullptr;
+        if ( fopen_s( &f, path, "wb" ) != 0 || !f ) { return false; }
+        std::fprintf( f, "P6\n%d %d\n255\n", w, h );
+        for ( int y = h - 1; y >= 0; --y )
+        {
+            for ( int x = 0; x < w; ++x )
+            {
+                float const d = depth[(size_t)y * (size_t)w + (size_t)x];
+                bool const valid = d < 0.999999f;
+                unsigned int code = 0u;
+                if ( valid )
+                {
+                    float const ndc = d * 2.f - 1.f;
+                    float const linear = ( 2.f * nearZ * farZ )
+                        / ( farZ + nearZ - ndc * ( farZ - nearZ ) );
+                    code = (unsigned int)std::clamp( std::lround( linear * 10000.f ), 0l, 65535l );
+                }
+                unsigned char rgb[3] = { (unsigned char)( code >> 8u ),
+                    (unsigned char)( code & 255u ), (unsigned char)( valid ? 255 : 0 ) };
+                std::fwrite( rgb, 1, 3, f );
+            }
+        }
+        std::fclose( f );
+        return true;
+    }
+
+    int CountLowerPpmSkyPixels(char const* path)
+    {
+        FILE* f=nullptr;if(fopen_s(&f,path,"rb")!=0||!f)return INT_MAX;
+        char magic[3]={};int w=0,h=0,maxv=0;
+        if(std::fscanf(f,"%2s %d %d %d",magic,&w,&h,&maxv)!=4
+          ||std::strcmp(magic,"P6")!=0||w<=0||h<=0||maxv!=255)
+        {std::fclose(f);return INT_MAX;}
+        (void)std::fgetc(f);
+        std::vector<unsigned char> rgb((size_t)w*(size_t)h*3u);
+        bool const read=std::fread(rgb.data(),1,rgb.size(),f)==rgb.size();
+        std::fclose(f);if(!read)return INT_MAX;
+        int sky=0;
+        // DumpFramePpm is top-down. The selected downward continuity view must
+        // contain no sky-clear pixels in the lower 45 percent.
+        for(int y=h*55/100;y<h;++y)for(int x=0;x<w;++x)
+        {
+            size_t const i=((size_t)y*(size_t)w+(size_t)x)*3u;
+            int const r=rgb[i],green=rgb[i+1],b=rgb[i+2];
+            if(std::abs(r-114)<=2&&std::abs(green-158)<=2&&std::abs(b-224)<=2)++sky;
+        }
+        return sky;
+    }
+
+    bool CaptureStage0GeologyXraySnapshot()
+    {
+        Stage0InspectorFrame inspector{};
+        if(!Stage0GeologyInspectorFrame(inspector)){return false;}
+        float tx,ty,tz;Stage0InspectorPoint(inspector,g.stage0GeologyInspectorDepthM,
+            0.f,0.f,tx,ty,tz);
+        auto const terminal=CausalGeologyAt(g.stage0PlayView,tx,ty,tz);
+        if(!terminal.found){return false;}
+        glFinish();
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+        int depositPixels=0;
+        if(vp[2]>0&&vp[3]>0)
+        {
+            std::vector<unsigned char> rgba((size_t)vp[2]*(size_t)vp[3]*4u);
+            glPixelStorei(GL_PACK_ALIGNMENT,1);glReadBuffer(GL_FRONT);
+            glReadPixels(0,0,vp[2],vp[3],GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
+            for(int y=vp[3]/4;y<vp[3]*3/4;++y)for(int x=vp[2]/4;x<vp[2]*3/4;++x)
+            {
+                size_t const i=((size_t)y*(size_t)vp[2]+(size_t)x)*4u;
+                int const r=rgba[i],green=rgba[i+1],b=rgba[i+2];
+                if(r>180&&green>160&&b<165&&r>b+35&&green>b+25)++depositPixels;
+            }
+        }
+        bool const cutC=IsCutCOccupancyView(g.stage0PlayView);
+        char const* imagePath=cutC
+            ?"Docs\\provenance_cut_c_player_xray.ppm"
+            :"Docs\\provenance_geology_xray_snapshot.ppm";
+        char const* receiptPath=cutC
+            ?"Docs\\provenance_cut_c_player_xray.txt"
+            :"Docs\\provenance_geology_xray_snapshot.txt";
+        bool const image=DumpFramePpm(imagePath);
+        FILE* f=nullptr;
+        bool const opened=fopen_s(&f,receiptPath,"w")==0&&f;
+        if(opened)
+        {
+            std::fprintf(f,"PROVENANCE_GEOLOGY_XRAY_SNAPSHOT\nimage=%s\n"
+                "stage=%s\ncontact=%.6f,%.6f,%.6f\ndepth_m=%.6f\nwidth_m=%.6f\n"
+                "terminal=%.6f,%.6f,%.6f\nmaterial=%s\nfeature_id=%s\nformation=%s\n"
+                "deposit_visible=%d\ndeposit_pixels=%d\nevent_count=%zu\nchronology_count=%zu\n"
+                "presentation_only=1\n",
+                image?(cutC?"Docs/provenance_cut_c_player_xray.ppm"
+                    :"Docs/provenance_geology_xray_snapshot.ppm"):"WRITE_FAILED",
+                Stage0PlayViewName(g.stage0PlayView),inspector.px,inspector.py,inspector.pz,
+                g.stage0GeologyInspectorDepthM,g.stage0GeologyInspectorWidthM,tx,ty,tz,
+                terminal.material.c_str(),CausalWorldGeology::Hex64(terminal.featureId).c_str(),
+                terminal.formationId.c_str(),terminal.material=="quartz"&&depositPixels>=128?1:0,
+                depositPixels,
+                terminal.eventIds.size(),terminal.chronology.size());
+            std::fclose(f);
+        }
+        g.stage0GeologySnapshotSucceeded=image&&opened;
+        g.stage0GeologySnapshotDepositPixels=depositPixels;
+        g.stage0GeologySnapshotDepositVisible=terminal.material=="quartz"&&depositPixels>=128;
+        return g.stage0GeologySnapshotSucceeded;
+    }
+
+    bool CaptureStage11FaultXraySnapshot()
+    {
+        if(!IsFaultDisplacementView(g.stage0PlayView)||!g.causalFaultRuntime)return false;
+        Stage0InspectorFrame inspector{};if(!Stage0GeologyInspectorFrame(inspector))return false;
+        float tx,ty,tz;Stage0InspectorPoint(inspector,g.stage0GeologyInspectorDepthM,
+            0.f,0.f,tx,ty,tz);
+        auto const terminal=g.causalFaultRuntime->Query(true,tx,ty,tz);
+        uint64_t const quartzId=0xda10b0d1e5f01001ull;
+        int footwallQuartz=0,hangingQuartz=0;
+        bool selectedQuartz=false,selectedShifted=false;
+        float selectedX=0.f,selectedY=0.f,selectedZ=0.f;
+        std::array<double,3> selectedSource{};
+        CausalWorldGeology::GeoSample selectedPost{},selectedPre{};
+        float const half=g.stage0GeologyInspectorWidthM*.5f;
+        for(float r=-half;r<=half+1e-4f;r+=.125f)
+        for(float u=-half;u<=half+1e-4f;u+=.125f)
+        {
+            float x,y,z;Stage0InspectorPoint(inspector,g.stage0GeologyInspectorDepthM,
+                r,u,x,y,z);
+            auto const sample=g.causalFaultRuntime->Query(true,x,y,z);
+            if(sample.found&&sample.featureId==quartzId)
+            {
+                if(g.causalFaultRuntime->SignedDistance(x,y,z)>=0.0)
+                {
+                    ++hangingQuartz;
+                    if(!selectedQuartz)
+                    {
+                        selectedPost=sample;selectedX=x;selectedY=y;selectedZ=z;
+                        selectedSource=g.causalFaultRuntime->SourcePoint(
+                            true,x,y,z,&selectedShifted);
+                        selectedPre=g.causalFaultRuntime->Stage10().Query(true,
+                            selectedSource[0],selectedSource[1],selectedSource[2]);
+                        selectedQuartz=true;
+                    }
+                }
+                else ++footwallQuartz;
+            }
+        }
+        bool const sameIdentity=selectedQuartz&&selectedShifted
+          &&selectedPost.found&&selectedPre.found
+          &&selectedPost.material=="quartz"&&selectedPost.featureId==quartzId
+          &&selectedPost.featureId==selectedPre.featureId
+          &&!selectedPost.eventIds.empty()
+          &&selectedPost.eventIds.back()==g.causalFaultRuntime->GetProgram().faultEventId;
+        glFinish();bool const image=DumpFramePpm(
+            "Docs\\provenance_stage11_fault_identity_xray.ppm");
+        FILE* f=nullptr;bool const opened=fopen_s(&f,
+            "Docs\\provenance_stage11_fault_identity_xray.txt","wb")==0&&f;
+        if(opened)
+        {
+            std::fprintf(f,"PROVENANCE_STAGE11_FAULT_IDENTITY_XRAY %s\n"
+                "image=Docs/provenance_stage11_fault_identity_xray.ppm\n"
+                "mode=IDENTITY\ncontact=%.6f,%.6f,%.6f\nterminal=%.6f,%.6f,%.6f\n"
+                "selected_post=%.6f,%.6f,%.6f\nsource=%.6f,%.6f,%.6f\n"
+                "feature_id=%s\nfault_event_id=%s\n"
+                "footwall_quartz_samples=%d\nhanging_wall_quartz_samples=%d\n"
+                "same_identity=%d\npresentation_only=1\n",
+                image&&sameIdentity&&footwallQuartz>0&&hangingQuartz>0?"PASS":"FAIL",
+                inspector.px,inspector.py,inspector.pz,tx,ty,tz,
+                selectedX,selectedY,selectedZ,
+                selectedSource[0],selectedSource[1],selectedSource[2],
+                CausalWorldGeology::Hex64(selectedPost.featureId).c_str(),
+                CausalWorldGeology::Hex64(
+                    g.causalFaultRuntime->GetProgram().faultEventId).c_str(),
+                footwallQuartz,hangingQuartz,sameIdentity?1:0);
+            std::fclose(f);
+        }
+        return image&&opened&&sameIdentity&&footwallQuartz>0&&hangingQuartz>0;
     }
 
     void WriteCertPixelReport( char const* ppmPath, char const* reportPath )
@@ -19232,8 +27489,8 @@ namespace
             int cases=0,solidContacts=0,airContacts=0,sweepHits=0,sweepExpected=0;
             int unexplainedEdges=0,nonManifoldEdges=0,badNormals=0,shapeMiss=0;
             int approvedMismatch=0;float maxExpansion=0.f,maxShapeDelta=0.f;
-            float firstEdge[6]={};float firstEdgeBoundary=0.f,firstEdgeLength=0.f;
-            float firstNormalPlus=0.f,firstNormalMinus=0.f,firstNormalC[3]={};
+            float firstEdge[6]={};float firstEdgeBoundary=0.f,firstEdgeLength=0.f;int firstEdgeMultiplicity=0;
+            float firstNormalPlus=0.f,firstNormalMinus=0.f,firstPatchPlus=0.f,firstPatchMinus=0.f,firstNormalC[3]={};
             bool allOk=true;char first[192]="-";
             for(size_t mi=0;mi<sizeof(materials)/sizeof(materials[0])&&allOk;++mi)
             {
@@ -19277,7 +27534,9 @@ namespace
                         if(std::strcmp(materials[mi],"limestone")==0
                             &&(std::strcmp(fe.morphology,"compact_angular")!=0
                             ||fe.env.angularSharp<0.75f||std::fabs(fe.env.tHalf-fe.env.bHalf)<0.005f))
-                        {++approvedMismatch;allOk=false;std::snprintf(first,sizeof(first),"limestone@%.0f signature",angle);break;}
+                        {++approvedMismatch;allOk=false;std::snprintf(first,sizeof(first),
+                            "limestone@%.0f signature morph=%s sharp=%.3f t=%.4f b=%.4f",
+                            angle,fe.morphology,fe.env.angularSharp,fe.env.tHalf,fe.env.bHalf);break;}
 
                         FractureSurface::Region const& physical=fp.eventBounds.front();
                         FractureSurface::Region const& owned=fp.regions.front();
@@ -19306,6 +27565,7 @@ namespace
                             return EdgeKey{aa[0],aa[1],aa[2],bb[0],bb[1],bb[2]};};
                         std::unordered_map<EdgeKey,int,EdgeHash> em;
                         for(auto const&t:fp.tris){++em[ekey(t.a,t.b)];++em[ekey(t.b,t.c)];++em[ekey(t.c,t.a)];}
+                        std::vector<EdgeKey> unexpected;
                         auto handoff=[&](EdgeKey const& e){auto atSide=[&](int x,int y,int z){
                             float const X=x*qq,Y=y*qq,Z=z*qq,eps=fp.spacing*0.08f;
                             return std::fabs(X-owned.minX)<eps||std::fabs(X-owned.maxX)<eps
@@ -19313,16 +27573,38 @@ namespace
                             auto atZHf=[&](int x,int y,int z){
                                 float const X=x*qq,Y=y*qq,Z=z*qq,eps=fp.spacing*0.08f;
                                 if(std::fabs(Z-owned.maxZ)<eps)return true;
-                                if(std::fabs(Z-owned.minZ)>=eps)return false;
                                 PickFracture::Vec3 const ql=PickFracture::WorldToLocal(
                                     fe.frame,PickFracture::V3(X,Y,Z));
-                                return PickFracture::LocalEnvelopeDistance(fe.env,ql)>=0.98f
-                                    ||std::fabs(Z-fixtureGround(X,Y))<fp.spacing*0.70f;};
-                            return (atSide(e.ax,e.ay,e.az)&&atSide(e.bx,e.by,e.bz))
-                                ||(atZHf(e.ax,e.ay,e.az)&&atZHf(e.bx,e.by,e.bz));};
+                                float const envelope=PickFracture::LocalEnvelopeDistance(fe.env,ql);
+                                // HF handoff follows the actual native surface, not
+                                // the patch's min-Z plane. On a slope those planes
+                                // coincide only along one line. Require both native
+                                // surface coincidence and an unopened envelope so a
+                                // cavity/backside edge can never borrow this excuse.
+                                bool const virginHf=std::fabs(Z-fixtureGround(X,Y))<fp.spacing*0.08f
+                                    &&envelope>=0.98f;
+                                bool const solidOuter=std::fabs(Z-owned.minZ)<eps&&envelope>=0.98f;
+                                return virginHf||solidOuter;};
+                            auto outsideEnvelope=[&](int x,int y,int z){
+                                PickFracture::Vec3 const ql=PickFracture::WorldToLocal(fe.frame,
+                                    PickFracture::V3(x*qq,y*qq,z*qq));
+                                return PickFracture::LocalEnvelopeDistance(fe.env,ql)>=0.98f;};
+                            bool const diagonalOuter=(atSide(e.ax,e.ay,e.az)||atSide(e.bx,e.by,e.bz))
+                                &&outsideEnvelope(e.ax,e.ay,e.az)&&outsideEnvelope(e.bx,e.by,e.bz);
+                            return diagonalOuter||(atZHf(e.ax,e.ay,e.az)&&atZHf(e.bx,e.by,e.bz));};
                         for(auto const& kv:em)
                         {
-                            if(kv.second>2)++nonManifoldEdges;
+                            if(kv.second>2)
+                            {
+                                if(nonManifoldEdges==0)
+                                {
+                                    EdgeKey const&e=kv.first;firstEdge[0]=e.ax*qq;firstEdge[1]=e.ay*qq;firstEdge[2]=e.az*qq;
+                                    firstEdge[3]=e.bx*qq;firstEdge[4]=e.by*qq;firstEdge[5]=e.bz*qq;firstEdgeMultiplicity=kv.second;
+                                    float const ex=firstEdge[3]-firstEdge[0],ey=firstEdge[4]-firstEdge[1],ez=firstEdge[5]-firstEdge[2];
+                                    firstEdgeLength=std::sqrt(ex*ex+ey*ey+ez*ez);
+                                }
+                                ++nonManifoldEdges;
+                            }
                             else if(kv.second==1&&!handoff(kv.first))
                             {
                                 if(unexplainedEdges==0)
@@ -19339,13 +27621,40 @@ namespace
                                     float const ex=firstEdge[3]-firstEdge[0],ey=firstEdge[4]-firstEdge[1],ez=firstEdge[5]-firstEdge[2];
                                     firstEdgeLength=std::sqrt(ex*ex+ey*ey+ez*ez);
                                 }
+                                unexpected.push_back(kv.first);
                                 ++unexplainedEdges;
                             }
                         }
                         if(nonManifoldEdges||unexplainedEdges)
-                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f edge u=%d n=%d z=%.4f:%.4f own=%.4f:%.4f len=%.5f",
-                            materials[mi],angle,unexplainedEdges,nonManifoldEdges,firstEdge[2],firstEdge[5],
-                            owned.minZ,owned.maxZ,firstEdgeLength);break;}
+                        {
+                            if(nonManifoldEdges&&unexpected.empty())
+                            {
+                                allOk=false;std::snprintf(first,sizeof(first),
+                                    "%s@%.0f nonMan=%d mult=%d len=%.6f p=(%.4f,%.4f,%.4f):(%.4f,%.4f,%.4f) seal=%d",
+                                    materials[mi],angle,nonManifoldEdges,firstEdgeMultiplicity,firstEdgeLength,
+                                    firstEdge[0],firstEdge[1],firstEdge[2],firstEdge[3],firstEdge[4],firstEdge[5],fp.microLoopsSealed);
+                                break;
+                            }
+                            int vv[64][3]={},deg[64]={},vn=0;
+                            auto av=[&](int x,int y,int z){int n=0;for(;n<vn;++n)if(vv[n][0]==x&&vv[n][1]==y&&vv[n][2]==z)break;
+                                if(n==vn&&vn<64){vv[vn][0]=x;vv[vn][1]=y;vv[vn][2]=z;++vn;}if(n<64)++deg[n];};
+                            for(EdgeKey const&e:unexpected){av(e.ax,e.ay,e.az);av(e.bx,e.by,e.bz);}
+                            int dmin=99,dmax=0;float vlo[3]={1e9f,1e9f,1e9f},vhi[3]={-1e9f,-1e9f,-1e9f};
+                            for(int vi=0;vi<vn;++vi){dmin=(std::min)(dmin,deg[vi]);dmax=(std::max)(dmax,deg[vi]);
+                                for(int k=0;k<3;++k){float const v=vv[vi][k]*qq;vlo[k]=(std::min)(vlo[k],v);vhi[k]=(std::max)(vhi[k],v);}}
+                            float const sx=vhi[0]-vlo[0],sy=vhi[1]-vlo[1],sz=vhi[2]-vlo[2];
+                            float const cspan=std::sqrt(sx*sx+sy*sy+sz*sz);
+                            PickFracture::Vec3 const ep0=PickFracture::V3(firstEdge[0],firstEdge[1],firstEdge[2]);
+                            PickFracture::Vec3 const ep1=PickFracture::V3(firstEdge[3],firstEdge[4],firstEdge[5]);
+                            float const ee0=PickFracture::LocalEnvelopeDistance(fe.env,PickFracture::WorldToLocal(fe.frame,ep0));
+                            float const ee1=PickFracture::LocalEnvelopeDistance(fe.env,PickFracture::WorldToLocal(fe.frame,ep1));
+                            float const gg0=firstEdge[2]-fixtureGround(firstEdge[0],firstEdge[1]);
+                            float const gg1=firstEdge[5]-fixtureGround(firstEdge[3],firstEdge[4]);
+                            allOk=false;std::snprintf(first,sizeof(first),
+                            "%s@%.0f u=%d len=%.5f seal=%d v=%d d=%d:%d sp=%.4f p0=(%.4f,%.4f,%.4f) p1=(%.4f,%.4f,%.4f) env=%.3f:%.3f gr=%.4f:%.4f",
+                            materials[mi],angle,unexplainedEdges,firstEdgeLength,fp.microLoopsSealed,
+                            vn,dmin,dmax,cspan,firstEdge[0],firstEdge[1],firstEdge[2],
+                            firstEdge[3],firstEdge[4],firstEdge[5],ee0,ee1,gg0,gg1);break;}
 
                         if(wall)
                         {
@@ -19384,13 +27693,19 @@ namespace
                             if(!(correctBracket||sameSideResidual))
                             {
                                 if(badNormals==0){firstNormalPlus=plus;firstNormalMinus=minus;
+                                    PickFracture::Vec3 const Pp=PickFracture::Add(C,PickFracture::Mul(NW,neps));
+                                    PickFracture::Vec3 const Pm=PickFracture::Add(C,PickFracture::Mul(NW,-neps));
+                                    FractureSurface::Vec3 const Fp{Pp.x,Pp.y,Pp.z};
+                                    FractureSurface::Vec3 const Fm{Pm.x,Pm.y,Pm.z};
+                                    firstPatchPlus=FractureSurface::SolidField(fp,fixtureGround,Fp.x,Fp.y,Fp.z);
+                                    firstPatchMinus=FractureSurface::SolidField(fp,fixtureGround,Fm.x,Fm.y,Fm.z);
                                     firstNormalC[0]=C.x;firstNormalC[1]=C.y;firstNormalC[2]=C.z;}
                                 ++badNormals;
                             }
                         }
                         if(badNormals)
-                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f normals=%d p=%.5f m=%.5f C=(%.3f,%.3f,%.3f)",
-                            materials[mi],angle,badNormals,firstNormalPlus,firstNormalMinus,
+                        {allOk=false;std::snprintf(first,sizeof(first),"%s@%.0f normals=%d truth=%.5f:%.5f patch=%.5f:%.5f seal=%d C=(%.3f,%.3f,%.3f)",
+                            materials[mi],angle,badNormals,firstNormalPlus,firstNormalMinus,firstPatchPlus,firstPatchMinus,fp.microLoopsSealed,
                             firstNormalC[0],firstNormalC[1],firstNormalC[2]);break;}
 
                         // Exterior, ±tangent, ±binormal/underside, and interior/backside.
@@ -19450,7 +27765,10 @@ namespace
                     }
                 }
             }
-            char note[256];std::snprintf(note,sizeof(note),
+            char note[256];
+            if(!allOk)std::snprintf(note,sizeof(note),
+                "cases=%d edgeU=%d nonMan=%d first=%s",cases,unexplainedEdges,nonManifoldEdges,first);
+            else std::snprintf(note,sizeof(note),
                 "cases=%d solid=%d air=%d sweeps=%d/%d edgeU=%d nonMan=%d normals=%d shapeMiss=%d approvedMismatch=%d maxShapeDelta=%.4f expansion=%.4f first=%s",
                 cases,solidContacts,airContacts,sweepHits,sweepExpected,unexplainedEdges,
                 nonManifoldEdges,badNormals,shapeMiss,approvedMismatch,maxShapeDelta,maxExpansion,first);
@@ -20647,12 +28965,5244 @@ namespace
         }
     }
 
+    // ---------- Playable Stage-0 worldgen traversal floor ----------
+    void WorldgenPlayInitialize()
+    {
+        if ( g.playWorldgenInitialized ) { return; }
+
+        ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+        ProvenanceGeo::SetSeedU64( 0x5747424153453031ULL ); // same WGBASE01 cert seed
+        g.worldIdentityHash = "worldgen_baseline_seed_wgbase01";
+        g.generatorId = "provenance_worldgen_baseline_v1";
+        g.generatorVersion = 1;
+        g.gradeDatum = 0.50f;
+        g.reliefVoxels = 64.f;
+        g.voxelEdgeM = 0.125f;
+        g.playerX = 128;
+        g.playerY = 128;
+        g.feetX = 128.5f;
+        g.feetY = 128.5f;
+        g.feetZ = GradeToZ( g.gradeDatum );
+        g.camX = g.feetX;
+        g.camY = g.feetY;
+        g.camZ = g.feetZ + kEyeHeightM;
+        g.walkMode = true;
+        g.flySprintDistanceM = 0.f;
+        g.flySprintTier = 0;
+        g.flyCurrentSpeedMps = kFlySpeedMps;
+        g.grounded = true;
+        g.havePlayer = true;
+        g.streamComplete = true;
+        g.chipMode = ChipMode::Off;
+        float const toolGround = GradeToZ( g.gradeDatum );
+        g.stage0Tools[0] = { Stage0ToolKind::Pickaxe, true, 136.55f, 129.65f, toolGround + 0.46f, 0.f };
+        g.stage0Tools[1] = { Stage0ToolKind::Axe, true, 136.55f, 131.05f, toolGround + 0.40f, 0.f };
+        g.stage0Tools[2] = { Stage0ToolKind::Shovel, true, 136.55f, 132.48f, toolGround + 0.61f, 0.f };
+        g.stage0HeldTool = Stage0ToolKind::None;
+        g.stage0ToolSpin = g.stage0ToolRoll = 0.f;
+        g.stage0StrikeStartMs = g.stage0StrikeImpactMs = 0;
+        g.stage0StrikePrevValid = false;
+        RecomputeBlocksWanted();
+        g.blocksLoaded = g.blocksWanted;
+        g.columnQueue.clear();
+        g.pending = PendingKind::None;
+
+        g.playWorldgenStartD2 = g.perfD2Rebuilds;
+        g.playWorldgenStartOcc = g.perfOccRebuilds;
+        g.playWorldgenStartEdits = g.perfEditedRegionChanges;
+        g.playWorldgenStartSupport = g.perfSupportBelowCount;
+        g.playWorldgenStartMutations = g.perfOccupancyMutations;
+
+        EnsureGeoDisk( g.playerX, g.playerY, 64 );
+        if ( IsCausalPlayableView( g.stage0PlayView ) )
+        {
+            float groundZ = g.feetZ;
+            if ( SampleGroundZBase( g.feetX, g.feetY, groundZ ) )
+            {
+                g.feetZ = groundZ;
+                g.camZ = groundZ + kEyeHeightM;
+            }
+        }
+        g.playWorldgenPrevGeoTotal = g.perfGeoGenMsTotal;
+        g.playWorldgenPrevHfTotal = g.perfHfRemeshMsTotal;
+        g.playWorldgenPrevCells = g.perfGeoCellsCreated;
+        g.playWorldgenPrevHf = g.perfHfRebuilds;
+        g.playWorldgenPrevHfLocal = g.perfHfLocalUpdates;
+        g.playWorldgenRateCells = g.perfGeoCellsCreated;
+        g.playWorldgenRateHf = g.perfHfRebuilds;
+        g.playWorldgenRateHfLocal = g.perfHfLocalUpdates;
+        g.playWorldgenPrevX = g.feetX;
+        g.playWorldgenPrevY = g.feetY;
+        g.playWorldgenStartMs = GetTickCount64();
+        g.playWorldgenRateMs = g.playWorldgenStartMs;
+        g.playWorldgenWorkingSet = CurrentWorkingSetBytes();
+
+        if ( fopen_s( &g.playWorldgenTrace,
+            "Docs\\provenance_worldgen_playtest_trace.csv", "w" ) == 0
+          && g.playWorldgenTrace )
+        {
+            std::fprintf( g.playWorldgenTrace,
+                "frame,elapsed_s,mode,x,y,speed_mps,frame_ms,fps,p99_ms,"
+                "new_cells,resident_cells,new_cells_per_s,evicted,pending,"
+                "hf_local_updates,hf_full_rebuilds,hf_local_updates_this_frame,hf_mesh_ms,"
+                "geo_request_ms,geo_worst_ms,hf_worst_ms,working_set_bytes,"
+                "cpu_frame_ms,simulation_ms,residency_ms,generation_pure_ms,"
+                "hf_build_ms,hf_upload_ms,hf_retire_ms,hf_retire_queue,"
+                "draw_submit_ms,gpu_finish_ms,present_wait_ms,"
+                "pacing_wait_ms,gpu_frame_ms,"
+                "calibration_stage,calibration_draw_ms,ruler_tris,palette_tris,"
+                "d2,occupancy,edits,support,mutations,bodies,fractures\n" );
+        }
+
+        g.playWorldgenInitialized = true;
+        if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch&&!g.playCutCLaunch)
+        {
+            g.stage0StageMenuOpen=false;
+            g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::FaultDisplacement);
+        }
+        if ( g.playStage11Launch )
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::FaultDisplacement);
+            if(g.certStage11Visual)
+            {
+                g.stage0ToolGeologyCutaway=true;
+                g.stage0GeologyInspectorMode=1;
+                g.stage0GeologyInspectorWidthM=6.096f;
+                // View the deterministic oblique certificate plane from inside
+                // its presentation-only cleared prism, eight metres from the
+                // terminal face.  Residency still covers both the surface contact
+                // and the displaced subsurface body.
+                g.walkMode=false;g.feetX=-5.5f;g.feetY=-16.2406f;
+                RebuildStage0PlayableRuntime();
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=-14.1910f;
+                g.yaw=0.f;g.pitch=-.3587707f;
+            }
+        }
+        if ( g.playCutCLaunch )
+        {
+            g.stage0StageMenuOpen = false;
+            SelectStage0PlayView( Stage0PlayView::CutCOccupancyParity );
+            if ( g.certCutCVisual )
+            {
+                // First visual gate: x-ray OFF, elevated player-scale view
+                // across the complete live terrain. The lower frame must be
+                // terrain, not a missing-package view of the sky clear color.
+                g.stage0ToolGeologyCutaway=false;
+                g.walkMode=false;
+                g.feetX=-25.0f;g.feetY=-35.0f;
+                RebuildStage0PlayableRuntime();
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=15.0f;
+                g.yaw=0.75f;g.pitch=-0.55f;
+            }
+        }
+        g.statusLine = (g.playStage11Launch||g.playWorldgenLatestStableLaunch)
+            ? "STAGE 11 - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
+            : ( g.playCutCLaunch ? "CUT C — FABLESCRIPT OCCUPANCY PARITY"
+            : "WORLDGEN PLAYTEST — STAGE 0  [R] residency overlay" );
+        if(g.certWorldgenLaunchContract)
+        {
+            FILE* f=nullptr;
+            bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
+            bool const latest=g.stage0PlayView==Stage0PlayView::FaultDisplacement;
+            bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
+            bool const selection=g.stage0BrowserSelection==
+                BrowserIndexForView(Stage0PlayView::FaultDisplacement)
+                &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
+                    g.stage0BrowserSelection);
+            int const savedSelection=g.stage0BrowserSelection;
+            int const savedCategory=g.stage0BrowserCategory;
+            MoveCertificationBrowserCategory(1);
+            bool navigation=g.stage0BrowserCategory==2&&g.stage0BrowserSelection==9;
+            MoveCertificationBrowserCategory(1);
+            navigation=navigation&&g.stage0BrowserCategory==0&&g.stage0BrowserSelection==0;
+            MoveCertificationBrowserStage(1);
+            navigation=navigation&&g.stage0BrowserSelection==1;
+            MoveCertificationBrowserCategory(1);
+            navigation=navigation&&g.stage0BrowserCategory==1&&g.stage0BrowserSelection==2;
+            MoveCertificationBrowserStage(1);
+            navigation=navigation&&g.stage0BrowserSelection==3;
+            g.stage0BrowserSelection=savedSelection;
+            g.stage0BrowserCategory=savedCategory;
+            bool stageSelection=true;
+            for(int index=2;index<=8;++index)
+            {
+                stageSelection=SelectCertificationBrowserEntry(index)&&stageSelection;
+                stageSelection=std::strcmp(CertificationRuntimeStatus(
+                    s_certificationBrowser[index]),"CURRENT")==0&&stageSelection;
+            }
+            bool const stageAuthorities=g.causalGeologyCertified
+                &&g.causalExposureCertified&&g.causalVisibleCertified
+                &&g.causalErosionCertified&&g.causalIntrusionCertified
+                &&g.causalMineralizationCertified&&g.causalFaultCertified;
+            bool const restored=SelectCertificationBrowserEntry(savedSelection)
+                &&g.stage0PlayView==Stage0PlayView::FaultDisplacement;
+            bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
+            bool const passed=opened&&latest&&closed&&selection&&navigation&&worldSize
+                &&stageSelection&&stageAuthorities&&restored;
+            if(opened)
+            {
+                std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
+                    "menu_open=%d\ntool_drawer_open=%d\n"
+                    "runtime=%s\nlatest_certified_stage=11\n"
+                    "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
+                    "browser_selection=%d\nbrowser_category=%s\n"
+                    "category_stage_navigation=%s\n"
+                    "stage_5_11_selection=%s\n"
+                    "stage_5_11_authorities=%s\n"
+                    "fault_authority_certified=%d\n",
+                    passed?"PASS":"FAIL",g.stage0StageMenuOpen?1:0,
+                    g.stage0ToolDrawerOpen?1:0,Stage0PlayViewName(g.stage0PlayView),
+                    g.stage0LiveRadiusM,g.stage0LiveRadiusM*2,g.stage0FarExtentM,
+                    g.stage0BrowserSelection,
+                    CertificationBrowserCategoryName(g.stage0BrowserCategory),
+                    navigation?"PASS":"FAIL",
+                    stageSelection?"PASS":"FAIL",
+                    stageAuthorities?"PASS":"FAIL",
+                    g.causalFaultCertified?1:0);
+                std::fclose(f);
+            }
+            PostQuitMessage(passed?0:1);
+        }
+    }
+
+    void WorldgenPlayAfterRender()
+    {
+        if ( !g.playWorldgenInitialized ) { return; }
+
+        LARGE_INTEGER qpc{}, qpf{};
+        QueryPerformanceCounter( &qpc );
+        QueryPerformanceFrequency( &qpf );
+        double frameMs = 0.0;
+        if ( g.playWorldgenLastQpc != 0 && qpf.QuadPart > 0 )
+        {
+            frameMs = 1000.0 * (double)( qpc.QuadPart - g.playWorldgenLastQpc )
+                / (double)qpf.QuadPart;
+        }
+        g.playWorldgenLastQpc = qpc.QuadPart;
+        if ( frameMs <= 0.0 ) { return; }
+
+        g.playWorldgenFrameMs = frameMs;
+        g.stage0FramePacingWaitMs = (std::max)( 0.0, frameMs - g.stage0FrameCpuMs );
+        g.playWorldgenWorstMs = (std::max)( g.playWorldgenWorstMs, frameMs );
+        g.playWorldgenRecentFrameMs.push_back( frameMs );
+        if ( g.playWorldgenRecentFrameMs.size() > 300 )
+        {
+            g.playWorldgenRecentFrameMs.erase( g.playWorldgenRecentFrameMs.begin() );
+        }
+
+        g.playWorldgenLastNewCells = g.perfGeoCellsCreated - g.playWorldgenPrevCells;
+        g.playWorldgenLastHfRebuilds = g.perfHfRebuilds - g.playWorldgenPrevHf;
+        g.playWorldgenLastHfLocalUpdates =
+            g.perfHfLocalUpdates - g.playWorldgenPrevHfLocal;
+        g.playWorldgenLastGeoMs = g.perfGeoGenMsTotal - g.playWorldgenPrevGeoTotal;
+        g.playWorldgenLastHfMs = (double)g.perfHfRemeshMsTotal - g.playWorldgenPrevHfTotal;
+        g.playWorldgenWorstGeoMs = (std::max)( g.playWorldgenWorstGeoMs, g.playWorldgenLastGeoMs );
+        g.playWorldgenWorstHfMs = (std::max)( g.playWorldgenWorstHfMs, g.playWorldgenLastHfMs );
+
+        ULONGLONG const nowMs = GetTickCount64();
+        ULONGLONG const rateElapsedMs = nowMs - g.playWorldgenRateMs;
+        if ( rateElapsedMs >= 1000 )
+        {
+            double const seconds = (double)rateElapsedMs / 1000.0;
+            g.playWorldgenNewCellsPerS =
+                (double)( g.perfGeoCellsCreated - g.playWorldgenRateCells ) / seconds;
+            g.playWorldgenRebuildsPerS =
+                (double)( g.perfHfLocalUpdates - g.playWorldgenRateHfLocal ) / seconds;
+            g.playWorldgenRateCells = g.perfGeoCellsCreated;
+            g.playWorldgenRateHf = g.perfHfRebuilds;
+            g.playWorldgenRateHfLocal = g.perfHfLocalUpdates;
+            g.playWorldgenRateMs = nowMs;
+            g.playWorldgenWorkingSet = CurrentWorkingSetBytes();
+
+            std::vector<double> sorted = g.playWorldgenRecentFrameMs;
+            std::sort( sorted.begin(), sorted.end() );
+            g.playWorldgenP99Ms = PercentileSorted( sorted, 0.99 );
+        }
+
+        double const dx = (double)g.feetX - (double)g.playWorldgenPrevX;
+        double const dy = (double)g.feetY - (double)g.playWorldgenPrevY;
+        double const speedMps = frameMs > 0.0
+            ? std::sqrt( dx * dx + dy * dy ) / ( frameMs / 1000.0 ) : 0.0;
+        int const pending = (int)g.columnQueue.size()
+            + ( g.pending != PendingKind::None ? 1 : 0 ) + ( g.terrainDirty ? 1 : 0 );
+        int const d2 = g.perfD2Rebuilds - g.playWorldgenStartD2;
+        int const occ = g.perfOccRebuilds - g.playWorldgenStartOcc;
+        int const edits = g.perfEditedRegionChanges - g.playWorldgenStartEdits;
+        int const support = g.perfSupportBelowCount - g.playWorldgenStartSupport;
+        int const mutations = g.perfOccupancyMutations - g.playWorldgenStartMutations;
+
+        if ( g.playWorldgenTrace )
+        {
+            std::fprintf( g.playWorldgenTrace,
+                "%d,%.3f,%s,%.3f,%.3f,%.3f,%.6f,%.3f,%.6f,"
+                "%d,%d,%.3f,%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%llu,"
+                "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%zu,%.6f,%.6f,%.6f,%.6f,%.6f,"
+                "%s,%.6f,%d,%d,"
+                "%d,%d,%d,%d,%d,%d,%d\n",
+                g.playWorldgenFrame,
+                (double)( nowMs - g.playWorldgenStartMs ) / 1000.0,
+                g.walkMode ? "walk" : "free_cam",
+                g.feetX, g.feetY, speedMps, frameMs,
+                frameMs > 0.0 ? 1000.0 / frameMs : 0.0, g.playWorldgenP99Ms,
+                g.playWorldgenLastNewCells, (int)g.cells.size(),
+                g.playWorldgenNewCellsPerS, g.playWorldgenEvicted, pending,
+                g.perfHfLocalUpdates, g.perfHfRebuilds,
+                g.playWorldgenLastHfLocalUpdates,
+                g.playWorldgenLastHfMs, g.playWorldgenLastGeoMs,
+                g.playWorldgenWorstGeoMs, g.playWorldgenWorstHfMs,
+                (unsigned long long)g.playWorldgenWorkingSet,
+                g.stage0FrameCpuMs, g.stage0FrameSimulationMs,
+                g.stage0FrameResidencyMs, g.stage0FrameGenerationMs,
+                g.stage0FrameHfBuildMs, g.stage0FrameHfUploadMs,
+                g.stage0FrameHfRetireMs,g.stage8RetiredDisplayLists.size(),
+                g.stage0FrameDrawSubmitMs,g.stage0FrameGpuFinishMs,
+                g.stage0FramePresentWaitMs,
+                g.stage0FramePacingWaitMs, g.stage0FrameGpuMs,
+                Stage0PlayViewName( g.stage0PlayView ), g.stage0FrameCalibrationDrawMs,
+                g.stage0RulerTriangles, g.stage0PaletteTriangles,
+                d2, occ, edits, support, mutations,
+                (int)H2H::State().bodies.size(), (int)g.fractureEvents.size() );
+        }
+
+        if ( g.playWorldgenFrame % 10 == 0 )
+        {
+            g.playWorldgenRecentPath.push_back( { g.feetX, g.feetY } );
+            if ( g.playWorldgenRecentPath.size() > 128 )
+            {
+                g.playWorldgenRecentPath.erase( g.playWorldgenRecentPath.begin() );
+            }
+        }
+
+        g.playWorldgenPrevGeoTotal = g.perfGeoGenMsTotal;
+        g.playWorldgenPrevHfTotal = g.perfHfRemeshMsTotal;
+        g.playWorldgenPrevCells = g.perfGeoCellsCreated;
+        g.playWorldgenPrevHf = g.perfHfRebuilds;
+        g.playWorldgenPrevHfLocal = g.perfHfLocalUpdates;
+        g.playWorldgenPrevX = g.feetX;
+        g.playWorldgenPrevY = g.feetY;
+        ++g.playWorldgenFrame;
+    }
+
+    void DrawWorldgenPlayHud( int w, int h )
+    {
+        glDisable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_STENCIL_TEST );
+        glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        glMatrixMode( GL_PROJECTION );
+        glLoadIdentity();
+        glOrtho( 0, w, 0, h, -1, 1 );
+        glMatrixMode( GL_MODELVIEW );
+        glLoadIdentity();
+
+        float const panelX = 12.f;
+        float const panelTop = (float)h - 12.f;
+        float const panelW = 420.f;
+        bool const rulerShown = Stage0ViewShowsRuler( g.stage0PlayView );
+        bool const paletteShown = Stage0ViewShowsPalette( g.stage0PlayView );
+        bool const causalShown = IsCausalPlayableView( g.stage0PlayView );
+        float const panelH = paletteShown ? 450.f : ( rulerShown ? 342.f : ( causalShown ? 378.f : 324.f ) );
+        glColor4f( 0.03f, 0.04f, 0.05f, 0.82f );
+        glBegin( GL_QUADS );
+        glVertex2f( panelX, panelTop );
+        glVertex2f( panelX + panelW, panelTop );
+        glVertex2f( panelX + panelW, panelTop - panelH );
+        glVertex2f( panelX, panelTop - panelH );
+        glEnd();
+
+        int const pending = (int)g.columnQueue.size()
+            + ( g.pending != PendingKind::None ? 1 : 0 ) + ( g.terrainDirty ? 1 : 0 );
+        int const d2 = g.perfD2Rebuilds - g.playWorldgenStartD2;
+        int const occ = g.perfOccRebuilds - g.playWorldgenStartOcc;
+        int const edits = g.perfEditedRegionChanges - g.playWorldgenStartEdits;
+        int const support = g.perfSupportBelowCount - g.playWorldgenStartSupport;
+        int const mutations = g.perfOccupancyMutations - g.playWorldgenStartMutations;
+        int const bodies = (int)H2H::State().bodies.size();
+        int const fractures = (int)g.fractureEvents.size();
+        bool const isolated = d2 == 0 && occ == 0 && edits == 0 && support == 0
+            && mutations == 0 && bodies == 0 && fractures == 0;
+
+        char line[256];
+        float y = panelTop - 20.f;
+        auto row = [&]( char const* text, float r = 0.92f, float gc = 0.95f, float b = 0.98f )
+        {
+            glColor3f( r, gc, b );
+            DrawHudText( panelX + 10.f, y, text );
+            y -= 18.f;
+        };
+        row( "WORLDGEN PLAYTEST — CERTIFIED RUNTIMES", 0.95f, 0.88f, 0.45f );
+        std::snprintf( line, sizeof( line ), "fps=%.1f  frame_ms=%.2f  rolling_p99_ms=%.2f",
+            g.playWorldgenFrameMs > 0.0 ? 1000.0 / g.playWorldgenFrameMs : 0.0,
+            g.playWorldgenFrameMs, g.playWorldgenP99Ms );
+        row( line );
+        std::snprintf( line, sizeof( line ), "resident=%d  new_cells/s=%.1f  evicted=%d  pending=%d",
+            (int)g.cells.size(), g.playWorldgenNewCellsPerS, g.playWorldgenEvicted, pending );
+        row( line );
+        std::snprintf( line, sizeof( line ),
+            "HF local_updates=%d  full_rebuilds=%d  local/s=%.1f",
+            g.perfHfLocalUpdates, g.perfHfRebuilds, g.playWorldgenRebuildsPerS );
+        row( line );
+        std::snprintf( line, sizeof( line ), "HF mesh_ms=%.2f  worst_ms=%.2f",
+            g.playWorldgenLastHfMs, g.playWorldgenWorstHfMs );
+        row( line );
+        std::snprintf(line,sizeof(line),"HF retire_ms=%.3f  retire_queue=%zu",
+            g.stage0FrameHfRetireMs,g.stage8RetiredDisplayLists.size());
+        row(line);
+        std::snprintf( line, sizeof( line ), "generation req_ms=%.3f  worst_ms=%.3f",
+            g.playWorldgenLastGeoMs, g.playWorldgenWorstGeoMs );
+        row( line );
+        std::snprintf( line, sizeof( line ),
+            "CPU=%.2f  sim=%.2f  residency=%.2f  gen=%.2f",
+            g.stage0FrameCpuMs, g.stage0FrameSimulationMs,
+            g.stage0FrameResidencyMs, g.stage0FrameGenerationMs );
+        row( line );
+        std::snprintf( line, sizeof( line ),
+            "draw=%.2f  finish=%.2f  present=%.2f  pacing=%.2f  swap=%s",
+            g.stage0FrameDrawSubmitMs,g.stage0FrameGpuFinishMs,
+            g.stage0FramePresentWaitMs,
+            g.stage0FramePacingWaitMs,
+            g.stage0SwapInterval == 0 ? "uncapped" : "driver" );
+        row( line );
+        std::snprintf( line, sizeof( line ), "memory=%.1f MB  radius=%dm  diameter=%dm",
+            (double)g.playWorldgenWorkingSet / ( 1024.0 * 1024.0 ),
+            g.stage0LiveRadiusM,2*g.stage0LiveRadiusM );
+        row( line );
+        if ( IsCausalGeologyView( g.stage0PlayView ) )
+        { row( "fixture=causal_geology_kernel  authority=CERTIFIED  surface=fixed_datum" ); }
+        else if ( IsCausalExposureView( g.stage0PlayView ) )
+        { row( "fixture=geologic_exposure  authority=CERTIFIED  surface=present_erosion" ); }
+        else if ( IsVisibleExposureView( g.stage0PlayView ) )
+        { row( "fixture=visible_geologic_exposure  authority=CERTIFIED  reconstruction=dual_0.5m" ); }
+        else if ( IsDifferentialErosionView( g.stage0PlayView ) )
+        { row( "fixture=differential_erosion  authority=CERTIFIED  history=compiled" ); }
+        else if ( IsGraniteIntrusionView( g.stage0PlayView ) )
+        { row( "fixture=granite_intrusion  authority=CERTIFIED  younger_body=enabled" ); }
+        else if ( IsFaultDisplacementView( g.stage0PlayView ) )
+        { row( "fixture=fault_displacement  authority=CERTIFIED  Stage10=fallback" ); }
+        else if ( IsCutCOccupancyView( g.stage0PlayView ) )
+        { row( "fixture=cut_c_occupancy  authority=FABLESCRIPT  voxel=0.125m  grade=FORBIDDEN" ); }
+        else if ( IsContactMineralizationView( g.stage0PlayView ) )
+        { row( "fixture=contact_mineralization  authority=CERTIFIED  event=enabled" ); }
+        else
+        { row( "fixture=flat_dirt  active=64m  cache=68m  virgin_eviction=ON" ); }
+        std::snprintf( line, sizeof( line ), "stage=%s  calibration_draw=%.3fms",
+            Stage0PlayViewName( g.stage0PlayView ), g.stage0FrameCalibrationDrawMs );
+        row( line, 0.70f, 0.90f, 1.0f );
+        if ( IsCausalGeologyView( g.stage0PlayView ) && g.causalGeologyRuntime )
+        {
+            CausalWorldGeology::GeoSample const sample =
+                g.causalGeologyRuntime->Query( g.feetX, g.feetY, -0.001 );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  revision=%u",
+                    CausalWorldGeology::Hex64( sample.featureId ).c_str(), sample.material.c_str(),
+                    sample.descriptorRevision );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolBedding )
+            {
+                std::snprintf( line, sizeof( line ), "bedding_n=(%.3f,%.3f,%.3f)  slice_z=0.000m",
+                    sample.structuralNormal[0], sample.structuralNormal[1], sample.structuralNormal[2] );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+        }
+        else if ( IsCausalExposureView( g.stage0PlayView ) && g.causalExposureRuntime )
+        {
+            CausalWorldExposure::ExposureSample const sample =
+                g.causalExposureRuntime->Query( CausalWorldExposure::kPresentSurface,
+                    g.feetX, g.feetY );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  surface_z=%.3fm",
+                    CausalWorldGeology::Hex64( sample.geology.featureId ).c_str(),
+                    sample.geology.material.c_str(), sample.surfaceZ );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolBedding )
+            {
+                std::snprintf( line, sizeof( line ), "bedding_n=(%.3f,%.3f,%.3f)",
+                    sample.geology.structuralNormal[0], sample.geology.structuralNormal[1],
+                    sample.geology.structuralNormal[2] );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolFormationContacts )
+            {
+                std::snprintf( line, sizeof( line ), "nearest_contact=%.3fm",
+                    sample.nearestContactDistanceM );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+        }
+        else if ( IsVisibleExposureView( g.stage0PlayView ) && g.causalVisibleRuntime )
+        {
+            CausalWorldExposure::ExposureSample const sample =
+                g.causalVisibleRuntime->AuthorityAt( g.feetX, g.feetY );
+            double const reconstructedZ =
+                g.causalVisibleRuntime->ReconstructedZ( g.feetX, g.feetY );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  visible_z=%.3fm",
+                    CausalWorldGeology::Hex64( sample.geology.featureId ).c_str(),
+                    sample.geology.material.c_str(), reconstructedZ );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            std::snprintf( line, sizeof( line ),
+                "dual_blocks=%d  triangles=%d  last_build=%.3fms",
+                (int)g.stage7TerrainBlocks.size(), g.stage7TerrainTriangles,
+                g.stage7LastBuildMs );
+            row( line, 0.82f, 0.92f, 0.72f );
+            if ( g.stage0ToolFormationContacts )
+            {
+                std::snprintf( line, sizeof( line ), "nearest_contact=%.3fm",
+                    sample.nearestContactDistanceM );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+        }
+        else if ( IsDifferentialErosionView( g.stage0PlayView ) && g.causalErosionRuntime )
+        {
+            auto const differential = g.causalErosionRuntime->Query(
+                CausalDifferentialErosion::Control::DifferentialResistance,
+                g.feetX, g.feetY );
+            auto const equal = g.causalErosionRuntime->Query(
+                CausalDifferentialErosion::Control::EqualResistance,
+                g.feetX, g.feetY );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  relief_delta=%.3fm",
+                    CausalWorldGeology::Hex64( differential.geology.featureId ).c_str(),
+                    differential.geology.material.c_str(), differential.surfaceZ - equal.surfaceZ );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            std::snprintf( line, sizeof( line ),
+                "erosion_work=%.3f  surface_z=%.3f  dual_blocks=%d  triangles=%d",
+                differential.erosionWork, differential.surfaceZ,
+                (int)g.stage8TerrainBlocks.size(), g.stage8TerrainTriangles );
+            row( line, 0.82f, 0.92f, 0.72f );
+        }
+        else if ( IsFaultDisplacementView( g.stage0PlayView )
+          && g.causalFaultRuntime )
+        {
+            double const z=g.causalFaultRuntime->ReconstructedZ(g.feetX,g.feetY);
+            auto const geology=g.causalFaultRuntime->Query(true,g.feetX,g.feetY,z-0.001);
+            double const side=g.causalFaultRuntime->SignedDistance(g.feetX,g.feetY,z-0.001);
+            bool shifted=false;auto const source=g.causalFaultRuntime->SourcePoint(
+                true,g.feetX,g.feetY,z-0.001,&shifted);
+            std::snprintf(line,sizeof(line),"feature=%s material=%s fault_side=%s",
+                CausalWorldGeology::Hex64(geology.featureId).c_str(),geology.material.c_str(),
+                side>=0.0?"hanging":"footwall");
+            row(line,0.82f,0.92f,0.72f);
+            std::snprintf(line,sizeof(line),"fault=%s shifted=%d source=(%.2f,%.2f,%.2f)",
+                CausalWorldGeology::Hex64(g.causalFaultRuntime->GetProgram().faultEventId).c_str(),
+                shifted?1:0,source[0],source[1],source[2]);
+            row(line,0.82f,0.92f,0.72f);
+        }
+        else if ( IsCutCOccupancyView( g.stage0PlayView )
+          && g.cutCOccupancyRuntime )
+        {
+            float surfaceZ=g.feetZ;SampleGroundZBase(g.feetX,g.feetY,surfaceZ);
+            double const z=surfaceZ;
+            auto const geology = CausalGeologyAt( g.stage0PlayView,
+                g.feetX, g.feetY, z - 0.001 );
+            std::snprintf( line, sizeof( line ),
+                "%s: feature=%s material=%s surface_z=%.3fm columns=%zu",
+                g.cutCOccupancyRuntime->Owns(g.feetX,g.feetY)?"occupancy":"stage10_control",
+                CausalWorldGeology::Hex64( geology.featureId ).c_str(),
+                geology.material.c_str(), z, g.cutCOccupancyRuntime->ColumnCount() );
+            row( line, 0.82f, 0.92f, 0.72f );
+            std::snprintf( line, sizeof( line ),
+                "ingest=%.3fms  payload=%s  render=collision=xray",
+                g.cutCOccupancyRuntime->LoadMs(),
+                CausalWorldGeology::Hex64( g.cutCOccupancyRuntime->PayloadDigest() ).c_str() );
+            row( line, 0.82f, 0.92f, 0.72f );
+        }
+        else if ( IsContactMineralizationView( g.stage0PlayView )
+          && g.causalMineralizationRuntime )
+        {
+            double const z = g.causalMineralizationRuntime->ReconstructedZ( g.feetX, g.feetY );
+            auto const geology = g.causalMineralizationRuntime->Query(
+                true, g.feetX, g.feetY, z - 0.001 );
+            auto const host = g.causalMineralizationRuntime->Intrusion().Query(
+                false, g.feetX, g.feetY, z - 0.001 );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  host=%s",
+                    CausalWorldGeology::Hex64( geology.featureId ).c_str(),
+                    geology.material.c_str(), host.material.c_str() );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolFormationContacts )
+            {
+                std::snprintf( line, sizeof( line ), "granite_contact=%.3fm  permeability=%.3f",
+                    g.causalMineralizationRuntime->ContactDistanceM( g.feetX, g.feetY, z - 0.001 ),
+                    g.causalMineralizationRuntime->Permeability(
+                        host, g.feetX, g.feetY, z - 0.001 ) );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolProvenance && geology.material == "quartz" )
+            {
+                row( "ancestry=granite_intrusion -> mineralizing_event -> contact_quartz",
+                    0.82f, 0.92f, 0.72f );
+            }
+        }
+        else if ( IsGraniteIntrusionView( g.stage0PlayView ) && g.causalIntrusionRuntime )
+        {
+            double const z = g.causalIntrusionRuntime->ReconstructedZ( g.feetX, g.feetY );
+            auto const geology = g.causalIntrusionRuntime->Query(
+                true, g.feetX, g.feetY, z - 0.001 );
+            if ( g.stage0ToolGeologyIdentity )
+            {
+                std::snprintf( line, sizeof( line ), "feature=%s  material=%s  surface_z=%.3fm",
+                    CausalWorldGeology::Hex64( geology.featureId ).c_str(),
+                    geology.material.c_str(), z );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+            if ( g.stage0ToolProvenance )
+            {
+                std::snprintf( line, sizeof( line ),
+                    "chronology=%s  body_field=%.3f  intrusion=%s",
+                    geology.material == "granite" ? "40>50" : "host<40",
+                    g.causalIntrusionRuntime->BodyField( g.feetX, g.feetY, z - 0.001 ),
+                    geology.material == "granite" ? "INSIDE" : "OUTSIDE" );
+                row( line, 0.82f, 0.92f, 0.72f );
+            }
+        }
+        if ( g.stage0ToolMutationHud )
+        {
+            std::snprintf( line, sizeof( line ),
+                "isolation=%s  d2=%d occ=%d edit=%d support=%d mut=%d body=%d frac=%d",
+                isolated ? "CLEAN" : "CONTAMINATED", d2, occ, edits, support, mutations,
+                bodies, fractures );
+            row( line, isolated ? 0.55f : 1.0f, isolated ? 0.95f : 0.35f, 0.45f );
+        }
+        if ( !g.walkMode )
+        {
+            std::snprintf( line, sizeof( line ),
+                "FREE FLY: speed=%.0fm/s  tier=%d  sprint_chain=%.1fm  next=%.1fm",
+                g.flyCurrentSpeedMps, g.flySprintTier, g.flySprintDistanceM,
+                kFlySprintTierDistanceM - std::fmod(
+                    g.flySprintDistanceM, kFlySprintTierDistanceM ) );
+            row( line, 1.0f, 0.84f, 0.35f );
+        }
+        else
+        { row( "WASD move  C toggle crouch  Shift+C power slide  E pick/drop  LMB strike" ); }
+        if ( g.stage0ToolGeologyCutaway && IsCausalPlayableView( g.stage0PlayView ) )
+        {
+            static char const* const mode[3]={"MATERIAL","IDENTITY","HISTORY"};
+            std::snprintf(line,sizeof(line),
+                "GEOLOGY X-RAY: contact=%s  width=%.1fft  depth=%.1fft  mode=%s",
+                g.aimHit?"valid":"none",g.stage0GeologyInspectorWidthM/0.3048f,
+                g.stage0GeologyInspectorDepthM/0.3048f,mode[g.stage0GeologyInspectorMode]);
+            row(line,0.95f,0.78f,0.42f);
+            Stage0InspectorFrame inspector{};
+            if(Stage0GeologyInspectorFrame(inspector))
+            {
+                float tx,ty,tz;Stage0InspectorPoint(inspector,g.stage0GeologyInspectorDepthM,
+                    0.f,0.f,tx,ty,tz);
+                auto const terminal=CausalGeologyAt(g.stage0PlayView,tx,ty,tz);
+                if(terminal.found)
+                {
+                    uint32_t age=terminal.chronology.empty()?0u:terminal.chronology.back();
+                    std::snprintf(line,sizeof(line),
+                        "terminal: material=%s feature=%016llx formation=%s chronology=%u",
+                        terminal.material.c_str(),(unsigned long long)terminal.featureId,
+                        terminal.formationId.c_str(),age);
+                    row(line,0.82f,0.92f,0.62f);
+                    std::snprintf(line,sizeof(line),"structure=(%.3f,%.3f,%.3f)  wheel=depth  Shift+wheel=width  V=mode  F9=snapshot",
+                        terminal.structuralNormal[0],terminal.structuralNormal[1],terminal.structuralNormal[2]);
+                    row(line,0.82f,0.92f,0.62f);
+                }
+            }
+        }
+        if ( rulerShown )
+        {
+            std::snprintf( line, sizeof( line ),
+                "ruler: 0-2000m  tris=%d verts=%d fit_error=%.6fm build=%.3fms",
+                g.stage0RulerTriangles, g.stage0RulerVertices,
+                g.stage0RulerMaxSurfaceErrorM, g.stage0RulerBuildMs );
+            row( line, 1.0f, 0.96f, 0.20f );
+        }
+        if ( paletteShown )
+        {
+            std::snprintf( line, sizeof( line ),
+                "palette: tris=%d verts=%d fit_error=%.6fm build=%.3fms bodies=0 held=%s",
+                g.stage0PaletteTriangles, g.stage0PaletteVertices,
+                g.stage0PaletteMaxSurfaceErrorM, g.stage0PaletteBuildMs,
+                Stage0ToolName( g.stage0HeldTool ) );
+            row( line, 0.76f, 0.92f, 0.72f );
+            for ( Stage0SwatchStat const& stat : g.stage0Swatches )
+            {
+                std::snprintf( line, sizeof( line ), "%s: tri=%d vert=%d meso=%d | %s",
+                    stat.name, stat.triangles, stat.vertices, stat.mesoDetails,
+                    stat.representation );
+                row( line, 0.82f, 0.84f, 0.76f );
+            }
+            row( "character: 1.8288m / 6ft articulated rig — 19 named pivots + idle",
+                0.88f, 0.78f, 0.64f );
+        }
+        if ( g.stage0ToolProvenance )
+        { row( "trace: Docs/provenance_worldgen_playtest_trace.csv" ); }
+
+        if ( paletteShown || g.stage0HeldTool != Stage0ToolKind::None )
+        {
+            float const cx = (float)w * 0.5f;
+            float const cy = (float)h * 0.5f;
+            glColor3f( 0.96f, 0.90f, 0.58f );
+            glBegin( GL_LINES );
+            glVertex2f( cx - 6.f, cy ); glVertex2f( cx + 6.f, cy );
+            glVertex2f( cx, cy - 6.f ); glVertex2f( cx, cy + 6.f );
+            glEnd();
+            if ( g.stage0HeldTool != Stage0ToolKind::None )
+            {
+                char prompt[160];
+                std::snprintf( prompt, sizeof(prompt), "[LMB] STRIKE   [E] DROP %s   [H] %s HAND",
+                    Stage0ToolName(g.stage0HeldTool),g.stage0LeftHanded?"LEFT":"RIGHT" );
+                DrawHudText( cx - 174.f, cy - 28.f, prompt );
+                if ( g.stage0StrikeStartMs != 0 )
+                {
+                    char contact[160];
+                    char const* response = g.stage0StrikeResponse == 1 ? "REBOUND"
+                        : ( g.stage0StrikeResponse == 2 ? "LODGED"
+                            : ( g.stage0StrikeResponse == 3 ? "BITE" : "SWING" ) );
+                    std::snprintf( contact, sizeof(contact), "%s — %s", response, g.stage0StrikeMaterial );
+                    DrawHudText( cx - 72.f, cy - 48.f, contact );
+                }
+            }
+            else
+            {
+                int const aimed = Stage0AimedToolIndex(3.5f);
+                if ( aimed >= 0 )
+                {
+                    char prompt[128];
+                    std::snprintf( prompt, sizeof(prompt), "[E] PICK UP %s", Stage0ToolName(g.stage0Tools[aimed].kind) );
+                    DrawHudText( cx - 78.f, cy - 28.f, prompt );
+                }
+            }
+        }
+
+        if ( g.playWorldgenResidencyOverlay )
+        {
+            float const cx = (float)w - 126.f;
+            float const cy = (float)h - 126.f;
+            float const radius = 96.f;
+            glColor4f( 0.03f, 0.04f, 0.05f, 0.82f );
+            glBegin( GL_QUADS );
+            glVertex2f( cx - 112.f, cy + 112.f ); glVertex2f( cx + 112.f, cy + 112.f );
+            glVertex2f( cx + 112.f, cy - 132.f ); glVertex2f( cx - 112.f, cy - 132.f );
+            glEnd();
+            glColor3f( 0.30f, 0.82f, 0.48f );
+            glBegin( GL_LINE_LOOP );
+            for ( int i = 0; i < 64; ++i )
+            {
+                float const a = (float)i / 64.f * 6.2831853f;
+                glVertex2f( cx + std::cos( a ) * radius, cy + std::sin( a ) * radius );
+            }
+            glEnd();
+            glColor3f( 0.35f, 0.48f, 0.62f );
+            glBegin( GL_LINE_LOOP );
+            for ( int i = 0; i < 64; ++i )
+            {
+                float const a = (float)i / 64.f * 6.2831853f;
+                float const cacheR = radius * ( 68.f / 64.f );
+                glVertex2f( cx + std::cos( a ) * cacheR, cy + std::sin( a ) * cacheR );
+            }
+            glEnd();
+            glPointSize( 3.f );
+            glBegin( GL_POINTS );
+            for ( auto const& p : g.playWorldgenRecentPath )
+            {
+                float const dx = ( p.first - g.feetX ) * ( radius / 64.f );
+                float const dy = ( p.second - g.feetY ) * ( radius / 64.f );
+                if ( dx * dx + dy * dy <= radius * radius )
+                {
+                    glVertex2f( cx + dx, cy + dy );
+                }
+            }
+            glColor3f( 1.f, 0.82f, 0.25f );
+            glVertex2f( cx, cy );
+            glEnd();
+            glColor3f( 0.92f, 0.95f, 0.98f );
+            DrawHudText( cx - 104.f, cy - 116.f,
+                "green=active  blue=cache edge  yellow=player" );
+        }
+    }
+
+    void DrawWorldgenJournalPage( int w, int h, bool diagnostics )
+    {
+        glDisable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        glMatrixMode( GL_PROJECTION ); glLoadIdentity();
+        glOrtho( 0, w, 0, h, -1, 1 );
+        glMatrixMode( GL_MODELVIEW ); glLoadIdentity();
+
+        float const W = (float)w, H = (float)h;
+        FillRect( 0, 0, W, H, 0.02f, 0.02f, 0.02f, 0.45f );
+        float const x0 = 28.f, y0 = 70.f, x1 = W - 28.f, y1 = H - 36.f;
+        FillRect( x0, y0, x1, y1, 0.22f, 0.12f, 0.07f, 0.97f );
+        StrokeRect( x0, y0, x1, y1, 0.10f, 0.05f, 0.02f );
+        float const px0 = x0 + 16.f, py0 = y0 + 42.f, px1 = x1 - 16.f, py1 = y1 - 58.f;
+        FillRect( px0, py0, px1, py1, 0.82f, 0.74f, 0.55f );
+        StrokeRect( px0, py0, px1, py1, 0.36f, 0.25f, 0.12f );
+
+        UiRect const runtimeTab = { px0 + 14.f, py1 + 12.f, px0 + 205.f, y1 - 12.f };
+        UiRect const diagnosticTab = { px0 + 215.f, py1 + 12.f, px0 + 420.f, y1 - 12.f };
+        FillRect( runtimeTab.x0, runtimeTab.y0, runtimeTab.x1, runtimeTab.y1,
+            diagnostics ? 0.36f : 0.58f, diagnostics ? 0.24f : 0.40f, 0.15f );
+        FillRect( diagnosticTab.x0, diagnosticTab.y0, diagnosticTab.x1, diagnosticTab.y1,
+            diagnostics ? 0.58f : 0.36f, diagnostics ? 0.40f : 0.24f, 0.15f );
+        glColor3f( 0.97f, 0.91f, 0.72f );
+        DrawHudText( runtimeTab.x0 + 18.f, runtimeTab.y0 + 10.f, "CERTIFIED RUNTIMES" );
+        DrawHudText( diagnosticTab.x0 + 22.f, diagnosticTab.y0 + 10.f, "DIAGNOSTICS" );
+        glColor3f( 0.95f, 0.86f, 0.35f );
+        DrawHudText( px1 - 78.f, y1 - 30.f, "[X] CLOSE" );
+
+        char line[512];
+        if ( !diagnostics )
+        {
+            glColor3f( 0.20f, 0.12f, 0.06f );
+            DrawHudText( px0 + 18.f, py1 - 26.f,
+                "WORLDGEN CERTIFICATION JOURNAL - category then certified stage" );
+            float const rowTop = py1 - 52.f;
+            float const detailsH=66.f;
+            float const categoryW=(std::min)(310.f,(px1-px0)*0.28f);
+            float const categoryX0=px0+18.f,categoryX1=categoryX0+categoryW;
+            float const stageX0=categoryX1+18.f,stageX1=px1-18.f;
+            float const categoryRowH=54.f;
+            for(int category=0;category<kCertificationBrowserCategoryCount;++category)
+            {
+                float const ry1=rowTop-(float)category*categoryRowH;
+                float const ry0=ry1-categoryRowH+7.f;
+                bool const selectedCategory=category==g.stage0BrowserCategory;
+                FillRect(categoryX0,ry0,categoryX1,ry1,
+                    selectedCategory?0.48f:0.66f,selectedCategory?0.34f:0.56f,
+                    selectedCategory?0.17f:0.39f);
+                StrokeRect(categoryX0,ry0,categoryX1,ry1,0.35f,0.24f,0.12f);
+                glColor3f(0.20f,0.12f,0.06f);
+                char categoryLine[160];
+                std::snprintf(categoryLine,sizeof(categoryLine),"%c %s",
+                    selectedCategory?'>':' ',CertificationBrowserCategoryName(category));
+                DrawHudText(categoryX0+14.f,ry0+17.f,categoryLine);
+            }
+
+            std::vector<int> const categoryEntries=
+                CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
+            int selectedPosition=0;
+            auto const selectedIt=std::find(categoryEntries.begin(),categoryEntries.end(),
+                g.stage0BrowserSelection);
+            if(selectedIt!=categoryEntries.end())
+            {selectedPosition=(int)(selectedIt-categoryEntries.begin());}
+            constexpr float stageRowH=46.f;
+            int const visibleRows=(std::max)(1,(int)((rowTop-py0-detailsH)/stageRowH));
+            int const maxStart=(std::max)(0,(int)categoryEntries.size()-visibleRows);
+            int const firstVisible=std::clamp(selectedPosition-visibleRows/2,0,maxStart);
+            int const lastVisible=(std::min)((int)categoryEntries.size(),firstVisible+visibleRows);
+            for(int position=firstVisible;position<lastVisible;++position)
+            {
+                int const i=categoryEntries[position];
+                float const ry1=rowTop-(float)(position-firstVisible)*stageRowH;
+                float const ry0=ry1-stageRowH+6.f;
+                CertificationBrowserEntry const& entry = s_certificationBrowser[i];
+                bool const current = entry.view == g.stage0PlayView;
+                bool const selected=i==g.stage0BrowserSelection;
+                FillRect(stageX0,ry0,stageX1,ry1,
+                    current?0.48f:(selected?0.64f:0.72f),
+                    current?0.34f:(selected?0.51f:0.64f),
+                    current?0.17f:(selected?0.29f:0.46f));
+                StrokeRect(stageX0,ry0,stageX1,ry1,0.35f,0.24f,0.12f);
+                glColor3f( 0.20f, 0.12f, 0.06f );
+                std::snprintf(line,sizeof(line),"%c [%d] %-31s %-10s %s",
+                    selected?'>':' ',i+1,entry.label,
+                    CertificationRuntimeStatus(entry),entry.id);
+                DrawHudText(stageX0+14.f,ry0+14.f,line);
+            }
+            if((int)categoryEntries.size()>visibleRows)
+            {
+                glColor3f(0.34f,0.21f,0.09f);
+                std::snprintf(line,sizeof(line),"showing %d-%d of %d - wheel or Up/Down",
+                    firstVisible+1,lastVisible,(int)categoryEntries.size());
+                DrawHudText(stageX0,rowTop-(float)visibleRows*stageRowH-8.f,line);
+            }
+            CertificationBrowserEntry const& selected =
+                s_certificationBrowser[g.stage0BrowserSelection];
+            glColor3f( 0.32f, 0.20f, 0.10f );
+            std::snprintf( line, sizeof( line ), "requires: %s", selected.dependency );
+            DrawHudText( px0 + 18.f, py0 + 18.f, line );
+        }
+        else
+        {
+            glColor3f( 0.20f, 0.12f, 0.06f );
+            DrawHudText( px0 + 18.f, py1 - 26.f,
+                "PLAYTEST DIAGNOSTICS - click a row or ON/OFF switch" );
+            float const gap = 18.f;
+            float const colW = ( px1 - px0 - 54.f - gap ) * 0.5f;
+            float const rowTop = py1 - 52.f;
+            float const rowH = ( rowTop - py0 - 18.f ) / 8.f;
+            for ( int i = 0; i < kStage0ToolCount; ++i )
+            {
+                int const col = i / 8, row = i % 8;
+                float const rx0 = px0 + 18.f + (float)col * ( colW + gap );
+                float const rx1 = rx0 + colW;
+                float const ry1 = rowTop - (float)row * rowH;
+                float const ry0 = ry1 - rowH + 5.f;
+                bool const ready = std::strcmp( Stage0ToolDrawerAvailability( i ), "READY" ) == 0;
+                bool const enabled = Stage0ToolDrawerEnabled( i );
+                FillRect( rx0, ry0, rx1, ry1,
+                    ready ? 0.72f : 0.58f, ready ? 0.64f : 0.55f,
+                    ready ? 0.46f : 0.45f );
+                StrokeRect( rx0, ry0, rx1, ry1, 0.35f, 0.24f, 0.12f );
+                glColor3f( ready ? 0.20f : 0.38f, ready ? 0.12f : 0.34f, 0.06f );
+                DrawHudText( rx0 + 10.f, ry0 + 12.f, Stage0ToolDrawerName( i ) );
+                UiRect const toggle = { rx1 - 66.f, ry0 + 6.f, rx1 - 8.f, ry1 - 6.f };
+                FillRect( toggle.x0, toggle.y0, toggle.x1, toggle.y1,
+                    enabled ? 0.28f : 0.36f, enabled ? 0.48f : 0.24f,
+                    enabled ? 0.20f : 0.14f );
+                glColor3f( 0.97f, 0.91f, 0.72f );
+                DrawHudText( toggle.x0 + 12.f, toggle.y0 + 7.f,
+                    ready ? ( enabled ? "ON" : "OFF" ) : "LOCK" );
+                if ( !ready )
+                {
+                    glColor3f( 0.45f, 0.38f, 0.28f );
+                    DrawHudText( rx0 + 10.f, ry0 + 2.f, Stage0ToolDrawerAvailability( i ) );
+                }
+            }
+        }
+        glColor3f( 0.90f, 0.85f, 0.70f );
+        DrawHudText( x0 + 16.f, y0 + 14.f,
+            "M runtimes   T diagnostics   Left/Right category   Up/Down stage   Enter load   Esc close" );
+    }
+
+    bool HandleWorldgenMenuClick( float mx, float my )
+    {
+        RECT rc{};
+        GetClientRect( g.hwnd, &rc );
+        float const W = (float)(std::max)( 1L, rc.right );
+        float const H = (float)(std::max)( 1L, rc.bottom );
+        float const x0 = 28.f, y0 = 70.f, x1 = W - 28.f, y1 = H - 36.f;
+        float const px0 = x0 + 16.f, py0 = y0 + 42.f;
+        float const px1 = x1 - 16.f, py1 = y1 - 58.f;
+        UiRect const runtimeTab = { px0 + 14.f, py1 + 12.f, px0 + 205.f, y1 - 12.f };
+        UiRect const diagnosticTab = { px0 + 215.f, py1 + 12.f, px0 + 420.f, y1 - 12.f };
+        UiRect const closeButton = { px1 - 94.f, y1 - 46.f, px1, y1 };
+
+        if ( UiHit( closeButton, mx, my ) )
+        {
+            g.stage0StageMenuOpen = false;
+            g.stage0ToolDrawerOpen = false;
+            SetMouseLook( g.hwnd, true );
+            return true;
+        }
+        if ( UiHit( runtimeTab, mx, my ) )
+        {
+            g.stage0StageMenuOpen = true;
+            g.stage0ToolDrawerOpen = false;
+            g.stage0BrowserSelection = BrowserIndexForView( g.stage0PlayView );
+            SyncCertificationBrowserCategoryToSelection();
+            return true;
+        }
+        if ( UiHit( diagnosticTab, mx, my ) )
+        {
+            g.stage0StageMenuOpen = false;
+            g.stage0ToolDrawerOpen = true;
+            return true;
+        }
+
+        if ( g.stage0StageMenuOpen )
+        {
+            float const rowTop=py1-52.f;
+            float const detailsH=66.f;
+            float const categoryW=(std::min)(310.f,(px1-px0)*0.28f);
+            float const categoryX0=px0+18.f,categoryX1=categoryX0+categoryW;
+            float const stageX0=categoryX1+18.f,stageX1=px1-18.f;
+            constexpr float categoryRowH=54.f;
+            for(int category=0;category<kCertificationBrowserCategoryCount;++category)
+            {
+                float const ry1=rowTop-(float)category*categoryRowH;
+                float const ry0=ry1-categoryRowH+7.f;
+                if(!UiHit({categoryX0,ry0,categoryX1,ry1},mx,my))continue;
+                g.stage0BrowserCategory=category;
+                std::vector<int> const entries=CertificationBrowserEntriesInCategory(category);
+                if(!entries.empty())g.stage0BrowserSelection=entries.front();
+                return true;
+            }
+            std::vector<int> const entries=
+                CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
+            int selectedPosition=0;
+            auto const selectedIt=std::find(entries.begin(),entries.end(),g.stage0BrowserSelection);
+            if(selectedIt!=entries.end())selectedPosition=(int)(selectedIt-entries.begin());
+            constexpr float stageRowH=46.f;
+            int const visibleRows=(std::max)(1,(int)((rowTop-py0-detailsH)/stageRowH));
+            int const maxStart=(std::max)(0,(int)entries.size()-visibleRows);
+            int const firstVisible=std::clamp(selectedPosition-visibleRows/2,0,maxStart);
+            int const lastVisible=(std::min)((int)entries.size(),firstVisible+visibleRows);
+            for(int position=firstVisible;position<lastVisible;++position)
+            {
+                int const i=entries[position];
+                float const ry1=rowTop-(float)(position-firstVisible)*stageRowH;
+                float const ry0=ry1-stageRowH+6.f;
+                if(!UiHit({stageX0,ry0,stageX1,ry1},mx,my))continue;
+                g.stage0BrowserSelection=i;
+                if ( SelectCertificationBrowserEntry( i ) )
+                {
+                    g.stage0StageMenuOpen = false;
+                    SetMouseLook( g.hwnd, true );
+                }
+                return true;
+            }
+        }
+        else if ( g.stage0ToolDrawerOpen )
+        {
+            float const gap = 18.f;
+            float const colW = ( px1 - px0 - 54.f - gap ) * 0.5f;
+            float const rowTop = py1 - 52.f;
+            float const rowH = ( rowTop - py0 - 18.f ) / 8.f;
+            for ( int i = 0; i < kStage0ToolCount; ++i )
+            {
+                int const col = i / 8, row = i % 8;
+                float const rx0 = px0 + 18.f + (float)col * ( colW + gap );
+                float const rx1 = rx0 + colW;
+                float const ry1 = rowTop - (float)row * rowH;
+                float const ry0 = ry1 - rowH + 5.f;
+                if ( !UiHit( { rx0, ry0, rx1, ry1 }, mx, my ) ) { continue; }
+                g.stage0ToolSelection = i;
+                ToggleStage0ToolDrawerEntry( i );
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void DrawWorldgenStageMenu( int w, int h )
+    {
+        if ( !g.stage0StageMenuOpen ) { return; }
+        DrawWorldgenJournalPage( w, h, false );
+        return;
+        glDisable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        glMatrixMode( GL_PROJECTION );
+        glLoadIdentity();
+        glOrtho( 0, w, 0, h, -1, 1 );
+        glMatrixMode( GL_MODELVIEW );
+        glLoadIdentity();
+
+        float const pw = 820.f;
+        float const ph = 590.f;
+        float const x = ( (float)w - pw ) * 0.5f;
+        float const y = ( (float)h + ph ) * 0.5f;
+        glColor4f( 0.025f, 0.035f, 0.045f, 0.96f );
+        glBegin( GL_QUADS );
+        glVertex2f( x, y ); glVertex2f( x + pw, y );
+        glVertex2f( x + pw, y - ph ); glVertex2f( x, y - ph );
+        glEnd();
+        glColor3f( 0.95f, 0.86f, 0.35f );
+        DrawHudText( x + 20.f, y - 30.f,
+            "PROVENANCE WORLDGEN PLAYTEST - CERTIFICATION BROWSER" );
+        glColor3f( 0.72f, 0.84f, 0.92f );
+        char line[512];
+        std::snprintf( line, sizeof( line ),
+            "WORLD seed=7  generator=%s v%d  runtime=CAUSAL_WORLD  residency=64m",
+            g.generatorId.c_str(), g.generatorVersion );
+        DrawHudText( x + 24.f, y - 58.f, line );
+
+        float rowY = y - 92.f;
+        char const* lastCategory = "";
+        for ( int i = 0; i < kCertificationBrowserCount; ++i )
+        {
+            CertificationBrowserEntry const& entry = s_certificationBrowser[i];
+            if ( std::strcmp( lastCategory, entry.category ) != 0 )
+            {
+                glColor3f( 0.95f, 0.78f, 0.30f );
+                DrawHudText( x + 24.f, rowY, entry.category );
+                rowY -= 23.f;
+                lastCategory = entry.category;
+            }
+            bool const selected = i == g.stage0BrowserSelection;
+            char const* status = CertificationRuntimeStatus( entry );
+            glColor3f( selected ? 1.0f : 0.82f,
+                selected ? 0.94f : 0.88f, selected ? 0.48f : 0.94f );
+            std::snprintf( line, sizeof( line ), "%c [%s] [%d] %-34s  %s",
+                selected ? '>' : ' ', status, i + 1, entry.label, entry.id );
+            DrawHudText( x + 34.f, rowY, line );
+            rowY -= 24.f;
+        }
+
+        glColor3f( 0.95f, 0.78f, 0.30f );
+        DrawHudText( x + 24.f, rowY - 2.f, "HYDROLOGY" );
+        glColor3f( 0.58f, 0.64f, 0.70f );
+        DrawHudText( x + 34.f, rowY - 25.f,
+            "  [LOCKED P5b] HYDRO.BASIN - deterministic water foundation required" );
+        DrawHudText( x + 34.f, rowY - 48.f,
+            "  [LOCKED P5b] HYDRO.REACH - terrain/water coupling not authorized" );
+
+        CertificationBrowserEntry const& selected =
+            s_certificationBrowser[g.stage0BrowserSelection];
+        glColor3f( 0.72f, 0.88f, 0.72f );
+        std::snprintf( line, sizeof( line ), "requires: %s", selected.dependency );
+        DrawHudText( x + 24.f, y - ph + 88.f, line );
+        std::snprintf( line, sizeof( line ), "provides: %s", selected.provides );
+        DrawHudText( x + 24.f, y - ph + 66.f, line );
+        glColor3f( 0.65f, 0.78f, 0.86f );
+        DrawHudText( x + 24.f, y - ph + 30.f,
+            "Up/Down or wheel select   Enter load   1-9/0 shortcuts   T tools   M/Esc close" );
+    }
+
+    void DrawWorldgenToolDrawer( int w, int h )
+    {
+        if ( !g.stage0ToolDrawerOpen ) { return; }
+        DrawWorldgenJournalPage( w, h, true );
+        return;
+        glDisable( GL_DEPTH_TEST );
+        glDisable( GL_TEXTURE_2D );
+        glMatrixMode( GL_PROJECTION );
+        glLoadIdentity();
+        glOrtho( 0, w, 0, h, -1, 1 );
+        glMatrixMode( GL_MODELVIEW );
+        glLoadIdentity();
+
+        float const pw = 590.f;
+        float const ph = 475.f;
+        float const x = (float)w - pw - 24.f;
+        float const y = (float)h - 24.f;
+        glColor4f( 0.025f, 0.035f, 0.045f, 0.97f );
+        glBegin( GL_QUADS );
+        glVertex2f( x, y ); glVertex2f( x + pw, y );
+        glVertex2f( x + pw, y - ph ); glVertex2f( x, y - ph );
+        glEnd();
+        glColor3f( 0.95f, 0.86f, 0.35f );
+        DrawHudText( x + 20.f, y - 28.f, "GLOBAL PLAYTEST TOOLKIT" );
+        glColor3f( 0.66f, 0.78f, 0.86f );
+        DrawHudText( x + 20.f, y - 50.f,
+            "Tools inspect this certificate; they do not load another world." );
+
+        float rowY = y - 78.f;
+        char line[256];
+        for ( int i = 0; i < kStage0ToolCount; ++i )
+        {
+            bool const selected = i == g.stage0ToolSelection;
+            bool const ready = std::strcmp( Stage0ToolDrawerAvailability( i ), "READY" ) == 0;
+            bool const enabled = Stage0ToolDrawerEnabled( i );
+            if ( selected ) { glColor3f( 1.0f, 0.94f, 0.48f ); }
+            else if ( ready ) { glColor3f( 0.88f, 0.93f, 0.96f ); }
+            else { glColor3f( 0.52f, 0.59f, 0.64f ); }
+            std::snprintf( line, sizeof( line ), "%c [%c] %-31s %s",
+                selected ? '>' : ' ', enabled ? 'X' : ' ', Stage0ToolDrawerName( i ),
+                ready ? "" : Stage0ToolDrawerAvailability( i ) );
+            DrawHudText( x + 24.f, rowY, line );
+            rowY -= 23.f;
+        }
+        glColor3f( 0.65f, 0.78f, 0.86f );
+        DrawHudText( x + 20.f, y - ph + 24.f,
+            "Up/Down or wheel select   Enter/Space toggle   T/Esc close" );
+    }
+
+    void WorldgenPlayShutdown()
+    {
+        if ( !g.playWorldgenInitialized ) { return; }
+        if ( g.playWorldgenTrace )
+        {
+            std::fflush( g.playWorldgenTrace );
+            std::fclose( g.playWorldgenTrace );
+            g.playWorldgenTrace = nullptr;
+        }
+
+        FILE* f = nullptr;
+        if ( fopen_s( &f, "Docs\\provenance_worldgen_playtest_summary.txt", "w" ) == 0 && f )
+        {
+            ULONGLONG const elapsedMs = GetTickCount64() - g.playWorldgenStartMs;
+            std::fprintf( f,
+                "Provenance WORLDGEN PLAYTEST STAGE 0\n"
+                "elapsed_s=%.3f\nframes=%d\nworst_frame_ms=%.3f\nrolling_p99_ms=%.3f\n"
+                "resident_cells=%d\nevicted=%d\nworking_set_bytes=%llu\n"
+                "geo_requests=%d\ngeo_total_ms=%.3f\ngeo_worst_frame_ms=%.3f\n"
+                "hf_local_updates=%d\nhf_full_rebuilds=%d\n"
+                "hf_total_ms=%.3f\nhf_worst_frame_ms=%.3f\n"
+                "last_cpu_frame_ms=%.3f\nlast_simulation_ms=%.3f\n"
+                "last_residency_ms=%.3f\nlast_generation_pure_ms=%.3f\n"
+                "last_hf_build_ms=%.3f\nlast_hf_upload_ms=%.3f\n"
+                "last_draw_submit_ms=%.3f\nlast_gpu_finish_ms=%.3f\n"
+                "last_present_wait_ms=%.3f\n"
+                "last_calibration_draw_ms=%.3f\ncalibration_stage=%s\n"
+                "last_pacing_wait_ms=%.3f\ngpu_frame_ms=-1.000\n"
+                "swap_interval=%d\nswap_control_available=%d\n"
+                "d2=%d\noccupancy=%d\nedits=%d\nsupport=%d\nmutations=%d\n"
+                "matter_bodies=%d\nfracture_events=%d\n"
+                "water_coupling=DISABLED_P5b_CLOSED\n"
+                "trace=Docs/provenance_worldgen_playtest_trace.csv\n",
+                (double)elapsedMs / 1000.0, g.playWorldgenFrame,
+                g.playWorldgenWorstMs, g.playWorldgenP99Ms,
+                (int)g.cells.size(), g.playWorldgenEvicted,
+                (unsigned long long)CurrentWorkingSetBytes(),
+                g.perfGeoDiskRequests, g.perfGeoGenMsTotal, g.playWorldgenWorstGeoMs,
+                g.perfHfLocalUpdates, g.perfHfRebuilds,
+                g.perfHfRemeshMsTotal, g.playWorldgenWorstHfMs,
+                g.stage0FrameCpuMs, g.stage0FrameSimulationMs,
+                g.stage0FrameResidencyMs, g.stage0FrameGenerationMs,
+                g.stage0FrameHfBuildMs, g.stage0FrameHfUploadMs,
+                g.stage0FrameDrawSubmitMs,g.stage0FrameGpuFinishMs,
+                g.stage0FramePresentWaitMs,
+                g.stage0FrameCalibrationDrawMs, Stage0PlayViewName( g.stage0PlayView ),
+                g.stage0FramePacingWaitMs,
+                g.stage0SwapInterval, g.stage0SwapControlAvailable ? 1 : 0,
+                g.perfD2Rebuilds - g.playWorldgenStartD2,
+                g.perfOccRebuilds - g.playWorldgenStartOcc,
+                g.perfEditedRegionChanges - g.playWorldgenStartEdits,
+                g.perfSupportBelowCount - g.playWorldgenStartSupport,
+                g.perfOccupancyMutations - g.playWorldgenStartMutations,
+                (int)H2H::State().bodies.size(), (int)g.fractureEvents.size() );
+            std::fclose( f );
+        }
+        g.playWorldgenInitialized = false;
+    }
+
+    // ---------- Stage-0 worldgen streaming/performance floor ----------
+    // Flat analytic matter floor, current 64 m effective residency radius / 128 m diameter.
+    // No bridge, D2, occupancy, water, loose bodies, edits, or material morphology.
+    struct WorldgenPerfPhaseDef
+    {
+        char const* id;
+        double speedMps;
+        int teleportEveryFrames;
+        double teleportDistanceM;
+        Stage0PlayView view = Stage0PlayView::Clean;
+        CausalDifferentialErosion::Control erosionControl =
+            CausalDifferentialErosion::Control::DifferentialResistance;
+        bool fixedRoute = false;
+    };
+
+    static WorldgenPerfPhaseDef const s_worldgenPerfPhases[] = {
+        { "stand",       0.0,  0,   0.0 },
+        { "walk",        5.0,  0,   0.0 },
+        { "run",        11.0,  0,   0.0 },
+        { "run_2x",     22.0,  0,   0.0 },
+        { "run_4x",     44.0,  0,   0.0 },
+        { "teleport",    0.0, 60, 128.0 },
+    };
+
+    static WorldgenPerfPhaseDef const s_stage8PerfPhases[] = {
+        { "A_stage7_stand", 0.0, 0, 0.0, Stage0PlayView::VisibleGeologicExposure,
+            CausalDifferentialErosion::Control::DifferentialResistance, false },
+        { "A_stage7_walk",  5.0, 0, 0.0, Stage0PlayView::VisibleGeologicExposure,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "B_equal_stand",  0.0, 0, 0.0, Stage0PlayView::DifferentialErosion,
+            CausalDifferentialErosion::Control::EqualResistance, false },
+        { "B_equal_walk",   5.0, 0, 0.0, Stage0PlayView::DifferentialErosion,
+            CausalDifferentialErosion::Control::EqualResistance, true },
+        { "C_diff_stand",   0.0, 0, 0.0, Stage0PlayView::DifferentialErosion,
+            CausalDifferentialErosion::Control::DifferentialResistance, false },
+        { "C_diff_walk",    5.0, 0, 0.0, Stage0PlayView::DifferentialErosion,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+    };
+
+    static WorldgenPerfPhaseDef const s_ladderAuditPhases[] = {
+        { "clean_settled", 0.0, 0, 0.0, Stage0PlayView::Clean },
+        { "clean_traversal", 5.0, 0, 0.0, Stage0PlayView::Clean,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "clean_residency", 0.0, 30, 96.0, Stage0PlayView::Clean },
+        { "s5_settled", 0.0, 0, 0.0, Stage0PlayView::CausalGeologyKernel },
+        { "s5_traversal", 5.0, 0, 0.0, Stage0PlayView::CausalGeologyKernel,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s5_residency", 0.0, 30, 96.0, Stage0PlayView::CausalGeologyKernel },
+        { "s6_settled", 0.0, 0, 0.0, Stage0PlayView::GeologicExposure },
+        { "s6_traversal", 5.0, 0, 0.0, Stage0PlayView::GeologicExposure,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s6_residency", 0.0, 30, 96.0, Stage0PlayView::GeologicExposure },
+        { "s7_settled", 0.0, 0, 0.0, Stage0PlayView::VisibleGeologicExposure },
+        { "s7_traversal", 5.0, 0, 0.0, Stage0PlayView::VisibleGeologicExposure,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s7_residency", 0.0, 30, 96.0, Stage0PlayView::VisibleGeologicExposure },
+        { "s8_settled", 0.0, 0, 0.0, Stage0PlayView::DifferentialErosion },
+        { "s8_traversal", 5.0, 0, 0.0, Stage0PlayView::DifferentialErosion,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s8_residency", 0.0, 30, 96.0, Stage0PlayView::DifferentialErosion },
+        { "s9_settled", 0.0, 0, 0.0, Stage0PlayView::GraniteIntrusion },
+        { "s9_traversal", 5.0, 0, 0.0, Stage0PlayView::GraniteIntrusion,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s9_residency", 0.0, 30, 96.0, Stage0PlayView::GraniteIntrusion },
+        { "s10_settled", 0.0, 0, 0.0, Stage0PlayView::ContactMineralization },
+        { "s10_traversal", 5.0, 0, 0.0, Stage0PlayView::ContactMineralization,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s10_residency", 0.0, 30, 96.0, Stage0PlayView::ContactMineralization },
+        { "s11_settled", 0.0, 0, 0.0, Stage0PlayView::FaultDisplacement },
+        { "s11_traversal", 5.0, 0, 0.0, Stage0PlayView::FaultDisplacement,
+            CausalDifferentialErosion::Control::DifferentialResistance, true },
+        { "s11_residency", 0.0, 30, 96.0, Stage0PlayView::FaultDisplacement },
+        // Reverse settled sweep permanently checks that retained higher-stage state
+        // cannot change a lower-stage answer or recurring cost.
+        { "rev_s11", 0.0, 0, 0.0, Stage0PlayView::FaultDisplacement },
+        { "rev_s10", 0.0, 0, 0.0, Stage0PlayView::ContactMineralization },
+        { "rev_s9", 0.0, 0, 0.0, Stage0PlayView::GraniteIntrusion },
+        { "rev_s8", 0.0, 0, 0.0, Stage0PlayView::DifferentialErosion },
+        { "rev_s7", 0.0, 0, 0.0, Stage0PlayView::VisibleGeologicExposure },
+        { "rev_s6", 0.0, 0, 0.0, Stage0PlayView::GeologicExposure },
+        { "rev_s5", 0.0, 0, 0.0, Stage0PlayView::CausalGeologyKernel },
+        { "rev_clean", 0.0, 0, 0.0, Stage0PlayView::Clean },
+    };
+
+    int WorldgenPerfPhaseCount()
+    {
+        return ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+            ? (int)( sizeof( s_ladderAuditPhases ) / sizeof( s_ladderAuditPhases[0] ) )
+            : g.certStage8Perf
+            ? (int)( sizeof( s_stage8PerfPhases ) / sizeof( s_stage8PerfPhases[0] ) )
+            : (int)( sizeof( s_worldgenPerfPhases ) / sizeof( s_worldgenPerfPhases[0] ) );
+    }
+
+    WorldgenPerfPhaseDef const& WorldgenPerfPhase( int phase )
+    {
+        if ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+        { return s_ladderAuditPhases[phase]; }
+        return g.certStage8Perf ? s_stage8PerfPhases[phase] : s_worldgenPerfPhases[phase];
+    }
+
+    int WorldgenPerfWarmupFrames()
+    { return ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+        ? 20 : ( g.certStage8Perf ? 60 : 30 ); }
+    int WorldgenPerfMeasuredFrames()
+    { return ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+        ? 180 : ( g.certStage8Perf ? 600 : 300 ); }
+
+    struct WorldgenPerfTraceRow
+    {
+        int phase = 0;
+        int frame = 0;
+        double frameMs = 0.0;
+        double x = 0.0;
+        double y = 0.0;
+        int newCells = 0;
+        int residentCells = 0;
+        int evictedCells = 0;
+        double geoMs = 0.0;
+        double hfMs = 0.0;
+        int hfRebuilds = 0;
+        int hfLocalUpdates = 0;
+        int packagesEvicted = 0;
+        double cpuFrameMs = 0.0;
+        double simulationMs = 0.0;
+        double residencyMs = 0.0;
+        double generationPureMs = 0.0;
+        double hfBuildMs = 0.0;
+        double hfRetireMs = 0.0;
+        double hfUploadMs = 0.0;
+        double drawSubmitMs = 0.0;
+        double gpuFinishMs = 0.0;
+        double presentWaitMs = 0.0;
+        double pacingWaitMs = 0.0;
+        double gpuFrameMs = -1.0;
+        double collisionMs = 0.0;
+        int queueDepth = 0;
+        int outstanding = 0;
+        SIZE_T workingSetBytes = 0;
+    };
+
+    struct LadderAuditDigests
+    {
+        uint64_t authority = 14695981039346656037ull;
+        uint64_t geometry = 14695981039346656037ull;
+        uint64_t materialFeature = 14695981039346656037ull;
+        uint64_t collision = 14695981039346656037ull;
+        uint64_t residentPackages = 14695981039346656037ull;
+    };
+
+    struct WorldgenPerfResult
+    {
+        char id[48] = {};
+        double commandedSpeedMps = 0.0;
+        double distanceM = 0.0;
+        double walkDistanceM = 0.0;
+        double sprintDistanceM = 0.0;
+        double freeFlyDistanceM = 0.0;
+        double durationS = 0.0;
+        int sampleCount = 0;
+        double meanMs = 0.0;
+        double medianMs = 0.0;
+        double p95Ms = 0.0;
+        double p99Ms = 0.0;
+        double p999Ms = 0.0;
+        double worstMs = 0.0;
+        int over16 = 0;
+        int over33 = 0;
+        int over50 = 0;
+        int over100 = 0;
+        int cellsRequested = 0;
+        int cellsCompleted = 0;
+        int residentCellsStart = 0;
+        int residentCellsEnd = 0;
+        int evictedCells = 0;
+        int geoRequests = 0;
+        double geoMsTotal = 0.0;
+        double geoMsMax = 0.0;
+        int hfRebuilds = 0;
+        int hfLocalUpdates = 0;
+        int packagesBuilt = 0;
+        int packagesEvicted = 0;
+        double hfMsTotal = 0.0;
+        double hfMsMax = 0.0;
+        double terrainSpikeMs = 0.0;
+        double cpuFrameMeanMs = 0.0;
+        double simulationMeanMs = 0.0;
+        double residencyMeanMs = 0.0;
+        double generationPureMeanMs = 0.0;
+        double hfBuildMeanMs = 0.0;
+        double hfUploadMeanMs = 0.0;
+        double drawSubmitMeanMs = 0.0;
+        double gpuFinishMeanMs = 0.0;
+        double presentWaitMeanMs = 0.0;
+        double pacingWaitMeanMs = 0.0;
+        double gpuFrameMeanMs = -1.0;
+        int queueDepthMax = 0;
+        int outstandingMax = 0;
+        int coverageMisses = 0;
+        SIZE_T workingSetStart = 0;
+        SIZE_T workingSetEnd = 0;
+        int residentTriangles = 0;
+        int meshPackages = 0;
+        uint64_t authorityRecomputes = 0;
+        double collisionMeanMs = 0.0;
+        LadderAuditDigests digests;
+    };
+
+    struct WorldgenPerfHarness
+    {
+        static constexpr int kEffectiveRadiusCells = 64;
+
+        bool initialized = false;
+        bool measuringFrame = false;
+        int phase = 0;
+        int phaseFrame = 0;
+        int measuredFrames = 0;
+        long long lastFrameQpc = 0;
+        double distanceMeasuredM = 0.0;
+        double walkDistanceMeasuredM = 0.0;
+        double sprintDistanceMeasuredM = 0.0;
+        double freeFlyDistanceMeasuredM = 0.0;
+        int routeSegment = -1;
+        float routeFlyZ = 0.f;
+        double measuredElapsedS = 0.0;
+        double nextLiveTeleportS = 0.25;
+        int liveTeleports = 0;
+        std::vector<double> frameMs;
+        std::vector<WorldgenPerfTraceRow> trace;
+        std::vector<WorldgenPerfResult> results;
+
+        int snapCellsRequested = 0;
+        int snapCellsCompleted = 0;
+        int snapResidentCells = 0;
+        int snapEvictedCells = 0;
+        int snapGeoRequests = 0;
+        double snapGeoMs = 0.0;
+        int snapHfRebuilds = 0;
+        int snapHfLocalUpdates = 0;
+        int snapHfBlocksEvicted = 0;
+        double snapHfMs = 0.0;
+        SIZE_T snapWorkingSet = 0;
+        uint64_t snapAuthorityRecomputes = 0;
+
+        double frameGeoStartMs = 0.0;
+        double frameHfStartMs = 0.0;
+        int frameCellsStart = 0;
+        int frameHfStart = 0;
+        int frameHfLocalStart = 0;
+        int frameHfBlocksEvictedStart = 0;
+        double phaseGeoMax = 0.0;
+        double phaseHfMax = 0.0;
+        double phaseTerrainSpikeMax = 0.0;
+        int phaseQueueMax = 0;
+        int phaseOutstandingMax = 0;
+        int phaseCoverageMisses = 0;
+
+        int invariantD2Start = 0;
+        int invariantOccStart = 0;
+        int invariantEditStart = 0;
+        int invariantSupportStart = 0;
+        int invariantMutationStart = 0;
+        int startupCells = 0;
+        int startupRequests = 0;
+        double startupGeoMs = 0.0;
+        int startupHf = 0;
+        int startupHfLocal = 0;
+        double startupHfMs = 0.0;
+        SIZE_T startupWorkingSet = 0;
+    };
+
+    static WorldgenPerfHarness s_worldgenPerf;
+
+    SIZE_T CurrentWorkingSetBytes()
+    {
+        PROCESS_MEMORY_COUNTERS pmc{};
+        pmc.cb = sizeof( pmc );
+        if ( GetProcessMemoryInfo( GetCurrentProcess(), &pmc, sizeof( pmc ) ) )
+        {
+            return pmc.WorkingSetSize;
+        }
+        return 0;
+    }
+
+    double PercentileSorted( std::vector<double> const& sorted, double p )
+    {
+        if ( sorted.empty() ) { return 0.0; }
+        double const pos = std::clamp( p, 0.0, 1.0 ) * (double)( sorted.size() - 1 );
+        size_t const lo = (size_t)std::floor( pos );
+        size_t const hi = (std::min)( lo + 1, sorted.size() - 1 );
+        double const t = pos - (double)lo;
+        return sorted[lo] * ( 1.0 - t ) + sorted[hi] * t;
+    }
+
+    LadderAuditDigests CaptureLadderAuditDigests( Stage0PlayView view )
+    {
+        LadderAuditDigests d;
+        int const viewValue = (int)view;
+        CausalWorldGeology::HashAppend( d.authority, &viewValue, sizeof( viewValue ) );
+        CausalWorldGeology::HashAppend( d.authority,
+            g.generatorId.data(), g.generatorId.size() );
+        CausalWorldGeology::HashAppend( d.authority,
+            &g.generatorVersion, sizeof( g.generatorVersion ) );
+        for ( int y = -24; y <= 24; y += 4 )
+        for ( int x = -24; x <= 24; x += 4 )
+        {
+            float surfaceZ = 0.f;
+            bool const groundOk = SampleGroundZBase(
+                (float)x + 0.375f, (float)y + 0.625f, surfaceZ );
+            CausalWorldGeology::HashAppend( d.geometry, &groundOk, sizeof( groundOk ) );
+            CausalWorldGeology::HashAppend( d.geometry, &surfaceZ, sizeof( surfaceZ ) );
+            CausalWorldGeology::HashAppend( d.collision, &groundOk, sizeof( groundOk ) );
+            CausalWorldGeology::HashAppend( d.collision, &surfaceZ, sizeof( surfaceZ ) );
+            if ( IsCausalPlayableView( view ) )
+            {
+                auto const sample = CausalGeologyAt(
+                    view, (double)x + 0.375, (double)y + 0.625,
+                    (double)surfaceZ - 0.001 );
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, &sample.found, sizeof( sample.found ) );
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, &sample.featureId, sizeof( sample.featureId ) );
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, sample.material.data(), sample.material.size() );
+                CausalWorldGeology::HashAppend(
+                    d.authority, &sample.descriptorRevision, sizeof( sample.descriptorRevision ) );
+            }
+            else
+            {
+                constexpr char dirt[] = "dirt";
+                CausalWorldGeology::HashAppend( d.materialFeature, dirt, sizeof( dirt ) - 1 );
+            }
+        }
+        std::vector<uint64_t> packageKeys;
+        int packageTriangles = 0;
+        if ( IsVisibleExposureView( view ) )
+        {
+            for ( auto const& package : g.stage7TerrainBlocks )
+            { packageKeys.push_back( package.first ); packageTriangles += package.second.tris; }
+        }
+        else if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
+          || IsContactMineralizationView( view ) || IsFaultDisplacementView(view) )
+        {
+            for ( auto const& package : g.stage8TerrainBlocks )
+            { packageKeys.push_back( package.first ); packageTriangles += package.second.tris; }
+        }
+        else
+        {
+            for ( auto const& package : g.stage0TerrainBlocks )
+            { packageKeys.push_back( package.first ); packageTriangles += package.second.tris; }
+        }
+        std::sort( packageKeys.begin(), packageKeys.end() );
+        for ( uint64_t key : packageKeys )
+        { CausalWorldGeology::HashAppend( d.residentPackages, &key, sizeof( key ) ); }
+        CausalWorldGeology::HashAppend(
+            d.residentPackages, &packageTriangles, sizeof( packageTriangles ) );
+        return d;
+    }
+
+    void WorldgenPerfBeginMeasurement()
+    {
+        WorldgenPerfHarness& h = s_worldgenPerf;
+        h.frameMs.clear();
+        h.measuredFrames = 0;
+        h.distanceMeasuredM = 0.0;
+        h.walkDistanceMeasuredM = 0.0;
+        h.sprintDistanceMeasuredM = 0.0;
+        h.freeFlyDistanceMeasuredM = 0.0;
+        h.routeSegment = -1;
+        h.routeFlyZ = 0.f;
+        h.measuredElapsedS = 0.0;
+        h.nextLiveTeleportS = 0.25;
+        h.liveTeleports = 0;
+        h.snapCellsRequested = g.perfGeoCellsRequested;
+        h.snapCellsCompleted = g.perfGeoCellsCreated;
+        h.snapResidentCells = (int)g.cells.size();
+        h.snapEvictedCells = g.perfGeoCellsEvicted;
+        h.snapGeoRequests = g.perfGeoDiskRequests;
+        h.snapGeoMs = g.perfGeoGenMsTotal;
+        h.snapHfRebuilds = g.perfHfRebuilds;
+        h.snapHfLocalUpdates = g.perfHfLocalUpdates;
+        h.snapHfBlocksEvicted = g.perfHfBlocksEvicted;
+        h.snapHfMs = g.perfHfRemeshMsTotal;
+        h.snapWorkingSet = CurrentWorkingSetBytes();
+        h.snapAuthorityRecomputes = g.causalErosionRuntime
+            ? g.causalErosionRuntime->SurfaceCompilationCount() : 0;
+        h.phaseGeoMax = 0.0;
+        h.phaseHfMax = 0.0;
+        h.phaseTerrainSpikeMax = 0.0;
+        h.phaseQueueMax = 0;
+        h.phaseOutstandingMax = 0;
+        h.phaseCoverageMisses = 0;
+
+        if ( h.phase == 0 )
+        {
+            h.startupCells = g.perfGeoCellsCreated;
+            h.startupRequests = g.perfGeoDiskRequests;
+            h.startupGeoMs = g.perfGeoGenMsTotal;
+            h.startupHf = g.perfHfRebuilds;
+            h.startupHfLocal = g.perfHfLocalUpdates;
+            h.startupHfMs = g.perfHfRemeshMsTotal;
+            h.startupWorkingSet = h.snapWorkingSet;
+        }
+    }
+
+    void WorldgenPerfInitialize()
+    {
+        WorldgenPerfHarness& h = s_worldgenPerf;
+        if ( h.initialized ) { return; }
+
+        ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+        ProvenanceGeo::SetSeedU64( 0x5747424153453031ULL ); // "WGBASE01"
+        g.worldIdentityHash = "worldgen_baseline_seed_wgbase01";
+        g.generatorId = "provenance_worldgen_baseline_v1";
+        g.generatorVersion = 1;
+        g.gradeDatum = 0.50f;
+        g.reliefVoxels = 64.f;
+        g.voxelEdgeM = 0.125f;
+        g.playerX = 128;
+        g.playerY = 128;
+        g.feetX = 128.5f;
+        g.feetY = 128.5f;
+        g.feetZ = 0.f;
+        g.camX = g.feetX;
+        g.camY = g.feetY;
+        g.camZ = g.feetZ + kEyeHeightM;
+        g.walkMode = true;
+        g.playerCrouch = 0.f;
+        g.playerCrouched = false;
+        g.stage0SlideRemaining = g.stage0SlideSpeed = 0.f;
+        g.grounded = true;
+        g.havePlayer = true;
+        g.streamComplete = true;
+        RecomputeBlocksWanted();
+        g.blocksLoaded = g.blocksWanted;
+        g.columnQueue.clear();
+        g.pending = PendingKind::None;
+
+        h.invariantD2Start = g.perfD2Rebuilds;
+        h.invariantOccStart = g.perfOccRebuilds;
+        h.invariantEditStart = g.perfEditedRegionChanges;
+        h.invariantSupportStart = g.perfSupportBelowCount;
+        h.invariantMutationStart = g.perfOccupancyMutations;
+
+        if ( !g.certStage8Perf && !g.certWorldgenLadderAudit
+          && !g.certWorldgenLadderLivePerf )
+        { EnsureGeoDisk( g.playerX, g.playerY, WorldgenPerfHarness::kEffectiveRadiusCells ); }
+        h.initialized = true;
+        h.lastFrameQpc = 0;
+        g.statusLine = "WORLDGEN BASELINE PERF — stand warmup";
+    }
+
+    void WorldgenPerfBeforeFrame()
+    {
+        WorldgenPerfInitialize();
+        WorldgenPerfHarness& h = s_worldgenPerf;
+        if ( h.phase >= WorldgenPerfPhaseCount() )
+        {
+            return;
+        }
+
+        WorldgenPerfPhaseDef const& p = WorldgenPerfPhase( h.phase );
+        if ( ( g.certStage8Perf || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf ) && h.phaseFrame == 0 )
+        {
+            g.stage8Control = p.erosionControl;
+            g.feetX = p.fixedRoute ? -28.0f : 0.5f;
+            g.feetY = p.fixedRoute ? 0.0f : 0.5f;
+            g.playerX = (int)std::floor( g.feetX );
+            g.playerY = (int)std::floor( g.feetY );
+            g.walkMode = true;
+            g.grounded = true;
+            g.yaw = 1.5707963f;
+            g.pitch = -0.12f;
+            if ( !SelectStage0PlayView( p.view ) )
+            {
+                std::string const refusalReason = g.statusLine;
+                g.statusLine = "WORLDGEN PERF REFUSED - authority unavailable";
+                if ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+                {
+                    FILE* failure = nullptr;
+                    char const* failurePath = g.certWorldgenLadderLivePerf
+                        ? "Docs\\provenance_worldgen_ladder_live_perf.txt"
+                        : "Docs\\provenance_worldgen_ladder_audit.txt";
+                    if ( fopen_s( &failure, failurePath, "w" ) == 0
+                      && failure )
+                    {
+                        std::fprintf( failure,
+                            "Provenance WORLDGEN_LADDER_AUDIT v1\nstatus=FAIL\nexit_code=1\n"
+                            "failure=authority_selection_refused\nphase=%s\nview=%s\nreason=%s\n",
+                            p.id, Stage0PlayViewName( p.view ), refusalReason.c_str() );
+                        std::fclose( failure );
+                    }
+                }
+                PostQuitMessage( 1 );
+                return;
+            }
+            RebuildStage0PlayableRuntime();
+        }
+
+        int const warmupFrames = WorldgenPerfWarmupFrames();
+        int const measuredFrames = WorldgenPerfMeasuredFrames();
+        if ( h.phaseFrame == warmupFrames )
+        {
+            WorldgenPerfBeginMeasurement();
+            if ( ( g.certStage8Perf || g.certWorldgenLadderAudit
+              || g.certWorldgenLadderLivePerf ) && p.fixedRoute )
+            {
+                g.feetX = -28.0f; g.feetY = 0.0f;
+                g.playerX = -28; g.playerY = 0;
+            }
+        }
+
+        h.measuringFrame = h.phaseFrame >= warmupFrames;
+        h.frameGeoStartMs = g.perfGeoGenMsTotal;
+        h.frameHfStartMs = g.perfHfRemeshMsTotal;
+        h.frameCellsStart = g.perfGeoCellsCreated;
+        h.frameHfStart = g.perfHfRebuilds;
+        h.frameHfLocalStart = g.perfHfLocalUpdates;
+        h.frameHfBlocksEvictedStart = g.perfHfBlocksEvicted;
+
+        double moved = 0.0;
+        int directionalSegment = -1;
+        bool directionalFreeFly = false;
+        bool directionalSprint = false;
+        if ( ( g.certStage8Perf || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf ) && p.fixedRoute )
+        {
+            if ( ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+              && h.measuringFrame )
+            {
+                // Permanent eight-bearing traversal.  Six metres per bearing
+                // exercises admission/eviction on every side of the residency
+                // disk while returning to the same deterministic coordinate.
+                // The last five legs also cover sprint and collision-free
+                // diagnostic free-flight behavior.
+                constexpr double kSegmentM = 6.0;
+                directionalSegment = (std::min)( 7,
+                    (int)std::floor( h.distanceMeasuredM / kSegmentM ) );
+                directionalSprint = directionalSegment >= 3 && directionalSegment < 6;
+                directionalFreeFly = directionalSegment >= 6;
+                double const segmentSpeed = directionalFreeFly ? kFlySpeedMps
+                    : ( directionalSprint ? kSprintSpeedMps : kWalkSpeedMps );
+                double const remaining = (std::max)( 0.0, 48.0 - h.distanceMeasuredM );
+                double const segmentRemaining = kSegmentM
+                    - std::fmod( h.distanceMeasuredM, kSegmentM );
+                double const requested = g.certWorldgenLadderLivePerf
+                    ? segmentSpeed * (double)g.frameDt
+                    : 48.0 / (double)measuredFrames;
+                moved = (std::min)( { remaining, segmentRemaining, requested } );
+            }
+            else
+            {
+                // Non-ladder Stage-8 comparison retains its fixed sample route.
+                moved = h.measuringFrame ? 48.0 / (double)measuredFrames : 0.0;
+            }
+        }
+        else if ( p.teleportEveryFrames > 0 )
+        {
+            if ( g.certWorldgenLadderLivePerf )
+            {
+                if ( h.measuringFrame && h.liveTeleports < 6
+                  && h.measuredElapsedS >= h.nextLiveTeleportS )
+                {
+                    moved = p.teleportDistanceM;
+                    ++h.liveTeleports;
+                    h.nextLiveTeleportS += 0.5;
+                }
+            }
+            else
+            {
+                int const localFrame = h.phaseFrame - warmupFrames;
+                if ( localFrame >= 0 && localFrame % p.teleportEveryFrames == 0 )
+                { moved = p.teleportDistanceM; }
+                else if ( h.phaseFrame < warmupFrames
+                       && h.phaseFrame % p.teleportEveryFrames == 0 )
+                { moved = p.teleportDistanceM; }
+            }
+        }
+        else
+        {
+            // Match the live client traversal law: advance by measured/clamped frame delta,
+            // so slow frames do not quietly reduce the requested streaming pressure.
+            moved = p.speedMps * (double)g.frameDt;
+        }
+
+        if ( directionalSegment >= 0 )
+        {
+            constexpr float kDiagonal = 0.7071067811865475f;
+            static float const directions[8][2] = {
+                { 0.f, 1.f }, { kDiagonal, kDiagonal }, { 1.f, 0.f },
+                { kDiagonal, -kDiagonal }, { 0.f, -1.f },
+                { -kDiagonal, -kDiagonal }, { -1.f, 0.f },
+                { -kDiagonal, kDiagonal }
+            };
+            g.feetX += directions[directionalSegment][0] * (float)moved;
+            g.feetY += directions[directionalSegment][1] * (float)moved;
+            if ( directionalFreeFly ) { h.freeFlyDistanceMeasuredM += moved; }
+            else if ( directionalSprint ) { h.sprintDistanceMeasuredM += moved; }
+            else { h.walkDistanceMeasuredM += moved; }
+        }
+        else
+        {
+            g.feetX += (float)moved;
+        }
+        g.camX = g.feetX;
+        g.camY = g.feetY;
+        if ( h.measuringFrame ) { h.distanceMeasuredM += moved; }
+        FollowStreamCenter();
+        float ground = g.feetZ;
+        LARGE_INTEGER collision0{}, collision1{}, frequency{};
+        QueryPerformanceFrequency( &frequency ); QueryPerformanceCounter( &collision0 );
+        bool const groundValid = SampleGroundZBase( g.feetX, g.feetY, ground );
+        if ( directionalFreeFly )
+        {
+            if ( h.routeSegment != directionalSegment )
+            { h.routeFlyZ = ( groundValid ? ground : g.feetZ ) + 18.f; }
+            g.walkMode = false;
+            g.camZ = h.routeFlyZ;
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.grounded = false;
+        }
+        else
+        {
+            g.walkMode = true;
+            if ( groundValid ) { g.feetZ = ground; }
+            g.camZ = g.feetZ + kEyeHeightM;
+            g.grounded = groundValid;
+        }
+        h.routeSegment = directionalSegment;
+        QueryPerformanceCounter( &collision1 );
+        if ( frequency.QuadPart > 0 )
+        {
+            g.stage0FrameCollisionMs += 1000.0
+                * (double)( collision1.QuadPart - collision0.QuadPart )
+                / (double)frequency.QuadPart;
+        }
+        if ( !directionalFreeFly ) { g.camZ = g.feetZ + kEyeHeightM; }
+
+        char status[160];
+        std::snprintf( status, sizeof( status ),
+            "WORLDGEN BASELINE PERF — %s %d/%d",
+            p.id,
+            h.measuringFrame ? h.measuredFrames : h.phaseFrame,
+            h.measuringFrame ? measuredFrames : warmupFrames );
+        g.statusLine = status;
+    }
+
+    void WorldgenPerfWriteArtifacts( int exitCode )
+    {
+        WorldgenPerfHarness const& h = s_worldgenPerf;
+        FILE* f = nullptr;
+        if ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+        {
+            bool directionalPassed = h.results.size() >= 24;
+            for ( int stage = 0; directionalPassed && stage < 8; ++stage )
+            {
+                WorldgenPerfResult const& traversal = h.results[stage * 3 + 1];
+                directionalPassed = traversal.coverageMisses == 0
+                    && std::fabs( traversal.walkDistanceM - 18.0 ) <= 0.01
+                    && std::fabs( traversal.sprintDistanceM - 18.0 ) <= 0.01
+                    && std::fabs( traversal.freeFlyDistanceM - 12.0 ) <= 0.01
+                    && ( !g.certWorldgenLadderLivePerf || traversal.over16 == 0 );
+            }
+            bool orderInvariant = h.results.size() == 32;
+            if ( orderInvariant )
+            {
+                for ( int reverse = 0; reverse < 8; ++reverse )
+                {
+                    int const forwardStage = 7 - reverse;
+                    LadderAuditDigests const& a = h.results[forwardStage * 3].digests;
+                    LadderAuditDigests const& b = h.results[24 + reverse].digests;
+                    orderInvariant = orderInvariant
+                        && a.authority == b.authority
+                        && a.geometry == b.geometry
+                        && a.materialFeature == b.materialFeature
+                        && a.collision == b.collision
+                        && a.residentPackages == b.residentPackages;
+                }
+            }
+            int coverageMisses = 0;
+            for ( WorldgenPerfResult const& r : h.results )
+            { coverageMisses += r.coverageMisses; }
+            bool const stageIsolationPassed =
+                g.perfD2Rebuilds - h.invariantD2Start == 0
+                && g.perfOccRebuilds - h.invariantOccStart == 0
+                && g.perfEditedRegionChanges - h.invariantEditStart == 0
+                && g.perfSupportBelowCount - h.invariantSupportStart == 0
+                && g.perfOccupancyMutations - h.invariantMutationStart == 0
+                && coverageMisses == 0 && g.fractureEvents.empty()
+                && H2H::State().bodies.empty();
+            char const* reportPath = g.certWorldgenLadderLivePerf
+                ? "Docs\\provenance_worldgen_ladder_live_perf.txt"
+                : "Docs\\provenance_worldgen_ladder_audit.txt";
+            char const* tracePath = g.certWorldgenLadderLivePerf
+                ? "Docs\\provenance_worldgen_ladder_live_perf_trace.csv"
+                : "Docs\\provenance_worldgen_ladder_audit_trace.csv";
+            if ( fopen_s( &f, reportPath, "w" ) == 0 && f )
+            {
+                std::fprintf( f,
+                    "Provenance %s v1\nstatus=%s\nexit_code=%d\n"
+                    "scope=clean_stage5_stage6_stage7_stage8_stage9_stage10_stage11\n"
+                    "battery=settled_traversal_residency_stress\n"
+                    "order=forward_full_battery_then_reverse_settled\n"
+                    "traversal_route=N_NE_E_SE_S_SW_W_NW\n"
+                    "traversal_modes=walk_18m_sprint_18m_freefly_12m\n"
+                    "radius_m=%d\ndiameter_m=%d\nwarmup_frames=%d\nmeasured_frames=%d\n"
+                    "runtime_loop=%s\nswap_interval_request=%d\n"
+                    "pre_present_completion=%s\n"
+                    "measurement_policy=%s\n"
+                    "performance_budget_status=TRAVERSAL_60FPS_HARD_GATE_RESIDENCY_STRESS_ATTRIBUTED\n"
+                    "check.directional_walk_sprint_freefly=%s\n"
+                    "check.forward_reverse_digest_invariance=%s\n"
+                    "check.stage_isolation=%s\n"
+                    "check.periodic_legacy_present_stall=%s\n"
+                    "companion_transition_cert=Docs/provenance_playable_runtime_independence_cert.txt\n",
+                    g.certWorldgenLadderLivePerf ? "WORLDGEN_LADDER_LIVE_PERF"
+                        : "WORLDGEN_LADDER_AUDIT",
+                    exitCode == 0 ? "PASS" : "FAIL", exitCode,
+                    g.stage0LiveRadiusM,2*g.stage0LiveRadiusM,
+                    WorldgenPerfWarmupFrames(), WorldgenPerfMeasuredFrames(),
+                    g.certWorldgenLadderLivePerf ? "continuous_uncapped_player" : "wm_timer_certification",
+                    g.certWorldgenLadderLivePerf ? 0 : -1,
+                    Stage0UsesPrePresentCompletion()?"glFinish":"none",
+                    g.certWorldgenLadderLivePerf
+                        ? "settled_2s_traversal_48m_8bearings_walk_sprint_fly_residency_6x96m_over_3s"
+                        : "180_timer_frames_per_phase",
+                    directionalPassed ? "PASS" : "FAIL",
+                    orderInvariant ? "PASS" : "FAIL",
+                    stageIsolationPassed ? "PASS" : "FAIL",
+                    directionalPassed ? "PASS" : "FAIL" );
+                for ( size_t i = 0; i < h.results.size(); ++i )
+                {
+                    WorldgenPerfResult const& r = h.results[i];
+                    double const averageFps = r.meanMs > 0.0 ? 1000.0 / r.meanMs : 0.0;
+                    double const medianFps = r.medianMs > 0.0 ? 1000.0 / r.medianMs : 0.0;
+                    double const low1 = r.p99Ms > 0.0 ? 1000.0 / r.p99Ms : 0.0;
+                    double const low01 = r.p999Ms > 0.0 ? 1000.0 / r.p999Ms : 0.0;
+                    double const frameElapsedMs = r.meanMs * (double)r.sampleCount;
+                    double const terrainWorkMs = r.geoMsTotal + r.hfMsTotal;
+                    double const msPerMeter = r.distanceM > 0.0
+                        ? frameElapsedMs / r.distanceM : 0.0;
+                    double const workPerPackage = r.packagesBuilt > 0
+                        ? terrainWorkMs / (double)r.packagesBuilt : 0.0;
+                    double const workPerThousandCells = r.cellsCompleted > 0
+                        ? terrainWorkMs * 1000.0 / (double)r.cellsCompleted : 0.0;
+                    std::fprintf( f,
+                        "\n[%s]\nworkload=%s\nsample_count=%d\ndistance_m=%.6f\n"
+                        "walk_distance_m=%.6f\nsprint_distance_m=%.6f\n"
+                        "freefly_distance_m=%.6f\nduration_s=%.6f\n"
+                        "mean_fps=%.6f\nmedian_fps=%.6f\none_percent_low_fps=%.6f\n"
+                        "zero_point_one_percent_low_fps=%.6f\n"
+                        "mean_ms=%.6f\nmedian_ms=%.6f\np95_ms=%.6f\n"
+                        "p99_ms=%.6f\np99_9_ms=%.6f\nworst_ms=%.6f\n"
+                        "frames_over_16_667ms=%d\nframes_over_33_333ms=%d\n"
+                        "frames_over_50ms=%d\nframes_over_100ms=%d\n"
+                        "cpu_mean_ms=%.6f\n"
+                        "simulation_mean_ms=%.6f\nresidency_mean_ms=%.6f\n"
+                        "generation_mean_ms=%.6f\nmesh_build_mean_ms=%.6f\n"
+                        "draw_submit_mean_ms=%.6f\ngpu_finish_mean_ms=%.6f\n"
+                        "present_wait_mean_ms=%.6f\n"
+                        "collision_mean_ms=%.6f\n"
+                        "resident_cells=%d\nresident_triangles=%d\nmesh_packages=%d\n"
+                        "new_cells=%d\nevicted_cells=%d\npackages_built=%d\npackages_evicted=%d\n"
+                        "full_rebuilds=%d\nlocal_updates=%d\n"
+                        "elapsed_frame_ms_per_meter=%.6f\n"
+                        "terrain_work_ms_per_new_package=%.6f\n"
+                        "terrain_work_ms_per_1000_new_cells=%.6f\n"
+                        "memory_start_bytes=%llu\nmemory_end_bytes=%llu\n"
+                        "authority_digest=%s\ngeometry_digest=%s\nmaterial_feature_digest=%s\n"
+                        "collision_digest=%s\nresident_package_digest=%s\n",
+                        r.id, WorldgenPerfPhase( (int)i ).fixedRoute ? "traversal"
+                            : ( WorldgenPerfPhase( (int)i ).teleportEveryFrames > 0
+                                ? "residency_stress" : "settled" ),
+                        r.sampleCount, r.distanceM, r.walkDistanceM,
+                        r.sprintDistanceM, r.freeFlyDistanceM, r.durationS,
+                        averageFps, medianFps, low1, low01,
+                        r.meanMs, r.medianMs, r.p95Ms, r.p99Ms, r.p999Ms, r.worstMs,
+                        r.over16, r.over33, r.over50, r.over100,
+                        r.cpuFrameMeanMs, r.simulationMeanMs, r.residencyMeanMs,
+                        r.generationPureMeanMs, r.hfBuildMeanMs, r.drawSubmitMeanMs,
+                        r.gpuFinishMeanMs,r.presentWaitMeanMs, r.collisionMeanMs,
+                        r.residentCellsEnd, r.residentTriangles,
+                        r.meshPackages, r.cellsCompleted, r.evictedCells,
+                        r.packagesBuilt, r.packagesEvicted, r.hfRebuilds,
+                        r.hfLocalUpdates, msPerMeter, workPerPackage, workPerThousandCells,
+                        (unsigned long long)r.workingSetStart,
+                        (unsigned long long)r.workingSetEnd,
+                        CausalWorldGeology::Hex64( r.digests.authority ).c_str(),
+                        CausalWorldGeology::Hex64( r.digests.geometry ).c_str(),
+                        CausalWorldGeology::Hex64( r.digests.materialFeature ).c_str(),
+                        CausalWorldGeology::Hex64( r.digests.collision ).c_str(),
+                        CausalWorldGeology::Hex64( r.digests.residentPackages ).c_str() );
+                }
+                if ( h.results.size() >= 24 )
+                {
+                    static char const* scenarios[3] = { "settled", "traversal", "residency" };
+                    static char const* stages[8] = {
+                        "clean", "s5", "s6", "s7", "s8", "s9", "s10", "s11" };
+                    for ( int stage = 1; stage < 8; ++stage )
+                    for ( int scenario = 0; scenario < 3; ++scenario )
+                    {
+                        WorldgenPerfResult const& older = h.results[( stage - 1 ) * 3 + scenario];
+                        WorldgenPerfResult const& newer = h.results[stage * 3 + scenario];
+                        std::fprintf( f,
+                            "\n[delta_%s_minus_%s_%s]\nmean_delta_ms=%.6f\n"
+                            "p99_delta_ms=%.6f\ntriangles_delta=%d\npackages_delta=%d\n"
+                            "memory_end_delta_bytes=%lld\n",
+                            stages[stage], stages[stage - 1], scenarios[scenario],
+                            newer.meanMs - older.meanMs, newer.p99Ms - older.p99Ms,
+                            newer.residentTriangles - older.residentTriangles,
+                            newer.meshPackages - older.meshPackages,
+                            (long long)newer.workingSetEnd - (long long)older.workingSetEnd );
+                    }
+                }
+                std::fclose( f );
+            }
+            if ( fopen_s( &f, tracePath, "w" ) == 0 && f )
+            {
+                std::fprintf( f, "phase,workload,frame,frame_ms,fps,x,y,cpu_ms,simulation_ms,residency_ms,"
+                    "generation_ms,mesh_ms,retire_ms,draw_ms,finish_ms,present_ms,collision_ms,new_cells,resident_cells,"
+                    "evicted_cells,packages_built,packages_evicted,memory_bytes\n" );
+                for ( WorldgenPerfTraceRow const& row : h.trace )
+                {
+                    WorldgenPerfPhaseDef const& phase = WorldgenPerfPhase( row.phase );
+                    char const* workload = phase.fixedRoute ? "traversal"
+                        : ( phase.teleportEveryFrames > 0 ? "residency_stress" : "settled" );
+                    std::fprintf( f, "%s,%s,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
+                        "%d,%d,%d,%d,%d,%llu\n", phase.id, workload, row.frame,
+                        row.frameMs, row.frameMs > 0.0 ? 1000.0 / row.frameMs : 0.0,
+                        row.x, row.y, row.cpuFrameMs, row.simulationMs, row.residencyMs,
+                        row.generationPureMs, row.hfBuildMs, row.hfRetireMs,
+                        row.drawSubmitMs,row.gpuFinishMs,row.presentWaitMs,row.collisionMs,
+                        row.newCells, row.residentCells, row.evictedCells, row.hfLocalUpdates,
+                        row.packagesEvicted,
+                        (unsigned long long)row.workingSetBytes );
+                }
+                std::fclose( f );
+            }
+            return;
+        }
+        if ( g.certStage8Perf )
+        {
+            auto overheadPct = []( double newer, double older )
+            { return older > 0.0 ? 100.0 * ( newer - older ) / older : 0.0; };
+            bool settled = h.results.size() == 6;
+            for ( int index : { 0, 2, 4 } )
+            {
+                if ( index >= (int)h.results.size() ) { settled = false; continue; }
+                WorldgenPerfResult const& r = h.results[index];
+                settled = settled && r.cellsCompleted == 0 && r.evictedCells == 0
+                    && r.hfRebuilds == 0 && r.hfLocalUpdates == 0
+                    && r.authorityRecomputes == 0 && r.coverageMisses == 0;
+            }
+            bool marginal = h.results.size() == 6;
+            if ( marginal )
+            {
+                WorldgenPerfResult const& a = h.results[1];
+                WorldgenPerfResult const& c = h.results[5];
+                marginal = c.meanMs <= a.meanMs * 1.15 + 0.25
+                    && c.p99Ms <= a.p99Ms * 1.20 + 0.50
+                    && c.coverageMisses == 0;
+            }
+            int const stage8Exit = exitCode == 0 && settled && marginal ? 0 : 1;
+            if ( fopen_s( &f, "Docs\\provenance_stage8_playable_perf.txt", "w" ) == 0 && f )
+            {
+                std::fprintf( f,
+                    "Provenance STAGE8_PLAYABLE_PERF v1\nstatus=%s\nexit_code=%d\n"
+                    "build=same_process_same_resolution_same_seed\n"
+                    "radius_m=64\ndiameter_m=128\nwarmup_frames=%d\nmeasured_frames=600\n"
+                    "route=48m_fixed_shale_ridge_contact_recess\nmutation=0\n"
+                    "settled_invariants=%s\nmarginal_cost_gate=%s\n",
+                    stage8Exit == 0 ? "PASS" : "FAIL", stage8Exit,
+                    WorldgenPerfWarmupFrames(), settled ? "PASS" : "FAIL",
+                    marginal ? "PASS" : "FAIL" );
+                for ( size_t i = 0; i < h.results.size(); ++i )
+                {
+                    WorldgenPerfResult const& r = h.results[i];
+                    std::fprintf( f,
+                        "\n[%s]\nmean_ms=%.6f\nmedian_ms=%.6f\np95_ms=%.6f\n"
+                        "p99_ms=%.6f\nworst_ms=%.6f\nresident_triangles=%d\n"
+                        "mesh_packages=%d\nresident_cells=%d\nworking_set_start_bytes=%llu\n"
+                        "working_set_end_bytes=%llu\nworking_set_delta_bytes=%lld\n"
+                        "cpu_mean_ms=%.6f\npresentation_mean_ms=%.6f\ncollision_mean_ms=%.6f\n"
+                        "residency_mean_ms=%.6f\nhf_build_mean_ms=%.6f\n"
+                        "geometry_rebuilds=%d\nhf_local_updates=%d\nauthority_recomputes=%llu\n"
+                        "erosion_recompiles=%llu\nnew_cells=%d\nevicted_cells=%d\n"
+                        "coverage_misses=%d\n",
+                        WorldgenPerfPhase( (int)i ).id, r.meanMs, r.medianMs, r.p95Ms,
+                        r.p99Ms, r.worstMs, r.residentTriangles, r.meshPackages,
+                        r.residentCellsEnd, (unsigned long long)r.workingSetStart,
+                        (unsigned long long)r.workingSetEnd,
+                        (long long)r.workingSetEnd - (long long)r.workingSetStart,
+                        r.cpuFrameMeanMs, r.drawSubmitMeanMs, r.collisionMeanMs,
+                        r.residencyMeanMs, r.hfBuildMeanMs, r.hfRebuilds,
+                        r.hfLocalUpdates, (unsigned long long)r.authorityRecomputes,
+                        (unsigned long long)r.authorityRecomputes, r.cellsCompleted,
+                        r.evictedCells, r.coverageMisses );
+                }
+                if ( h.results.size() == 6 )
+                {
+                    auto writeDelta = [&]( char const* id, WorldgenPerfResult const& newer,
+                        WorldgenPerfResult const& older )
+                    {
+                        std::fprintf( f, "\n[%s]\nmean_delta_ms=%.6f\nmean_delta_pct=%.3f\n"
+                            "p99_delta_ms=%.6f\np99_delta_pct=%.3f\n",
+                            id, newer.meanMs - older.meanMs, overheadPct( newer.meanMs, older.meanMs ),
+                            newer.p99Ms - older.p99Ms, overheadPct( newer.p99Ms, older.p99Ms ) );
+                    };
+                    writeDelta( "compiler_path_overhead_walk", h.results[3], h.results[1] );
+                    writeDelta( "causal_relief_overhead_walk", h.results[5], h.results[3] );
+                    writeDelta( "total_stage8_overhead_walk", h.results[5], h.results[1] );
+                }
+                std::fclose( f );
+            }
+            if ( fopen_s( &f, "Docs\\provenance_stage8_playable_perf_trace.csv", "w" ) == 0 && f )
+            {
+                std::fprintf( f, "condition,frame,frame_ms,cpu_ms,presentation_ms,collision_ms,"
+                    "residency_ms,hf_build_ms,new_cells,hf_updates,resident_cells,memory_bytes\n" );
+                for ( WorldgenPerfTraceRow const& row : h.trace )
+                {
+                    std::fprintf( f, "%s,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%llu\n",
+                        WorldgenPerfPhase( row.phase ).id, row.frame, row.frameMs,
+                        row.cpuFrameMs, row.drawSubmitMs, row.collisionMs,
+                        row.residencyMs, row.hfBuildMs, row.newCells, row.hfLocalUpdates,
+                        row.residentCells, (unsigned long long)row.workingSetBytes );
+                }
+                std::fclose( f );
+            }
+            return;
+        }
+        if ( fopen_s( &f, "Docs\\provenance_worldgen_baseline_perf.txt", "w" ) == 0 && f )
+        {
+            int const d2 = g.perfD2Rebuilds - h.invariantD2Start;
+            int const occ = g.perfOccRebuilds - h.invariantOccStart;
+            int const edits = g.perfEditedRegionChanges - h.invariantEditStart;
+            int const support = g.perfSupportBelowCount - h.invariantSupportStart;
+            int const mutations = g.perfOccupancyMutations - h.invariantMutationStart;
+            std::fprintf( f,
+                "Provenance WORLDGEN_BASELINE_PERF v1\n"
+                "status=%s\nexit_code=%d\n"
+                "pass_scope=isolation_and_residency_continuity\n"
+                "performance_budget_status=REFERENCE_ONLY_NO_THRESHOLD\n"
+                "fixture=baseline\nseed=0x5747424153453031\n"
+                "terrain=constant_grade_dirt_floor\n"
+                "configured_far_radius_cells=%d\n"
+                "effective_residency_radius_cells=%d\n"
+                "effective_residency_diameter_m=%d\n"
+                "hf_draw_radius_cells=64\ncell_size_m=1\n"
+                "warmup_frames=%d\nmeasured_frames_per_phase=%d\n"
+                "movement_dt=live_client_clamped_frame_dt\n"
+                "frame_budget_ms=16.667\n"
+                "startup_cells=%d\nstartup_geo_requests=%d\n"
+                "startup_geo_ms=%.3f\nstartup_hf_rebuilds=%d\n"
+                "startup_hf_local_updates=%d\nstartup_hf_ms=%.3f\n"
+                "startup_working_set_bytes=%llu\n"
+                "invariant_d2_rebuilds=%d\ninvariant_occupancy_rebuilds=%d\n"
+                "invariant_edited_region_changes=%d\ninvariant_support_queries=%d\n"
+                "invariant_occupancy_mutations=%d\n"
+                "fracture_events=%d\nmatter_bodies=%d\nwater_coupling=DISABLED_P5b_CLOSED\n"
+                "trace=Docs/provenance_worldgen_baseline_trace.csv\n",
+                exitCode == 0 ? "PASS" : "FAIL", exitCode,
+                kFarRadiusCells, WorldgenPerfHarness::kEffectiveRadiusCells,
+                WorldgenPerfHarness::kEffectiveRadiusCells * 2,
+                WorldgenPerfWarmupFrames(), WorldgenPerfMeasuredFrames(),
+                h.startupCells, h.startupRequests, h.startupGeoMs,
+                h.startupHf, h.startupHfLocal, h.startupHfMs,
+                (unsigned long long)h.startupWorkingSet,
+                d2, occ, edits, support, mutations,
+                (int)g.fractureEvents.size(), (int)H2H::State().bodies.size() );
+
+            for ( WorldgenPerfResult const& r : h.results )
+            {
+                double const fps = r.meanMs > 0.0 ? 1000.0 / r.meanMs : 0.0;
+                double const low1 = r.p99Ms > 0.0 ? 1000.0 / r.p99Ms : 0.0;
+                double const low01 = r.p999Ms > 0.0 ? 1000.0 / r.p999Ms : 0.0;
+                double const cellsPerS = r.durationS > 0.0 ? (double)r.cellsCompleted / r.durationS : 0.0;
+                double const remeshPerS = r.durationS > 0.0
+                    ? (double)r.hfLocalUpdates / r.durationS : 0.0;
+                double const achievedSpeed = r.durationS > 0.0 ? r.distanceM / r.durationS : 0.0;
+                double const requestMean = r.geoRequests > 0 ? r.geoMsTotal / (double)r.geoRequests : 0.0;
+                std::fprintf( f,
+                    "\n[%s]\n"
+                    "commanded_speed_mps=%.3f\nachieved_speed_mps=%.3f\n"
+                    "distance_m=%.3f\nduration_s=%.3f\n"
+                    "mean_frame_ms=%.3f\nmedian_frame_ms=%.3f\n"
+                    "p95_frame_ms=%.3f\np99_frame_ms=%.3f\np99_9_frame_ms=%.3f\n"
+                    "worst_frame_ms=%.3f\naverage_fps=%.3f\n"
+                    "one_percent_low_fps=%.3f\nzero_point_one_percent_low_fps=%.3f\n"
+                    "frames_over_16_667ms=%d\nframes_over_33_333ms=%d\nframes_over_50ms=%d\n"
+                    "cells_requested=%d\ncells_completed=%d\n"
+                    "resident_cells_start=%d\nresident_cells_end=%d\nevicted_cells=%d\n"
+                    "new_cells_per_s=%.3f\n"
+                    "geo_requests=%d\nrequest_latency_mean_ms=%.3f\nrequest_latency_max_ms=%.3f\n"
+                    "terrain_generation_total_ms=%.3f\n"
+                    "hf_full_rebuilds=%d\nhf_local_updates=%d\nhf_local_updates_per_s=%.3f\n"
+                    "hf_mesh_total_ms=%.3f\nhf_mesh_max_ms=%.3f\n"
+                    "worst_single_frame_terrain_work_ms=%.3f\n"
+                    "cpu_frame_mean_ms=%.3f\nsimulation_mean_ms=%.3f\n"
+                    "residency_mean_ms=%.3f\ngeneration_pure_mean_ms=%.3f\n"
+                    "hf_build_mean_ms=%.3f\nhf_upload_mean_ms=%.3f\n"
+                    "draw_submit_mean_ms=%.3f\npresent_wait_mean_ms=%.3f\n"
+                    "pacing_wait_mean_ms=%.3f\ngpu_frame_mean_ms=%.3f\n"
+                    "queue_depth_max=%d\noutstanding_work_max=%d\ncoverage_misses=%d\n"
+                    "working_set_start_bytes=%llu\nworking_set_end_bytes=%llu\n"
+                    "resident_cell_payload_lower_bound_bytes=%llu\n"
+                    "kept_up=%s\n",
+                    r.id, r.commandedSpeedMps, achievedSpeed, r.distanceM, r.durationS,
+                    r.meanMs, r.medianMs, r.p95Ms, r.p99Ms, r.p999Ms, r.worstMs,
+                    fps, low1, low01, r.over16, r.over33, r.over50,
+                    r.cellsRequested, r.cellsCompleted, r.residentCellsStart,
+                    r.residentCellsEnd, r.evictedCells, cellsPerS, r.geoRequests, requestMean,
+                    r.geoMsMax, r.geoMsTotal, r.hfRebuilds, r.hfLocalUpdates, remeshPerS,
+                    r.hfMsTotal, r.hfMsMax, r.terrainSpikeMs,
+                    r.cpuFrameMeanMs, r.simulationMeanMs, r.residencyMeanMs,
+                    r.generationPureMeanMs, r.hfBuildMeanMs, r.hfUploadMeanMs,
+                    r.drawSubmitMeanMs, r.presentWaitMeanMs, r.pacingWaitMeanMs,
+                    r.gpuFrameMeanMs,
+                    r.queueDepthMax, r.outstandingMax, r.coverageMisses,
+                    (unsigned long long)r.workingSetStart,
+                    (unsigned long long)r.workingSetEnd,
+                    (unsigned long long)( (size_t)r.residentCellsEnd * sizeof( CellSample ) ),
+                    r.coverageMisses == 0 ? "yes" : "no" );
+            }
+            std::fclose( f );
+        }
+
+        if ( fopen_s( &f, "Docs\\provenance_worldgen_baseline_trace.csv", "w" ) == 0 && f )
+        {
+            std::fprintf( f,
+                "phase,frame,frame_ms,fps,x,y,new_cells,resident_cells,evicted_cells,geo_ms,hf_ms,"
+                "hf_full_rebuilds,hf_local_updates,cpu_frame_ms,simulation_ms,residency_ms,"
+                "generation_pure_ms,hf_build_ms,hf_upload_ms,draw_submit_ms,present_wait_ms,"
+                "pacing_wait_ms,gpu_frame_ms,queue_depth,outstanding,working_set_bytes\n" );
+            for ( WorldgenPerfTraceRow const& r : h.trace )
+            {
+                std::fprintf( f, "%s,%d,%.6f,%.3f,%.3f,%.3f,%d,%d,%d,%.6f,%.6f,%d,%d,"
+                    "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%llu\n",
+                    WorldgenPerfPhase( r.phase ).id, r.frame,
+                    r.frameMs, r.frameMs > 0.0 ? 1000.0 / r.frameMs : 0.0,
+                    r.x, r.y, r.newCells, r.residentCells, r.evictedCells, r.geoMs, r.hfMs,
+                    r.hfRebuilds, r.hfLocalUpdates,
+                    r.cpuFrameMs, r.simulationMs, r.residencyMs, r.generationPureMs,
+                    r.hfBuildMs, r.hfUploadMs, r.drawSubmitMs, r.presentWaitMs,
+                    r.pacingWaitMs, r.gpuFrameMs, r.queueDepth, r.outstanding,
+                    (unsigned long long)r.workingSetBytes );
+            }
+            std::fclose( f );
+        }
+    }
+
+    void WorldgenPerfFinishPhase()
+    {
+        WorldgenPerfHarness& h = s_worldgenPerf;
+        WorldgenPerfPhaseDef const& p = WorldgenPerfPhase( h.phase );
+        WorldgenPerfResult r{};
+        std::snprintf( r.id, sizeof( r.id ), "%s", p.id );
+        r.commandedSpeedMps = p.speedMps;
+        r.distanceM = h.distanceMeasuredM;
+        r.walkDistanceM = h.walkDistanceMeasuredM;
+        r.sprintDistanceM = h.sprintDistanceMeasuredM;
+        r.freeFlyDistanceM = h.freeFlyDistanceMeasuredM;
+        r.sampleCount = (int)h.frameMs.size();
+        for ( double ms : h.frameMs )
+        {
+            r.durationS += ms / 1000.0;
+            r.meanMs += ms;
+            r.worstMs = (std::max)( r.worstMs, ms );
+            if ( ms > 16.667 ) { ++r.over16; }
+            if ( ms > 33.333 ) { ++r.over33; }
+            if ( ms > 50.0 ) { ++r.over50; }
+            if ( ms > 100.0 ) { ++r.over100; }
+        }
+        if ( !h.frameMs.empty() ) { r.meanMs /= (double)h.frameMs.size(); }
+        std::vector<double> sorted = h.frameMs;
+        std::sort( sorted.begin(), sorted.end() );
+        r.medianMs = PercentileSorted( sorted, 0.50 );
+        r.p95Ms = PercentileSorted( sorted, 0.95 );
+        r.p99Ms = PercentileSorted( sorted, 0.99 );
+        r.p999Ms = PercentileSorted( sorted, 0.999 );
+        int timingCount = 0;
+        for ( WorldgenPerfTraceRow const& row : h.trace )
+        {
+            if ( row.phase != h.phase ) { continue; }
+            r.cpuFrameMeanMs += row.cpuFrameMs;
+            r.simulationMeanMs += row.simulationMs;
+            r.residencyMeanMs += row.residencyMs;
+            r.generationPureMeanMs += row.generationPureMs;
+            r.hfBuildMeanMs += row.hfBuildMs;
+            r.hfUploadMeanMs += row.hfUploadMs;
+            r.drawSubmitMeanMs += row.drawSubmitMs;
+            r.gpuFinishMeanMs += row.gpuFinishMs;
+            r.presentWaitMeanMs += row.presentWaitMs;
+            r.pacingWaitMeanMs += row.pacingWaitMs;
+            r.collisionMeanMs += row.collisionMs;
+            ++timingCount;
+        }
+        if ( timingCount > 0 )
+        {
+            double const inv = 1.0 / (double)timingCount;
+            r.cpuFrameMeanMs *= inv;
+            r.simulationMeanMs *= inv;
+            r.residencyMeanMs *= inv;
+            r.generationPureMeanMs *= inv;
+            r.hfBuildMeanMs *= inv;
+            r.hfUploadMeanMs *= inv;
+            r.drawSubmitMeanMs *= inv;
+            r.gpuFinishMeanMs *= inv;
+            r.presentWaitMeanMs *= inv;
+            r.pacingWaitMeanMs *= inv;
+            r.collisionMeanMs *= inv;
+        }
+        r.cellsRequested = g.perfGeoCellsRequested - h.snapCellsRequested;
+        r.cellsCompleted = g.perfGeoCellsCreated - h.snapCellsCompleted;
+        r.residentCellsStart = h.snapResidentCells;
+        r.residentCellsEnd = (int)g.cells.size();
+        r.evictedCells = g.perfGeoCellsEvicted - h.snapEvictedCells;
+        r.geoRequests = g.perfGeoDiskRequests - h.snapGeoRequests;
+        r.geoMsTotal = g.perfGeoGenMsTotal - h.snapGeoMs;
+        r.geoMsMax = h.phaseGeoMax;
+        r.hfRebuilds = g.perfHfRebuilds - h.snapHfRebuilds;
+        r.hfLocalUpdates = g.perfHfLocalUpdates - h.snapHfLocalUpdates;
+        r.packagesBuilt = r.hfLocalUpdates;
+        r.packagesEvicted = g.perfHfBlocksEvicted - h.snapHfBlocksEvicted;
+        r.hfMsTotal = (double)g.perfHfRemeshMsTotal - h.snapHfMs;
+        r.hfMsMax = h.phaseHfMax;
+        r.terrainSpikeMs = h.phaseTerrainSpikeMax;
+        r.queueDepthMax = h.phaseQueueMax;
+        r.outstandingMax = h.phaseOutstandingMax;
+        r.coverageMisses = h.phaseCoverageMisses;
+        r.workingSetStart = h.snapWorkingSet;
+        r.workingSetEnd = CurrentWorkingSetBytes();
+        if ( IsVisibleExposureView( g.stage0PlayView ) )
+        {
+            r.residentTriangles = g.stage7TerrainTriangles;
+            r.meshPackages = (int)g.stage7TerrainBlocks.size();
+        }
+        else if ( IsDifferentialErosionView( g.stage0PlayView )
+          || IsGraniteIntrusionView( g.stage0PlayView )
+          || IsContactMineralizationView( g.stage0PlayView )
+          || IsFaultDisplacementView(g.stage0PlayView) )
+        {
+            r.residentTriangles = g.stage8TerrainTriangles;
+            r.meshPackages = (int)g.stage8TerrainBlocks.size();
+        }
+        else
+        {
+            for ( auto const& block : g.stage0TerrainBlocks )
+            { r.residentTriangles += block.second.tris; }
+            r.meshPackages = (int)g.stage0TerrainBlocks.size();
+        }
+        uint64_t const authorityNow = g.causalErosionRuntime
+            ? g.causalErosionRuntime->SurfaceCompilationCount() : 0;
+        r.authorityRecomputes = authorityNow - h.snapAuthorityRecomputes;
+        if ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+        { r.digests = CaptureLadderAuditDigests( g.stage0PlayView ); }
+        h.results.push_back( r );
+
+        ++h.phase;
+        h.phaseFrame = 0;
+        h.measuredFrames = 0;
+        h.measuringFrame = false;
+        h.lastFrameQpc = 0;
+
+        int const phaseCount = WorldgenPerfPhaseCount();
+        if ( h.phase >= phaseCount )
+        {
+            int const d2 = g.perfD2Rebuilds - h.invariantD2Start;
+            int const occ = g.perfOccRebuilds - h.invariantOccStart;
+            int const edits = g.perfEditedRegionChanges - h.invariantEditStart;
+            int const support = g.perfSupportBelowCount - h.invariantSupportStart;
+            int const mutations = g.perfOccupancyMutations - h.invariantMutationStart;
+            int coverage = 0;
+            for ( WorldgenPerfResult const& pr : h.results ) { coverage += pr.coverageMisses; }
+            int exitCode = ( d2 == 0 && occ == 0 && edits == 0 && support == 0
+                && mutations == 0 && coverage == 0 && g.fractureEvents.empty()
+                && H2H::State().bodies.empty() ) ? 0 : 1;
+            if ( g.certStage8Perf && h.results.size() == 6 )
+            {
+                bool settled = true;
+                for ( int index : { 0, 2, 4 } )
+                {
+                    WorldgenPerfResult const& r = h.results[index];
+                    settled = settled && r.cellsCompleted == 0 && r.evictedCells == 0
+                        && r.hfRebuilds == 0 && r.hfLocalUpdates == 0
+                        && r.authorityRecomputes == 0 && r.coverageMisses == 0;
+                }
+                WorldgenPerfResult const& a = h.results[1];
+                WorldgenPerfResult const& c = h.results[5];
+                bool const marginal = c.meanMs <= a.meanMs * 1.15 + 0.25
+                    && c.p99Ms <= a.p99Ms * 1.20 + 0.50
+                    && c.coverageMisses == 0;
+                if ( !settled || !marginal ) { exitCode = 1; }
+            }
+            if ( g.certWorldgenLadderAudit || g.certWorldgenLadderLivePerf )
+            {
+                bool orderInvariant = h.results.size() == 32;
+                bool directionalPassed = h.results.size() >= 24;
+                for ( int stage = 0; directionalPassed && stage < 8; ++stage )
+                {
+                    WorldgenPerfResult const& traversal = h.results[stage * 3 + 1];
+                    directionalPassed = traversal.coverageMisses == 0
+                        && std::fabs( traversal.walkDistanceM - 18.0 ) <= 0.01
+                        && std::fabs( traversal.sprintDistanceM - 18.0 ) <= 0.01
+                        && std::fabs( traversal.freeFlyDistanceM - 12.0 ) <= 0.01
+                        && ( !g.certWorldgenLadderLivePerf || traversal.over16 == 0 );
+                }
+                if ( orderInvariant )
+                {
+                    for ( int reverse = 0; reverse < 8; ++reverse )
+                    {
+                        int const forwardStage = 7 - reverse;
+                        LadderAuditDigests const& a = h.results[forwardStage * 3].digests;
+                        LadderAuditDigests const& b = h.results[24 + reverse].digests;
+                        orderInvariant = orderInvariant
+                            && a.authority == b.authority
+                            && a.geometry == b.geometry
+                            && a.materialFeature == b.materialFeature
+                            && a.collision == b.collision
+                            && a.residentPackages == b.residentPackages;
+                    }
+                }
+                if ( !orderInvariant || !directionalPassed ) { exitCode = 1; }
+            }
+            WorldgenPerfWriteArtifacts( exitCode );
+            g.statusLine = exitCode == 0
+                ? ( g.certWorldgenLadderLivePerf ? "WORLDGEN LIVE LADDER complete — PASS"
+                    : g.certWorldgenLadderAudit ? "WORLDGEN LADDER AUDIT complete — PASS"
+                    : g.certStage8Perf ? "STAGE 8 PERF complete — PASS"
+                    : "WORLDGEN BASELINE PERF complete — PASS" )
+                : ( g.certWorldgenLadderLivePerf ? "WORLDGEN LIVE LADDER complete — FAIL"
+                    : g.certWorldgenLadderAudit ? "WORLDGEN LADDER AUDIT complete — FAIL"
+                    : g.certStage8Perf ? "STAGE 8 PERF complete — FAIL"
+                    : "WORLDGEN BASELINE PERF complete — invariant FAIL" );
+            PostQuitMessage( exitCode );
+        }
+    }
+
+    void WorldgenPerfAfterRender()
+    {
+        WorldgenPerfHarness& h = s_worldgenPerf;
+        if ( !h.initialized ) { return; }
+        int const phaseCount = WorldgenPerfPhaseCount();
+        if ( h.phase >= phaseCount ) { return; }
+
+        LARGE_INTEGER qpc{}, qpf{};
+        QueryPerformanceCounter( &qpc );
+        QueryPerformanceFrequency( &qpf );
+        double frameMs = 0.0;
+        if ( h.lastFrameQpc != 0 && qpf.QuadPart > 0 )
+        {
+            frameMs = 1000.0 * (double)( qpc.QuadPart - h.lastFrameQpc ) / (double)qpf.QuadPart;
+        }
+        h.lastFrameQpc = qpc.QuadPart;
+
+        if ( h.measuringFrame && frameMs > 0.0 )
+        {
+            g.stage0FramePacingWaitMs =
+                (std::max)( 0.0, frameMs - g.stage0FrameCpuMs );
+            double const geoMs = g.perfGeoGenMsTotal - h.frameGeoStartMs;
+            double const hfMs = (double)g.perfHfRemeshMsTotal - h.frameHfStartMs;
+            int const newCells = g.perfGeoCellsCreated - h.frameCellsStart;
+            int const hfRebuilds = g.perfHfRebuilds - h.frameHfStart;
+            int const hfLocalUpdates = g.perfHfLocalUpdates - h.frameHfLocalStart;
+            int const packagesEvicted = g.perfHfBlocksEvicted - h.frameHfBlocksEvictedStart;
+            int const queueDepth = (int)g.columnQueue.size();
+            int const outstanding = ( g.pending != PendingKind::None ? 1 : 0 )
+                + ( g.terrainDirty ? 1 : 0 );
+            h.phaseGeoMax = (std::max)( h.phaseGeoMax, geoMs );
+            h.phaseHfMax = (std::max)( h.phaseHfMax, hfMs );
+            h.phaseTerrainSpikeMax = (std::max)( h.phaseTerrainSpikeMax, geoMs + hfMs );
+            h.phaseQueueMax = (std::max)( h.phaseQueueMax, queueDepth );
+            h.phaseOutstandingMax = (std::max)( h.phaseOutstandingMax, outstanding );
+
+            int const cx = (int)std::floor( g.feetX );
+            int const cy = (int)std::floor( g.feetY );
+            int const r = WorldgenPerfHarness::kEffectiveRadiusCells;
+            int misses = 0;
+            misses += GetCell( cx, cy ) ? 0 : 1;
+            misses += GetCell( cx + r, cy ) ? 0 : 1;
+            misses += GetCell( cx - r, cy ) ? 0 : 1;
+            misses += GetCell( cx, cy + r ) ? 0 : 1;
+            misses += GetCell( cx, cy - r ) ? 0 : 1;
+            h.phaseCoverageMisses += misses;
+
+            h.frameMs.push_back( frameMs );
+            h.measuredElapsedS += frameMs / 1000.0;
+            WorldgenPerfTraceRow row{};
+            row.phase = h.phase;
+            row.frame = h.measuredFrames;
+            row.frameMs = frameMs;
+            row.x = g.feetX;
+            row.y = g.feetY;
+            row.newCells = newCells;
+            row.residentCells = (int)g.cells.size();
+            row.evictedCells = g.perfGeoCellsEvicted;
+            row.geoMs = geoMs;
+            row.hfMs = hfMs;
+            row.hfRebuilds = hfRebuilds;
+            row.hfLocalUpdates = hfLocalUpdates;
+            row.packagesEvicted = packagesEvicted;
+            row.cpuFrameMs = g.stage0FrameCpuMs;
+            row.simulationMs = g.stage0FrameSimulationMs;
+            row.residencyMs = g.stage0FrameResidencyMs;
+            row.generationPureMs = g.stage0FrameGenerationMs;
+            row.hfBuildMs = g.stage0FrameHfBuildMs;
+            row.hfRetireMs = g.stage0FrameHfRetireMs;
+            row.hfUploadMs = g.stage0FrameHfUploadMs;
+            row.drawSubmitMs = g.stage0FrameDrawSubmitMs;
+            row.gpuFinishMs = g.stage0FrameGpuFinishMs;
+            row.presentWaitMs = g.stage0FramePresentWaitMs;
+            row.pacingWaitMs = g.stage0FramePacingWaitMs;
+            row.gpuFrameMs = g.stage0FrameGpuMs;
+            row.collisionMs = g.stage0FrameCollisionMs;
+            row.queueDepth = queueDepth;
+            row.outstanding = outstanding;
+            if ( h.measuredFrames % 30 == 0 ) { row.workingSetBytes = CurrentWorkingSetBytes(); }
+            h.trace.push_back( row );
+            ++h.measuredFrames;
+        }
+
+        ++h.phaseFrame;
+        bool phaseComplete = h.measuredFrames >= WorldgenPerfMeasuredFrames();
+        if ( g.certWorldgenLadderLivePerf )
+        {
+            WorldgenPerfPhaseDef const& phase = WorldgenPerfPhase( h.phase );
+            phaseComplete = h.measuringFrame && ( phase.fixedRoute
+                ? h.distanceMeasuredM >= 48.0 - 1e-6
+                : ( phase.teleportEveryFrames > 0
+                    ? h.liveTeleports >= 6 && h.measuredElapsedS >= 3.0
+                    : h.measuredElapsedS >= 2.0 ) );
+        }
+        if ( phaseComplete )
+        {
+            WorldgenPerfFinishPhase();
+        }
+    }
+
+    struct RuntimeIndependenceCase
+    {
+        char const* id;
+        Stage0PlayView predecessor;
+        Stage0PlayView target;
+    };
+
+    static RuntimeIndependenceCase const s_runtimeIndependenceCases[] = {
+        { "cold_clean_to_10", Stage0PlayView::Clean, Stage0PlayView::ContactMineralization },
+        { "5_to_10", Stage0PlayView::CausalGeologyKernel, Stage0PlayView::ContactMineralization },
+        { "6_to_10", Stage0PlayView::GeologicExposure, Stage0PlayView::ContactMineralization },
+        { "7_to_10", Stage0PlayView::VisibleGeologicExposure, Stage0PlayView::ContactMineralization },
+        { "8_to_10", Stage0PlayView::DifferentialErosion, Stage0PlayView::ContactMineralization },
+        { "9_to_10", Stage0PlayView::GraniteIntrusion, Stage0PlayView::ContactMineralization },
+        { "10_to_5", Stage0PlayView::ContactMineralization, Stage0PlayView::CausalGeologyKernel },
+        { "10_to_7", Stage0PlayView::ContactMineralization, Stage0PlayView::VisibleGeologicExposure },
+        { "10_to_9", Stage0PlayView::ContactMineralization, Stage0PlayView::GraniteIntrusion },
+        { "10_to_10", Stage0PlayView::ContactMineralization, Stage0PlayView::ContactMineralization },
+        { "cold_clean_to_11", Stage0PlayView::Clean, Stage0PlayView::FaultDisplacement },
+        { "10_to_11", Stage0PlayView::ContactMineralization, Stage0PlayView::FaultDisplacement },
+        { "11_to_5", Stage0PlayView::FaultDisplacement, Stage0PlayView::CausalGeologyKernel },
+        { "11_to_10", Stage0PlayView::FaultDisplacement, Stage0PlayView::ContactMineralization },
+        { "11_to_11", Stage0PlayView::FaultDisplacement, Stage0PlayView::FaultDisplacement },
+    };
+
+    struct RuntimeIndependenceReceipt
+    {
+        char const* id = "";
+        bool selected = false;
+        bool terrainVisible = false;
+        bool resident = false;
+        bool settled = false;
+        bool collision = false;
+        bool grounded = false;
+        int cells = 0;
+        int packages = 0;
+        int triangles = 0;
+        uint64_t digest = 0;
+        int attachmentSamples = 0;
+        int attachmentPenetrations = 0;
+        double attachmentMaxFloatM = 0.0;
+        bool toolListsBuilt = false;
+        int rulerTriangles = 0;
+        double rulerMaxSurfaceErrorM = 0.0;
+        double paletteMaxSurfaceErrorM = 0.0;
+        int cutawayAuthoritySamples = 0;
+        bool xrayContact = false;
+        bool xraySharedEdge = false;
+        bool xrayQueryParity = false;
+        bool xrayHostResident = false;
+        bool xrayDigestInvariant = false;
+    };
+
+    static int s_runtimeIndependenceCase = 0;
+    static int s_runtimeIndependenceFrames = 0;
+    static bool s_runtimeIndependenceSelectionOk = false;
+    static std::vector<RuntimeIndependenceReceipt> s_runtimeIndependenceReceipts;
+    static int s_runtimeDiagnosticPhase = -1;
+    static int s_runtimeDiagnosticFrames = 0;
+    static float s_runtimePaletteAX = 0.f;
+    static uint64_t s_runtimeRulerDigestA = 0;
+    static int s_runtimeRulerTrianglesA = 0;
+    static bool s_runtimePaletteOneAtA = false;
+    static bool s_runtimePaletteToolsAtA = false;
+    static bool s_runtimePaletteReplacedAtB = false;
+    static bool s_runtimePaletteRetired = false;
+    static bool s_runtimeRulerMoved = false;
+    static bool s_runtimeRulerReturned = false;
+    static bool s_runtimeRulerOffZero = false;
+
+    struct WorldgenBoundaryReceipt
+    {
+        Stage0PlayView view = Stage0PlayView::Clean;
+        char label[32] = {};
+        int skyPixels = 0;
+        int fallbackGreenPixels = 0;
+        int sampledPixels = 0;
+        bool groundValid = false;
+        bool freeFlyStable = false;
+        bool imageWritten = false;
+    };
+
+    static Stage0PlayView const s_boundaryViews[] = {
+        Stage0PlayView::Clean,
+        Stage0PlayView::CausalGeologyKernel,
+        Stage0PlayView::GeologicExposure,
+        Stage0PlayView::VisibleGeologicExposure,
+        Stage0PlayView::DifferentialErosion,
+        Stage0PlayView::GraniteIntrusion,
+        Stage0PlayView::ContactMineralization,
+        Stage0PlayView::FaultDisplacement,
+    };
+    static char const* const s_boundaryLabels[] = {
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11"
+    };
+    static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
+    constexpr int kBoundaryBearingCount = 4;
+    static std::vector<WorldgenBoundaryReceipt> s_boundaryReceipts;
+    static int s_boundaryViewIndex = 0;
+    static bool s_boundaryCapturePending = false;
+    static bool s_boundaryCaptureComplete = false;
+    static float s_boundaryExpectedCameraZ = 0.f;
+    static bool s_runtimeBaseAndToolsPassed = false;
+    static int s_boundaryPopCapturePending = 0; // 1=before, 2=after
+    static bool s_boundaryPopCaptureComplete = false;
+    static std::vector<unsigned char> s_boundaryPopBefore;
+    static int s_boundaryPopW = 0, s_boundaryPopH = 0;
+    static int s_boundaryPopChangedPixels = 0;
+    static int s_boundaryPopSampledPixels = 0;
+    static int s_boundaryPopMaxChannelDelta = 0;
+
+    void PrepareWorldgenBoundaryView( int index )
+    {
+        int const stageIndex = index / kBoundaryBearingCount;
+        int const bearingIndex = index % kBoundaryBearingCount;
+        Stage0PlayView const view = s_boundaryViews[stageIndex];
+        g.stage0ToolGeologyCutaway = false;
+        g.stage0ToolPerformanceHud = false;
+        g.stage0StageMenuOpen = false;
+        g.walkMode = false;
+        g.grounded = false;
+
+        // Deliberately inspect well beyond the origin fixture.  Looking steeply
+        // down makes every clear-colour pixel an unambiguous terrain coverage
+        // failure rather than ordinary horizon sky.
+        g.camX = 1536.5f;
+        g.camY = -1023.5f;
+        g.feetX = g.camX;
+        g.feetY = g.camY;
+        g.playerX = (int)std::floor( g.feetX );
+        g.playerY = (int)std::floor( g.feetY );
+        // Stage selection rebuilds the exact surface around the current live
+        // center.  Establish the distant destination first so this audit tests
+        // traversal coverage, not a deliberately stale pre-teleport package set.
+        SelectStage0PlayView( view );
+        FollowStreamCenter();
+        float surfaceZ = 0.f;
+        float walkGroundZ = 0.f;
+        bool const groundValid = Stage0CalibrationSurfaceZ( g.camX, g.camY, surfaceZ )
+            && std::isfinite( surfaceZ )
+            && SampleGroundZ( g.camX, g.camY, walkGroundZ )
+            && std::isfinite( walkGroundZ )
+            && std::fabs( walkGroundZ - surfaceZ ) <= 0.001f;
+        // Oblique seam study: the view ray reaches ground at roughly 64 m,
+        // putting the exact/stitch/far handoff through the centre of the image.
+        g.camZ = surfaceZ + 24.f;
+        static float const yaws[kBoundaryBearingCount] = {
+            0.f, 1.5707963f, 3.14159265f, -1.5707963f };
+        g.yaw = yaws[bearingIndex];
+        g.pitch = -0.35f;
+        g.feetZ = g.camZ - kEyeHeightM;
+        s_boundaryExpectedCameraZ = g.camZ;
+
+        WorldgenBoundaryReceipt receipt;
+        receipt.view = view;
+        std::snprintf( receipt.label, sizeof( receipt.label ), "%s_%s",
+            s_boundaryLabels[stageIndex], s_boundaryBearingLabels[bearingIndex] );
+        receipt.groundValid = groundValid;
+        s_boundaryReceipts.push_back( receipt );
+    }
+
+    void CaptureWorldgenBoundaryView()
+    {
+        if ( s_boundaryReceipts.empty() ) { return; }
+        WorldgenBoundaryReceipt& receipt = s_boundaryReceipts.back();
+        glFinish();
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w > 0 && h > 0 )
+        {
+            std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+            glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+            glReadBuffer( GL_FRONT );
+            glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+            // Ignore only the outermost pixel, where the Win32 client border can
+            // enter captures. The view is downward and the certified 192 m live
+            // surface extends beyond the frustum, so sky is never legitimate here.
+            // Only the lower 60% is required to be terrain in this oblique view;
+            // ordinary horizon sky above it is legitimate.
+            for ( int y = 1; y < h * 3 / 5; ++y )
+            for ( int x = 1; x < w - 1; ++x )
+            {
+                size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                int const r = rgba[i], green = rgba[i + 1], b = rgba[i + 2];
+                int const dr = r - 114, dg = green - 158, db = b - 224;
+                ++receipt.sampledPixels;
+                if ( dr * dr + dg * dg + db * db <= 8 * 8 ) { ++receipt.skyPixels; }
+                if ( green > r * 1.12f && green > b * 1.12f && green > 72 )
+                { ++receipt.fallbackGreenPixels; }
+            }
+        }
+        char path[MAX_PATH];
+        std::snprintf( path, sizeof( path ),
+            "Docs\\provenance_%s_boundary_continuity.ppm", receipt.label );
+        receipt.imageWritten = DumpFramePpm( path );
+        receipt.freeFlyStable = std::fabs( g.camZ - s_boundaryExpectedCameraZ ) <= 1e-4f;
+    }
+
+    void CaptureWorldgenBoundaryPopFrame( int which )
+    {
+        glFinish();
+        GLint vp[4] = {}; glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return; }
+        std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 ); glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+        if ( which == 1 )
+        {
+            s_boundaryPopBefore = rgba; s_boundaryPopW = w; s_boundaryPopH = h;
+            DumpFramePpm( "Docs\\provenance_stage8_boundary_pop_before.ppm" );
+            return;
+        }
+        DumpFramePpm( "Docs\\provenance_stage8_boundary_pop_after.ppm" );
+        s_boundaryPopChangedPixels = s_boundaryPopSampledPixels = 0;
+        s_boundaryPopMaxChannelDelta = 0;
+        if ( s_boundaryPopW != w || s_boundaryPopH != h
+          || s_boundaryPopBefore.size() != rgba.size() )
+        { s_boundaryPopChangedPixels = INT_MAX; return; }
+        for ( int y = 1; y < h * 3 / 5; ++y )
+        for ( int x = 1; x < w - 1; ++x )
+        {
+            size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+            int const dr = std::abs( (int)rgba[i] - (int)s_boundaryPopBefore[i] );
+            int const dg = std::abs( (int)rgba[i+1] - (int)s_boundaryPopBefore[i+1] );
+            int const db = std::abs( (int)rgba[i+2] - (int)s_boundaryPopBefore[i+2] );
+            int const delta = (std::max)({ dr, dg, db });
+            ++s_boundaryPopSampledPixels;
+            s_boundaryPopMaxChannelDelta = (std::max)( s_boundaryPopMaxChannelDelta, delta );
+            if ( delta > 2 ) { ++s_boundaryPopChangedPixels; }
+        }
+    }
+
+    bool WriteWorldgenBoundaryArtifact()
+    {
+        bool passed = s_boundaryReceipts.size()
+            == sizeof( s_boundaryViews ) / sizeof( s_boundaryViews[0] )
+                * kBoundaryBearingCount;
+        FILE* file = nullptr;
+        if ( fopen_s( &file, "Docs\\provenance_worldgen_boundary_continuity_cert.txt", "wb" )
+          != 0 || !file ) { return false; }
+        for ( WorldgenBoundaryReceipt const& receipt : s_boundaryReceipts )
+        {
+            bool const rowPassed = receipt.skyPixels == 0
+                && receipt.fallbackGreenPixels == 0 && receipt.sampledPixels > 0
+                && receipt.groundValid && receipt.freeFlyStable && receipt.imageWritten;
+            passed = passed && rowPassed;
+            std::fprintf( file,
+                "view.%s=%s sky_pixels=%d fallback_green_pixels=%d sampled=%d ground_valid=%d freefly_stable=%d image=%d\n",
+                receipt.label, rowPassed ? "PASS" : "FAIL", receipt.skyPixels,
+                receipt.fallbackGreenPixels, receipt.sampledPixels, receipt.groundValid ? 1 : 0,
+                receipt.freeFlyStable ? 1 : 0, receipt.imageWritten ? 1 : 0 );
+        }
+        passed = passed && s_boundaryPopSampledPixels > 0
+            && s_boundaryPopChangedPixels == 0;
+        std::fprintf( file,
+            "WORLDGEN_BOUNDARY_CONTINUITY %s\n"
+            "capture_policy=stage0_stage5_to_stage11_x_north_east_south_west\n"
+            "active_residency_radius_m=%d\nactive_residency_diameter_m=%d\n"
+            "far_field_extent_m=%d\nfar_field_collision=0\n"
+            "check.partial_edge_packages_closed=%s\n"
+            "check.residency_boundary_not_visible=%s\n"
+            "check.no_missing_cell_green_fallback=%s\n"
+            "boundary_pop_changed_pixels=%d\nboundary_pop_sampled_pixels=%d\n"
+            "boundary_pop_max_channel_delta=%d\n"
+            "check.fixed_camera_boundary_crossing_no_pop=%s\n"
+            "check.distant_ground_query_valid=%s\n"
+            "check.freefly_has_no_body_collision=%s\n",
+            passed ? "PASS" : "FAIL", g.stage0LiveRadiusM,
+            g.stage0LiveRadiusM * 2, g.stage0FarExtentM,
+            passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            s_boundaryPopChangedPixels, s_boundaryPopSampledPixels,
+            s_boundaryPopMaxChannelDelta,
+            s_boundaryPopChangedPixels == 0 ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL" );
+        std::fclose( file );
+        return passed;
+    }
+
+    uint64_t RuntimeSurfaceDigest( Stage0PlayView view )
+    {
+        uint64_t hash = 14695981039346656037ull;
+        for ( int y = -24; y <= 24; y += 6 )
+        for ( int x = -24; x <= 24; x += 6 )
+        {
+            float z = 0.f; std::string material;
+            bool const ok = SampleCausalPlayableCell( view, x + 0.5, y + 0.5, z, material );
+            CausalWorldGeology::HashAppend( hash, &ok, sizeof( ok ) );
+            CausalWorldGeology::HashAppend( hash, &z, sizeof( z ) );
+            CausalWorldGeology::HashAppend( hash, material.data(), material.size() );
+        }
+        return hash;
+    }
+
+    bool WriteRuntimeIndependenceArtifact( bool passed )
+    {
+        FILE* file = nullptr;
+        if ( fopen_s( &file, "Docs\\provenance_playable_runtime_independence_cert.txt", "wb" ) != 0
+          || !file ) { return false; }
+        std::fprintf( file, "PLAYABLE_RUNTIME_INDEPENDENCE %s\ncase_count=%zu\n",
+            passed ? "PASS" : "FAIL", s_runtimeIndependenceReceipts.size() );
+        for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
+        {
+            std::fprintf( file,
+                "case.%s selected=%d terrain_visible=%d resident=%d settled=%d collision=%d grounded=%d cells=%d packages=%d triangles=%d ruler_triangles=%d ruler_error_m=%.9f palette_error_m=%.9f digest=%s\n",
+                r.id, r.selected ? 1 : 0, r.terrainVisible ? 1 : 0,
+                r.resident ? 1 : 0, r.settled ? 1 : 0, r.collision ? 1 : 0,
+                r.grounded ? 1 : 0, r.cells, r.packages, r.triangles,
+                r.rulerTriangles,r.rulerMaxSurfaceErrorM,r.paletteMaxSurfaceErrorM,
+                CausalWorldGeology::Hex64( r.digest ).c_str() );
+        }
+        std::fprintf( file, "check.cold_stage10_independent=%s\n"
+            "check.cold_stage11_independent=%s\ncheck.transition_matrix=%s\n"
+            "check.stage10_digest_order_invariant=%s\n"
+            "check.stage11_digest_order_invariant=%s\n",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL" );
+        std::fclose( file );
+
+        FILE* tools = nullptr;
+        if ( fopen_s( &tools, "Docs\\provenance_playtest_toolkit_surface_attachment_cert.txt",
+                "wb" ) != 0 || !tools ) { return false; }
+        int samples = 0, penetrations = 0, minRulerTriangles = INT_MAX;
+        int cutawayAuthoritySamples = 0;
+        double maxFloat = 0.0, maxRulerSurfaceError = 0.0, maxPaletteSurfaceError = 0.0;
+        bool listsBuilt = true, xrayContact = true, xraySharedEdge = true;
+        bool xrayQueryParity = true, xrayHostResident = true, xrayDigestInvariant = true;
+        for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
+        {
+            samples += r.attachmentSamples;
+            penetrations += r.attachmentPenetrations;
+            maxFloat = (std::max)( maxFloat, r.attachmentMaxFloatM );
+            minRulerTriangles = (std::min)( minRulerTriangles, r.rulerTriangles );
+            maxRulerSurfaceError = (std::max)(
+                maxRulerSurfaceError, r.rulerMaxSurfaceErrorM );
+            maxPaletteSurfaceError = (std::max)(
+                maxPaletteSurfaceError, r.paletteMaxSurfaceErrorM );
+            cutawayAuthoritySamples += r.cutawayAuthoritySamples;
+            listsBuilt = listsBuilt && r.toolListsBuilt;
+            xrayContact = xrayContact && r.xrayContact;
+            xraySharedEdge = xraySharedEdge && r.xraySharedEdge;
+            xrayQueryParity = xrayQueryParity && r.xrayQueryParity;
+            xrayHostResident = xrayHostResident && r.xrayHostResident;
+            xrayDigestInvariant = xrayDigestInvariant && r.xrayDigestInvariant;
+        }
+        bool const toolPassed = passed && samples > 0 && penetrations == 0
+            && maxFloat <= 0.025 && listsBuilt && minRulerTriangles > 536
+            && maxRulerSurfaceError <= 0.00025 && maxPaletteSurfaceError <= 0.00025
+            && cutawayAuthoritySamples > 0 && xrayContact && xraySharedEdge
+            && xrayQueryParity && xrayHostResident && xrayDigestInvariant
+            && g.stage0GeologySnapshotSucceeded && g.stage0GeologySnapshotDepositVisible
+            && s_runtimePaletteOneAtA && s_runtimePaletteToolsAtA
+            && s_runtimePaletteReplacedAtB
+            && s_runtimePaletteRetired && s_runtimeRulerMoved
+            && s_runtimeRulerReturned && s_runtimeRulerOffZero;
+        std::fprintf( tools,
+            "PLAYTEST_TOOLKIT_SURFACE_ATTACHMENT %s\nsamples=%d\npenetrations=%d\nmax_float_m=%.6f\n"
+            "normal_offset_m=0.008000\nruler_min_triangles=%d\nruler_max_surface_error_m=%.9f\n"
+            "palette_max_surface_error_m=%.9f\n"
+            "cutaway_authority_samples=%d\n"
+            "check.surface_normal_offset=%s\n"
+            "check.no_terrain_penetration=%s\ncheck.no_gross_float=%s\n"
+            "check.ruler_triangle_lattice_fit=%s\n"
+            "check.palette_triangle_lattice_fit=%s\n"
+            "check.cutaway_uses_3d_geology_authority=%s\n"
+            "check.xray_starts_at_authoritative_hit=%s\n"
+            "check.xray_terminal_plane_coordinate_determinism=%s\n"
+            "check.xray_terminal_query_parity=%s\n"
+            "check.xray_host_is_resident=%s\n"
+            "check.xray_toggle_preserves_authority_digest=%s\n"
+            "check.xray_deposit_snapshot_written=%s\n"
+            "check.xray_snapshot_terminal_is_deposit=%s\n"
+            "xray_snapshot_deposit_pixels=%d\n"
+            "check.ruler_palette_rebuilt_after_switch=%s\n"
+            "check.palette_single_instance_at_A=%s\n"
+            "check.palette_summons_pick_axe_shovel=%s\n"
+            "check.palette_replaced_at_B=%s\n"
+            "check.palette_retires_with_host_residency=%s\n"
+            "check.ruler_rebuilds_for_new_residency=%s\n"
+            "check.ruler_return_is_deterministic=%s\n"
+            "check.ruler_toggle_off_zero_geometry=%s\n"
+            "invariant=Diagnostic presentation follows residency, not history.\n",
+            toolPassed ? "PASS" : "FAIL", samples, penetrations, maxFloat,
+            minRulerTriangles, maxRulerSurfaceError, maxPaletteSurfaceError,
+            cutawayAuthoritySamples,
+            penetrations == 0 ? "PASS" : "FAIL", penetrations == 0 ? "PASS" : "FAIL",
+            maxFloat <= 0.025 ? "PASS" : "FAIL",
+            minRulerTriangles > 536 && maxRulerSurfaceError <= 0.00025 ? "PASS" : "FAIL",
+            maxPaletteSurfaceError <= 0.00025 ? "PASS" : "FAIL",
+            cutawayAuthoritySamples > 0 ? "PASS" : "FAIL",
+            xrayContact ? "PASS" : "FAIL", xraySharedEdge ? "PASS" : "FAIL",
+            xrayQueryParity ? "PASS" : "FAIL", xrayHostResident ? "PASS" : "FAIL",
+            xrayDigestInvariant ? "PASS" : "FAIL",
+            g.stage0GeologySnapshotSucceeded ? "PASS" : "FAIL",
+            g.stage0GeologySnapshotDepositVisible ? "PASS" : "FAIL",
+            g.stage0GeologySnapshotDepositPixels,
+            listsBuilt ? "PASS" : "FAIL",
+            s_runtimePaletteOneAtA ? "PASS" : "FAIL",
+            s_runtimePaletteToolsAtA ? "PASS" : "FAIL",
+            s_runtimePaletteReplacedAtB ? "PASS" : "FAIL",
+            s_runtimePaletteRetired ? "PASS" : "FAIL",
+            s_runtimeRulerMoved ? "PASS" : "FAIL",
+            s_runtimeRulerReturned ? "PASS" : "FAIL",
+            s_runtimeRulerOffZero ? "PASS" : "FAIL" );
+        std::fclose( tools );
+        return toolPassed;
+    }
+
+    void RuntimeDiagnosticResidencyTick( bool basePassed )
+    {
+        ++s_runtimeDiagnosticFrames;
+        if ( s_runtimeDiagnosticPhase == 0 )
+        {
+            SelectStage0PlayView( Stage0PlayView::ContactMineralization );
+            g.feetX = 0.5f; g.feetY = 0.5f; g.playerX = 0; g.playerY = 0;
+            RebuildStage0PlayableRuntime();
+            g.stage0ToolRuler = true;
+            SummonStage0Palette();
+            s_runtimeDiagnosticFrames = 0; s_runtimeDiagnosticPhase = 1;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 1 && s_runtimeDiagnosticFrames >= 6 )
+        {
+            if ( Stage0PendingPackageCount( g.stage0PlayView ) != 0
+              || !Stage8PackageJobsIdle() ) { return; }
+            BuildStage0RulerList();
+            if ( g.stage0PaletteList == 0 )
+            {
+                SummonStage0Palette();
+                return; // Render builds the list against the complete host package.
+            }
+            s_runtimePaletteOneAtA = g.stage0PaletteAnchored && g.stage0PaletteList != 0;
+            s_runtimePaletteToolsAtA = true;
+            Stage0ToolKind const expected[3] = {
+                Stage0ToolKind::Pickaxe, Stage0ToolKind::Axe, Stage0ToolKind::Shovel };
+            for ( int i = 0; i < 3; ++i )
+            {
+                Stage0ToolProp const& prop = g.stage0Tools[i];
+                float const dx = prop.x - g.stage0PaletteAnchorX;
+                float const dy = prop.y - g.stage0PaletteAnchorY;
+                s_runtimePaletteToolsAtA = s_runtimePaletteToolsAtA
+                    && prop.present && prop.kind == expected[i]
+                    && std::isfinite( prop.z ) && dx > -1.10f && dx < -0.80f
+                    && dy > 0.4f && dy < 3.8f;
+            }
+            s_runtimePaletteAX = g.stage0PaletteAnchorX;
+            s_runtimeRulerDigestA = g.stage0RulerResidencyDigest;
+            s_runtimeRulerTrianglesA = g.stage0RulerTriangles;
+            g.feetX += 16.f; g.playerX = (int)std::floor( g.feetX );
+            FollowStreamCenter();
+            SummonStage0Palette();
+            s_runtimeDiagnosticFrames = 0; s_runtimeDiagnosticPhase = 2;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 2 && s_runtimeDiagnosticFrames >= 6 )
+        {
+            s_runtimePaletteReplacedAtB = g.stage0PaletteAnchored
+                && g.stage0PaletteList != 0
+                && std::fabs( g.stage0PaletteAnchorX - s_runtimePaletteAX ) > 8.f;
+            g.feetX += 96.f; g.playerX = (int)std::floor( g.feetX );
+            FollowStreamCenter();
+            s_runtimeDiagnosticFrames = 0; s_runtimeDiagnosticPhase = 3;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 3 && s_runtimeDiagnosticFrames >= 8 )
+        {
+            s_runtimePaletteRetired = !g.stage0PaletteAnchored && g.stage0PaletteList == 0;
+            s_runtimeRulerMoved = g.stage0RulerList != 0
+                && g.stage0RulerTriangles > 0
+                && g.stage0RulerResidencyDigest != s_runtimeRulerDigestA;
+            g.feetX = 0.5f; g.playerX = 0;
+            FollowStreamCenter();
+            s_runtimeDiagnosticFrames = 0; s_runtimeDiagnosticPhase = 4;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 4 && s_runtimeDiagnosticFrames >= 8 )
+        {
+            s_runtimeRulerReturned = g.stage0RulerList != 0
+                && g.stage0RulerResidencyDigest == s_runtimeRulerDigestA
+                && g.stage0RulerTriangles == s_runtimeRulerTrianglesA;
+            g.stage0ToolRuler = false;
+            if ( g.stage0RulerList )
+            { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+            s_runtimeDiagnosticFrames = 0; s_runtimeDiagnosticPhase = 5;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 5 && s_runtimeDiagnosticFrames >= 2 )
+        {
+            s_runtimeRulerOffZero = g.stage0RulerList == 0;
+            bool foundDeposit=false;float depositX=0.f,depositY=0.f,depositZ=0.f,surfaceZ=0.f;
+            SelectStage0PlayView(Stage0PlayView::ContactMineralization);
+            if(g.causalMineralizationRuntime)
+            {
+                for(int y=-24;y<=24&&!foundDeposit;++y)for(int x=-24;x<=24&&!foundDeposit;++x)
+                {
+                    double const surface=g.causalMineralizationRuntime->ReconstructedZ(x+.5,y+.5);
+                    for(double z=surface-.25;z>=surface-36.0;z-=.25)
+                    {
+                        auto const q=g.causalMineralizationRuntime->Query(true,x+.5,y+.5,z);
+                        if(q.found&&q.material=="quartz")
+                        {foundDeposit=true;depositX=x+.5f;depositY=y+.5f;depositZ=(float)z;surfaceZ=(float)surface;break;}
+                    }
+                }
+            }
+            if(foundDeposit)
+            {
+                float const contactX=depositX+2.5f,contactY=depositY+1.0f;
+                float contactZ=surfaceZ;SampleGroundZBase(contactX,contactY,contactZ);
+                float fx=depositX-contactX,fy=depositY-contactY,fz=depositZ-contactZ;
+                float const length=std::sqrt(fx*fx+fy*fy+fz*fz);
+                fx/=length;fy/=length;fz/=length;
+                g.walkMode=false;g.grounded=false;g.yaw=std::atan2(fx,fy);g.pitch=std::asin(fz);
+                g.camX=contactX-fx*5.f;g.camY=contactY-fy*5.f;g.camZ=contactZ-fz*5.f;
+                g.feetX=g.camX;g.feetY=g.camY;g.feetZ=contactZ;
+                g.stage0ToolGeologyCutaway=true;g.stage0GeologyInspectorMode=0;
+                g.stage0GeologyInspectorWidthM=3.048f;
+                g.stage0GeologyInspectorDepthM=(std::max)(1.5f,length);
+                g.stage0GeologySnapshotSucceeded=false;
+                g.stage0GeologySnapshotDepositVisible=false;
+                g.stage0GeologySnapshotDepositPixels=0;
+                g.stage0GeologySnapshotPending=false;
+            }
+            s_runtimeDiagnosticFrames=0;s_runtimeDiagnosticPhase=6;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 6 && s_runtimeDiagnosticFrames >= 3 )
+        {
+            g.stage0GeologySnapshotPending=true;
+            s_runtimeDiagnosticFrames=0;s_runtimeDiagnosticPhase=7;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 7 && s_runtimeDiagnosticFrames >= 3 )
+        {
+            s_runtimeBaseAndToolsPassed = basePassed && s_runtimePaletteOneAtA
+                && s_runtimePaletteToolsAtA
+                && s_runtimePaletteReplacedAtB && s_runtimePaletteRetired
+                && s_runtimeRulerMoved && s_runtimeRulerReturned && s_runtimeRulerOffZero
+                && g.stage0GeologySnapshotSucceeded && g.stage0GeologySnapshotDepositVisible;
+            s_boundaryReceipts.clear();
+            s_boundaryViewIndex = 0;
+            PrepareWorldgenBoundaryView( s_boundaryViewIndex );
+            s_runtimeDiagnosticFrames = 0;
+            s_runtimeDiagnosticPhase = 8;
+            return;
+        }
+        if ( s_runtimeDiagnosticPhase == 8 )
+        {
+            if ( s_boundaryCaptureComplete )
+            {
+                s_boundaryCaptureComplete = false;
+                ++s_boundaryViewIndex;
+                if ( s_boundaryViewIndex >= (int)( sizeof( s_boundaryViews )
+                    / sizeof( s_boundaryViews[0] ) ) * kBoundaryBearingCount )
+                {
+                    SelectStage0PlayView( Stage0PlayView::DifferentialErosion );
+                    // Fixed camera, two different live centres straddling one
+                    // package boundary. Only a representation swap can change pixels.
+                    g.feetX = 1535.9f; g.feetY = -1023.5f;
+                    g.playerX = INT_MIN; g.playerY = INT_MIN;
+                    FollowStreamCenter();
+                    s_runtimeDiagnosticFrames = 0;
+                    s_runtimeDiagnosticPhase = 9;
+                    return;
+                }
+                PrepareWorldgenBoundaryView( s_boundaryViewIndex );
+                s_runtimeDiagnosticFrames = 0;
+                return;
+            }
+            if ( s_runtimeDiagnosticFrames >= 8 && !s_boundaryCapturePending
+              && Stage0PendingPackageCount( g.stage0PlayView ) == 0
+              && Stage8PackageJobsIdle() )
+            {
+                s_boundaryCapturePending = true;
+            }
+        }
+        if ( s_runtimeDiagnosticPhase == 9 )
+        {
+            if ( s_boundaryPopCaptureComplete )
+            {
+                s_boundaryPopCaptureComplete = false;
+                g.feetX = 1536.1f;
+                FollowStreamCenter();
+                s_runtimeDiagnosticFrames = 0;
+                s_runtimeDiagnosticPhase = 10;
+                return;
+            }
+            if ( s_runtimeDiagnosticFrames >= 8 && s_boundaryPopCapturePending == 0
+              && Stage0PendingPackageCount( g.stage0PlayView ) == 0
+              && Stage8PackageJobsIdle() )
+            { s_boundaryPopCapturePending = 1; }
+        }
+        if ( s_runtimeDiagnosticPhase == 10 )
+        {
+            if ( s_boundaryPopCaptureComplete )
+            {
+                s_boundaryPopCaptureComplete = false;
+                bool const boundaryPassed = WriteWorldgenBoundaryArtifact();
+                bool const passed = s_runtimeBaseAndToolsPassed && boundaryPassed;
+                bool const toolkitPassed=WriteRuntimeIndependenceArtifact( passed );
+                PostQuitMessage( passed&&toolkitPassed ? 0 : 1 );
+                return;
+            }
+            if ( s_runtimeDiagnosticFrames >= 8 && s_boundaryPopCapturePending == 0
+              && Stage0PendingPackageCount( g.stage0PlayView ) == 0
+              && Stage8PackageJobsIdle() )
+            { s_boundaryPopCapturePending = 2; }
+        }
+    }
+
+    void RuntimeIndependenceTick()
+    {
+        if ( !g.certPlayableRuntimeIndependence || !g.playWorldgenInitialized ) { return; }
+        int constexpr caseCount = (int)( sizeof( s_runtimeIndependenceCases )
+            / sizeof( s_runtimeIndependenceCases[0] ) );
+        if ( s_runtimeIndependenceCase >= caseCount )
+        {
+            bool basePassed = true;
+            uint64_t stage10Digest = 0;
+            uint64_t stage11Digest = 0;
+            for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
+            {
+                basePassed = basePassed && r.selected && r.terrainVisible && r.resident
+                    && r.settled && r.collision && r.grounded;
+                if ( std::strstr( r.id, "to_10" ) || std::strcmp( r.id, "10_to_10" ) == 0 )
+                {
+                    if ( stage10Digest == 0 ) { stage10Digest = r.digest; }
+                    else { basePassed = basePassed && stage10Digest == r.digest; }
+                }
+                if ( std::strstr( r.id, "to_11" ) || std::strcmp( r.id, "11_to_11" ) == 0 )
+                {
+                    if ( stage11Digest == 0 ) { stage11Digest = r.digest; }
+                    else { basePassed = basePassed && stage11Digest == r.digest; }
+                }
+            }
+            RuntimeDiagnosticResidencyTick( basePassed );
+            return;
+        }
+        RuntimeIndependenceCase const& test = s_runtimeIndependenceCases[s_runtimeIndependenceCase];
+        if ( s_runtimeIndependenceFrames == 0 )
+        {
+            bool const predecessorOk = SelectStage0PlayView( test.predecessor );
+            bool const targetOk = predecessorOk && SelectStage0PlayView( test.target );
+            s_runtimeIndependenceSelectionOk = targetOk;
+            // Stage-specific playable spawn points are useful to a player but
+            // must not contaminate a transition-order certificate.  Compare all
+            // targets at the same coordinate and residency footprint.
+            if(targetOk)
+            {
+                g.walkMode=true;g.feetX=128.5f;g.feetY=128.5f;
+                RebuildStage0PlayableRuntime();
+            }
+            g.stage0StageMenuOpen = false;
+            g.stage0ToolRuler = true;
+            g.stage0ToolPalette = true;
+            SummonStage0Palette();
+            g.stage0ToolGeologyCutaway = IsCausalPlayableView( test.target );
+            ++s_runtimeIndependenceFrames;
+            return;
+        }
+        ++s_runtimeIndependenceFrames;
+        if ( s_runtimeIndependenceFrames < 5 ) { return; }
+
+        // A drained legacy column queue no longer means the selected runtime is
+        // settled: bounded workers may still be deriving or publishing terrain
+        // packages. Transition-order parity must sample the same complete live
+        // obligation for every predecessor, never whichever subset happened to
+        // publish within four frames.
+        bool const packageSettled = Stage0PendingPackageCount( test.target ) == 0
+            && Stage8PackageJobsIdle();
+        if ( !packageSettled ) { return; }
+        BuildStage0RulerList();
+        if ( g.stage0PaletteList == 0 )
+        {
+            SummonStage0Palette();
+            return; // Sample only after the next render publishes the tool list.
+        }
+
+        RuntimeIndependenceReceipt receipt;
+        receipt.id = test.id;
+        receipt.selected = s_runtimeIndependenceSelectionOk;
+        receipt.cells = (int)g.cells.size();
+        receipt.resident = receipt.cells > 0;
+        receipt.settled = g.columnQueue.empty() && g.pending == PendingKind::None
+            && packageSettled;
+        if ( IsVisibleExposureView( test.target ) )
+        {
+            receipt.packages = (int)g.stage7TerrainBlocks.size();
+            receipt.triangles = g.stage7TerrainTriangles;
+        }
+        else if ( IsDifferentialErosionView( test.target )
+          || IsGraniteIntrusionView( test.target )
+          || IsContactMineralizationView( test.target )
+          || IsFaultDisplacementView( test.target ) )
+        {
+            receipt.packages = (int)g.stage8TerrainBlocks.size();
+            receipt.triangles = g.stage8TerrainTriangles;
+        }
+        else
+        {
+            receipt.packages = (int)g.stage0TerrainBlocks.size();
+            for ( auto const& block : g.stage0TerrainBlocks ) { receipt.triangles += block.second.tris; }
+        }
+        receipt.terrainVisible = receipt.packages > 0 && receipt.triangles > 0;
+        receipt.toolListsBuilt = g.stage0RulerList != 0 && g.stage0PaletteList != 0;
+        receipt.rulerTriangles = g.stage0RulerTriangles;
+        receipt.rulerMaxSurfaceErrorM = g.stage0RulerMaxSurfaceErrorM;
+        receipt.paletteMaxSurfaceErrorM = g.stage0PaletteMaxSurfaceErrorM;
+        if ( IsCausalPlayableView( test.target ) )
+        {
+            for ( int x = -16; x <= 16; x += 4 )
+            for ( int z = -20; z <= -1; z += 3 )
+            {
+                auto const sample = CausalGeologyAt( test.target, (double)x, 10.0, (double)z );
+                if ( sample.found ) { ++receipt.cutawayAuthoritySamples; }
+            }
+            Stage0InspectorFrame inspector{};
+            receipt.xrayContact = Stage0GeologyInspectorFrame( inspector );
+            if ( receipt.xrayContact )
+            {
+                float tx,ty,tz,lx,ly,lz;
+                Stage0InspectorPoint(inspector,g.stage0GeologyInspectorDepthM,0.f,0.f,tx,ty,tz);
+                // Independently evaluate the flashlight terminal centre.
+                lx=inspector.px+inspector.fx*g.stage0GeologyInspectorDepthM
+                    +inspector.rx*0.f+inspector.ux*0.f;
+                ly=inspector.py+inspector.fy*g.stage0GeologyInspectorDepthM
+                    +inspector.ry*0.f+inspector.uy*0.f;
+                lz=inspector.pz+inspector.fz*g.stage0GeologyInspectorDepthM
+                    +inspector.rz*0.f+inspector.uz*0.f;
+                receipt.xraySharedEdge=std::fabs(tx-lx)<1e-6f
+                    &&std::fabs(ty-ly)<1e-6f&&std::fabs(tz-lz)<1e-6f;
+                auto const terminal=CausalGeologyAt(test.target,tx,ty,tz);
+                auto const longitudinal=CausalGeologyAt(test.target,lx,ly,lz);
+                receipt.xrayQueryParity=terminal.found&&longitudinal.found
+                    &&terminal.featureId==longitudinal.featureId
+                    &&terminal.material==longitudinal.material;
+                receipt.xrayHostResident=GetCell((int)std::floor(tx),(int)std::floor(ty))!=nullptr;
+            }
+        }
+        float ground = 0.f;
+        receipt.collision = SampleGroundZBase( g.feetX, g.feetY, ground )
+            && std::isfinite( ground );
+        receipt.grounded = g.grounded && std::fabs( g.feetZ - ground ) < 0.05f;
+        receipt.digest = RuntimeSurfaceDigest( test.target );
+        bool const xrayWasEnabled=g.stage0ToolGeologyCutaway;
+        g.stage0ToolGeologyCutaway=false;
+        uint64_t const disabledDigest=RuntimeSurfaceDigest(test.target);
+        g.stage0ToolGeologyCutaway=xrayWasEnabled;
+        receipt.xrayDigestInvariant=receipt.digest==disabledDigest;
+        for ( int py = -24; py <= 24; py += 6 )
+        for ( int px = -24; px <= 24; px += 6 )
+        {
+            float rendered[3];
+            Stage0CalibrationRenderPoint( px + 0.5f, py + 0.5f, 0.f, rendered );
+            float surfaceAtRendered = 0.f;
+            Stage0CalibrationSurfaceZ( rendered[0], rendered[1], surfaceAtRendered );
+            double const clearance = (double)rendered[2] - surfaceAtRendered;
+            ++receipt.attachmentSamples;
+            if ( clearance < 0.002 ) { ++receipt.attachmentPenetrations; }
+            receipt.attachmentMaxFloatM = (std::max)( receipt.attachmentMaxFloatM, clearance );
+        }
+        s_runtimeIndependenceReceipts.push_back( receipt );
+
+        ++s_runtimeIndependenceCase;
+        s_runtimeIndependenceFrames = 0;
+        if ( s_runtimeIndependenceCase >= caseCount )
+        {
+            s_runtimeDiagnosticPhase = 0;
+            s_runtimeDiagnosticFrames = -1;
+        }
+    }
+
+    // ---------- Complete live-world replacement certificate ----------
+    // The short live ladder route measures ordinary overlapping residency.  It
+    // cannot prove that one neighborhood is fully retired and later regenerated.
+    // This independent gate walks, sprints, and free-flies 192 m in each cardinal
+    // direction, validates the new authority-backed neighborhood, then returns to
+    // the exact cold-origin camera and compares authoritative and visual receipts.
+    struct CardinalReplacementDigests
+    {
+        uint64_t geometry = 14695981039346656037ull;
+        uint64_t materialFeature = 14695981039346656037ull;
+        uint64_t collision = 14695981039346656037ull;
+        uint64_t packages = 14695981039346656037ull;
+    };
+
+    struct CardinalReplacementReceipt
+    {
+        Stage0PlayView view = Stage0PlayView::Clean;
+        char stage[16] = {};
+        char bearing[8] = {};
+        float dx = 0.f, dy = 0.f;
+        CardinalReplacementDigests origin{};
+        CardinalReplacementDigests returned{};
+        std::unordered_set<uint64_t> originPackages;
+        int originPackageCount = 0;
+        int outerPackageCount = 0;
+        int returnPackageCount = 0;
+        int originPackagesAtOuter = INT_MAX;
+        uint64_t originResidencyDigest = 0;
+        uint64_t returnResidencyDigest = 1; // differs until both are captured
+        float originMinCompleteRadiusM = -1.f;
+        float outerMinCompleteRadiusM = -1.f;
+        float returnMinCompleteRadiusM = -1.f;
+        int maxResidentPackages = 0;
+        int maxResidentCells = 0;
+        int movementSamples = 0;
+        int groundFailures = 0;
+        int collisionMismatches = 0;
+        int oracleSamples = 0;
+        int oracleMismatches = 0;
+        int oracleMissingCells = 0;
+        int oracleCellMaterialMismatches = 0;
+        int oracleAuthorityMismatches = 0;
+        int oracleCollisionMismatches = 0;
+        int geologyFeatureSamples = 0;
+        int skyPixels = INT_MAX;
+        int fallbackGreenPixels = INT_MAX;
+        int sampledPixels = 0;
+        int returnImageChangedPixels = INT_MAX;
+        int returnImageSampledPixels = 0;
+        int returnImageMaxChannelDelta = INT_MAX;
+        bool outerImageWritten = false;
+        bool originSettled = false;
+        bool outerSettled = false;
+        bool returnSettled = false;
+        double walkDistanceM = 0.0;
+        double sprintDistanceM = 0.0;
+        double freeFlyDistanceM = 0.0;
+        double worstFrameMs = 0.0;
+        int framesOver16 = 0;
+        double movementWorstFrameMs = 0.0;
+        int movementFramesOver16 = 0;
+        std::vector<unsigned char> originImage;
+        int originImageW = 0, originImageH = 0;
+    };
+
+    static std::vector<CardinalReplacementReceipt> s_cardinalReceipts;
+    static int s_cardinalCase = 0;
+    static int s_cardinalPhase = 0;
+    static int s_cardinalPhaseFrames = 0;
+    static float s_cardinalDistanceM = 0.f;
+    static int s_cardinalCapturePending = 0; // 1 origin, 2 outer, 3 return
+    static bool s_cardinalCaptureComplete = false;
+    static FILE* s_cardinalTrace = nullptr;
+    // Complete origin eviction requires travelling far enough that the outer
+    // station's live window cannot overlap the origin's. That is a function of
+    // the live radius plus the retained apron, not a fixed 192 m: at a 192 m
+    // radius, 192 m of travel leaves the two windows overlapping by design and
+    // the eviction check is unsatisfiable. 192 m remains the floor so the
+    // established 64 m route is unchanged.
+    float CardinalReplacementDistanceM()
+    {
+        float const apronM = (float)( kStage0PackageApron * kStage0TerrainBlockCells );
+        float const required = 2.f * (float)g.stage0LiveRadiusM + 2.f * apronM
+            + (float)kStage0TerrainBlockCells;
+        return (std::max)( 192.f, required );
+    }
+    constexpr int kCardinalSettleFrames = 90;
+    constexpr int kCardinalMaxPackages = 400;
+    constexpr int kCardinalMaxCells = 15000;
+
+    std::unordered_map<uint64_t, Stage0TerrainBlock> const& CardinalPackageMap(
+        Stage0PlayView view )
+    {
+        if ( IsVisibleExposureView( view ) ) { return g.stage7TerrainBlocks; }
+        if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
+          || IsContactMineralizationView( view ) || IsFaultDisplacementView( view ) )
+        { return g.stage8TerrainBlocks; }
+        return g.stage0TerrainBlocks;
+    }
+
+    std::unordered_set<uint64_t> CardinalPackageKeys( Stage0PlayView view )
+    {
+        std::unordered_set<uint64_t> keys;
+        auto const& packages = CardinalPackageMap( view );
+        keys.reserve( packages.size() );
+        for ( auto const& package : packages ) { keys.insert( package.first ); }
+        return keys;
+    }
+
+    // ---- residency law ----------------------------------------------------
+    // The permitted resident population is derived from the contract, not from
+    // whatever the current implementation happens to allocate. A live radius R
+    // covers 2R/8+1 packages per axis, and residency retains one package of
+    // apron on each side as hysteresis. Deriving the bound this way means
+    // --live-radius=64 and --live-radius=192 test the same law at two scales
+    // instead of comparing against two unrelated magic numbers.
+    int Stage0PackagesPerAxis( int liveRadiusM )
+    {
+        int const snapped = ( liveRadiusM / kStage0TerrainBlockCells )
+            * kStage0TerrainBlockCells;
+        return 2 * ( snapped / kStage0TerrainBlockCells ) + 1 + 2 * kStage0PackageApron;
+    }
+
+    int Stage0DeclaredMaxResidentPackages( int liveRadiusM )
+    {
+        int const perAxis = Stage0PackagesPerAxis( liveRadiusM );
+        return perAxis * perAxis;
+    }
+
+    // Which spatial packages are resident, under which authority. Deliberately
+    // free of geometry content: the geometry, material and collision digests
+    // answer what the terrain *is*, and this one answers only what is present.
+    // A residency change is then reported as a residency failure rather than
+    // being confused with a content change.
+    uint64_t Stage0ResidentPackageDigest( Stage0PlayView view )
+    {
+        std::vector<uint64_t> keys;
+        auto const& packages = CardinalPackageMap( view );
+        keys.reserve( packages.size() );
+        for ( auto const& package : packages ) { keys.push_back( package.first ); }
+        std::sort( keys.begin(), keys.end() );
+        uint64_t digest = 14695981039346656037ull;
+        int const kind = Stage0TerrainRuntimeKind( view );
+        int const control = (int)g.stage8Control;
+        CausalWorldGeology::HashAppend( digest, &kind, sizeof( kind ) );
+        CausalWorldGeology::HashAppend( digest, &control, sizeof( control ) );
+        for ( uint64_t key : keys )
+        { CausalWorldGeology::HashAppend( digest, &key, sizeof( key ) ); }
+        return digest;
+    }
+
+    // Packages the residency law requires but which are not resident yet: the
+    // in-bounds window plus its apron. This is the strict backlog. It is not the
+    // same question as min-complete-radius, because residency is a square of
+    // half-width R while that metric measures a disk, so the square's corners
+    // sit up to R*sqrt(2) out and never pull a disk radius below R.
+    int Stage0PendingPackageCount( Stage0PlayView view )
+    {
+        Stage0PresentationBounds const b = Stage0CurrentPresentationBounds();
+        auto const& packages = CardinalPackageMap( view );
+        int pending = 0;
+        for ( int by = b.by0 - kStage0PackageApron; by <= b.by1 + kStage0PackageApron; ++by )
+        for ( int bx = b.bx0 - kStage0PackageApron; bx <= b.bx1 + kStage0PackageApron; ++bx )
+        {
+            if ( !packages.count( CellKey( bx, by ) ) ) { ++pending; }
+        }
+        return pending;
+    }
+
+    // Distance from the player to the nearest required-but-absent package. The
+    // scheduler is eventually allowed to let the outer edge trail under extreme
+    // flight, but only if we can say how far away the first gap is; "some
+    // packages are deferred" cannot distinguish a hole at 190 m from one
+    // underneath the player.
+    float Stage0MinCompleteRadiusM( Stage0PlayView view )
+    {
+        Stage0PresentationBounds const b = Stage0CurrentPresentationBounds();
+        auto const& packages = CardinalPackageMap( view );
+        float best = (float)g.stage0LiveRadiusM;
+        for ( int by = b.by0; by <= b.by1; ++by )
+        for ( int bx = b.bx0; bx <= b.bx1; ++bx )
+        {
+            if ( packages.count( CellKey( bx, by ) ) ) { continue; }
+            float const minX = (float)( bx * kStage0TerrainBlockCells );
+            float const minY = (float)( by * kStage0TerrainBlockCells );
+            float const maxX = minX + (float)kStage0TerrainBlockCells;
+            float const maxY = minY + (float)kStage0TerrainBlockCells;
+            float const dx = (std::max)( { minX - g.feetX, 0.f, g.feetX - maxX } );
+            float const dy = (std::max)( { minY - g.feetY, 0.f, g.feetY - maxY } );
+            best = (std::min)( best, std::sqrt( dx * dx + dy * dy ) );
+        }
+        return best;
+    }
+
+    struct PresentationIsolationRow
+    {
+        int frame=0;
+        double elapsedS=0.0,frameMs=0.0,cpuMs=0.0,drawMs=0.0;
+        double finishMs=0.0,presentMs=0.0,terrainMs=0.0;
+        float x=0.f,y=0.f,completeRadiusM=0.f;
+        int pendingPackages=0;
+    };
+
+    struct PresentationIsolationHarness
+    {
+        bool initialized=false,measuring=false;
+        long long readyQpc=0,lastQpc=0;
+        double elapsedS=0.0;
+        int framesBelowRadius=0;
+        std::vector<PresentationIsolationRow> rows;
+    };
+
+    static PresentationIsolationHarness s_presentationIsolation;
+
+    void PresentationIsolationBeforeFrame( float dt )
+    {
+        if(!g.certPresentationIsolation)return;
+        auto& h=s_presentationIsolation;
+        LARGE_INTEGER now{},qpf{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&qpf);
+        if(!h.initialized)
+        {
+            h.initialized=true;h.readyQpc=0;h.lastQpc=now.QuadPart;
+            h.rows.reserve(300000);
+        }
+        float const complete=Stage0MinCompleteRadiusM(g.stage0PlayView);
+        int const pending=Stage0PendingPackageCount(g.stage0PlayView);
+        bool const ready=complete>=(float)g.stage0LiveRadiusM-0.001f&&pending==0;
+        if(!h.measuring)
+        {
+            if(!ready){h.readyQpc=0;return;}
+            if(h.readyQpc==0){h.readyQpc=now.QuadPart;return;}
+            double const settled=qpf.QuadPart>0
+                ?(double)(now.QuadPart-h.readyQpc)/(double)qpf.QuadPart:0.0;
+            if(settled<2.0)return;
+            h.measuring=true;h.lastQpc=now.QuadPart;h.elapsedS=0.0;
+            h.rows.clear();h.framesBelowRadius=0;
+        }
+
+        // One deterministic player route covers walk, sprint, free flight and
+        // all cardinal planes while the presentation mode is the only control.
+        float dx=0.f,dy=0.f,speed=0.f;
+        if(h.elapsedS<10.0){dy=1.f;speed=5.f;g.walkMode=true;}
+        else if(h.elapsedS<20.0){dx=1.f;speed=11.f;g.walkMode=true;}
+        else if(h.elapsedS<30.0){dy=-1.f;speed=24.f;g.walkMode=false;}
+        else{dx=-1.f;speed=24.f;g.walkMode=false;}
+        float const step=(std::min)(dt,0.05f)*speed;
+        g.feetX+=dx*step;g.feetY+=dy*step;
+        float ground=0.f;
+        if(SampleGroundZBase(g.feetX,g.feetY,ground))
+        {
+            g.feetZ=g.walkMode?ground:ground+10.f;
+            g.camZ=g.feetZ+(g.walkMode?kEyeHeightM:0.f);
+        }
+        g.camX=g.feetX;g.camY=g.feetY;
+    }
+
+    void PresentationIsolationAfterRender()
+    {
+        if(!g.certPresentationIsolation||!s_presentationIsolation.measuring)return;
+        auto& h=s_presentationIsolation;
+        LARGE_INTEGER now{},qpf{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&qpf);
+        double const frameMs=qpf.QuadPart>0
+            ?1000.0*(double)(now.QuadPart-h.lastQpc)/(double)qpf.QuadPart:0.0;
+        h.lastQpc=now.QuadPart;
+        if(frameMs<=0.0)return;
+        h.elapsedS+=frameMs/1000.0;
+        PresentationIsolationRow row{};
+        row.frame=(int)h.rows.size();row.elapsedS=h.elapsedS;row.frameMs=frameMs;
+        row.cpuMs=g.stage0FrameCpuMs;row.drawMs=g.stage0FrameDrawSubmitMs;
+        row.finishMs=g.stage0FrameGpuFinishMs;row.presentMs=g.stage0FramePresentWaitMs;
+        row.terrainMs=g.stage0FrameHfBuildMs+g.stage0FrameHfRetireMs
+            +g.stage0FrameResidencyMs+g.stage0FrameGenerationMs;
+        row.x=g.feetX;row.y=g.feetY;
+        row.completeRadiusM=Stage0MinCompleteRadiusM(g.stage0PlayView);
+        row.pendingPackages=Stage0PendingPackageCount(g.stage0PlayView);
+        if(row.completeRadiusM<(float)g.stage0LiveRadiusM-0.001f)
+        {++h.framesBelowRadius;}
+        h.rows.push_back(row);
+        if(h.elapsedS<g.presentationIsolationDurationS)return;
+
+        std::vector<double> sorted;sorted.reserve(h.rows.size());
+        int over16=0,over33=0,over50=0,over100=0,worstIndex=-1;
+        double worst=-1.0,sum=0.0;
+        for(size_t i=0;i<h.rows.size();++i)
+        {
+            double const ms=h.rows[i].frameMs;sorted.push_back(ms);sum+=ms;
+            if(ms>16.667)++over16;if(ms>33.333)++over33;
+            if(ms>50.0)++over50;if(ms>100.0)++over100;
+            if(ms>worst){worst=ms;worstIndex=(int)i;}
+        }
+        std::sort(sorted.begin(),sorted.end());
+        auto percentile=[&](double p){return PercentileSorted(sorted,p);};
+        PresentationIsolationRow const& wr=h.rows[(size_t)(std::max)(0,worstIndex)];
+        char reportPath[MAX_PATH],tracePath[MAX_PATH];
+        std::snprintf(reportPath,sizeof(reportPath),
+            "Docs\\provenance_presentation_isolation_%s.txt",
+            PresentationIsolationModeName(g.presentationIsolationMode));
+        std::snprintf(tracePath,sizeof(tracePath),
+            "Docs\\provenance_presentation_isolation_%s.csv",
+            PresentationIsolationModeName(g.presentationIsolationMode));
+        FILE* f=nullptr;
+        if(fopen_s(&f,reportPath,"w")==0&&f)
+        {
+            std::fprintf(f,
+                "PRESENTATION_BACKEND_ISOLATION\nmode=%s\n"
+                "swap_interval=%d\nswap_control_available=%d\n"
+                "duration_s=%.3f\nframes=%d\nmean_ms=%.6f\nmedian_ms=%.6f\n"
+                "p95_ms=%.6f\np99_ms=%.6f\nworst_ms=%.6f\n"
+                "frames_over_16_667ms=%d\nframes_over_33_333ms=%d\n"
+                "frames_over_50ms=%d\nframes_over_100ms=%d\n"
+                "frame_gate=%s\nframes_below_192m=%d\n"
+                "worst_frame_index=%d\nworst_frame_elapsed_s=%.6f\n"
+                "worst_frame_draw_ms=%.6f\nworst_frame_finish_ms=%.6f\n"
+                "worst_frame_present_ms=%.6f\nworst_frame_terrain_ms=%.6f\n"
+                "worst_frame_pending_packages=%d\n"
+                "route=walk_N_5mps,sprint_E_11mps,freefly_S_24mps,freefly_W_24mps\n",
+                PresentationIsolationModeName(g.presentationIsolationMode),
+                g.stage0SwapInterval,g.stage0SwapControlAvailable?1:0,h.elapsedS,
+                (int)h.rows.size(),sum/(double)h.rows.size(),percentile(.5),
+                percentile(.95),percentile(.99),worst,over16,over33,over50,over100,
+                over16==0?"PASS":"FAIL",h.framesBelowRadius,worstIndex,wr.elapsedS,
+                wr.drawMs,wr.finishMs,wr.presentMs,wr.terrainMs,wr.pendingPackages);
+            std::fclose(f);
+        }
+        if(fopen_s(&f,tracePath,"w")==0&&f)
+        {
+            std::fprintf(f,"frame,elapsed_s,x,y,frame_ms,cpu_ms,draw_ms,finish_ms,present_ms,terrain_ms,complete_radius_m,pending_packages\n");
+            for(auto const& r:h.rows)
+            {
+                std::fprintf(f,"%d,%.6f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%d\n",
+                    r.frame,r.elapsedS,r.x,r.y,r.frameMs,r.cpuMs,r.drawMs,r.finishMs,
+                    r.presentMs,r.terrainMs,r.completeRadiusM,r.pendingPackages);
+            }
+            std::fclose(f);
+        }
+        PostQuitMessage(0);
+        h.measuring=false;
+    }
+
+    CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
+        Stage0PlayView view, double x, double y, double surfaceZ )
+    {
+        if ( IsFaultDisplacementView( view ) && g.causalFaultRuntime )
+        { return g.causalFaultRuntime->SurfaceGeology( true, x, y ); }
+        if ( IsContactMineralizationView( view ) && g.causalMineralizationRuntime )
+        { return g.causalMineralizationRuntime->SurfaceGeology( true, x, y ); }
+        if ( IsGraniteIntrusionView( view ) && g.causalIntrusionRuntime )
+        { return g.causalIntrusionRuntime->SurfaceGeology( true, x, y ); }
+        if ( IsDifferentialErosionView( view ) && g.causalErosionRuntime )
+        { return g.causalErosionRuntime->Query( g.stage8Control, x, y ).geology; }
+        if ( IsVisibleExposureView( view ) && g.causalVisibleRuntime )
+        { return g.causalVisibleRuntime->AuthorityAt( x, y ).geology; }
+        if ( IsCausalExposureView( view ) && g.causalExposureRuntime )
+        { return g.causalExposureRuntime->Query(
+            CausalWorldExposure::kPresentSurface, x, y ).geology; }
+        if ( IsCausalGeologyView( view ) && g.causalGeologyRuntime )
+        { return g.causalGeologyRuntime->Query( x, y, surfaceZ - 0.001 ); }
+        return {};
+    }
+
+    CardinalReplacementDigests CaptureCardinalDigests(
+        Stage0PlayView view, float centerX, float centerY )
+    {
+        CardinalReplacementDigests d;
+        int const viewValue = (int)view;
+        CausalWorldGeology::HashAppend( d.materialFeature, &viewValue, sizeof( viewValue ) );
+        for ( int oy = -24; oy <= 24; oy += 4 )
+        for ( int ox = -24; ox <= 24; ox += 4 )
+        {
+            double const x = (double)centerX + (double)ox;
+            double const y = (double)centerY + (double)oy;
+            float surfaceZ = 0.f, collisionZ = 0.f;
+            bool const surfaceOk = Stage0CalibrationSurfaceZ(
+                (float)x, (float)y, surfaceZ );
+            bool const collisionOk = SampleGroundZ(
+                (float)x, (float)y, collisionZ );
+            CausalWorldGeology::HashAppend( d.geometry, &surfaceOk, sizeof( surfaceOk ) );
+            CausalWorldGeology::HashAppend( d.geometry, &surfaceZ, sizeof( surfaceZ ) );
+            CausalWorldGeology::HashAppend( d.collision, &collisionOk, sizeof( collisionOk ) );
+            CausalWorldGeology::HashAppend( d.collision, &collisionZ, sizeof( collisionZ ) );
+            if ( IsCausalPlayableView( view ) )
+            {
+                auto const geology = CardinalSurfaceAuthority(
+                    view, x, y, (double)surfaceZ );
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, &geology.found, sizeof( geology.found ) );
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, &geology.featureId, sizeof( geology.featureId ) );
+                CausalWorldGeology::HashAppend( d.materialFeature,
+                    geology.material.data(), geology.material.size() );
+            }
+            else
+            {
+                constexpr char dirt[] = "dirt";
+                CausalWorldGeology::HashAppend(
+                    d.materialFeature, dirt, sizeof( dirt ) - 1 );
+            }
+        }
+        std::vector<uint64_t> packageKeys;
+        int triangles = 0;
+        for ( auto const& package : CardinalPackageMap( view ) )
+        { packageKeys.push_back( package.first ); triangles += package.second.tris; }
+        std::sort( packageKeys.begin(), packageKeys.end() );
+        for ( uint64_t key : packageKeys )
+        { CausalWorldGeology::HashAppend( d.packages, &key, sizeof( key ) ); }
+        CausalWorldGeology::HashAppend( d.packages, &triangles, sizeof( triangles ) );
+        return d;
+    }
+
+    bool CardinalDigestsEqual( CardinalReplacementDigests const& a,
+        CardinalReplacementDigests const& b )
+    {
+        return a.geometry == b.geometry
+            && a.materialFeature == b.materialFeature
+            && a.collision == b.collision
+            && a.packages == b.packages;
+    }
+
+    void UpdateCardinalResidencyMax( CardinalReplacementReceipt& receipt )
+    {
+        receipt.maxResidentPackages = (std::max)( receipt.maxResidentPackages,
+            (int)CardinalPackageMap( receipt.view ).size() );
+        receipt.maxResidentCells = (std::max)( receipt.maxResidentCells,
+            (int)g.cells.size() );
+        receipt.worstFrameMs = (std::max)(
+            receipt.worstFrameMs, g.playWorldgenFrameMs );
+        if ( g.playWorldgenFrameMs > 16.667 ) { ++receipt.framesOver16; }
+    }
+
+    void ValidateCardinalOuterAuthority( CardinalReplacementReceipt& receipt )
+    {
+        float const cx = 128.5f + receipt.dx * CardinalReplacementDistanceM();
+        float const cy = 128.5f + receipt.dy * CardinalReplacementDistanceM();
+        for ( int oy = -32; oy <= 32; oy += 8 )
+        for ( int ox = -32; ox <= 32; ox += 8 )
+        {
+            float const x = cx + (float)ox;
+            float const y = cy + (float)oy;
+            float authorityZ = 0.f, presentedZ = 0.f, collisionZ = 0.f;
+            std::string expectedMaterial = "dirt";
+            bool expected = true;
+            if ( IsCausalPlayableView( receipt.view ) )
+            { expected = SampleCausalPlayableCell(
+                receipt.view, x, y, authorityZ, expectedMaterial ); }
+            else
+            { expected = Stage0CalibrationSurfaceZ( x, y, authorityZ ); }
+            bool const presented = Stage0CalibrationSurfaceZ( x, y, presentedZ );
+            bool const collision = SampleGroundZ( x, y, collisionZ );
+            CellSample const* cell = GetCell(
+                (int)std::floor( x ), (int)std::floor( y ) );
+            ++receipt.oracleSamples;
+            bool matches = expected && presented && collision && cell && cell->valid
+                && std::fabs( presentedZ - collisionZ ) <= 0.001f
+                && cell->cap == expectedMaterial;
+            if ( !cell || !cell->valid ) { ++receipt.oracleMissingCells; }
+            else if ( cell->cap != expectedMaterial )
+            { ++receipt.oracleCellMaterialMismatches; }
+            if ( !presented || !collision
+              || ( presented && collision && std::fabs( presentedZ - collisionZ ) > 0.001f ) )
+            { ++receipt.oracleCollisionMismatches; }
+            if ( IsCausalPlayableView( receipt.view ) && expected )
+            {
+                auto const geology = CardinalSurfaceAuthority(
+                    receipt.view, x, y, (double)authorityZ );
+                matches = matches && geology.found
+                    && geology.material == expectedMaterial;
+                if ( !geology.found || geology.material != expectedMaterial )
+                { ++receipt.oracleAuthorityMismatches; }
+                if ( geology.found && geology.featureId != 0 )
+                { ++receipt.geologyFeatureSamples; }
+            }
+            if ( !matches ) { ++receipt.oracleMismatches; }
+        }
+    }
+
+    void SetCardinalCamera( CardinalReplacementReceipt const& receipt,
+        float distanceM, bool inspectionCamera )
+    {
+        float const x = 128.5f + receipt.dx * distanceM;
+        float const y = 128.5f + receipt.dy * distanceM;
+        float groundZ = GradeToZ( g.gradeDatum );
+        Stage0CalibrationSurfaceZ( x, y, groundZ );
+        g.feetX = x; g.feetY = y;
+        if ( inspectionCamera )
+        {
+            g.walkMode = false; g.grounded = false;
+            g.camX = x; g.camY = y; g.camZ = groundZ + 24.f;
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.pitch = -0.55f;
+        }
+        else
+        {
+            g.camX = x; g.camY = y;
+        }
+        g.yaw = std::atan2( receipt.dx, receipt.dy );
+    }
+
+    void AdvanceCardinalPlayer( CardinalReplacementReceipt& receipt,
+        float nextDistanceM, int mode, float movedM )
+    {
+        float const x = 128.5f + receipt.dx * nextDistanceM;
+        float const y = 128.5f + receipt.dy * nextDistanceM;
+        g.feetX = x; g.feetY = y;
+        FollowStreamCenter();
+        float surfaceZ = 0.f, collisionZ = 0.f;
+        bool const surface = Stage0CalibrationSurfaceZ( x, y, surfaceZ );
+        bool const collision = SampleGroundZ( x, y, collisionZ );
+        ++receipt.movementSamples;
+        if ( !surface || !collision || !std::isfinite( surfaceZ )
+          || !std::isfinite( collisionZ ) ) { ++receipt.groundFailures; }
+        if ( surface && collision && std::fabs( surfaceZ - collisionZ ) > 0.001f )
+        { ++receipt.collisionMismatches; }
+        if ( mode == 2 )
+        {
+            g.walkMode = false; g.grounded = false;
+            g.feetZ = surfaceZ + 22.f;
+            g.camZ = surfaceZ + 24.f;
+            receipt.freeFlyDistanceM += movedM;
+        }
+        else
+        {
+            g.walkMode = true; g.grounded = true;
+            g.feetZ = surfaceZ; g.camZ = surfaceZ + kEyeHeightM;
+            if ( mode == 1 ) { receipt.sprintDistanceM += movedM; }
+            else { receipt.walkDistanceM += movedM; }
+        }
+        g.camX = x; g.camY = y;
+        g.yaw = std::atan2( receipt.dx, receipt.dy );
+        g.pitch = mode == 2 ? -0.35f : -0.08f;
+        UpdateCardinalResidencyMax( receipt );
+        receipt.movementWorstFrameMs=(std::max)(receipt.movementWorstFrameMs,
+            g.playWorldgenFrameMs);
+        if(g.playWorldgenFrameMs>16.667){++receipt.movementFramesOver16;}
+        if ( s_cardinalTrace )
+        {
+            std::fprintf( s_cardinalTrace,
+                "%s,%s,%d,%.1f,%.3f,%.3f,%s,%zu,%zu,%.4f\n",
+                receipt.stage, receipt.bearing, s_cardinalPhase, nextDistanceM,
+                x, y, mode == 2 ? "free_fly" : ( mode == 1 ? "sprint" : "walk" ),
+                g.cells.size(), CardinalPackageMap( receipt.view ).size(),
+                g.playWorldgenFrameMs );
+        }
+    }
+
+    bool WriteCardinalReplacementArtifact()
+    {
+        size_t const expectedCases = g.certWorldgenCardinalStageFilter >= 0 ? 4u : 32u;
+        bool passed = s_cardinalReceipts.size() == expectedCases;
+        bool residencyDigestExact = passed;
+        bool residencyCompleteAll = passed;
+        FILE* file = nullptr;
+        if ( fopen_s( &file,
+            "Docs\\provenance_worldgen_cardinal_replacement_cert.txt", "wb" ) != 0
+          || !file ) { return false; }
+        // The permitted residency envelope follows the residency law at the
+        // configured radius, so this certificate proves the same contract at
+        // 64 m and at 192 m rather than against a hard-coded 64 m assumption.
+        int const declaredMaxPackages =
+            Stage0DeclaredMaxResidentPackages( g.stage0LiveRadiusM );
+        std::fprintf( file,
+            "WORLDGEN_CARDINAL_REPLACEMENT_RECEIPT\n"
+            "route=N_192_return,E_192_return,S_192_return,W_192_return\n"
+            "configured_live_radius_m=%d\nrequired_residency_radius_m=%d\n"
+            "far_extent_m=%d\nreplacement_distance_m=%.0f\n"
+            "package_size_m=%d\npackage_apron=%d\npackages_per_axis=%d\n"
+            "declared_max_packages=%d\ndeclared_max_cells=%d\n",
+            g.stage0LiveRadiusM, g.stage0LiveRadiusM, g.stage0FarExtentM,
+            CardinalReplacementDistanceM(),
+            (int)kStage0TerrainBlockCells, kStage0PackageApron,
+            Stage0PackagesPerAxis( g.stage0LiveRadiusM ),
+            declaredMaxPackages, kCardinalMaxCells );
+        for ( CardinalReplacementReceipt const& r : s_cardinalReceipts )
+        {
+            bool const digestParity = CardinalDigestsEqual( r.origin, r.returned );
+            // Exact return of the resident set itself, with no tolerance. Count
+            // equality is not identity: two different resident sets can hold the
+            // same number of packages.
+            bool const residencyParity =
+                r.originResidencyDigest == r.returnResidencyDigest;
+            // Residency must be complete to the configured radius at every
+            // settled station, in every direction.
+            float const requiredRadius = (float)g.stage0LiveRadiusM - 0.001f;
+            bool const completeEverywhere =
+                r.originMinCompleteRadiusM >= requiredRadius
+                && r.outerMinCompleteRadiusM >= requiredRadius
+                && r.returnMinCompleteRadiusM >= requiredRadius;
+            bool const rowPassed = r.originSettled && r.outerSettled && r.returnSettled
+                && r.originPackagesAtOuter == 0
+                && residencyParity && completeEverywhere
+                && r.maxResidentPackages <= declaredMaxPackages
+                && r.maxResidentCells <= kCardinalMaxCells
+                && r.movementSamples > 0 && r.groundFailures == 0
+                && r.collisionMismatches == 0
+                && r.oracleSamples > 0 && r.oracleMismatches == 0
+                && r.skyPixels == 0 && r.fallbackGreenPixels == 0
+                && r.sampledPixels > 0 && r.outerImageWritten
+                && r.returnImageChangedPixels == 0
+                && r.returnImageSampledPixels > 0 && digestParity
+                && r.walkDistanceM >= 127.9 && r.sprintDistanceM >= 127.9
+                && r.freeFlyDistanceM >= 127.9
+                && r.movementFramesOver16 == 0;
+            passed = passed && rowPassed;
+            residencyDigestExact = residencyDigestExact && residencyParity;
+            residencyCompleteAll = residencyCompleteAll && completeEverywhere;
+            std::fprintf( file,
+                "case.%s_%s=%s origin_packages=%d outer_packages=%d return_packages=%d "
+                "origin_live_packages_at_outer_station=%d max_resident_packages=%d "
+                "max_resident_cells=%d movement_samples=%d ground_failures=%d "
+                "collision_mismatches=%d oracle_samples=%d oracle_mismatches=%d "
+                "oracle_missing_cells=%d oracle_cell_material_mismatches=%d "
+                "oracle_authority_mismatches=%d oracle_collision_mismatches=%d "
+                "feature_samples=%d sky_pixels=%d fallback_green_pixels=%d "
+                "return_image_changed_pixels=%d return_image_sampled_pixels=%d "
+                "return_image_max_channel_delta=%d walk_m=%.1f sprint_m=%.1f fly_m=%.1f "
+                "resident_package_digest_origin=%016llx resident_package_digest_return=%016llx "
+                "residency_return=%s min_complete_radius_origin_m=%.2f "
+                "min_complete_radius_outer_m=%.2f min_complete_radius_return_m=%.2f "
+                "residency_complete=%s "
+                "geometry_return=%s material_feature_return=%s collision_return=%s "
+                "packages_return=%s worst_frame_ms=%.3f frames_over_16_667=%d "
+                "movement_worst_frame_ms=%.3f movement_frames_over_16_667=%d\n",
+                r.stage, r.bearing, rowPassed ? "PASS" : "FAIL",
+                r.originPackageCount, r.outerPackageCount, r.returnPackageCount,
+                r.originPackagesAtOuter, r.maxResidentPackages, r.maxResidentCells,
+                r.movementSamples, r.groundFailures, r.collisionMismatches,
+                r.oracleSamples, r.oracleMismatches, r.oracleMissingCells,
+                r.oracleCellMaterialMismatches, r.oracleAuthorityMismatches,
+                r.oracleCollisionMismatches, r.geologyFeatureSamples,
+                r.skyPixels, r.fallbackGreenPixels, r.returnImageChangedPixels,
+                r.returnImageSampledPixels, r.returnImageMaxChannelDelta,
+                r.walkDistanceM, r.sprintDistanceM, r.freeFlyDistanceM,
+                (unsigned long long)r.originResidencyDigest,
+                (unsigned long long)r.returnResidencyDigest,
+                residencyParity ? "PASS" : "FAIL",
+                r.originMinCompleteRadiusM, r.outerMinCompleteRadiusM,
+                r.returnMinCompleteRadiusM, completeEverywhere ? "PASS" : "FAIL",
+                r.origin.geometry == r.returned.geometry ? "PASS" : "FAIL",
+                r.origin.materialFeature == r.returned.materialFeature ? "PASS" : "FAIL",
+                r.origin.collision == r.returned.collision ? "PASS" : "FAIL",
+                r.origin.packages == r.returned.packages ? "PASS" : "FAIL",
+                r.worstFrameMs, r.framesOver16,
+                r.movementWorstFrameMs,r.movementFramesOver16 );
+        }
+        std::fprintf( file,
+            "WORLDGEN_CARDINAL_REPLACEMENT %s\n"
+            "check.origin_fully_evicted_at_outer=%s\n"
+            "check.authority_population_matches=%s\n"
+            "check.collision_surface_continuity=%s\n"
+            "check.no_outer_sky_or_fallback=%s\n"
+            "check.return_origin_exact=%s\n"
+            "check.resident_package_digest_exact=%s\n"
+            "check.residency_complete_to_live_radius=%s\n"
+            "stage6_repeatable_hitch=CLOSED_BY_BOUNDED_WORKER_PACKAGE_PATH\n"
+            "bare_earth_macro_geography=%s\n",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            passed ? "PASS" : "FAIL", passed ? "PASS" : "FAIL",
+            residencyDigestExact ? "PASS" : "FAIL",
+            residencyCompleteAll ? "PASS" : "FAIL",
+            passed ? "READY_FOR_FULL_LADDER_PERFORMANCE_GATE"
+                : "BLOCKED_BY_REPLACEMENT_FAILURE" );
+        std::fclose( file );
+        return passed;
+    }
+
+    void WorldgenCardinalReplacementTick()
+    {
+        if ( !g.certWorldgenCardinalReplacement || !g.playWorldgenInitialized ) { return; }
+        if ( !s_cardinalTrace )
+        {
+            fopen_s( &s_cardinalTrace,
+                "Docs\\provenance_worldgen_cardinal_replacement_trace.csv", "wb" );
+            if ( s_cardinalTrace )
+            { std::fprintf( s_cardinalTrace,
+                "stage,bearing,phase,distance_m,x,y,mode,resident_cells,resident_packages,frame_ms\n" ); }
+        }
+        constexpr int allStageCount = (int)( sizeof( s_boundaryViews ) / sizeof( s_boundaryViews[0] ) );
+        int const stageCount = g.certWorldgenCardinalStageFilter >= 0 ? 1 : allStageCount;
+        constexpr int bearingCount = 4;
+        constexpr float bearingX[bearingCount] = { 0.f, 1.f, 0.f, -1.f };
+        constexpr float bearingY[bearingCount] = { 1.f, 0.f, -1.f, 0.f };
+        if ( s_cardinalCase >= stageCount * bearingCount )
+        {
+            if ( s_cardinalTrace ) { std::fclose( s_cardinalTrace ); s_cardinalTrace = nullptr; }
+            bool const passed = WriteCardinalReplacementArtifact();
+            g.certWorldgenCardinalReplacement = false;
+            PostQuitMessage( passed ? 0 : 2 );
+            return;
+        }
+        int const stageIndex = g.certWorldgenCardinalStageFilter >= 0
+            ? g.certWorldgenCardinalStageFilter : s_cardinalCase / bearingCount;
+        int const bearingIndex = s_cardinalCase % bearingCount;
+        if ( s_cardinalPhase == 0 )
+        {
+            CardinalReplacementReceipt receipt;
+            receipt.view = s_boundaryViews[stageIndex];
+            std::snprintf( receipt.stage, sizeof( receipt.stage ), "%s", s_boundaryLabels[stageIndex] );
+            std::snprintf( receipt.bearing, sizeof( receipt.bearing ), "%s",
+                s_boundaryBearingLabels[bearingIndex] );
+            receipt.dx = bearingX[bearingIndex]; receipt.dy = bearingY[bearingIndex];
+            s_cardinalReceipts.push_back( std::move( receipt ) );
+            CardinalReplacementReceipt& r = s_cardinalReceipts.back();
+            g.stage0ToolGeologyCutaway = false;
+            g.stage0ToolRuler = false; g.stage0ToolPalette = false;
+            g.stage0ToolPerformanceHud = false; g.stage0ToolMutationHud = false;
+            g.stage0StageMenuOpen = false; g.stage0ToolDrawerOpen = false;
+            SelectStage0PlayView( r.view );
+            g.feetX = 128.5f; g.feetY = 128.5f;
+            g.playerX = 128; g.playerY = 128;
+            RebuildStage0PlayableRuntime();
+            SetCardinalCamera( r, 0.f, true );
+            s_cardinalDistanceM = 0.f;
+            s_cardinalPhaseFrames = 0;
+            s_cardinalPhase = 1;
+            return;
+        }
+        CardinalReplacementReceipt& r = s_cardinalReceipts.back();
+        UpdateCardinalResidencyMax( r );
+        // Settled must include an empty package backlog. Construction used to be
+        // synchronous, so residency was complete the instant the stream queue
+        // drained; a time-budgeted builder fills the window over many frames, and
+        // without this the audit captures a half-built world and reports it as a
+        // residency failure.
+        bool const settled = g.columnQueue.empty() && g.pending == PendingKind::None
+            && Stage0PendingPackageCount( r.view ) == 0
+            && Stage8PackageJobsIdle();
+        if ( s_cardinalPhase == 1 )
+        {
+            SetCardinalCamera( r, 0.f, true );
+            if ( ++s_cardinalPhaseFrames >= kCardinalSettleFrames && settled )
+            {
+                r.originSettled = true; s_cardinalCapturePending = 1;
+                s_cardinalCaptureComplete = false; s_cardinalPhase = 2;
+            }
+            return;
+        }
+        if ( s_cardinalPhase == 2 )
+        {
+            if ( s_cardinalCaptureComplete )
+            { s_cardinalCaptureComplete = false; s_cardinalPhase = 3; }
+            return;
+        }
+        if ( s_cardinalPhase == 3 )
+        {
+            int mode = s_cardinalDistanceM < 64.f ? 0
+                : ( s_cardinalDistanceM < 128.f ? 1 : 2 );
+            float const step = mode == 0 ? 1.f : ( mode == 1 ? 2.f : 4.f );
+            float const next = (std::min)( CardinalReplacementDistanceM(),
+                s_cardinalDistanceM + step );
+            AdvanceCardinalPlayer( r, next, mode, next - s_cardinalDistanceM );
+            s_cardinalDistanceM = next;
+            if ( s_cardinalDistanceM >= CardinalReplacementDistanceM() )
+            { s_cardinalPhase = 4; s_cardinalPhaseFrames = 0; }
+            return;
+        }
+        if ( s_cardinalPhase == 4 )
+        {
+            SetCardinalCamera( r, CardinalReplacementDistanceM(), true );
+            if ( ++s_cardinalPhaseFrames >= kCardinalSettleFrames && settled )
+            {
+                r.outerSettled = true; s_cardinalCapturePending = 2;
+                s_cardinalCaptureComplete = false; s_cardinalPhase = 5;
+            }
+            return;
+        }
+        if ( s_cardinalPhase == 5 )
+        {
+            if ( s_cardinalCaptureComplete )
+            { s_cardinalCaptureComplete = false; s_cardinalPhase = 6; }
+            return;
+        }
+        if ( s_cardinalPhase == 6 )
+        {
+            int mode = s_cardinalDistanceM > 128.f ? 2
+                : ( s_cardinalDistanceM > 64.f ? 1 : 0 );
+            float const step = mode == 0 ? 1.f : ( mode == 1 ? 2.f : 4.f );
+            float const next = (std::max)( 0.f, s_cardinalDistanceM - step );
+            AdvanceCardinalPlayer( r, next, mode, s_cardinalDistanceM - next );
+            s_cardinalDistanceM = next;
+            if ( s_cardinalDistanceM <= 0.f )
+            { s_cardinalPhase = 7; s_cardinalPhaseFrames = 0; }
+            return;
+        }
+        if ( s_cardinalPhase == 7 )
+        {
+            SetCardinalCamera( r, 0.f, true );
+            if ( ++s_cardinalPhaseFrames >= kCardinalSettleFrames && settled )
+            {
+                r.returnSettled = true; s_cardinalCapturePending = 3;
+                s_cardinalCaptureComplete = false; s_cardinalPhase = 8;
+            }
+            return;
+        }
+        if ( s_cardinalPhase == 8 && s_cardinalCaptureComplete )
+        {
+            s_cardinalCaptureComplete = false;
+            ++s_cardinalCase; s_cardinalPhase = 0; s_cardinalPhaseFrames = 0;
+        }
+    }
+
+    void WorldgenCardinalReplacementAfterRender()
+    {
+        if ( !g.certWorldgenCardinalReplacement || s_cardinalCapturePending == 0
+          || s_cardinalReceipts.empty() ) { return; }
+        CardinalReplacementReceipt& r = s_cardinalReceipts.back();
+        glFinish();
+        GLint vp[4] = {}; glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return; }
+        std::vector<unsigned char> rgba( (size_t)w * (size_t)h * 4u );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 ); glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+        if ( s_cardinalCapturePending == 1 )
+        {
+            r.origin = CaptureCardinalDigests( r.view, 128.5f, 128.5f );
+            r.originPackages = CardinalPackageKeys( r.view );
+            r.originPackageCount = (int)r.originPackages.size();
+            r.originResidencyDigest = Stage0ResidentPackageDigest( r.view );
+            r.originMinCompleteRadiusM = Stage0MinCompleteRadiusM( r.view );
+            r.originImage = rgba; r.originImageW = w; r.originImageH = h;
+        }
+        else if ( s_cardinalCapturePending == 2 )
+        {
+            auto const outerKeys = CardinalPackageKeys( r.view );
+            r.outerPackageCount = (int)outerKeys.size();
+            r.outerMinCompleteRadiusM = Stage0MinCompleteRadiusM( r.view );
+            r.originPackagesAtOuter = 0;
+            for ( uint64_t key : outerKeys )
+            { if ( r.originPackages.count( key ) ) { ++r.originPackagesAtOuter; } }
+            r.skyPixels = r.fallbackGreenPixels = r.sampledPixels = 0;
+            for ( int y = 1; y < h * 3 / 5; ++y )
+            for ( int x = 1; x < w - 1; ++x )
+            {
+                size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                int const red = rgba[i], green = rgba[i + 1], blue = rgba[i + 2];
+                int const dr = red - 114, dg = green - 158, db = blue - 224;
+                ++r.sampledPixels;
+                if ( dr * dr + dg * dg + db * db <= 8 * 8 ) { ++r.skyPixels; }
+                if ( green > red * 1.12f && green > blue * 1.12f && green > 72 )
+                { ++r.fallbackGreenPixels; }
+            }
+            char path[MAX_PATH];
+            std::snprintf( path, sizeof( path ),
+                "Docs\\provenance_cardinal_%s_%s_outer.ppm", r.stage, r.bearing );
+            r.outerImageWritten = DumpFramePpm( path );
+            ValidateCardinalOuterAuthority( r );
+        }
+        else
+        {
+            r.returned = CaptureCardinalDigests( r.view, 128.5f, 128.5f );
+            r.returnPackageCount = (int)CardinalPackageMap( r.view ).size();
+            r.returnResidencyDigest = Stage0ResidentPackageDigest( r.view );
+            r.returnMinCompleteRadiusM = Stage0MinCompleteRadiusM( r.view );
+            r.returnImageChangedPixels = 0;
+            r.returnImageSampledPixels = 0;
+            r.returnImageMaxChannelDelta = 0;
+            if ( r.originImageW != w || r.originImageH != h
+              || r.originImage.size() != rgba.size() )
+            { r.returnImageChangedPixels = INT_MAX; }
+            else
+            {
+                for ( int y = 1; y < h * 3 / 5; ++y )
+                for ( int x = 1; x < w - 1; ++x )
+                {
+                    size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 4u;
+                    int const dr = std::abs( (int)rgba[i] - (int)r.originImage[i] );
+                    int const dg = std::abs( (int)rgba[i + 1] - (int)r.originImage[i + 1] );
+                    int const db = std::abs( (int)rgba[i + 2] - (int)r.originImage[i + 2] );
+                    int const delta = (std::max)({ dr, dg, db });
+                    ++r.returnImageSampledPixels;
+                    r.returnImageMaxChannelDelta = (std::max)(
+                        r.returnImageMaxChannelDelta, delta );
+                    if ( delta > 2 ) { ++r.returnImageChangedPixels; }
+                }
+            }
+            r.originImage.clear(); r.originImage.shrink_to_fit();
+        }
+        UpdateCardinalResidencyMax( r );
+        s_cardinalCapturePending = 0;
+        s_cardinalCaptureComplete = true;
+    }
+
+    struct Stage11WaterfallRun
+    {
+        int phase=0;
+        int warmFrames=0;
+        int settleFrames=0;
+        int measuredFrames=0;
+        int groundFailures=0;
+        int collisionMismatches=0;
+        int framesOver16=0;
+        int framesOver33=0;
+        int framesOver50=0;
+        int framesOver100=0;
+        int maxResidentPackages=0;
+        int maxResidentCells=0;
+        float distanceM=0.f;
+        double coldAuthorityResetMs=0.0;
+        double coldWarmWorstMs=0.0;
+        double collisionQueryMs=0.0;
+        double walkM=0.0,sprintM=0.0,flyM=0.0;
+        double cpuMs=0.0,simulationMs=0.0,residencyMs=0.0,generationMs=0.0;
+        double hfBuildMs=0.0,hfUploadMs=0.0,hfRetireMs=0.0;
+        double drawMs=0.0,presentMs=0.0,pacingMs=0.0;
+        std::vector<double> frameMs;
+        // Ordinary movement modes are gated separately. An aggregate frame count
+        // cannot distinguish a rare anchor spike from a movement mode whose
+        // ordinary frames simply do not fit inside 16.67 ms, and those are two
+        // different defects with two different fixes.
+        std::vector<double> modeFrameMs[3];      // 0=walk 1=sprint 2=free_fly
+        double modeFarFieldMs[3]={0.0,0.0,0.0};
+        double modePrefetchMs[3]={0.0,0.0,0.0};
+        int modeFramesOver16[3]={0,0,0};
+        FILE* trace=nullptr;
+        // Rolled forward every measured frame so the trace can attribute
+        // far-field, lookahead and package cost to the individual frame.
+        Stage11ResidencyWaterfallCounters frameSnapshot;
+    };
+    Stage11WaterfallRun s_stage11WaterfallRun;
+
+    double Stage11WaterfallPercentile(std::vector<double> values,double p)
+    {
+        if(values.empty())return 0.0;
+        std::sort(values.begin(),values.end());
+        size_t const i=(size_t)std::floor(p*(double)(values.size()-1));
+        return values[i];
+    }
+
+    // Bearing convention is shared with the cardinal replacement audit:
+    // 0=north(+Y) 1=east(+X) 2=south(-Y) 3=west(-X).
+    char const* Stage11BearingName(int bearing)
+    {
+        static char const* const names[4]={"north","east","south","west"};
+        return names[bearing&3];
+    }
+
+    void Stage11BearingStep(int bearing,float& stepX,float& stepY)
+    {
+        static float const sx[4]={0.f,1.f,0.f,-1.f};
+        static float const sy[4]={1.f,0.f,-1.f,0.f};
+        stepX=sx[bearing&3];stepY=sy[bearing&3];
+    }
+
+    float Stage11BearingYaw(int bearing)
+    {
+        static float const yaws[4]={0.f,1.5707963f,3.14159265f,-1.5707963f};
+        return yaws[bearing&3];
+    }
+
+    // Places the probe at an absolute station and records the shared ground /
+    // collision parity checks used by every Stage-11 capture-free route.
+    void Stage11PlaceProbe(float x,float y,bool fly,float& outSurfaceZ,
+        int& groundFailures,int& collisionMismatches,double& collisionQueryMs,float yaw)
+    {
+        g.feetX=x;g.feetY=y;FollowStreamCenter();
+        LARGE_INTEGER q0{},q1{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        float surfaceZ=0.f,collisionZ=0.f;
+        bool const surface=Stage0CalibrationSurfaceZ(x,y,surfaceZ);
+        bool const collision=SampleGroundZ(x,y,collisionZ);
+        QueryPerformanceCounter(&q1);
+        if(qpf.QuadPart>0)collisionQueryMs+=1000.0
+            *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+        if(!surface||!collision||!std::isfinite(surfaceZ)||!std::isfinite(collisionZ))
+        {++groundFailures;}
+        if(surface&&collision&&std::fabs(surfaceZ-collisionZ)>0.001f)
+        {++collisionMismatches;}
+        if(fly)
+        {
+            g.walkMode=false;g.grounded=false;g.feetZ=surfaceZ+22.f;g.camZ=surfaceZ+24.f;
+        }
+        else
+        {
+            g.walkMode=true;g.grounded=true;g.feetZ=surfaceZ;g.camZ=surfaceZ+kEyeHeightM;
+        }
+        g.camX=x;g.camY=y;g.yaw=yaw;g.pitch=fly?-.35f:-.08f;
+        outSurfaceZ=surfaceZ;
+    }
+
+    void SetStage11WaterfallPlayer(float distanceM,int mode,float movedM)
+    {
+        int const bearing=g.certStage11WaterfallBearing;
+        float stepX=1.f,stepY=0.f;Stage11BearingStep(bearing,stepX,stepY);
+        float const x=128.5f+stepX*distanceM,y=128.5f+stepY*distanceM;
+        float surfaceZ=0.f;
+        Stage11PlaceProbe(x,y,mode==2,surfaceZ,
+            s_stage11WaterfallRun.groundFailures,
+            s_stage11WaterfallRun.collisionMismatches,
+            s_stage11WaterfallRun.collisionQueryMs,Stage11BearingYaw(bearing));
+        if(mode==2){s_stage11WaterfallRun.flyM+=movedM;}
+        else if(mode==1){s_stage11WaterfallRun.sprintM+=movedM;}
+        else{s_stage11WaterfallRun.walkM+=movedM;}
+    }
+
+    bool WriteStage11WaterfallArtifactTo(char const* path)
+    {
+        auto const& run=s_stage11WaterfallRun;
+        int const bearing=g.certStage11WaterfallBearing;
+        char route[64]={};
+        std::snprintf(route,sizeof(route),"%s_192m_capture_free",Stage11BearingName(bearing));
+        bool const integrity=run.distanceM>=192.f&&run.groundFailures==0
+            &&run.collisionMismatches==0&&run.measuredFrames>0;
+        FILE* f=nullptr;
+        if(fopen_s(&f,path,"wb")!=0||!f)
+        {return false;}
+        double const totalProfile=s_stage11Waterfall.packageDiscoveryMs
+            +s_stage11Waterfall.packageMeshMs+s_stage11Waterfall.packageMaterialMs
+            +s_stage11Waterfall.packageAllocationMs+s_stage11Waterfall.packageGlCompileMs
+            +s_stage11Waterfall.packagePublishMs+s_stage11Waterfall.packageRetirementScanMs
+            +s_stage11Waterfall.farFieldTotalMs;
+        double const worst=run.frameMs.empty()?0.0:*std::max_element(run.frameMs.begin(),run.frameMs.end());
+        // The acceptance rule is per movement mode: walking, sprinting and
+        // free-flight must each stay inside 16.67 ms. A mode whose ordinary
+        // frames do not fit is a different defect from a rare anchor spike, and
+        // the aggregate count hides which one is present.
+        bool everyModeSustains=integrity;
+        for(int m=0;m<3;++m)
+        {
+            if(run.modeFrameMs[m].empty()||run.modeFramesOver16[m]!=0)
+            {everyModeSustains=false;}
+        }
+        char const* performanceGate=everyModeSustains&&run.framesOver16==0
+            ?"PASS_SUSTAINED_60_FPS":"FAIL_SUSTAINED_60_FPS";
+        static char const* const kModeNames[3]={"walk","sprint","free_fly"};
+        char modeBlock[1024]={};
+        {
+            size_t used=0;
+            for(int m=0;m<3;++m)
+            {
+                std::vector<double> const& v=run.modeFrameMs[m];
+                double sum=0.0,peak=0.0;
+                for(double x:v){sum+=x;peak=(std::max)(peak,x);}
+                size_t const n=v.size();
+                int const written=std::snprintf(modeBlock+used,sizeof(modeBlock)-used,
+                    "mode.%s frames=%zu mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f worst_ms=%.3f "
+                    "over_16_667=%d over_16_667_pct=%.1f far_field_ms=%.3f lookahead_ms=%.3f "
+                    "sustains_60=%s\n",
+                    kModeNames[m],n,n?sum/(double)n:0.0,
+                    Stage11WaterfallPercentile(v,.50),Stage11WaterfallPercentile(v,.95),peak,
+                    run.modeFramesOver16[m],n?100.0*(double)run.modeFramesOver16[m]/(double)n:0.0,
+                    run.modeFarFieldMs[m],run.modePrefetchMs[m],
+                    (n&&run.modeFramesOver16[m]==0)?"PASS":"FAIL");
+                if(written>0){used+=(size_t)written;}
+                if(used>=sizeof(modeBlock))break;
+            }
+        }
+        char const* optimizationMilestone="OPEN";
+        if(integrity&&worst<16.667)optimizationMilestone="LT_16_667_PASS";
+        else if(integrity&&worst<33.3)optimizationMilestone="LT_33_3_PASS";
+        else if(integrity&&worst<50.0)optimizationMilestone="LT_50_PASS";
+        else if(integrity&&run.framesOver100==0)optimizationMilestone="LT_100_PASS";
+        std::fprintf(f,
+            "STAGE11_RESIDENCY_WATERFALL\n"
+            "route=%s\nbearing=%s\nlive_radius_m=%d\n"
+            "walk_m=%.1f\nsprint_m=%.1f\nfree_fly_m=%.1f\n"
+            "cold_authority_reset_ms=%.3f\ncold_warm_worst_frame_ms=%.3f\n"
+            "measured_frames=%d\nmean_frame_thread_ms=%.3f\np50_frame_thread_ms=%.3f\n"
+            "p95_frame_thread_ms=%.3f\np99_frame_thread_ms=%.3f\nworst_frame_thread_ms=%.3f\n"
+            "frames_over_16_667=%d\nframes_over_33_3=%d\nframes_over_50=%d\nframes_over_100=%d\n"
+            "frame_cpu_total_ms=%.3f\nsimulation_total_ms=%.3f\nresidency_total_ms=%.3f\n"
+            "generation_total_ms=%.3f\nhf_build_total_ms=%.3f\nhf_upload_total_ms=%.3f\n"
+            "hf_retire_total_ms=%.3f\ndraw_submit_total_ms=%.3f\npresent_wait_total_ms=%.3f\n"
+            "pacing_wait_total_ms=%.3f\ncollision_query_total_ms=%.3f\n"
+            "package_discovery_ms=%.3f\npackage_discovery_candidates=%d\n"
+            "package_relief_surface_mesh_ms=%.3f\npackage_fault_material_query_ms=%.3f\n"
+            "package_sample_ms=%.3f\npackage_surface_descriptor_ms=%.3f\n"
+            "package_material_ms=%.3f\npackage_mesh_emit_ms=%.3f\n"
+            "package_collision_ms=%.3f\n"
+            "package_display_list_allocation_ms=%.3f\npackage_gl_compile_ms=%.3f\n"
+            "package_publication_ms=%.3f\npackage_retirement_scan_ms=%.3f\n"
+            "packages_built=%d\npackages_retired=%d\npackage_material_samples=%d\n"
+            "package_material_cache_hits=%d\nfar_field_rebuilds=%d\nfar_field_total_ms=%.3f\n"
+            "far_tiles_retained=%d\nfar_tiles_discovered=%d\nfar_tiles_built=%d\n"
+            "far_coarse_tiles_built=%d\nfar_stitch_tiles_built=%d\n"
+            "far_tiles_published=%d\nfar_tiles_retired=%d\nfar_tiles_pending_max=%d\n"
+            "far_prefetch_ms=%.3f\nfar_prefetch_surface_queries=%d\n"
+            "far_prefetch_material_queries=%d\n"
+            "far_tile_discovery_ms=%.3f\nfar_tile_resource_ms=%.3f\n"
+            "far_tile_compile_ms=%.3f\nfar_tile_publish_ms=%.3f\n"
+            "far_cache_prune_ms=%.3f\n"
+            "far_surface_query_ms=%.3f\nfar_surface_queries=%d\nfar_material_query_ms=%.3f\n"
+            "far_material_queries=%d\nfar_material_cache_hits=%d\nprofiled_work_total_ms=%.3f\n"
+            "frame_thread_id=%lu\noff_frame_thread_builds=%d\n"
+            "certification_sync_ms=0\nreadback_ms=0\nscreenshot_ms=0\ndigest_ms=0\n"
+            "occupancy_compile_ms=0.000 (not active in Stage-11 presentation path)\n"
+            "collision_compile_ms=%.3f (shared sampled package boundary)\n"
+            "max_resident_packages=%d\nmax_resident_cells=%d\nground_failures=%d\n"
+            "collision_mismatches=%d\ncorrectness=%s\n"
+            "%s"
+            "performance_gate=%s\n"
+            "optimization_milestone=%s\n"
+            "macro_geography=BLOCKED\nstage12=BLOCKED\n",
+            route,Stage11BearingName(bearing),g.stage0LiveRadiusM,
+            run.walkM,run.sprintM,run.flyM,run.coldAuthorityResetMs,run.coldWarmWorstMs,
+            run.measuredFrames,run.measuredFrames?run.cpuMs/run.measuredFrames:0.0,
+            Stage11WaterfallPercentile(run.frameMs,.50),Stage11WaterfallPercentile(run.frameMs,.95),
+            Stage11WaterfallPercentile(run.frameMs,.99),worst,run.framesOver16,run.framesOver33,
+            run.framesOver50,run.framesOver100,run.cpuMs,run.simulationMs,run.residencyMs,
+            run.generationMs,run.hfBuildMs,run.hfUploadMs,run.hfRetireMs,run.drawMs,
+            run.presentMs,run.pacingMs,run.collisionQueryMs,
+            s_stage11Waterfall.packageDiscoveryMs,s_stage11Waterfall.packageDiscoveryCandidates,
+            s_stage11Waterfall.packageMeshMs,s_stage11Waterfall.packageMaterialMs,
+            s_stage11Waterfall.packageSampleMs,
+            s_stage11Waterfall.packageSurfaceDescriptorMs,
+            s_stage11Waterfall.packageMaterialMs,
+            s_stage11Waterfall.packageMeshEmitMs,
+            s_stage11Waterfall.packageCollisionMs,
+            s_stage11Waterfall.packageAllocationMs,s_stage11Waterfall.packageGlCompileMs,
+            s_stage11Waterfall.packagePublishMs,s_stage11Waterfall.packageRetirementScanMs,
+            s_stage11Waterfall.packagesBuilt,s_stage11Waterfall.packagesRetired,
+            s_stage11Waterfall.packageMaterialSamples,s_stage11Waterfall.packageMaterialCacheHits,
+            s_stage11Waterfall.farFieldRebuilds,s_stage11Waterfall.farFieldTotalMs,
+            s_stage11Waterfall.farTilesRetained,s_stage11Waterfall.farTilesDiscovered,
+            s_stage11Waterfall.farTilesBuilt,s_stage11Waterfall.farCoarseTilesBuilt,
+            s_stage11Waterfall.farStitchTilesBuilt,s_stage11Waterfall.farTilesPublished,
+            s_stage11Waterfall.farTilesRetired,s_stage11Waterfall.farTilesPendingMax,
+            s_stage11Waterfall.farPrefetchMs,s_stage11Waterfall.farPrefetchSurfaceQueries,
+            s_stage11Waterfall.farPrefetchMaterialQueries,
+            s_stage11Waterfall.farTileDiscoveryMs,s_stage11Waterfall.farTileResourceMs,
+            s_stage11Waterfall.farTileCompileMs,s_stage11Waterfall.farTilePublishMs,
+            s_stage11Waterfall.farCachePruneMs,
+            s_stage11Waterfall.farSurfaceMs,s_stage11Waterfall.farSurfaceQueries,
+            s_stage11Waterfall.farMaterialMs,s_stage11Waterfall.farMaterialQueries,
+            s_stage11Waterfall.farMaterialCacheHits,totalProfile,
+            (unsigned long)s_stage11Waterfall.frameThreadId,s_stage11Waterfall.offFrameThreadBuilds,
+            s_stage11Waterfall.packageCollisionMs,
+            run.maxResidentPackages,run.maxResidentCells,run.groundFailures,
+            run.collisionMismatches,integrity?"PASS":"FAIL",
+            modeBlock,performanceGate,optimizationMilestone);
+        std::fclose(f);return integrity;
+    }
+
+    bool WriteStage11WaterfallArtifact()
+    {
+        auto const& run=s_stage11WaterfallRun;
+        int const bearing=g.certStage11WaterfallBearing;
+        char const* const name=Stage11BearingName(bearing);
+        char path[160]={};
+        std::snprintf(path,sizeof(path),
+            "Docs\\provenance_stage11_residency_waterfall_%s.txt",name);
+        bool ok=WriteStage11WaterfallArtifactTo(path);
+        // The unsuffixed receipt stays the eastward reference so the original
+        // single-direction certificate keeps its established artifact path.
+        if(bearing==1)
+        {ok=WriteStage11WaterfallArtifactTo(
+            "Docs\\provenance_stage11_residency_waterfall.txt")&&ok;}
+        // One appended line per direction lets the all-direction command state a
+        // combined verdict without re-parsing four full receipts.
+        double const worst=run.frameMs.empty()
+            ?0.0:*std::max_element(run.frameMs.begin(),run.frameMs.end());
+        FILE* combined=nullptr;
+        if(fopen_s(&combined,
+            "Docs\\provenance_stage11_residency_waterfall_alldir.txt","ab")==0&&combined)
+        {
+            bool sustains=ok&&run.framesOver16==0;
+            for(int m=0;m<3;++m)
+            {
+                if(run.modeFrameMs[m].empty()||run.modeFramesOver16[m]!=0)sustains=false;
+            }
+            std::fprintf(combined,
+                "bearing=%s correctness=%s gameplay_60fps=%s "
+                "walk_over_16=%d sprint_over_16=%d fly_over_16=%d "
+                "walk_p50=%.2f sprint_p50=%.2f fly_p50=%.2f "
+                "over_100=%d over_50=%d over_33=%d over_16=%d "
+                "worst_ms=%.3f p99_ms=%.3f median_ms=%.3f frames=%d far_shifts=%d\n",
+                name,ok?"PASS":"FAIL",sustains?"PASS":"FAIL",
+                run.modeFramesOver16[0],run.modeFramesOver16[1],run.modeFramesOver16[2],
+                Stage11WaterfallPercentile(run.modeFrameMs[0],.50),
+                Stage11WaterfallPercentile(run.modeFrameMs[1],.50),
+                Stage11WaterfallPercentile(run.modeFrameMs[2],.50),
+                run.framesOver100,run.framesOver50,run.framesOver33,
+                run.framesOver16,worst,Stage11WaterfallPercentile(run.frameMs,.99),
+                Stage11WaterfallPercentile(run.frameMs,.50),run.measuredFrames,
+                s_stage11Waterfall.farFieldRebuilds);
+            std::fclose(combined);
+        }
+        return ok;
+    }
+
+    void Stage11ResidencyWaterfallTick()
+    {
+        if(!g.certStage11ResidencyWaterfall||!g.playWorldgenInitialized)return;
+        auto& run=s_stage11WaterfallRun;
+        if(run.phase==0)
+        {
+            g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::FaultDisplacement);
+            g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            LARGE_INTEGER q0{},q1{},qpf{};QueryPerformanceFrequency(&qpf);
+            QueryPerformanceCounter(&q0);RebuildStage0PlayableRuntime();QueryPerformanceCounter(&q1);
+            if(qpf.QuadPart>0)run.coldAuthorityResetMs=1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+            SetStage11WaterfallPlayer(0.f,0,0.f);run.phase=1;return;
+        }
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage8PackageJobsIdle();
+        if(run.phase==1)
+        {
+            SetStage11WaterfallPlayer(0.f,0,0.f);
+            if(++run.warmFrames>=120&&settled)
+            {
+                s_stage11Waterfall={};s_stage11Waterfall.collecting=true;
+                s_stage11Waterfall.frameThreadId=GetCurrentThreadId();
+                char tracePath[160]={};
+                std::snprintf(tracePath,sizeof(tracePath),
+                    "Docs\\provenance_stage11_residency_waterfall_trace_%s.csv",
+                    Stage11BearingName(g.certStage11WaterfallBearing));
+                fopen_s(&run.trace,tracePath,"wb");
+                if(run.trace)std::fprintf(run.trace,
+                    "frame,distance_m,mode,cpu_ms,simulation_ms,residency_ms,generation_ms,hf_build_ms,hf_retire_ms,draw_ms,present_ms,resident_packages,resident_cells,far_field_ms,far_prefetch_ms,far_tiles_built,packages_built\n");
+                run.frameSnapshot=s_stage11Waterfall;
+                run.phase=2;
+            }
+            return;
+        }
+        if(run.phase==2)
+        {
+            int const mode=run.distanceM<64.f?0:(run.distanceM<128.f?1:2);
+            float const step=mode==0?1.f:(mode==1?2.f:4.f);
+            float const next=(std::min)(192.f,run.distanceM+step);
+            SetStage11WaterfallPlayer(next,mode,next-run.distanceM);run.distanceM=next;
+            if(run.distanceM>=192.f){run.phase=3;run.settleFrames=0;}
+            return;
+        }
+        if(run.phase==3)
+        {
+            SetStage11WaterfallPlayer(192.f,2,0.f);
+            if(++run.settleFrames>=90&&settled){run.phase=4;}
+            return;
+        }
+        if(run.phase==4)
+        {
+            s_stage11Waterfall.collecting=false;
+            if(run.trace){std::fclose(run.trace);run.trace=nullptr;}
+            bool const ok=WriteStage11WaterfallArtifact();
+            g.certStage11ResidencyWaterfall=false;PostQuitMessage(ok?0:2);run.phase=5;
+        }
+    }
+
+    void Stage11ResidencyWaterfallAfterRender()
+    {
+        if(!g.certStage11ResidencyWaterfall)return;
+        auto& run=s_stage11WaterfallRun;
+        if(run.phase==1)
+        {run.coldWarmWorstMs=(std::max)(run.coldWarmWorstMs,g.stage0FrameCpuMs);return;}
+        if(run.phase!=2&&run.phase!=3)return;
+        double const ms=g.stage0FrameCpuMs;
+        // Attribute this frame's far-field, lookahead and package work, then
+        // roll the snapshot forward. Totals alone cannot say whether a mode's
+        // ordinary frames are expensive or whether one anchor frame spiked.
+        auto const& counters=s_stage11Waterfall;
+        double const frameFarFieldMs=counters.farFieldTotalMs-run.frameSnapshot.farFieldTotalMs;
+        double const framePrefetchMs=counters.farPrefetchMs-run.frameSnapshot.farPrefetchMs;
+        int const frameTilesBuilt=counters.farTilesBuilt-run.frameSnapshot.farTilesBuilt;
+        int const framePackagesBuilt=counters.packagesBuilt-run.frameSnapshot.packagesBuilt;
+        run.frameSnapshot=counters;
+        int const modeIndex=run.phase==3?2
+            :(run.distanceM<=64.f?0:(run.distanceM<=128.f?1:2));
+        run.modeFrameMs[modeIndex].push_back(ms);
+        run.modeFarFieldMs[modeIndex]+=frameFarFieldMs;
+        run.modePrefetchMs[modeIndex]+=framePrefetchMs;
+        if(ms>16.667)++run.modeFramesOver16[modeIndex];
+        run.frameMs.push_back(ms);++run.measuredFrames;run.cpuMs+=ms;
+        run.simulationMs+=g.stage0FrameSimulationMs;run.residencyMs+=g.stage0FrameResidencyMs;
+        run.generationMs+=g.stage0FrameGenerationMs;run.hfBuildMs+=g.stage0FrameHfBuildMs;
+        run.hfUploadMs+=g.stage0FrameHfUploadMs;run.hfRetireMs+=g.stage0FrameHfRetireMs;
+        run.drawMs+=g.stage0FrameDrawSubmitMs;run.presentMs+=g.stage0FramePresentWaitMs;
+        run.pacingMs+=g.stage0FramePacingWaitMs;
+        if(ms>16.667)++run.framesOver16;if(ms>33.3)++run.framesOver33;
+        if(ms>50.0)++run.framesOver50;if(ms>100.0)++run.framesOver100;
+        run.maxResidentPackages=(std::max)(run.maxResidentPackages,(int)g.stage8TerrainBlocks.size());
+        run.maxResidentCells=(std::max)(run.maxResidentCells,(int)g.cells.size());
+        static char const* const kModeNames[3]={"walk","sprint","free_fly"};
+        if(run.trace)std::fprintf(run.trace,
+            "%d,%.1f,%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%zu,%zu,%.4f,%.4f,%d,%d\n",
+            run.measuredFrames,run.distanceM,kModeNames[modeIndex],
+            ms,g.stage0FrameSimulationMs,g.stage0FrameResidencyMs,g.stage0FrameGenerationMs,
+            g.stage0FrameHfBuildMs,g.stage0FrameHfRetireMs,g.stage0FrameDrawSubmitMs,
+            g.stage0FramePresentWaitMs,g.stage8TerrainBlocks.size(),g.cells.size(),
+            frameFarFieldMs,framePrefetchMs,frameTilesBuilt,framePackagesBuilt);
+    }
+
+    // ---- Stage 11 sustained free-flight -----------------------------------
+    // Free-flight is the real residency stress: it crosses package and anchor
+    // boundaries several times faster than walking, so anything that only keeps
+    // up at 1 m per frame fails here. The route is deliberately long, because a
+    // 64 m leg can be carried entirely by caches warmed before it started.
+    struct Stage11FreeFlyRun
+    {
+        int phase=0;
+        int warmFrames=0;
+        int settleFrames=0;
+        int measuredFrames=0;
+        int groundFailures=0;
+        int collisionMismatches=0;
+        int framesOver16=0,framesOver33=0,framesOver50=0,framesOver100=0;
+        int maxResidentPackages=0;
+        int maxResidentCells=0;
+        int peakPackagesPerFrame=0;
+        int peakFarTilesPerFrame=0;
+        // Frame time alone cannot certify traversal: a builder that simply does
+        // not build stays inside budget while the world goes missing. These
+        // record how complete residency actually was during the route.
+        float minCompleteRadiusM=1e9f;
+        double completeRadiusSumM=0.0;
+        int framesBelowRequired=0;
+        int packagesRequiredTotal=0;
+        int packagesBuiltTotal=0;
+        float distanceM=0.f;
+        double collisionQueryMs=0.0;
+        double coldWarmWorstMs=0.0;
+        double cpuMs=0.0;
+        double liveMs=0.0;      // exact package build cost
+        double farMs=0.0;       // far-field shift cost
+        double lookaheadMs=0.0; // far-field lookahead cost
+        double drawMs=0.0;
+        std::vector<double> frameMs;
+        Stage11ResidencyWaterfallCounters frameSnapshot;
+        FILE* trace=nullptr;
+    };
+    Stage11FreeFlyRun s_stage11FreeFlyRun;
+
+    void SetStage11FreeFlyPlayer(float distanceM)
+    {
+        float const x=128.5f+distanceM,y=128.5f;
+        float surfaceZ=0.f;
+        Stage11PlaceProbe(x,y,true,surfaceZ,
+            s_stage11FreeFlyRun.groundFailures,s_stage11FreeFlyRun.collisionMismatches,
+            s_stage11FreeFlyRun.collisionQueryMs,Stage11BearingYaw(1));
+    }
+
+    bool WriteStage11FreeFlyArtifact()
+    {
+        auto const& run=s_stage11FreeFlyRun;
+        bool const integrity=run.measuredFrames>0&&run.groundFailures==0
+            &&run.collisionMismatches==0
+            &&run.distanceM>=(float)g.certStage11FreeFlyDistanceM-0.001f;
+        double const worst=run.frameMs.empty()
+            ?0.0:*std::max_element(run.frameMs.begin(),run.frameMs.end());
+        char path[160]={};
+        std::snprintf(path,sizeof(path),
+            "Docs\\provenance_stage11_freefly_r%d_f%d_s%.0f.txt",
+            g.stage0LiveRadiusM,g.stage0FarExtentM,(double)g.certStage11FreeFlyStepM);
+        FILE* f=nullptr;
+        if(fopen_s(&f,path,"wb")!=0||!f)return false;
+        double const metresPerSecond=(double)g.certStage11FreeFlyStepM*60.0;
+        std::fprintf(f,
+            "STAGE11_SUSTAINED_FREEFLY\n"
+            "route=east_freefly_capture_free\n"
+            "live_radius_m=%d\nfar_extent_m=%d\n"
+            "step_m_per_frame=%.2f\nspeed_m_per_s_at_60hz=%.1f\ndistance_m=%.1f\n"
+            "measured_frames=%d\nmean_frame_thread_ms=%.3f\np50_frame_thread_ms=%.3f\n"
+            "p95_frame_thread_ms=%.3f\np99_frame_thread_ms=%.3f\nworst_frame_thread_ms=%.3f\n"
+            "frames_over_16_667=%d\nframes_over_33_3=%d\nframes_over_50=%d\nframes_over_100=%d\n"
+            "over_16_667_pct=%.1f\n"
+            "live_package_build_total_ms=%.3f\nfar_field_shift_total_ms=%.3f\n"
+            "far_lookahead_total_ms=%.3f\ndraw_submit_total_ms=%.3f\nframe_cpu_total_ms=%.3f\n"
+            "live_share_pct=%.1f\nfar_share_pct=%.1f\n"
+            "peak_packages_per_frame=%d\npeak_far_tiles_per_frame=%d\n"
+            "live_package_deferrals=%d\n"
+            "min_complete_radius_m=%.2f\nmean_complete_radius_m=%.2f\n"
+            "frames_below_required_radius=%d\nresidency_complete=%s\n"
+            "packages_required_frame_sum=%d\npackages_built=%d\n"
+            "package_build_debt=%d\n"
+            "max_resident_packages=%d\nmax_resident_cells=%d\n"
+            "cold_warm_worst_frame_ms=%.3f\n"
+            "ground_failures=%d\ncollision_mismatches=%d\ncorrectness=%s\n"
+            "performance_gate=%s\nmacro_geography=BLOCKED\nstage12=BLOCKED\n",
+            g.stage0LiveRadiusM,g.stage0FarExtentM,
+            (double)g.certStage11FreeFlyStepM,metresPerSecond,
+            run.distanceM,run.measuredFrames,
+            run.measuredFrames?run.cpuMs/run.measuredFrames:0.0,
+            Stage11WaterfallPercentile(run.frameMs,.50),
+            Stage11WaterfallPercentile(run.frameMs,.95),
+            Stage11WaterfallPercentile(run.frameMs,.99),worst,
+            run.framesOver16,run.framesOver33,run.framesOver50,run.framesOver100,
+            run.measuredFrames?100.0*(double)run.framesOver16/(double)run.measuredFrames:0.0,
+            run.liveMs,run.farMs,run.lookaheadMs,run.drawMs,run.cpuMs,
+            run.cpuMs>0.0?100.0*run.liveMs/run.cpuMs:0.0,
+            run.cpuMs>0.0?100.0*(run.farMs+run.lookaheadMs)/run.cpuMs:0.0,
+            run.peakPackagesPerFrame,run.peakFarTilesPerFrame,
+            g.stage0LivePackageDeferrals,
+            run.minCompleteRadiusM>1e8f?0.f:run.minCompleteRadiusM,
+            run.measuredFrames?run.completeRadiusSumM/run.measuredFrames:0.0,
+            run.framesBelowRequired,run.framesBelowRequired==0?"PASS":"FAIL",
+            run.packagesRequiredTotal,run.packagesBuiltTotal,
+            run.framesBelowRequired,
+            run.maxResidentPackages,run.maxResidentCells,run.coldWarmWorstMs,
+            run.groundFailures,run.collisionMismatches,integrity?"PASS":"FAIL",
+            // A frame budget met by not building the world is not a pass.
+            run.framesBelowRequired>0
+                ?"FAIL_INCOMPLETE_RESIDENCY"
+                :(integrity&&run.framesOver16==0
+                    ?"PASS_SUSTAINED_60_FPS":"FAIL_SUSTAINED_60_FPS"));
+        std::fclose(f);
+        return integrity;
+    }
+
+    // Cold packages are classified by cost, then explained by their first-touch
+    // signals. The branching rule this receipt exists to decide:
+    //   authority/mesh dominates -> construction must become finer-grained
+    //   material dominates       -> a prewarm sweep is justified
+    //   GL dominates             -> CPU prewarm is irrelevant, publication needs work
+    bool WriteStage0PackageBuildArtifact( char const* path )
+    {
+        if(s_packageBuildSamples.empty())return false;
+        FILE* f=nullptr;
+        if(fopen_s(&f,path,"wb")!=0||!f)return false;
+        auto pct=[](std::vector<double> v,double p)->double
+        {
+            if(v.empty())return 0.0;
+            std::sort(v.begin(),v.end());
+            return v[(size_t)std::floor(p*(double)(v.size()-1))];
+        };
+        // The threshold must be relative to this configuration's own typical
+        // package. A fixed millisecond cut just splits the bulk distribution in
+        // half and then reports what dominates the bulk, which is not the
+        // question. The tail is what the frame budget actually trips over.
+        std::vector<double> allMs;
+        allMs.reserve(s_packageBuildSamples.size());
+        for(auto const& s:s_packageBuildSamples)allMs.push_back(s.totalMs);
+        double const medianMs=pct(allMs,.50);
+        double const kColdThresholdMs=(std::max)(0.05,6.0*medianMs);
+        double const extremeThresholdMs=(std::max)(0.5,20.0*medianMs);
+        struct Bucket
+        {
+            std::vector<double> total;
+            double build=0,alloc=0,material=0,gl=0,publish=0,sum=0;
+            double sample=0,descriptor=0,meshEmit=0,collision=0;
+            int misses=0,variants=0,tris=0;
+        };
+        Bucket warm,cold,extreme;
+        for(auto const& s:s_packageBuildSamples)
+        {
+            Bucket& b=s.totalMs>=extremeThresholdMs?extreme
+                :(s.totalMs>=kColdThresholdMs?cold:warm);
+            b.total.push_back(s.totalMs);b.sum+=s.totalMs;
+            b.build+=s.buildBlockMs;b.alloc+=s.allocMs;b.material+=s.materialMs;
+            b.sample+=s.sampleMs;b.descriptor+=s.surfaceDescriptorMs;
+            b.meshEmit+=s.meshEmitMs;b.collision+=s.collisionMs;
+            b.gl+=s.glCompileMs;b.publish+=s.publishMs;
+            b.misses+=s.materialMisses;b.variants+=s.newMaterialVariants;b.tris+=s.tris;
+        }
+        std::fprintf(f,
+            "STAGE0_PACKAGE_BUILD_ATTRIBUTION\n"
+            "live_radius_m=%d\nfar_extent_m=%d\n"
+            "packages_sampled=%zu\nmedian_package_ms=%.4f\n"
+            "cold_threshold_ms=%.4f (6x median)\n"
+            "extreme_threshold_ms=%.4f (20x median)\n",
+            g.stage0LiveRadiusM,g.stage0FarExtentM,
+            s_packageBuildSamples.size(),medianMs,
+            kColdThresholdMs,extremeThresholdMs);
+        auto emit=[&](char const* name,Bucket& b)
+        {
+            size_t const n=b.total.size();
+            double const denom=n?(double)n:1.0;
+            std::fprintf(f,
+                "%s.packages=%zu %s.share_of_total_ms=%.1f\n"
+                "%s.p50_ms=%.4f %s.p95_ms=%.4f %s.p99_ms=%.4f %s.max_ms=%.4f "
+                "%s.mean_ms=%.4f %s.total_ms=%.3f\n"
+                "%s.mean_authority_mesh_ms=%.4f %s.mean_alloc_ms=%.4f "
+                "%s.mean_material_ms=%.4f %s.mean_gl_compile_ms=%.4f "
+                "%s.mean_publish_ms=%.4f\n"
+                "%s.mean_sample_ms=%.4f %s.mean_surface_descriptor_ms=%.4f "
+                "%s.mean_mesh_emit_ms=%.4f %s.mean_collision_ms=%.4f\n"
+                "%s.pct_authority_mesh=%.1f %s.pct_alloc=%.1f %s.pct_material=%.1f "
+                "%s.pct_gl_compile=%.1f %s.pct_publish=%.1f\n"
+                "%s.material_misses_per_package=%.1f %s.new_variants_total=%d "
+                "%s.mean_tris=%.0f\n",
+                name,n,name,(warm.sum+cold.sum+extreme.sum)>0.0
+                    ?100.0*b.sum/(warm.sum+cold.sum+extreme.sum):0.0,
+                name,pct(b.total,.50),name,pct(b.total,.95),name,pct(b.total,.99),
+                name,n?*std::max_element(b.total.begin(),b.total.end()):0.0,
+                name,b.sum/denom,name,b.sum,
+                name,b.build/denom,name,b.alloc/denom,name,b.material/denom,
+                name,b.gl/denom,name,b.publish/denom,
+                name,b.sample/denom,name,b.descriptor/denom,
+                name,b.meshEmit/denom,name,b.collision/denom,
+                name,b.sum>0.0?100.0*b.build/b.sum:0.0,
+                name,b.sum>0.0?100.0*b.alloc/b.sum:0.0,
+                name,b.sum>0.0?100.0*b.material/b.sum:0.0,
+                name,b.sum>0.0?100.0*b.gl/b.sum:0.0,
+                name,b.sum>0.0?100.0*b.publish/b.sum:0.0,
+                name,(double)b.misses/denom,name,b.variants,name,(double)b.tris/denom);
+        };
+        emit("bulk",warm);emit("cold",cold);emit("extreme",extreme);
+        // The ten worst packages, itemised, so the extreme tail is inspectable
+        // rather than only summarised.
+        std::vector<Stage0PackageBuildSample> worst=s_packageBuildSamples;
+        std::partial_sort(worst.begin(),
+            worst.begin()+(std::min)((size_t)10,worst.size()),worst.end(),
+            [](Stage0PackageBuildSample const& a,Stage0PackageBuildSample const& b)
+            {return a.totalMs>b.totalMs;});
+        size_t const show=(std::min)((size_t)10,worst.size());
+        for(size_t i=0;i<show;++i)
+        {
+            auto const& s=worst[i];
+            std::fprintf(f,
+                "worst.%zu bx=%d by=%d total_ms=%.4f authority_mesh_ms=%.4f alloc_ms=%.4f "
+                "sample_ms=%.4f surface_descriptor_ms=%.4f material_ms=%.4f "
+                "mesh_emit_ms=%.4f collision_ms=%.4f gl_compile_ms=%.4f publish_ms=%.4f "
+                "material_misses=%d new_variants=%d tris=%d\n",
+                i,s.bx,s.by,s.totalMs,s.buildBlockMs,s.allocMs,s.sampleMs,
+                s.surfaceDescriptorMs,s.materialMs,s.meshEmitMs,s.collisionMs,
+                s.glCompileMs,s.publishMs,s.materialMisses,s.newMaterialVariants,s.tris);
+        }
+        // Two separate verdicts. The bulk verdict says where routine package
+        // cost lives and therefore what a prewarm could shave off the mean. The
+        // tail verdict says what actually blows a frame budget. They are not the
+        // same stage, and reporting only one of them was how the first pass of
+        // this receipt reached a misleading conclusion.
+        auto dominant=[&](Bucket const& b,char const* fallback)->char const*
+        {
+            if(b.sum<=0.0)return "NONE_OBSERVED";
+            double const build=100.0*b.build/b.sum;
+            double const material=100.0*b.material/b.sum;
+            double const gl=100.0*b.gl/b.sum;
+            if(build>=60.0)return "AUTHORITY_MESH_NEEDS_FINER_GRAINED_CONSTRUCTION";
+            if(material>=60.0)return "MATERIAL_PREWARM_JUSTIFIED";
+            if(gl>=60.0)return "GL_PREWARM_IRRELEVANT_REDESIGN_PUBLICATION";
+            return fallback;
+        };
+        std::fprintf(f,
+            "bulk_dominant_stage=%s\ncold_dominant_stage=%s\nextreme_dominant_stage=%s\n"
+            "material_cache_hit_rate_pct=%.1f\n",
+            dominant(warm,"MIXED_SPLIT_BY_STAGE"),
+            dominant(cold,"MIXED_SPLIT_BY_STAGE"),
+            dominant(extreme,"MIXED_SPLIT_BY_STAGE"),
+            s_stage11Waterfall.packageMaterialSamples>0
+                ?100.0*(double)s_stage11Waterfall.packageMaterialCacheHits
+                    /(double)s_stage11Waterfall.packageMaterialSamples:0.0);
+        std::fclose(f);
+        return true;
+    }
+
+    void Stage11FreeFlyTick()
+    {
+        if(!g.certStage11FreeFly||!g.playWorldgenInitialized)return;
+        auto& run=s_stage11FreeFlyRun;
+        if(run.phase==0)
+        {
+            g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::FaultDisplacement);
+            g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            RebuildStage0PlayableRuntime();
+            SetStage11FreeFlyPlayer(0.f);run.phase=1;return;
+        }
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage8PackageJobsIdle();
+        if(run.phase==1)
+        {
+            SetStage11FreeFlyPlayer(0.f);
+            if(++run.warmFrames>=120&&settled)
+            {
+                s_stage11Waterfall={};s_stage11Waterfall.collecting=true;
+                s_stage11Waterfall.frameThreadId=GetCurrentThreadId();
+                run.frameSnapshot=s_stage11Waterfall;
+                // Warmup already populated the window, so material variants seen
+                // during it are not first-touch for the measured route.
+                s_packageBuildSamples.clear();s_packageBuildProfiling=true;
+                char tracePath[192]={};
+                std::snprintf(tracePath,sizeof(tracePath),
+                    "Docs\\provenance_stage11_freefly_r%d_f%d_s%.0f_trace.csv",
+                    g.stage0LiveRadiusM,g.stage0FarExtentM,
+                    (double)g.certStage11FreeFlyStepM);
+                fopen_s(&run.trace,tracePath,"wb");
+                if(run.trace)std::fprintf(run.trace,
+                    "frame,distance_m,cpu_ms,simulation_ms,residency_ms,generation_ms,"
+                    "live_ms,hf_retire_ms,far_field_ms,lookahead_ms,draw_ms,present_ms,"
+                    "pacing_ms,packages_built,far_tiles_built,resident_packages,resident_cells\n");
+                run.phase=2;
+            }
+            return;
+        }
+        if(run.phase==2)
+        {
+            float const target=(float)g.certStage11FreeFlyDistanceM;
+            float const next=(std::min)(target,run.distanceM+g.certStage11FreeFlyStepM);
+            run.distanceM=next;SetStage11FreeFlyPlayer(next);
+            if(run.distanceM>=target-0.001f){run.phase=3;run.settleFrames=0;}
+            return;
+        }
+        if(run.phase==3)
+        {
+            SetStage11FreeFlyPlayer(run.distanceM);
+            if(++run.settleFrames>=60&&settled){run.phase=4;}
+            return;
+        }
+        if(run.phase==4)
+        {
+            s_stage11Waterfall.collecting=false;s_packageBuildProfiling=false;
+            if(run.trace){std::fclose(run.trace);run.trace=nullptr;}
+            char attributionPath[192]={};
+            std::snprintf(attributionPath,sizeof(attributionPath),
+                "Docs\\provenance_stage0_package_build_r%d_f%d.txt",
+                g.stage0LiveRadiusM,g.stage0FarExtentM);
+            WriteStage0PackageBuildArtifact(attributionPath);
+            bool const ok=WriteStage11FreeFlyArtifact();
+            g.certStage11FreeFly=false;PostQuitMessage(ok?0:2);run.phase=5;
+        }
+    }
+
+    void Stage11FreeFlyAfterRender()
+    {
+        if(!g.certStage11FreeFly)return;
+        auto& run=s_stage11FreeFlyRun;
+        if(run.phase==1)
+        {run.coldWarmWorstMs=(std::max)(run.coldWarmWorstMs,g.stage0FrameCpuMs);return;}
+        if(run.phase!=2&&run.phase!=3)return;
+        auto const& now=s_stage11Waterfall;
+        auto const& was=run.frameSnapshot;
+        double const liveMs=(now.packageMeshMs-was.packageMeshMs)
+            +(now.packageMaterialMs-was.packageMaterialMs)
+            +(now.packageAllocationMs-was.packageAllocationMs)
+            +(now.packageGlCompileMs-was.packageGlCompileMs)
+            +(now.packagePublishMs-was.packagePublishMs)
+            +(now.packageDiscoveryMs-was.packageDiscoveryMs)
+            +(now.packageRetirementScanMs-was.packageRetirementScanMs);
+        double const farMs=now.farFieldTotalMs-was.farFieldTotalMs;
+        double const lookMs=now.farPrefetchMs-was.farPrefetchMs;
+        int const packages=now.packagesBuilt-was.packagesBuilt;
+        int const farTiles=now.farTilesBuilt-was.farTilesBuilt;
+        run.frameSnapshot=now;
+        double const ms=g.stage0FrameCpuMs;
+        run.frameMs.push_back(ms);++run.measuredFrames;run.cpuMs+=ms;
+        run.liveMs+=liveMs;run.farMs+=farMs;run.lookaheadMs+=lookMs;
+        run.drawMs+=g.stage0FrameDrawSubmitMs;
+        if(ms>16.667)++run.framesOver16;if(ms>33.3)++run.framesOver33;
+        if(ms>50.0)++run.framesOver50;if(ms>100.0)++run.framesOver100;
+        float const complete=Stage0MinCompleteRadiusM(g.stage0PlayView);
+        run.minCompleteRadiusM=(std::min)(run.minCompleteRadiusM,complete);
+        run.completeRadiusSumM+=complete;
+        if(complete<(float)g.stage0LiveRadiusM-0.001f)++run.framesBelowRequired;
+        Stage0PresentationBounds const pb=Stage0CurrentPresentationBounds();
+        run.packagesRequiredTotal+=(pb.bx1-pb.bx0+1)*(pb.by1-pb.by0+1);
+        run.packagesBuiltTotal+=packages;
+        run.peakPackagesPerFrame=(std::max)(run.peakPackagesPerFrame,packages);
+        run.peakFarTilesPerFrame=(std::max)(run.peakFarTilesPerFrame,farTiles);
+        run.maxResidentPackages=(std::max)(run.maxResidentPackages,
+            (int)g.stage8TerrainBlocks.size());
+        run.maxResidentCells=(std::max)(run.maxResidentCells,(int)g.cells.size());
+        if(run.trace)std::fprintf(run.trace,
+            "%d,%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
+            "%d,%d,%zu,%zu\n",
+            run.measuredFrames,run.distanceM,ms,g.stage0FrameSimulationMs,
+            g.stage0FrameResidencyMs,g.stage0FrameGenerationMs,liveMs,
+            g.stage0FrameHfRetireMs,farMs,lookMs,g.stage0FrameDrawSubmitMs,
+            g.stage0FramePresentWaitMs,g.stage0FramePacingWaitMs,packages,farTiles,
+            g.stage8TerrainBlocks.size(),g.cells.size());
+    }
+
+    // ---- Stage 11 far-field shift scaling ---------------------------------
+    // The constitutional requirement for the incremental cut is that an anchor
+    // shift costs work proportional to the newly exposed fringe, not to the
+    // complete 384 m latent field.  A monolithic rebuild is indistinguishable
+    // from an incremental one at a single shift distance, so this route walks
+    // the same window across 8, 16, 32 and 64 m shifts and reports the work
+    // normalised per metre of shift.  Constant per-shift work is the monolithic
+    // signature; constant per-metre work is the incremental one.
+    struct Stage11ShiftClassStats
+    {
+        int shiftM=0;
+        int shifts=0;
+        int missedShifts=0;
+        double meters=0.0;
+        double farFieldMs=0.0;
+        double shiftFrameMs=0.0;
+        double worstShiftFrameMs=0.0;
+        double settlePrefetchMs=0.0;
+        double settleFrameMs=0.0;
+        int settleFrames=0;
+        int tilesRetained=0,tilesDiscovered=0,tilesBuilt=0,tilesRetired=0;
+        int coarseBuilt=0,stitchBuilt=0;
+        int surfaceQueries=0,materialQueries=0,prefetchSurfaceQueries=0;
+        int packagesBuilt=0;
+    };
+
+    constexpr int kStage11ShiftClassM[4]={8,16,32,64};
+    constexpr int kStage11ShiftReps=4;
+    constexpr int kStage11ShiftSettleFrames=8;
+
+    struct Stage11ShiftScalingRun
+    {
+        int phase=0;
+        int warmFrames=0;
+        int settleFrames=0;
+        int classIndex=0;
+        int rep=0;
+        int attributeClass=-1;
+        bool measurePending=false;
+        int groundFailures=0;
+        int collisionMismatches=0;
+        int residentFarTiles=0;
+        int residentCoarseTiles=0;
+        int residentStitchTiles=0;
+        double collisionQueryMs=0.0;
+        double coldWarmWorstMs=0.0;
+        float distanceM=0.f;
+        Stage11ResidencyWaterfallCounters snapshot;
+        Stage11ShiftClassStats classes[4];
+    };
+    Stage11ShiftScalingRun s_stage11ShiftRun;
+
+    void SetStage11ShiftScalingPlayer(float distanceM)
+    {
+        float const x=128.5f+distanceM,y=128.5f;
+        float surfaceZ=0.f;
+        Stage11PlaceProbe(x,y,false,surfaceZ,
+            s_stage11ShiftRun.groundFailures,s_stage11ShiftRun.collisionMismatches,
+            s_stage11ShiftRun.collisionQueryMs,Stage11BearingYaw(1));
+    }
+
+    bool WriteStage11ShiftScalingArtifact()
+    {
+        auto const& run=s_stage11ShiftRun;
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_stage11_shift_scaling.txt","wb")!=0||!f)
+        {return false;}
+        double tilesPerMeterMin=1e30,tilesPerMeterMax=0.0;
+        double msPerMeterMin=1e30,msPerMeterMax=0.0;
+        bool complete=run.groundFailures==0&&run.collisionMismatches==0;
+        for(int i=0;i<4;++i)
+        {
+            auto const& c=run.classes[i];
+            if(c.shifts!=kStage11ShiftReps||c.missedShifts!=0||c.meters<=0.0)
+            {complete=false;continue;}
+            double const tpm=(double)c.tilesBuilt/c.meters;
+            double const mpm=c.farFieldMs/c.meters;
+            tilesPerMeterMin=(std::min)(tilesPerMeterMin,tpm);
+            tilesPerMeterMax=(std::max)(tilesPerMeterMax,tpm);
+            msPerMeterMin=(std::min)(msPerMeterMin,mpm);
+            msPerMeterMax=(std::max)(msPerMeterMax,mpm);
+        }
+        double const tileSpread=(complete&&tilesPerMeterMin>0.0)
+            ?tilesPerMeterMax/tilesPerMeterMin:0.0;
+        double const msSpread=(complete&&msPerMeterMin>0.0)
+            ?msPerMeterMax/msPerMeterMin:0.0;
+        // An 8 m shift that rebuilt most of the resident window would be the
+        // monolithic behaviour wearing a tiled costume.
+        double const smallShiftFraction=(run.residentFarTiles>0&&run.classes[0].shifts>0)
+            ?((double)run.classes[0].tilesBuilt/(double)run.classes[0].shifts)
+                /(double)run.residentFarTiles:1.0;
+        bool const bounded=smallShiftFraction<=0.25;
+        bool const proportional=complete&&bounded
+            &&tileSpread>0.0&&tileSpread<=2.0&&msSpread>0.0&&msSpread<=3.0;
+        std::fprintf(f,
+            "STAGE11_FAR_FIELD_SHIFT_SCALING\n"
+            "route=east_shift_ladder_capture_free\n"
+            "anchor_cadence_m=8\nfar_extent_m=384\nshift_classes_m=8,16,32,64\n"
+            "shifts_per_class=%d\nsettle_frames_per_shift=%d\n"
+            "total_travel_m=%.1f\ncold_warm_worst_frame_ms=%.3f\n"
+            "resident_far_tiles=%d\nresident_coarse_tiles=%d\nresident_stitch_tiles=%d\n"
+            "ground_failures=%d\ncollision_mismatches=%d\n",
+            kStage11ShiftReps,kStage11ShiftSettleFrames,run.distanceM,run.coldWarmWorstMs,
+            run.residentFarTiles,run.residentCoarseTiles,run.residentStitchTiles,
+            run.groundFailures,run.collisionMismatches);
+        for(int i=0;i<4;++i)
+        {
+            auto const& c=run.classes[i];
+            double const meters=c.meters>0.0?c.meters:1.0;
+            double const shifts=c.shifts>0?(double)c.shifts:1.0;
+            std::fprintf(f,
+                "class.%dm shifts=%d missed=%d meters=%.0f "
+                "far_ms_total=%.3f far_ms_per_shift=%.3f far_ms_per_m=%.4f "
+                "tiles_built=%d tiles_built_per_shift=%.2f tiles_built_per_m=%.4f "
+                "coarse_built=%d stitch_built=%d tiles_retained=%d tiles_discovered=%d "
+                "tiles_retired=%d packages_built=%d surface_queries=%d material_queries=%d "
+                "shift_frame_ms_mean=%.3f shift_frame_ms_worst=%.3f "
+                "settle_frames=%d settle_prefetch_ms=%.3f settle_prefetch_queries=%d "
+                "resident_window_fraction=%.4f\n",
+                c.shiftM,c.shifts,c.missedShifts,c.meters,
+                c.farFieldMs,c.farFieldMs/shifts,c.farFieldMs/meters,
+                c.tilesBuilt,(double)c.tilesBuilt/shifts,(double)c.tilesBuilt/meters,
+                c.coarseBuilt,c.stitchBuilt,c.tilesRetained,c.tilesDiscovered,
+                c.tilesRetired,c.packagesBuilt,c.surfaceQueries,c.materialQueries,
+                c.shiftFrameMs/shifts,c.worstShiftFrameMs,
+                c.settleFrames,c.settlePrefetchMs,c.prefetchSurfaceQueries,
+                run.residentFarTiles>0
+                    ?((double)c.tilesBuilt/shifts)/(double)run.residentFarTiles:0.0);
+        }
+        std::fprintf(f,
+            "tiles_per_m_spread=%.3f\nfar_ms_per_m_spread=%.3f\n"
+            "small_shift_window_fraction=%.4f\n"
+            "measurement_complete=%s\nbounded_fringe=%s\n"
+            "scaling=%s\nmacro_geography=BLOCKED\nstage12=BLOCKED\n",
+            tileSpread,msSpread,smallShiftFraction,complete?"PASS":"FAIL",
+            bounded?"PASS":"FAIL",
+            proportional?"PROPORTIONAL_TO_FRINGE_PASS":"OPEN");
+        std::fclose(f);
+        // The exit code reports measurement integrity, matching the waterfall
+        // certificate. The scaling verdict is a gate line, not a crash.
+        return complete;
+    }
+
+    void Stage11ShiftScalingTick()
+    {
+        if(!g.certStage11ShiftScaling||!g.playWorldgenInitialized)return;
+        auto& run=s_stage11ShiftRun;
+        if(run.phase==0)
+        {
+            g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::FaultDisplacement);
+            g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            RebuildStage0PlayableRuntime();
+            for(int i=0;i<4;++i)run.classes[i].shiftM=kStage11ShiftClassM[i];
+            SetStage11ShiftScalingPlayer(0.f);run.phase=1;return;
+        }
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage8PackageJobsIdle();
+        if(run.phase==1)
+        {
+            SetStage11ShiftScalingPlayer(0.f);
+            if(++run.warmFrames>=120&&settled)
+            {
+                s_stage11Waterfall={};s_stage11Waterfall.collecting=true;
+                s_stage11Waterfall.frameThreadId=GetCurrentThreadId();
+                run.snapshot=s_stage11Waterfall;
+                run.settleFrames=kStage11ShiftSettleFrames;run.phase=2;
+            }
+            return;
+        }
+        if(run.phase==2)
+        {
+            bool const ladderDone=run.classIndex>=4;
+            bool const rested=run.settleFrames>=kStage11ShiftSettleFrames
+                &&settled&&!run.measurePending;
+            if(ladderDone)
+            {
+                if(rested)
+                {
+                    run.residentCoarseTiles=(int)g.stage0FarCoarseTiles.size();
+                    run.residentStitchTiles=(int)g.stage0FarStitchTiles.size();
+                    run.residentFarTiles=run.residentCoarseTiles+run.residentStitchTiles;
+                    run.phase=3;return;
+                }
+            }
+            else if(rested)
+            {
+                int const c=run.classIndex;
+                run.distanceM+=(float)kStage11ShiftClassM[c];
+                SetStage11ShiftScalingPlayer(run.distanceM);
+                run.attributeClass=c;run.measurePending=true;run.settleFrames=0;
+                if(++run.rep>=kStage11ShiftReps){run.rep=0;++run.classIndex;}
+                return;
+            }
+            ++run.settleFrames;SetStage11ShiftScalingPlayer(run.distanceM);
+            return;
+        }
+        if(run.phase==3)
+        {
+            s_stage11Waterfall.collecting=false;
+            bool const ok=WriteStage11ShiftScalingArtifact();
+            g.certStage11ShiftScaling=false;PostQuitMessage(ok?0:2);run.phase=4;
+        }
+    }
+
+    void Stage11ShiftScalingAfterRender()
+    {
+        if(!g.certStage11ShiftScaling)return;
+        auto& run=s_stage11ShiftRun;
+        if(run.phase==1)
+        {run.coldWarmWorstMs=(std::max)(run.coldWarmWorstMs,g.stage0FrameCpuMs);return;}
+        if(run.phase!=2)return;
+        auto const& now=s_stage11Waterfall;
+        auto const& was=run.snapshot;
+        if(run.measurePending&&run.attributeClass>=0)
+        {
+            auto& c=run.classes[run.attributeClass];
+            if(now.farFieldRebuilds-was.farFieldRebuilds<=0)++c.missedShifts;
+            ++c.shifts;c.meters+=(double)c.shiftM;
+            c.farFieldMs+=now.farFieldTotalMs-was.farFieldTotalMs;
+            c.tilesRetained+=now.farTilesRetained-was.farTilesRetained;
+            c.tilesDiscovered+=now.farTilesDiscovered-was.farTilesDiscovered;
+            c.tilesBuilt+=now.farTilesBuilt-was.farTilesBuilt;
+            c.tilesRetired+=now.farTilesRetired-was.farTilesRetired;
+            c.coarseBuilt+=now.farCoarseTilesBuilt-was.farCoarseTilesBuilt;
+            c.stitchBuilt+=now.farStitchTilesBuilt-was.farStitchTilesBuilt;
+            c.surfaceQueries+=now.farSurfaceQueries-was.farSurfaceQueries;
+            c.materialQueries+=now.farMaterialQueries-was.farMaterialQueries;
+            c.packagesBuilt+=now.packagesBuilt-was.packagesBuilt;
+            c.shiftFrameMs+=g.stage0FrameCpuMs;
+            c.worstShiftFrameMs=(std::max)(c.worstShiftFrameMs,g.stage0FrameCpuMs);
+            run.measurePending=false;
+        }
+        else if(run.attributeClass>=0)
+        {
+            auto& c=run.classes[run.attributeClass];
+            c.settlePrefetchMs+=now.farPrefetchMs-was.farPrefetchMs;
+            c.prefetchSurfaceQueries+=now.farPrefetchSurfaceQueries-was.farPrefetchSurfaceQueries;
+            c.settleFrameMs+=g.stage0FrameCpuMs;++c.settleFrames;
+        }
+        run.snapshot=now;
+    }
+
     void TickFrame()
     {
+        bool const stage0Mode = g.certWorldgenBaselinePerf || g.playWorldgenBaseline;
+        LARGE_INTEGER stage0TickQpc{}, stage0Qpf{};
+        if ( stage0Mode )
+        {
+            QueryPerformanceFrequency( &stage0Qpf );
+            QueryPerformanceCounter( &stage0TickQpc );
+            g.stage0TickStartQpc = stage0TickQpc.QuadPart;
+            g.stage0FrameCpuMs = 0.0;
+            g.stage0FrameSimulationMs = 0.0;
+            g.stage0FrameResidencyMs = 0.0;
+            g.stage0FrameGenerationMs = 0.0;
+            g.stage0FrameHfBuildMs = 0.0;
+            g.stage0FrameHfUploadMs = 0.0;
+            g.stage0FrameHfRetireMs = 0.0;
+            g.stage0FrameDrawSubmitMs = 0.0;
+            g.stage0FrameCalibrationDrawMs = 0.0;
+            g.stage0FramePresentWaitMs = 0.0;
+            g.stage0FrameGpuFinishMs = 0.0;
+            g.stage0FramePacingWaitMs = 0.0;
+            g.stage0FrameGpuMs = -1.0;
+            g.stage0FrameCollisionMs = 0.0;
+        }
         DWORD now = GetTickCount();
         float dt = 0.016f;
         float rawDt = 0.016f;
-        if ( g.lastFrameMs != 0 )
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderLivePerf )
+          && stage0Qpf.QuadPart > 0 )
+        {
+            if ( g.playWorldgenLastTickQpc != 0 )
+            {
+                rawDt = (float)( (double)( stage0TickQpc.QuadPart
+                    - g.playWorldgenLastTickQpc ) / (double)stage0Qpf.QuadPart );
+                dt = (std::min)( 0.05f, rawDt );
+            }
+            g.playWorldgenLastTickQpc = stage0TickQpc.QuadPart;
+        }
+        else if ( g.lastFrameMs != 0 )
         {
             rawDt = ( now - g.lastFrameMs ) * 0.001f;
             dt = (std::min)( 0.05f, rawDt );
@@ -20666,7 +34216,31 @@ namespace
             if ( rawMs > g.certMaxDtMs ) { g.certMaxDtMs = rawMs; }
         }
 
-        if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
+        if ( g.certWorldgenBaselinePerf )
+        {
+            LARGE_INTEGER sim0{}, sim1{};
+            QueryPerformanceCounter( &sim0 );
+            WorldgenPerfBeforeFrame();
+            QueryPerformanceCounter( &sim1 );
+            if ( stage0Qpf.QuadPart > 0 )
+            {
+                double const total = 1000.0 * (double)( sim1.QuadPart - sim0.QuadPart )
+                    / (double)stage0Qpf.QuadPart;
+                g.stage0FrameSimulationMs = (std::max)( 0.0,
+                    total - g.stage0FrameResidencyMs - g.stage0FrameGenerationMs );
+            }
+        }
+        else if ( g.playWorldgenBaseline )
+        {
+            WorldgenPlayInitialize();
+            RuntimeIndependenceTick();
+            WorldgenCardinalReplacementTick();
+            Stage11ResidencyWaterfallTick();
+            Stage11ShiftScalingTick();
+            Stage11FreeFlyTick();
+            PresentationIsolationBeforeFrame(dt);
+        }
+        else if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
         {
             PollSocket();
         }
@@ -20679,7 +34253,7 @@ namespace
             }
         }
 
-        TickStreamRequests();
+        if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline ) { TickStreamRequests(); }
         if(g.streamComplete&&g.certShelterCleanBenchmark&&!g.shelterStampLoadAttempted)
         {
             g.shelterStampLoadAttempted=true;
@@ -20706,7 +34280,8 @@ namespace
         {
             bool const certMode=g.certDig||g.certGeo||g.certLsi||g.certAsync||g.certP4
                 ||g.certResidency||g.certStress||g.certWater||g.certPickFracture
-                ||g.certShelterCleanBenchmark||g.certSinglePickBenchmark||g.certPickMatrixOnly;
+                ||g.certShelterCleanBenchmark||g.certSinglePickBenchmark||g.certPickMatrixOnly
+                ||g.certWorldgenBaselinePerf||g.playWorldgenBaseline;
             if(!certMode)
             {
                 g.shelterStampLoadAttempted=true;
@@ -20727,15 +34302,227 @@ namespace
                 }
             }
         }
-        UpdateCamera( dt );
-        UpdateAim();
+        if ( !g.certWorldgenBaselinePerf )
+        {
+            LARGE_INTEGER sim0{}, sim1{};
+            if ( g.playWorldgenBaseline ) { QueryPerformanceCounter( &sim0 ); }
+            if ( ( !g.playWorldgenBaseline || !g.stage0StageMenuOpen )
+              && !g.certWorldgenCardinalReplacement
+              && !g.certStage11ResidencyWaterfall
+              && !g.certStage11ShiftScaling
+              && !g.certStage11FreeFly
+              && !g.certPresentationIsolation )
+            {
+                UpdateCamera( dt );
+                if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
+            }
+            if ( g.playWorldgenBaseline )
+            {
+                QueryPerformanceCounter( &sim1 );
+                if ( stage0Qpf.QuadPart > 0 )
+                {
+                    double const total = 1000.0 * (double)( sim1.QuadPart - sim0.QuadPart )
+                        / (double)stage0Qpf.QuadPart;
+                    g.stage0FrameSimulationMs = (std::max)( 0.0,
+                        total - g.stage0FrameResidencyMs - g.stage0FrameGenerationMs );
+                }
+            }
+            if ( g.playWorldgenBaseline && !g.provRenderWorkbench )
+            {
+                if ( g.stage0ToolGeologyCutaway
+                  && IsCausalPlayableView( g.stage0PlayView ) ) { UpdateAim(); }
+                else { g.aimHit = false; }
+            }
+            // The workbench wants the live contact reticle, so it aims every frame
+            // exactly as the networked Phase-4 client does.
+            else { UpdateAim(); }
+        }
+        else
+        {
+            // The harness already advances and seats the camera on the constant floor.
+            // Do not admit interaction collision/support work into the Stage-0 baseline.
+            g.aimHit = false;
+        }
+        if(g.playWorldgenBaseline&&g.stage0CharacterOnly&&!g.stage0PaletteAnchored)
+        { SummonStage0CharacterOnly(); }
+        if(g.provRenderWorkbench)
+        {
+            // Summon the palette fixture and keep it: the character stands at the
+            // workbench with his materials beside him. Re-assert the closed-menu
+            // contract every frame, because SummonStage0Palette turns some of these
+            // back on and the certification browser must never be the front door.
+            if(!g.stage0PaletteAnchored){SummonStage0Palette();}
+            g.stage0ToolPalette=true;
+            if(!g.provRenderWorkbenchSeated)
+            {
+                // Assert the closed-menu contract ONCE. Re-asserting it every frame
+                // would swallow the M key: the menu would open and be shut again
+                // before it ever drew. ProvRender owns the front door; M still
+                // opens the in-game browser on demand, and F8 still toggles the HUD.
+                g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+                g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+                // Stand in front of the character at inspection distance, looking
+                // at him, rather than wherever the worldgen harness left the camera.
+                float const ox=g.stage0PaletteAnchorX-2.25f,oy=g.stage0PaletteAnchorY+8.10f;
+                float ground=GradeToZ(g.gradeDatum);
+                Stage0CalibrationSurfaceZ(ox,oy,ground);
+                g.camX=ox-1.85f;g.camY=oy;g.camZ=ground+kEyeHeightM;
+                g.yaw=1.5707963f;
+                // Aim at the character's eye line instead of carrying a fixed
+                // downward tilt. Both stand on the same surface here, so this
+                // resolves to level -- but it is derived from the two heights
+                // rather than asserted, so it stays correct if either moves.
+                {
+                    float charGround=GradeToZ(g.gradeDatum);
+                    Stage0CalibrationSurfaceZ(g.stage0PaletteAnchorX,
+                                              g.stage0PaletteAnchorY,charGround);
+                    float const targetZ=charGround+kCharEyeHeightM;
+                    float const dx=(ox)-g.camX, dy=oy-g.camY;
+                    float const horiz=std::sqrt(dx*dx+dy*dy);
+                    g.pitch=(horiz>0.01f)?std::atan2(targetZ-g.camZ,horiz):0.f;
+                }
+                g.feetX=g.camX;g.feetY=g.camY;g.feetZ=g.camZ-kEyeHeightM;
+                // Ordinary free walk/play, as in RunProvenanceClient. The workbench
+                // is somewhere you stand and work, not a locked inspection rig.
+                g.walkMode=true;
+                // Stock the bag and hotbar the way the networked client does, so
+                // the shovel/axe/pick/torch slots and their icons are populated
+                // rather than showing six empty boxes.
+                SeedStarterBag();
+                // The ore/mineral gallery is part of the workbench: it is what the
+                // material palette is for. Stage-0 modes leave it dormant.
+                EnsureGallerySpawned();
+                g.provRenderWorkbenchSeated=true;
+            }
+        }
+        if(g.certStage0CharacterPortrait)
+        {
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            g.stage0ToolPalette=true;g.stage0ToolPerformanceHud=false;
+            g.stage0ToolMutationHud=false;
+            if(g.certStage0CharacterPortraitFrames==0)SummonStage0CharacterOnly();
+            float const portraitX=g.stage0PaletteAnchorX-2.25f;
+            float const portraitY=g.stage0PaletteAnchorY+8.10f;
+            float portraitGround=GradeToZ(g.gradeDatum);
+            Stage0CalibrationSurfaceZ(portraitX,portraitY,portraitGround);
+            // Close and full-body captures use the identical character-only draw.
+            // The full view preserves standing eye height and looks down to frame
+            // the 1.8288 m ruler. Close views use a measured 0.13 m minimum
+            // near-plane clearance and a matched FOV, preventing facial clipping
+            // without making the recorded head materially smaller.
+            if(g.certStage0MacroFormV1)
+            {
+                // Frame the midpoint of the two objects.  The subjects remain at
+                // their exact world positions; only this proof camera widens and
+                // recentres so the 1.524 m separation is visible in one image.
+                constexpr float kPairDistanceM=3.65f;
+                constexpr float kPairCentreYOffsetM=-0.762f;
+                g.camX=portraitX-kPairDistanceM;
+                g.camY=portraitY+kPairCentreYOffsetM;
+                g.camZ=portraitGround+kCharHeightM*0.5f;
+                g.yaw=1.5707963f;g.pitch=0.f;
+                g.certStage0CharacterCameraDistanceM=kPairDistanceM;
+                g.certStage0CharacterCaptureFovYDeg=Stage0CaptureFovYDeg();
+                g.certStage0CharacterMaxReachM=0.45f;
+                g.certStage0CharacterNearClearanceM=kPairDistanceM
+                    -g.certStage0CharacterMaxReachM-kProjNearDefaultM;
+            }
+            else if(g.certStage0CharacterFullBody)
+            {
+                // Sweeping FOV alone only changes how big the subject looks. To
+                // vary PERSPECTIVE while holding subject height constant, the
+                // distance must scale as 1/tan(fov/2): a longer lens pulled back
+                // the matching amount flattens the projection without resizing.
+                // Framing is held constant: the visible world height at the subject
+                // stays 2.482 m (the 60 deg / 2.15 m baseline) whatever the focal
+                // length, so a longer lens is pulled back rather than cropping in.
+                float d=2.15f;
+                if(g.captureFocalMm>0.f&&!g.captureFixedDistance)
+                {
+                    float const halfRad=Stage0CaptureFovYDeg()*0.5f*3.14159265f/180.f;
+                    d=1.2410f/std::tan(halfRad);
+                }
+                // CANONICAL BODY RIG. Level, straight-on, exactly like a character
+                // sheet. The old rig stood at eye height and pitched 0.345 rad
+                // (19.77 deg) down to frame the figure, which showed the tops of
+                // the shoulders, head and feet that a straight-on reference cannot
+                // show, and inflated the profile silhouette enough to look like a
+                // 2x depth error that mesh-space measurement proved was ~7%.
+                // Frame by moving the camera vertically, never by tilting it.
+                g.camZ=portraitGround+kCharHeightM*0.5f;g.pitch=0.f;
+                switch(g.certStage0CharacterBodyView)
+                {
+                default:
+                case 0:g.camX=portraitX-d;g.camY=portraitY;g.yaw=1.5707963f;break;
+                case 1:g.camX=portraitX+d;g.camY=portraitY;g.yaw=-1.5707963f;break;
+                case 2:g.camX=portraitX;g.camY=portraitY-d;g.yaw=0.f;break;
+                case 3:g.camX=portraitX;g.camY=portraitY+d;g.yaw=3.14159265f;break;
+                case 4:
+                    // The atlas top study is approximately 67 degrees down from
+                    // standing eye level. Aim through the body centre instead of
+                    // reusing the shallower palette camera; otherwise its vertical
+                    // projection looks about seventeen percent too long.
+                    //
+                    // A retune to 64.75 deg was tried and reverted. The IoU fit that
+                    // proposed it carves the hull by stretching the authored panel
+                    // onto the hull's own projected bbox, which destroys the aspect
+                    // information the angle is supposed to be recovered from, so the
+                    // iteration deforms the hull to fit instead of testing it. Its
+                    // stable fixed point across seeds is a property of that
+                    // contraction, not evidence of the true angle. Recapture at
+                    // 64.75 deg moved the top plate's envelope aspect error from
+                    // 3.60 to 8.03 percent, and in the direction that says the true
+                    // elevation is steeper than 1.167, not shallower. See
+                    // Docs/provrender_capture_geometry.txt.
+                    g.camX=portraitX-0.94f;g.camY=portraitY;g.camZ=portraitGround+3.15f;
+                    g.yaw=1.5707963f;g.pitch=-1.167f;break;
+                case 5:
+                    // The supplied three-quarter authority is thirty degrees off
+                    // the front, not the conventional forty-five-degree turn.
+                    // Matching that lens direction keeps the good front/profile
+                    // dimensions from being incorrectly widened to fit the plate.
+                    g.camX=portraitX-d*0.8660254f;g.camY=portraitY-d*0.5f;
+                    g.yaw=1.0471976f;break;
+                }
+                float const dx=g.camX-portraitX,dy=g.camY-portraitY;
+                float const dz=g.camZ-(portraitGround+0.95f);
+                g.certStage0CharacterCameraDistanceM=std::sqrt(dx*dx+dy*dy+dz*dz);
+                g.certStage0CharacterCaptureFovYDeg=Stage0CaptureFovYDeg();
+                g.certStage0CharacterMaxReachM=0.35f;
+                g.certStage0CharacterNearClearanceM=g.certStage0CharacterCameraDistanceM
+                    -g.certStage0CharacterMaxReachM-kProjNearDefaultM;
+            }
+            else
+            {
+                float const d=kStage0PortraitDistanceM,q=d*0.70710678f;
+                switch(g.certStage0CharacterHeadView)
+                {
+                default:
+                case 0:g.camX=portraitX-d;g.camY=portraitY;g.yaw=1.5707963f;break;
+                case 1:g.camX=portraitX;g.camY=portraitY-d;g.yaw=0.f;break;
+                case 2:g.camX=portraitX+d;g.camY=portraitY;g.yaw=-1.5707963f;break;
+                case 3:g.camX=portraitX;g.camY=portraitY+d;g.yaw=3.14159265f;break;
+                case 4:g.camX=portraitX-q;g.camY=portraitY-q;g.yaw=0.78539816f;break;
+                case 5:g.camX=portraitX-q;g.camY=portraitY+q;g.yaw=2.35619449f;break;
+                }
+                g.camZ=portraitGround+1.690f;g.pitch=0.f;
+                g.certStage0CharacterCameraDistanceM=kStage0PortraitDistanceM;
+                g.certStage0CharacterCaptureFovYDeg=kStage0PortraitFovYDeg;
+                g.certStage0CharacterMaxReachM=kStage0PortraitMaxHeadReachM;
+                g.certStage0CharacterNearClearanceM=kStage0PortraitNearClearanceM;
+            }
+            g.feetX=g.camX;g.feetY=g.camY;g.feetZ=g.camZ-kEyeHeightM;
+            g.projNearM=kProjNearDefaultM;
+            g.walkMode=false;g.grounded=false;
+        }
         if ( ( now / 250 ) != ( ( now - (DWORD)( dt * 1000 ) ) / 250 ) )
         {
             UpdateStreamHud();
         }
         // Status receipt for smoke cert (overwritten each second)
         static DWORD lastStatusMs = 0;
-        if ( now - lastStatusMs > 1000 )
+        if ( !g.playWorldgenBaseline && !g.certWorldgenBaselinePerf
+          && now - lastStatusMs > 1000 )
         {
             lastStatusMs = now;
             char path[MAX_PATH];
@@ -20762,6 +34549,589 @@ namespace
             WriteChipProbeDump(); // %TEMP%\provenance_chip_probe.txt — full chip list for agents
         }
         Render();
+        if ( s_boundaryCapturePending )
+        {
+            CaptureWorldgenBoundaryView();
+            s_boundaryCapturePending = false;
+            s_boundaryCaptureComplete = true;
+        }
+        if ( s_boundaryPopCapturePending != 0 )
+        {
+            CaptureWorldgenBoundaryPopFrame( s_boundaryPopCapturePending );
+            s_boundaryPopCapturePending = 0;
+            s_boundaryPopCaptureComplete = true;
+        }
+        if ( g.certWorldgenCardinalReplacement )
+        { WorldgenCardinalReplacementAfterRender(); }
+        if ( g.certCutCVisual )
+        {
+            ++g.certCutCVisualFrames;
+            if ( g.certCutCVisualFrames == 90 )
+            {
+                g.certCutCContinuityImageWrote=DumpFramePpm(
+                    "Docs\\provenance_cut_c_world_continuity.ppm");
+                g.certCutCContinuityLowerSkyPixels=g.certCutCContinuityImageWrote
+                    ?CountLowerPpmSkyPixels("Docs\\provenance_cut_c_world_continuity.ppm")
+                    :INT_MAX;
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_cut_c_visual_cert.txt","wb")==0&&f)
+                {
+                    std::fprintf(f,"CUT_C_WORLD_CONTINUITY_VISUAL %s\nframes=%d\n"
+                        "stage=%s\nimage=Docs/provenance_cut_c_world_continuity.ppm\n"
+                        "continuity_image_written=%d\nlower_frame_sky_pixels=%d\n"
+                        "xray_enabled=0\n"
+                        "presentation_source=fablescript_cut_b_occupancy\n",
+                        g.certCutCContinuityImageWrote
+                          &&g.certCutCContinuityLowerSkyPixels==0?"PASS":"FAIL",
+                        g.certCutCVisualFrames,Stage0PlayViewName(g.stage0PlayView),
+                        g.certCutCContinuityImageWrote?1:0,
+                        g.certCutCContinuityLowerSkyPixels);
+                    std::fclose(f);
+                }
+                PostQuitMessage(g.certCutCContinuityImageWrote
+                    &&g.certCutCContinuityLowerSkyPixels==0?0:2);
+            }
+        }
+        if ( g.certCutCXrayVisual )
+        {
+            ++g.certCutCVisualFrames;
+            if(g.certCutCVisualFrames==90)
+            {
+                bool const wrote=CaptureStage0GeologyXraySnapshot();
+                FILE* f=nullptr;
+                if(fopen_s(&f,"Docs\\provenance_cut_c_xray_visual_cert.txt","wb")==0&&f)
+                {
+                    std::fprintf(f,"CUT_C_PLAYER_SCALE_XRAY_VISUAL %s\nframes=%d\n"
+                        "stage=%s\nimage=Docs/provenance_cut_c_player_xray.ppm\n"
+                        "xray_deposit_visible=%d\ndeposit_pixels=%d\n"
+                        "presentation_source=fablescript_cut_b_occupancy\n",
+                        wrote&&g.stage0GeologySnapshotDepositVisible?"PASS":"FAIL",
+                        g.certCutCVisualFrames,Stage0PlayViewName(g.stage0PlayView),
+                        g.stage0GeologySnapshotDepositVisible?1:0,
+                        g.stage0GeologySnapshotDepositPixels);
+                    std::fclose(f);
+                }
+                PostQuitMessage(wrote&&g.stage0GeologySnapshotDepositVisible?0:2);
+            }
+        }
+        if(g.certStage11Visual)
+        {
+            ++g.certStage11VisualFrames;
+            if(g.certStage11VisualFrames==90)
+            {
+                bool const passed=CaptureStage11FaultXraySnapshot();
+                PostQuitMessage(passed?0:2);
+            }
+        }
+        if(g.stage0GeologySnapshotPending)
+        {
+            bool const wrote=CaptureStage0GeologyXraySnapshot();
+            g.stage0GeologySnapshotPending=false;
+            g.statusLine=wrote?"Geology x-ray snapshot saved"
+                :"Geology x-ray snapshot refused - aim at resident geology";
+        }
+        if(g.certStage0CharacterPortrait)
+        {
+            LARGE_INTEGER qpc{},qpf{};QueryPerformanceCounter(&qpc);QueryPerformanceFrequency(&qpf);
+            if(g.certStage0CharacterPortraitLastQpc!=0&&g.certStage0CharacterPortraitFrames>=30)
+                g.certStage0CharacterPortraitFrameMs.push_back(1000.0
+                    *(double)(qpc.QuadPart-g.certStage0CharacterPortraitLastQpc)/(double)qpf.QuadPart);
+            g.certStage0CharacterPortraitLastQpc=qpc.QuadPart;
+            ++g.certStage0CharacterPortraitFrames;
+            // The hull inspection shares this deterministic camera and frame-timing
+            // lane but writes its own receipt family; it must never overwrite an
+            // accepted character capture.
+            if(g.certStage0CharacterPortraitFrameMs.size()>=240
+                &&!g.certStage0VisualHull&&!g.certStage0MacroFormV1)
+            {
+                glFinish();
+                static char const* const imagePaths[6]={
+                    "Docs\\provenance_stage0_character_portrait.ppm",
+                    "Docs\\provenance_stage0_character_profile.ppm",
+                    "Docs\\provenance_stage0_character_rear.ppm",
+                    "Docs\\provenance_stage0_character_profile_left.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left.ppm"};
+                static char const* const perfPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_perf.txt",
+                    "Docs\\provenance_stage0_character_profile_perf.txt",
+                    "Docs\\provenance_stage0_character_rear_perf.txt",
+                    "Docs\\provenance_stage0_character_profile_left_perf.txt",
+                    "Docs\\provenance_stage0_character_threequarter_right_perf.txt",
+                    "Docs\\provenance_stage0_character_threequarter_left_perf.txt"};
+                static char const* const maskPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_mask.ppm",
+                    "Docs\\provenance_stage0_character_rear_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_mask.ppm"};
+                static char const* const cutoutPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_cutout.ppm",
+                    "Docs\\provenance_stage0_character_profile_cutout.ppm",
+                    "Docs\\provenance_stage0_character_rear_cutout.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_cutout.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_cutout.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_cutout.ppm"};
+                static char const* const headSkinMaskPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_skin_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_skin_mask.ppm",
+                    "Docs\\provenance_stage0_character_rear_skin_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_skin_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_skin_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_skin_mask.ppm"};
+                static char const* const headHairMaskPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_hair_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_hair_mask.ppm",
+                    "Docs\\provenance_stage0_character_rear_hair_mask.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_hair_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_hair_mask.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_hair_mask.ppm"};
+                static char const* const headDepthPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_depth.ppm",
+                    "Docs\\provenance_stage0_character_profile_depth.ppm",
+                    "Docs\\provenance_stage0_character_rear_depth.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_depth.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_depth.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_depth.ppm"};
+                static char const* const headSemanticPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_semantic_id.ppm",
+                    "Docs\\provenance_stage0_character_profile_semantic_id.ppm",
+                    "Docs\\provenance_stage0_character_rear_semantic_id.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_semantic_id.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_semantic_id.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_semantic_id.ppm"};
+                static char const* const headPartPaths[6]={
+                    "Docs\\provenance_stage0_character_portrait_part_id.ppm",
+                    "Docs\\provenance_stage0_character_profile_part_id.ppm",
+                    "Docs\\provenance_stage0_character_rear_part_id.ppm",
+                    "Docs\\provenance_stage0_character_profile_left_part_id.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_right_part_id.ppm",
+                    "Docs\\provenance_stage0_character_threequarter_left_part_id.ppm"};
+                static char const* const bodyImagePaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_rear.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_top.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter.ppm"};
+                static char const* const bodyPerfPaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody_perf.txt",
+                    "Docs\\provenance_stage0_character_fullbody_rear_perf.txt",
+                    "Docs\\provenance_stage0_character_fullbody_profile_perf.txt",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left_perf.txt",
+                    "Docs\\provenance_stage0_character_fullbody_top_perf.txt",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter_perf.txt"};
+                static char const* const bodyMaskPaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_rear_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_top_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter_mask.ppm"};
+                static char const* const bodyAnatomyMaskPaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_rear_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_top_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter_anatomy_mask.ppm"};
+                static char const* const bodyGarmentMaskPaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_rear_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_top_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter_garment_mask.ppm"};
+                static char const* const bodyCutoutPaths[6]={
+                    "Docs\\provenance_stage0_character_fullbody_cutout.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_rear_cutout.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_cutout.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_profile_left_cutout.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_top_cutout.ppm",
+                    "Docs\\provenance_stage0_character_fullbody_threequarter_cutout.ppm"};
+                static char const* const poseImagePaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch.ppm",
+                    "Docs\\provenance_stage0_character_pose_tool_ready.ppm"};
+                static char const* const posePerfPaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch_perf.txt",
+                    "Docs\\provenance_stage0_character_pose_tool_ready_perf.txt"};
+                static char const* const poseMaskPaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch_mask.ppm",
+                    "Docs\\provenance_stage0_character_pose_tool_ready_mask.ppm"};
+                static char const* const poseAnatomyMaskPaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch_anatomy_mask.ppm",
+                    "Docs\\provenance_stage0_character_pose_tool_ready_anatomy_mask.ppm"};
+                static char const* const poseGarmentMaskPaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch_garment_mask.ppm",
+                    "Docs\\provenance_stage0_character_pose_tool_ready_garment_mask.ppm"};
+                static char const* const poseCutoutPaths[2]={
+                    "Docs\\provenance_stage0_character_pose_crouch_cutout.ppm",
+                    "Docs\\provenance_stage0_character_pose_tool_ready_cutout.ppm"};
+                static char const* const viewNames[6]={"close_head","side_profile_right","rear_head",
+                    "side_profile_left","threequarter_right","threequarter_left"};
+                static char const* const bodyViewNames[6]={"full_body_front","full_body_rear",
+                    "full_body_profile_right","full_body_profile_left","full_body_top_oblique",
+                    "full_body_threequarter"};
+                int const headView=std::clamp(g.certStage0CharacterHeadView,0,5);
+                int const bodyView=std::clamp(g.certStage0CharacterBodyView,0,5);
+                int const poseIndex=std::clamp(g.certStage0CharacterPoseAudit-1,0,1);
+                char const* imagePath=g.certStage0CharacterPoseAudit>0?poseImagePaths[poseIndex]
+                    :(g.certStage0CharacterFullBody?bodyImagePaths[bodyView]:imagePaths[headView]);
+                char const* perfPath=g.certStage0CharacterPoseAudit>0?posePerfPaths[poseIndex]
+                    :(g.certStage0CharacterFullBody?bodyPerfPaths[bodyView]:perfPaths[headView]);
+                char const* maskPath=g.certStage0CharacterPoseAudit>0?poseMaskPaths[poseIndex]
+                    :(g.certStage0CharacterFullBody?bodyMaskPaths[bodyView]:maskPaths[headView]);
+                char const* cutoutPath=g.certStage0CharacterPoseAudit>0?poseCutoutPaths[poseIndex]
+                    :(g.certStage0CharacterFullBody?bodyCutoutPaths[bodyView]:cutoutPaths[headView]);
+                char const* headSkinMaskPath=headSkinMaskPaths[headView];
+                char const* headHairMaskPath=headHairMaskPaths[headView];
+                char const* headDepthPath=headDepthPaths[headView];
+                char const* headSemanticPath=headSemanticPaths[headView];
+                char const* headPartPath=headPartPaths[headView];
+                char const* anatomyMaskPath=g.certStage0CharacterPoseAudit>0?poseAnatomyMaskPaths[poseIndex]
+                    :bodyAnatomyMaskPaths[bodyView];
+                char const* garmentMaskPath=g.certStage0CharacterPoseAudit>0?poseGarmentMaskPaths[poseIndex]
+                    :bodyGarmentMaskPaths[bodyView];
+                bool const wrote=DumpFramePpm(imagePath);
+                g.certStage0CharacterHeadMaskOnly=!g.certStage0CharacterFullBody;
+                // Same-camera chroma beauty authority. Neon green makes every
+                // physical edge legible and can be keyed transparent in overlays.
+                glClearColor(0.f,1.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                DrawStage0PaletteCharacter();
+                glFinish();SwapBuffers(g.hdc);
+                bool const cutoutWrote=DumpFramePpm(cutoutPath);
+                // Exact silhouette authority: no terrain, horizon, ruler, or
+                // colour-segmentation ambiguity.
+                glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                DrawStage0PaletteCharacter();
+                g.certStage0CharacterHeadMaskOnly=false;
+                glFinish();SwapBuffers(g.hdc);
+                bool const maskWrote=DumpFramePpm(maskPath);
+                bool headSkinMaskWrote=false,headHairMaskWrote=false,headDepthWrote=false;
+                bool headSemanticWrote=false,headPartWrote=false;
+                bool anatomyMaskWrote=false,garmentMaskWrote=false;
+                if(!g.certStage0CharacterFullBody)
+                {
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterHeadMaskOnly=true;
+                    g.certStage0CharacterHeadSkinMaskOnly=true;DrawStage0PaletteCharacter();
+                    glFinish();headDepthWrote=DumpDepthPpm(headDepthPath,g.projNearM,600.f);
+                    g.certStage0CharacterHeadSkinMaskOnly=false;SwapBuffers(g.hdc);
+                    headSkinMaskWrote=DumpFramePpm(headSkinMaskPath);
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterHeadHairMaskOnly=true;DrawStage0PaletteCharacter();
+                    g.certStage0CharacterHeadHairMaskOnly=false;g.certStage0CharacterHeadMaskOnly=false;
+                    glFinish();SwapBuffers(g.hdc);
+                    headHairMaskWrote=DumpFramePpm(headHairMaskPath);
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterHeadMaskOnly=true;
+                    g.certStage0CharacterSemanticIdPass=true;DrawStage0PaletteCharacter();
+                    g.certStage0CharacterSemanticIdPass=false;g.certStage0CharacterHeadMaskOnly=false;
+                    glFinish();SwapBuffers(g.hdc);
+                    headSemanticWrote=DumpFramePpm(headSemanticPath);
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterHeadMaskOnly=true;
+                    g.certStage0CharacterPartIdPass=true;DrawStage0PaletteCharacter();
+                    g.certStage0CharacterPartIdPass=false;g.certStage0CharacterHeadMaskOnly=false;
+                    glFinish();SwapBuffers(g.hdc);
+                    headPartWrote=DumpFramePpm(headPartPath);
+                }
+                else
+                {
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterBodyMaskOnly=true;DrawStage0PaletteCharacter();
+                    g.certStage0CharacterBodyMaskOnly=false;glFinish();SwapBuffers(g.hdc);
+                    anatomyMaskWrote=DumpFramePpm(anatomyMaskPath);
+                    glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    g.certStage0CharacterGarmentMaskOnly=true;DrawStage0PaletteCharacter();
+                    g.certStage0CharacterGarmentMaskOnly=false;glFinish();SwapBuffers(g.hdc);
+                    garmentMaskWrote=DumpFramePpm(garmentMaskPath);
+                    Stage0WriteCandidateScenePurity();
+                }
+                std::vector<double> sorted=g.certStage0CharacterPortraitFrameMs;
+                std::sort(sorted.begin(),sorted.end());
+                double sum=0.0;for(double ms:sorted)sum+=ms;
+                double const mean=sum/(double)sorted.size();
+                auto pct=[&](double p){return sorted[(size_t)std::floor(p*(double)(sorted.size()-1))];};
+                FILE* f=nullptr;
+                bool perfWrote=fopen_s(&f,perfPath,"w")==0&&f;
+                if(perfWrote)
+                {
+                    GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+                    Stage0UnifiedBodyMesh const& bodyMesh=GetStage0UnifiedBodyMesh();
+                    float poseMinZ=0.f,poseMaxZ=0.f,poseMinJacobian=0.f,poseMeanJacobian=0.f;
+                    int const poseInverted=Stage0UnifiedBodyPoseInvertedTriangles(
+                        g.certStage0CharacterPoseAudit,poseMinZ,poseMaxZ,poseMinJacobian,poseMeanJacobian);
+                    int const poseSelfIntersections=g.certStage0CharacterPoseAudit>0
+                        ?Stage0UnifiedBodyPoseSelfIntersections(g.certStage0CharacterPoseAudit):0;
+                    float const poseJacobianRatio=poseMeanJacobian>1e-7f
+                        ?poseMinJacobian/poseMeanJacobian:0.f;
+                    std::fprintf(f,"stage0_character_portrait_performance\n"
+                        "view=%s\nresolution=%dx%d\nwarmup_frames=30\nmeasured_frames=%d\nmean_ms=%.4f\nmean_fps=%.2f\n"
+                        "median_ms=%.4f\np95_ms=%.4f\np99_ms=%.4f\nworst_ms=%.4f\n"
+                        "head_rings=15\nhead_sides=32\nhead_skin_triangles=960\nhair_chunks=0\n"
+                        "hair_shell_cells=1088\nhair_shell_triangles=2176\nhair_side_triangles=0\n"
+                        "hair_ribbon_triangles=0\nhair_triangles=2176\nhead_hair_triangles=3136\n"
+                        "body_skin_vertices=%zu\nbody_skin_triangles=%zu\nbody_skin_components=%d\n"
+                        "body_skin_boundary_edges=%d\nbody_skin_nonmanifold_edges=%d\n"
+                        "body_skin_euler_characteristic=%d\nbody_skin_genus=%d\n"
+                        "body_skin_weighted_joints=%d\nbody_skin_max_influences=%d\nbody_skin_weight_sum_error=%.9f\n"
+                        "pose_audit=%d\npose_inverted_triangles=%d\npose_self_intersections=%d\npose_min_jacobian=%.6f\n"
+                        "pose_mean_jacobian=%.6f\npose_min_mean_jacobian_ratio=%.6f\n"
+                        "pose_min_z_m=%.6f\npose_max_z_m=%.6f\n"
+                        "normal_sheet_views=6\nnormal_sheet_loaded=%d\nnormal_sheet_file_exists=%d\n"
+                        "normal_sheet_size=%dx%d\nnormal_sheet_error=%s\nnormal_sheet_path=%s\n"
+                        "body_normal_sheet_loaded=%d\nbody_normal_sheet_file_exists=%d\n"
+                        "body_normal_sheet_size=%dx%d\nbody_normal_sheet_error=%s\nbody_normal_sheet_path=%s\n"
+                        "truth_ruler_inches=72\n"
+                        "camera_distance_m=%.3f\nprojection_near_m=%.3f\n"
+                        // Every plate carries the elevation it was shot at, so a
+                        // capture-geometry change makes older receipts identifiably
+                        // stale instead of silently incomparable.
+                        // The facing contract. Anatomical side, camera side, screen
+                        // facing, source panel and the mesh's own anterior axis are
+                        // recorded as INDEPENDENT facts. Inferring any one of them
+                        // from another is what produced three separate mirror
+                        // defects; Compare withholds metrics when they disagree.
+                        "capture_pitch_rad=%.4f\ncapture_elevation_deg=%.2f\n"
+                        "capture_yaw_rad=%.4f\ncapture_yaw_deg=%.2f\ncapture_roll_deg=%.2f\n"
+                        "projection_type=rectilinear_perspective\ncapture_focal_mm=%.2f\n"
+                        "sensor_height_mm=%.1f\nsensor_width_mm=%.1f\n"
+                        "rendered_vertical_fov_deg=%.4f\n"
+                        "projection_m00=%.6f\nprojection_m11=%.6f\n"
+                        "projection_source=loaded_matrix\n"
+                        "fixed_distance_mode=%d\nsubject_height_px=%d\n"
+                        "camera_side=%s\nscreen_facing=%s\nanatomical_side=%s\n"
+                        "source_panel=%s\nmesh_anterior_axis=%s\n"
+                        "portrait_fov_y_deg=%.1f\nmax_head_reach_m=%.3f\n"
+                        "near_clearance_m=%.3f\nnear_clearance_inches=%.2f\n"
+                        "comparison_cutout_written=%d\nsilhouette_mask_written=%d\n"
+                        "head_skin_mask_written=%d\nhead_hair_mask_written=%d\nhead_depth_written=%d\n"
+                        "head_semantic_id_written=%d\nhead_part_id_written=%d\n"
+                        "anatomy_mask_written=%d\ngarment_mask_written=%d\n",
+                        g.certStage0CharacterPoseAudit==1?"pose_crouch":
+                            (g.certStage0CharacterPoseAudit==2?"pose_tool_ready":
+                            (g.certStage0CharacterFullBody?bodyViewNames[bodyView]:viewNames[headView])),vp[2],vp[3],
+                        (int)sorted.size(),mean,mean>0.0?1000.0/mean:0.0,
+                        pct(0.50),pct(0.95),pct(0.99),sorted.back(),
+                        bodyMesh.vertices.size(),bodyMesh.indices.size()/3u,bodyMesh.connectedComponents,
+                        bodyMesh.boundaryEdges,bodyMesh.nonManifoldEdges,
+                        bodyMesh.eulerCharacteristic,bodyMesh.genus,
+                        bodyMesh.weightedJoints,bodyMesh.maxInfluences,bodyMesh.maxWeightSumError,
+                        g.certStage0CharacterPoseAudit,poseInverted,poseSelfIntersections,poseMinJacobian,poseMeanJacobian,
+                        poseJacobianRatio,poseMinZ,poseMaxZ,
+                        GetStage0HeadNormalSheet().pixels?1:0,
+                        GetStage0HeadNormalSheet().fileExists?1:0,
+                        GetStage0HeadNormalSheet().width,GetStage0HeadNormalSheet().height,
+                        GetStage0HeadNormalSheet().error.empty()?"none":GetStage0HeadNormalSheet().error.c_str(),
+                        GetStage0HeadNormalSheet().path.c_str(),
+                        GetStage0BodyNormalSheet().pixels?1:0,
+                        GetStage0BodyNormalSheet().fileExists?1:0,
+                        GetStage0BodyNormalSheet().width,GetStage0BodyNormalSheet().height,
+                        GetStage0BodyNormalSheet().error.empty()?"none":GetStage0BodyNormalSheet().error.c_str(),
+                        GetStage0BodyNormalSheet().path.c_str(),
+                        g.certStage0CharacterCameraDistanceM,kProjNearDefaultM,
+                        g.pitch,-g.pitch*57.29577951f,
+                        g.yaw,g.yaw*57.29577951f,0.f,
+                        g.captureFocalMm>0.f?g.captureFocalMm:
+                            (kCaptureSensorHeightMm*0.5f/std::tan(30.f*3.14159265f/180.f)),
+                        kCaptureSensorHeightMm,kCaptureSensorHeightMm*1.5f,
+                        g.renderedFovYDeg,g.renderedProjM00,g.renderedProjM11,
+                        g.captureFixedDistance?1:0,Stage0MaskSubjectHeightPx(),
+                        Stage0BodyCameraSide(g.certStage0CharacterBodyView),
+                        Stage0BodyScreenFacing(g.certStage0CharacterBodyView),
+                        Stage0BodyAnatomicalSide(g.certStage0CharacterBodyView),
+                        Stage0BodySourcePanel(g.certStage0CharacterBodyView),
+                        Stage0CandidateLoaded()?"-x_verified_toe_witness":"-x_runtime_convention",
+                        g.certStage0CharacterCaptureFovYDeg,g.certStage0CharacterMaxReachM,
+                        g.certStage0CharacterNearClearanceM,
+                        g.certStage0CharacterNearClearanceM/0.0254f,cutoutWrote?1:0,maskWrote?1:0,
+                        headSkinMaskWrote?1:0,headHairMaskWrote?1:0,headDepthWrote?1:0,
+                        headSemanticWrote?1:0,headPartWrote?1:0,
+                        anatomyMaskWrote?1:0,garmentMaskWrote?1:0);
+                    std::fclose(f);
+                }
+                bool const ownershipMasksWrote=g.certStage0CharacterFullBody
+                    ?(anatomyMaskWrote&&garmentMaskWrote)
+                    :(headSkinMaskWrote&&headHairMaskWrote&&headDepthWrote&&headSemanticWrote&&headPartWrote);
+                PostQuitMessage(wrote&&cutoutWrote&&maskWrote&&ownershipMasksWrote&&perfWrote?0:2);
+                g.certStage0CharacterPortrait=false;
+            }
+            if(g.certStage0MacroFormV1&&g.certStage0CharacterPortraitFrameMs.size()>=240)
+            {
+                glFinish();
+                bool const imageWrote=DumpFramePpm(
+                    "Docs\\provenance_stage0_macro_form_v1_ingame.ppm");
+                std::vector<double> sorted=g.certStage0CharacterPortraitFrameMs;
+                std::sort(sorted.begin(),sorted.end());
+                double sum=0.0;for(double ms:sorted)sum+=ms;
+                double const mean=sum/(double)sorted.size();
+                auto pct=[&](double p)
+                {return sorted[(size_t)std::floor(p*(double)(sorted.size()-1))];};
+                Stage0VisualHullMesh const& mesh=GetStage0MacroFormV1Mesh();
+                GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+                FILE* f=nullptr;
+                bool const receiptWrote=fopen_s(&f,
+                    "Docs\\provenance_stage0_macro_form_v1_ingame_perf.txt","w")==0&&f;
+                if(receiptWrote)
+                {
+                    std::fprintf(f,"provrender_macro_form_v1_ingame\n"
+                        "status=FROZEN_RUNTIME_WITNESS_NOT_PROMOTED\n"
+                        "construction=literal_six_filled_blue_volume_intersection\n"
+                        "existing_character_changed=0\n"
+                        "mesh_path=%s\nmesh_file_exists=%d\nmesh_loaded=%d\nmesh_error=%s\n"
+                        "vertices=%zu\ntriangles=%zu\ncomponents=%d\n"
+                        "boundary_edges=%d\nnonmanifold_edges=%d\n"
+                        "watertight=%d\nmesh_scale=1.000000\n"
+                        "stature_m=%.6f\nright_offset_m=1.524000\nright_offset_ft=5.000000\n"
+                        "world_offset_xyz_m=0.000000,-1.524000,0.000000\n"
+                        "resolution=%dx%d\nwarmup_frames=30\nmeasured_frames=%d\n"
+                        "mean_ms=%.4f\nmean_fps=%.2f\nmedian_ms=%.4f\n"
+                        "p95_ms=%.4f\np99_ms=%.4f\nworst_ms=%.4f\n"
+                        "image_written=%d\n",
+                        mesh.path.c_str(),mesh.fileExists?1:0,mesh.loaded?1:0,
+                        mesh.error.empty()?"none":mesh.error.c_str(),
+                        mesh.positions.size()/3u,mesh.indices.size()/3u,mesh.components,
+                        mesh.boundaryEdges,mesh.nonManifoldEdges,
+                        mesh.loaded&&mesh.boundaryEdges==0&&mesh.nonManifoldEdges==0?1:0,
+                        mesh.maxZ-mesh.minZ,vp[2],vp[3],(int)sorted.size(),mean,
+                        mean>0.0?1000.0/mean:0.0,pct(0.50),pct(0.95),pct(0.99),
+                        sorted.back(),imageWrote?1:0);
+                    std::fclose(f);
+                }
+                PostQuitMessage(mesh.loaded&&imageWrote&&receiptWrote?0:2);
+                g.certStage0MacroFormV1=false;
+                g.certStage0CharacterPortrait=false;
+            }
+            if(g.certStage0VisualHull&&g.certStage0CharacterPortraitFrameMs.size()>=240)
+            {
+                glFinish();
+                static char const* const hullViewNames[6]={"front","right_profile","rear",
+                    "left_profile","right_threequarter","left_threequarter"};
+                // Build-ProvRenderVisualHull.py VIEWS order is not the runtime
+                // head-view order. Record the registration rather than assume it.
+                static int const hullAuthoredPanel[6]={0,2,1,3,4,5};
+                int const view=std::clamp(g.certStage0CharacterHeadView,0,5);
+                char const* const suffix=g.certStage0VisualHullMirror?"_mirror":"";
+                char beautyPath[MAX_PATH],cutoutPath[MAX_PATH],maskPath[MAX_PATH];
+                char depthPath[MAX_PATH],runtimePath[MAX_PATH],receiptPath[MAX_PATH];
+                std::snprintf(beautyPath,sizeof(beautyPath),
+                    "Docs\\provrender_visual_hull_%s%s.ppm",hullViewNames[view],suffix);
+                std::snprintf(cutoutPath,sizeof(cutoutPath),
+                    "Docs\\provrender_visual_hull_%s%s_cutout.ppm",hullViewNames[view],suffix);
+                std::snprintf(maskPath,sizeof(maskPath),
+                    "Docs\\provrender_visual_hull_%s%s_mask.ppm",hullViewNames[view],suffix);
+                std::snprintf(depthPath,sizeof(depthPath),
+                    "Docs\\provrender_visual_hull_%s%s_depth.ppm",hullViewNames[view],suffix);
+                std::snprintf(runtimePath,sizeof(runtimePath),
+                    "Docs\\provrender_visual_hull_%s%s_runtime_head_mask.ppm",hullViewNames[view],suffix);
+                std::snprintf(receiptPath,sizeof(receiptPath),
+                    "Docs\\provrender_visual_hull_%s%s_receipt.txt",hullViewNames[view],suffix);
+                bool const beautyWrote=DumpFramePpm(beautyPath);
+                // Same-camera chroma cutout, exact hull silhouette, hull depth, and
+                // the runtime head silhouette from the identical camera. The last one
+                // is what lets a plain pixel comparison state hull-versus-runtime
+                // agreement without any atlas registration step.
+                glClearColor(0.f,1.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                DrawStage0VisualHullInspection();
+                glFinish();SwapBuffers(g.hdc);
+                bool const cutoutWrote=DumpFramePpm(cutoutPath);
+                glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                g.certStage0VisualHullMaskOnly=true;DrawStage0VisualHullInspection();
+                glFinish();
+                bool const depthWrote=DumpDepthPpm(depthPath,g.projNearM,600.f);
+                g.certStage0VisualHullMaskOnly=false;SwapBuffers(g.hdc);
+                bool const maskWrote=DumpFramePpm(maskPath);
+                glClearColor(0.f,0.f,0.f,1.f);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                g.certStage0CharacterHeadMaskOnly=true;DrawStage0PaletteCharacter();
+                g.certStage0CharacterHeadMaskOnly=false;
+                glFinish();SwapBuffers(g.hdc);
+                bool const runtimeWrote=DumpFramePpm(runtimePath);
+                std::vector<double> sorted=g.certStage0CharacterPortraitFrameMs;
+                std::sort(sorted.begin(),sorted.end());
+                double sum=0.0;for(double ms:sorted)sum+=ms;
+                double const mean=sum/(double)sorted.size();
+                auto pct=[&](double p){return sorted[(size_t)std::floor(p*(double)(sorted.size()-1))];};
+                Stage0VisualHullMesh const& hull=GetStage0VisualHullMesh();
+                GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+                float const zPitch=hull.maxZ>hull.minZ?(hull.maxZ-hull.minZ)/103.f:0.f;
+                FILE* f=nullptr;
+                bool const receiptWrote=fopen_s(&f,receiptPath,"w")==0&&f;
+                if(receiptWrote)
+                {
+                    std::fprintf(f,"provrender_visual_hull_inspection\n"
+                        "status=diagnostic_only_not_accepted_anatomy\n"
+                        "view=%s\nruntime_head_view=%d\nauthored_panel_index=%d\n"
+                        "resolution=%dx%d\n"
+                        "obj_path=%s\nobj_file_exists=%d\nobj_loaded=%d\nobj_error=%s\n"
+                        "vertices=%zu\ntriangles=%zu\nedges=%zu\nunreferenced_vertices=%d\n"
+                        "components=%d\nboundary_edges=%d\nnonmanifold_edges=%d\n"
+                        "euler_characteristic=%d\ngenus=%d\n"
+                        "orientation_flips=%d\nenclosed_volume_m3=%.9f\n"
+                        "hull_local_min_m=%.6f,%.6f,%.6f\nhull_local_max_m=%.6f,%.6f,%.6f\n"
+                        "hull_depth_x_m=%.6f\nhull_width_y_m=%.6f\nhull_height_z_m=%.6f\n"
+                        "authored_neck_cut_z_m=%.6f\nauthored_height_m=%.6f\n"
+                        "runtime_neck_joint_z_m=%.6f\nruntime_crown_z_m=%.6f\n"
+                        "neck_cut_width_m=%.6f\nneck_cut_depth_m=%.6f\n"
+                        "neck_joint_width_m=%.6f\nneck_joint_depth_m=%.6f\n"
+                        "lateral_sign_hull_y_to_world_y=%d\nmirror_probe=%d\n"
+                        "lateral_envelope_asymmetry_m=%.6f\nz_node_pitch_estimate_m=%.6f\n"
+                        "lateral_chirality_resolvable=%d\n"
+                        "hull_ownership_id=255,0,255\n"
+                        "warmup_frames=30\nmeasured_frames=%d\nmean_ms=%.4f\nmean_fps=%.2f\n"
+                        "median_ms=%.4f\np95_ms=%.4f\np99_ms=%.4f\nworst_ms=%.4f\n"
+                        "camera_distance_m=%.3f\nprojection_near_m=%.3f\nportrait_fov_y_deg=%.1f\n"
+                        "near_clearance_m=%.3f\n"
+                        "beauty_written=%d\ncutout_written=%d\nmask_written=%d\n"
+                        "depth_written=%d\nruntime_head_mask_written=%d\n",
+                        hullViewNames[view],view,hullAuthoredPanel[view],vp[2],vp[3],
+                        hull.path.c_str(),hull.fileExists?1:0,hull.loaded?1:0,
+                        hull.error.empty()?"none":hull.error.c_str(),
+                        hull.positions.size()/3u,hull.indices.size()/3u,hull.edges,
+                        hull.unreferencedVertices,hull.components,hull.boundaryEdges,
+                        hull.nonManifoldEdges,hull.eulerCharacteristic,hull.genus,
+                        hull.orientationFlips,hull.signedVolumeM3,
+                        hull.minX,hull.minY,hull.minZ,hull.maxX,hull.maxY,hull.maxZ,
+                        hull.maxX-hull.minX,hull.maxY-hull.minY,hull.maxZ-hull.minZ,
+                        kStage0VisualHullNeckCutZM,kStage0VisualHullHeightM,
+                        kStage0VisualHullNeckJointZM,kCharHeightM,
+                        hull.neckCutWidthM,hull.neckCutDepthM,
+                        hull.neckJointWidthM,hull.neckJointDepthM,
+                        g.certStage0VisualHullMirror?1:-1,g.certStage0VisualHullMirror?1:0,
+                        hull.lateralAsymmetryM,zPitch,
+                        hull.lateralAsymmetryM>zPitch?1:0,
+                        (int)sorted.size(),mean,mean>0.0?1000.0/mean:0.0,
+                        pct(0.50),pct(0.95),pct(0.99),sorted.back(),
+                        g.certStage0CharacterCameraDistanceM,kProjNearDefaultM,
+                        g.certStage0CharacterCaptureFovYDeg,g.certStage0CharacterNearClearanceM,
+                        beautyWrote?1:0,cutoutWrote?1:0,maskWrote?1:0,
+                        depthWrote?1:0,runtimeWrote?1:0);
+                    std::fclose(f);
+                }
+                PostQuitMessage(hull.loaded&&beautyWrote&&cutoutWrote&&maskWrote
+                    &&depthWrote&&runtimeWrote&&receiptWrote?0:2);
+                g.certStage0VisualHull=false;
+                g.certStage0CharacterPortrait=false;
+            }
+        }
+        if ( stage0Mode )
+        {
+            LARGE_INTEGER cpuEnd{};
+            QueryPerformanceCounter( &cpuEnd );
+            if ( stage0Qpf.QuadPart > 0 )
+            {
+                g.stage0FrameCpuMs = 1000.0
+                    * (double)( cpuEnd.QuadPart - stage0TickQpc.QuadPart )
+                    / (double)stage0Qpf.QuadPart;
+            }
+        }
+        if ( g.certWorldgenBaselinePerf ) { WorldgenPerfAfterRender(); }
+        if ( g.playWorldgenBaseline ) { WorldgenPlayAfterRender(); }
+        PresentationIsolationAfterRender();
+        Stage11ResidencyWaterfallAfterRender();
+        Stage11ShiftScalingAfterRender();
+        Stage11FreeFlyAfterRender();
         CertPickMatrixOnlyTick();
         CertSinglePickBenchmarkAfterRender();
         if(g.shelterPhotoPending>0)
@@ -20894,7 +35264,7 @@ namespace
         CertWaterTick();
         CertPickFractureTick();
         // P5a: settle only awake water; dormant pond costs an idle skip check only.
-        if ( !g.certWater )
+        if ( !g.certWater && !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline )
         {
             WaterLedger::TickSettle( g.waterWorld );
         }
@@ -20912,18 +35282,40 @@ namespace
                     PostQuitMessage( 1 );
                     return 0;
                 }
-                SetTimer( hwnd, kTimerId, 16, nullptr );
+                if ( !g.playWorldgenBaseline && !g.certWorldgenLadderLivePerf )
+                { SetTimer( hwnd, kTimerId, 16, nullptr ); }
                 g.lastAttemptMs = GetTickCount();
                 g.lastFrameMs = GetTickCount();
-                TryConnect();
-                SetMouseLook( hwnd, true );
+                if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline ) { TryConnect(); }
+                SetMouseLook( hwnd, !g.playWorldgenBaseline );
                 return 0;
             case WM_ACTIVATE:
-                if ( LOWORD( wParam ) != WA_INACTIVE && g.mouseLook )
-                {
-                    SetMouseLook( hwnd, true );
-                }
+                // Losing focus must always drop to the UI state. Previously only
+                // the regaining branch existed, so Alt+Tab left g.mouseLook true
+                // and the window silently re-grabbed the pointer on return --
+                // which is what made the application feel impossible to leave.
+                // Re-entry is now deliberate: click the viewport.
+                if ( LOWORD( wParam ) == WA_INACTIVE ) { ReleaseViewportInput( hwnd ); }
                 return 0;
+            case WM_CAPTURECHANGED:
+                // Windows took capture away. Mirror that into our own state
+                // instead of letting the two drift apart.
+                if ( (HWND)lParam != hwnd ) { ReleaseViewportInput( hwnd ); }
+                return 0;
+            case WM_KILLFOCUS:
+                ReleaseViewportInput( hwnd );
+                return 0;
+            case WM_SETFOCUS:
+                // Receiving focus is not on its own permission to grab the pointer:
+                // the shell hands focus to this child when it docks, and silently
+                // capturing there is what made the window feel inescapable. Entry
+                // stays deliberate -- a click on the viewport.
+                return 0;
+            case WM_MOUSEACTIVATE:
+                // A click that activates the viewport should also be the click that
+                // enters it, so the first press is not swallowed by activation.
+                EnterViewportInput( hwnd );
+                return MA_ACTIVATE;
             case WM_TIMER:
                 if ( wParam == kTimerId ) { TickFrame(); }
                 return 0;
@@ -20941,19 +35333,281 @@ namespace
                 if ( wParam < 256 ) { g.keys[wParam] = true; }
                 if ( wParam == VK_ESCAPE )
                 {
+                    if ( g.playWorldgenBaseline && g.stage0ToolDrawerOpen )
+                    {
+                        g.stage0ToolDrawerOpen = false;
+                        EnterViewportInput( hwnd );
+                        return 0;
+                    }
+                    if ( g.playWorldgenBaseline && g.stage0StageMenuOpen )
+                    {
+                        g.stage0StageMenuOpen = false;
+                        EnterViewportInput( hwnd );
+                        return 0;
+                    }
                     if ( g.journalOpen )
                     {
                         CloseJournal();
                         return 0;
                     }
-                    if ( g.mouseLook )
+                    // Esc always releases, whatever the flags currently claim.
+                    if ( g.mouseLook || g.cursorCaptured )
                     {
-                        SetMouseLook( hwnd, false );
+                        ReleaseViewportInput( hwnd );
                     }
-                    else
+                    else if ( !g.provRenderWorkbench )
                     {
                         PostQuitMessage( 0 );
                     }
+                    // In the ProvRender workbench, Escape only frees the mouse.
+                    // A second Escape must not quit: the viewport is docked inside
+                    // ProvRender, and closing it would leave an empty black panel.
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'M' || wParam == 'm' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.stage0StageMenuOpen = !g.stage0StageMenuOpen;
+                        g.stage0ToolDrawerOpen = false;
+                        g.stage0BrowserSelection = BrowserIndexForView( g.stage0PlayView );
+                        SyncCertificationBrowserCategoryToSelection();
+                        SetMouseLook( hwnd, !g.stage0StageMenuOpen );
+                    }
+                    g.keys['M'] = g.keys['m'] = false;
+                    return 0;
+                }
+                else if ( g.provRenderWorkbench && ( wParam == 'T' || wParam == 't' ) )
+                {
+                    // Foot-pad render toggle for the nearest character (FPS testing).
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 ) { Stage0ToggleNearestCandidate(); }
+                    g.keys['T'] = g.keys['t'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'T' || wParam == 't' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.stage0ToolDrawerOpen = !g.stage0ToolDrawerOpen;
+                        g.stage0StageMenuOpen = false;
+                        SetMouseLook( hwnd, !g.stage0ToolDrawerOpen );
+                    }
+                    g.keys['T'] = g.keys['t'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline
+                    && ( g.stage0StageMenuOpen || g.stage0ToolDrawerOpen )
+                    && ( wParam == VK_UP || wParam == VK_DOWN ) )
+                {
+                    int const step = wParam == VK_UP ? -1 : 1;
+                    if ( g.stage0StageMenuOpen )
+                    {MoveCertificationBrowserStage(step);}
+                    else
+                    {
+                        g.stage0ToolSelection =
+                            ( g.stage0ToolSelection + step + kStage0ToolCount ) % kStage0ToolCount;
+                    }
+                    g.keys[wParam] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && g.stage0StageMenuOpen
+                    && ( wParam == VK_LEFT || wParam == VK_RIGHT ) )
+                {
+                    MoveCertificationBrowserCategory(wParam==VK_LEFT?-1:1);
+                    g.keys[wParam]=false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && g.stage0StageMenuOpen
+                    && ( wParam == VK_RETURN || wParam == VK_SPACE ) )
+                {
+                    if ( SelectCertificationBrowserEntry( g.stage0BrowserSelection ) )
+                    {
+                        g.stage0StageMenuOpen = false;
+                        EnterViewportInput( hwnd );
+                    }
+                    g.keys[wParam] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && g.stage0ToolDrawerOpen
+                    && ( wParam == VK_RETURN || wParam == VK_SPACE ) )
+                {
+                    ToggleStage0ToolDrawerEntry( g.stage0ToolSelection );
+                    g.keys[wParam] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && !g.provRenderWorkbench
+                    && ( ( wParam >= '1' && wParam <= '9' ) || wParam == '0' ) )
+                {
+                    // Certification-browser shortcuts. In the ProvRender workbench
+                    // the number row belongs to the hotbar; the menu owns anything
+                    // this used to select.
+                    g.keys[wParam] = false;
+                    int const index = wParam == '0' ? 9 : (int)( wParam - '1' );
+                    if ( index < kCertificationBrowserCount
+                      && SelectCertificationBrowserEntry( index ) )
+                    {
+                        g.stage0StageMenuOpen = false;
+                        g.stage0ToolDrawerOpen = false;
+                        EnterViewportInput( hwnd );
+                    }
+                    else
+                    {
+                        g.stage0StageMenuOpen = true;
+                        SetMouseLook( hwnd, false );
+                    }
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'L' || wParam == 'l' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.stage0ToolRuler = !g.stage0ToolRuler;
+                        if ( !g.stage0ToolRuler && g.stage0RulerList )
+                        { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
+                        g.statusLine = g.stage0ToolRuler ? "Distance ruler ON" : "Distance ruler OFF";
+                    }
+                    g.keys['L'] = g.keys['l'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'P' || wParam == 'p' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        if((GetKeyState(VK_SHIFT)&0x8000)!=0)
+                        {
+                            SummonStage0CharacterOnly();
+                            g.statusLine = "Character-only inspection + 6ft truth ruler";
+                        }
+                        else
+                        {
+                            SummonStage0Palette();
+                            g.statusLine = "Material palette summoned at current surface";
+                        }
+                    }
+                    g.keys['P'] = g.keys['p'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'R' || wParam == 'r' ) )
+                {
+                    g.playWorldgenResidencyOverlay = !g.playWorldgenResidencyOverlay;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'X' || wParam == 'x' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        if ( IsCausalPlayableView( g.stage0PlayView ) )
+                        {
+                            g.stage0ToolGeologyCutaway = !g.stage0ToolGeologyCutaway;
+                            g.statusLine = g.stage0ToolGeologyCutaway
+                                ? "Geology x-ray ON - aim; wheel depth; Shift+wheel width; V mode"
+                                : "Geology x-ray OFF";
+                        }
+                        else { g.statusLine = "X-ray requires certified geology Stage 5-11"; }
+                    }
+                    g.keys['X'] = g.keys['x'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'V' || wParam == 'v' )
+                    && g.stage0ToolGeologyCutaway )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.stage0GeologyInspectorMode=(g.stage0GeologyInspectorMode+1)%3;
+                        static char const* const mode[3]={"MATERIAL","IDENTITY","HISTORY"};
+                        g.statusLine=std::string("Geology x-ray mode: ")+mode[g.stage0GeologyInspectorMode];
+                    }
+                    g.keys['V']=g.keys['v']=false;return 0;
+                }
+                else if ( g.playWorldgenBaseline && wParam == VK_F9
+                    && g.stage0ToolGeologyCutaway )
+                {
+                    if((lParam&(1LL<<30))==0)g.stage0GeologySnapshotPending=true;
+                    g.keys[VK_F9]=false;return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'E' || wParam == 'e' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        // The workbench has both the Stage-0 tool props and the
+                        // Phase-4 ore gallery within reach of the same key. Offer
+                        // the sample under the reticle first; only if nothing was
+                        // picked up or put down does E fall through to the tools.
+                        bool handled = false;
+                        if ( g.provRenderWorkbench ) { handled = TryPickupGallerySample(); }
+                        if ( !handled ) { TryStage0PickaxeInteraction(); }
+                    }
+                    // E is also free-fly rise in the main client. Always consume it here
+                    // so a pickup/drop press cannot move the Stage-0 calibration camera.
+                    g.keys['E'] = g.keys['e'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'H' || wParam == 'h' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.stage0LeftHanded = !g.stage0LeftHanded;
+                        g.stage0StrikePrevValid = false;
+                        g.statusLine = g.stage0LeftHanded
+                            ? "Held tools — left-handed poses"
+                            : "Held tools — right-handed poses";
+                    }
+                    g.keys['H'] = g.keys['h'] = false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && ( wParam == 'C' || wParam == 'c' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        g.playerCrouched=!g.playerCrouched;
+                        if(g.playerCrouched&&g.walkMode&&g.grounded
+                            &&(GetKeyState(VK_SHIFT)&0x8000)!=0)
+                        {
+                            float const cy=std::cos(g.yaw),sy=std::sin(g.yaw);
+                            float const fx=sy,fy=cy,rx=cy,ry=-sy;
+                            float dx=0.f,dy=0.f;
+                            if(g.keys['W']){dx+=fx;dy+=fy;}if(g.keys['S']){dx-=fx;dy-=fy;}
+                            if(g.keys['A']){dx-=rx;dy-=ry;}if(g.keys['D']){dx+=rx;dy+=ry;}
+                            float const dl=std::sqrt(dx*dx+dy*dy);
+                            if(dl>1e-5f)
+                            {
+                                g.stage0SlideDirX=dx/dl;g.stage0SlideDirY=dy/dl;
+                                g.stage0SlideSpeed=kSprintSpeedMps;g.stage0SlideRemaining=0.62f;
+                                g.statusLine="Power slide — crouched momentum";
+                            }
+                            else g.statusLine="Crouch — ON";
+                        }
+                        else
+                        {
+                            if(!g.playerCrouched)g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;
+                            g.statusLine=g.playerCrouched?"Crouch — ON":"Crouch — OFF";
+                        }
+                    }
+                    g.keys['C']=g.keys['c']=false;
+                    return 0;
+                }
+                else if ( g.playWorldgenBaseline && !g.provRenderWorkbench
+                  && ( wParam == 'J' || wParam == 'j'
+                    || wParam == 'C' || wParam == 'c'
+                    || wParam == 'K' || wParam == 'k'
+                    || wParam == 'B' || wParam == 'b'
+                    || wParam == 'G' || wParam == 'g'
+                    || ( wParam >= '1' && wParam <= '9' )
+                    || wParam == VK_OEM_4 || wParam == VK_OEM_6
+                    || wParam == VK_OEM_MINUS || wParam == VK_OEM_PLUS
+                    || wParam == VK_F8 ) )
+                {
+                    // Stage 0 admits traversal controls only. Keep all editing,
+                    // gallery, body, fixture, and presentation toggles dormant.
+                    // The ProvRender workbench is exempt: there the number row is
+                    // the hotbar and J opens the journal, as in the ordinary client.
+                    return 0;
+                }
+                else if ( g.provRenderWorkbench && wParam == VK_F1 )
+                {
+                    // The diagnostic readout is useful but covers the model. F1
+                    // clears it; the ProvRender menu owns everything it reported.
+                    g.provRenderHudText = !g.provRenderHudText;
+                    return 0;
                 }
                 else if ( wParam == 'J' || wParam == 'j' )
                 {
@@ -21085,11 +35739,55 @@ namespace
                     RefreshGeographyFixture();
                     return 0;
                 }
+                else if ( wParam == VK_F9 )
+                {
+                    g.inputWitnessHud = !g.inputWitnessHud;
+                    return 0;
+                }
                 return 0;
             case WM_KEYUP:
                 if ( wParam < 256 ) { g.keys[wParam] = false; }
                 return 0;
             case WM_MOUSEWHEEL:
+                if ( g.playWorldgenBaseline
+                    && ( g.stage0StageMenuOpen || g.stage0ToolDrawerOpen ) )
+                {
+                    short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
+                    int const step = delta > 0 ? -1 : 1;
+                    if ( g.stage0StageMenuOpen )
+                    {MoveCertificationBrowserStage(step);}
+                    else
+                    {
+                        g.stage0ToolSelection =
+                            ( g.stage0ToolSelection + step + kStage0ToolCount ) % kStage0ToolCount;
+                    }
+                    return 0;
+                }
+                if ( g.playWorldgenBaseline && g.stage0ToolGeologyCutaway
+                  && IsCausalPlayableView( g.stage0PlayView ) )
+                {
+                    short const delta=GET_WHEEL_DELTA_WPARAM(wParam);
+                    float const notches=delta/(float)WHEEL_DELTA;
+                    if((GetKeyState(VK_SHIFT)&0x8000)!=0)
+                    {
+                        g.stage0GeologyInspectorWidthM=(std::clamp)(
+                            g.stage0GeologyInspectorWidthM+notches*.3048f,3.048f,6.096f);
+                    }
+                    else
+                    {
+                        g.stage0GeologyInspectorDepthM=(std::clamp)(
+                            g.stage0GeologyInspectorDepthM+notches*1.f,1.5f,60.96f);
+                    }
+                    return 0;
+                }
+                if ( g.playWorldgenBaseline && g.stage0HeldTool != Stage0ToolKind::None )
+                {
+                    short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
+                    float const step = ( delta / (float)WHEEL_DELTA ) * ( 3.14159265f / 12.f );
+                    if ( ( GetKeyState( VK_SHIFT ) & 0x8000 ) != 0 ) { g.stage0ToolSpin += step; }
+                    else { g.stage0ToolRoll += step; }
+                    return 0;
+                }
                 if ( !g.heldGalleryId.empty() && !g.journalOpen )
                 {
                     short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
@@ -21109,6 +35807,23 @@ namespace
                 return 0;
             case WM_LBUTTONDOWN:
             {
+                if ( g.playWorldgenBaseline )
+                {
+                    if ( g.stage0StageMenuOpen || g.stage0ToolDrawerOpen )
+                    {
+                        int const mx = (int)(short)LOWORD( lParam );
+                        int const my = (int)(short)HIWORD( lParam );
+                        RECT rc{}; GetClientRect( hwnd, &rc );
+                        g.uiWinW = (std::max)( 1, (int)rc.right );
+                        g.uiWinH = (std::max)( 1, (int)rc.bottom );
+                        UpdateUiMouseFromWin( mx, my );
+                        HandleWorldgenMenuClick( g.uiMouseX, g.uiMouseY );
+                        return 0;
+                    }
+                    EnterViewportInput( hwnd );
+                    BeginStage0ToolStrike();
+                    return 0;
+                }
                 int mx = (int)(short)LOWORD( lParam );
                 int my = (int)(short)HIWORD( lParam );
                 RECT rc; GetClientRect( hwnd, &rc );
@@ -21121,12 +35836,17 @@ namespace
                     HandleJournalClick( g.uiMouseX, g.uiMouseY, false );
                     return 0;
                 }
-                if ( !g.mouseLook ) { SetMouseLook( hwnd, true ); }
+                EnterViewportInput( hwnd );
                 TryDigHandful();
                 return 0;
             }
             case WM_RBUTTONDOWN:
             {
+                if ( g.playWorldgenBaseline )
+                {
+                    EnterViewportInput( hwnd );
+                    return 0;
+                }
                 int mx = (int)(short)LOWORD( lParam );
                 int my = (int)(short)HIWORD( lParam );
                 RECT rc; GetClientRect( hwnd, &rc );
@@ -21138,7 +35858,7 @@ namespace
                     HandleJournalClick( g.uiMouseX, g.uiMouseY, true );
                     return 0;
                 }
-                if ( !g.mouseLook ) { SetMouseLook( hwnd, true ); }
+                EnterViewportInput( hwnd );
                 // Always run place path — empty hand / busy get an explicit digest (no silent no-op)
                 TryPlaceHandful();
                 return 0;
@@ -21177,6 +35897,7 @@ namespace
             }
             case WM_DESTROY:
                 KillTimer( hwnd, kTimerId );
+                WorldgenPlayShutdown();
                 CloseSock();
                 ShutdownGL();
                 PostQuitMessage( 0 );
@@ -21188,6 +35909,221 @@ namespace
 
 int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
 {
+    // Windows supplies a process working directory independently of the
+    // executable location.  Opening Build\x64_Release\ProvenanceClient.exe
+    // directly therefore used to make every relative Data\Worldgen lookup
+    // miss and falsely mark every selected runtime FAILED.  Resolve the
+    // nearest owning data root before any certificate or runtime file access.
+    {
+        wchar_t modulePath[32768] = {};
+        DWORD const length = GetModuleFileNameW( nullptr, modulePath,
+            (DWORD)( sizeof( modulePath ) / sizeof( modulePath[0] ) ) );
+        if ( length > 0 && length < (DWORD)( sizeof( modulePath ) / sizeof( modulePath[0] ) ) )
+        {
+            std::wstring candidate( modulePath, length );
+            size_t const fileSlash = candidate.find_last_of( L"\\/" );
+            if ( fileSlash != std::wstring::npos ) { candidate.resize( fileSlash ); }
+            for ( int parent = 0; parent < 8 && !candidate.empty(); ++parent )
+            {
+                std::wstring const dataRoot = candidate + L"\\Data\\Worldgen";
+                DWORD const attributes = GetFileAttributesW( dataRoot.c_str() );
+                if ( attributes != INVALID_FILE_ATTRIBUTES
+                  && ( attributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 )
+                {
+                    SetCurrentDirectoryW( candidate.c_str() );
+                    break;
+                }
+                size_t const slash = candidate.find_last_of( L"\\/" );
+                if ( slash == std::wstring::npos ) { break; }
+                candidate.resize( slash );
+            }
+        }
+    }
+
+    // Read-only CAUSAL_WORLD geology floor runs before WinSock, window, GL,
+    // terrain residency, or simulation initialization. It therefore cannot
+    // accidentally admit presentation or gameplay systems into this cert.
+    {
+        int certArgc = 0;
+        LPWSTR* certArgv = CommandLineToArgvW( GetCommandLineW(), &certArgc );
+        bool runCausalWorldCert = false;
+        bool runCausalWorldExposureCert = false;
+        bool runCausalWorldVisibleCert = false;
+        bool runCausalWorldErosionCert = false;
+        bool runCausalWorldIntrusionCert = false;
+        bool runCausalWorldMineralizationCert = false;
+        bool runCausalWorldFaultCert = false;
+        bool runGeologyAuthorityParityCert = false;
+        bool runCutCOccupancyParityCert = false;
+        char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
+        char exposurePath[MAX_PATH] = "Data\\Worldgen\\causal_world_geologic_exposure_floor.cwe";
+        char erosionPath[MAX_PATH] = "Data\\Worldgen\\causal_world_differential_erosion_floor.cde";
+        char intrusionPath[MAX_PATH] = "Data\\Worldgen\\causal_world_granite_intrusion_floor.cgi";
+        char mineralizationPath[MAX_PATH] = "Data\\Worldgen\\causal_world_contact_mineralization_floor.ccm";
+        char faultPath[MAX_PATH] = "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
+        char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
+        char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
+        char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
+        if ( certArgv )
+        {
+            for ( int i = 1; i < certArgc; ++i )
+            {
+                if ( _wcsicmp( certArgv[i], L"--cert-causal-world-geology" ) == 0
+                  || _wcsicmp( certArgv[i], L"--cert-causal-world-kernel" ) == 0 )
+                {
+                    runCausalWorldCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-exposure" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-geologic-exposure" ) == 0 )
+                {
+                    runCausalWorldExposureCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-visible-exposure" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-visible-geologic-exposure" ) == 0 )
+                {
+                    runCausalWorldVisibleCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-differential-erosion" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-differential-erosion" ) == 0 )
+                {
+                    runCausalWorldErosionCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-granite-intrusion" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-granite-intrusion" ) == 0 )
+                {
+                    runCausalWorldIntrusionCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-contact-mineralization" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-contact-mineralization" ) == 0 )
+                {
+                    runCausalWorldMineralizationCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-causal-world-fault-displacement" ) == 0
+                       || _wcsicmp( certArgv[i], L"--cert-fault-displacement" ) == 0 )
+                {
+                    runCausalWorldFaultCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-geology-authority-parity" ) == 0 )
+                {
+                    runGeologyAuthorityParityCert = true;
+                }
+                else if ( _wcsicmp( certArgv[i], L"--cert-cut-c-occupancy-parity" ) == 0 )
+                {
+                    runCutCOccupancyParityCert = true;
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-descriptor=", 26 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 26, -1,
+                        descriptorPath, sizeof( descriptorPath ), nullptr, nullptr );
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-exposure=", 24 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 24, -1,
+                        exposurePath, sizeof( exposurePath ), nullptr, nullptr );
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-erosion=", 23 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 23, -1,
+                        erosionPath, sizeof( erosionPath ), nullptr, nullptr );
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-intrusion=", 25 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 25, -1,
+                        intrusionPath, sizeof( intrusionPath ), nullptr, nullptr );
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-mineralization=", 30 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 30, -1,
+                        mineralizationPath, sizeof( mineralizationPath ), nullptr, nullptr );
+                }
+                else if ( _wcsnicmp( certArgv[i], L"--causal-world-fault=", 21 ) == 0 )
+                {
+                    WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 21, -1,
+                        faultPath, sizeof( faultPath ), nullptr, nullptr );
+                }
+            }
+            LocalFree( certArgv );
+        }
+        if ( runGeologyAuthorityParityCert )
+        {
+            CausalGeologyAuthorityBridge::CertResult const result =
+                CausalGeologyAuthorityBridge::RunCert( authorityBridgePath, authorityOraclePath,
+                    descriptorPath, exposurePath, erosionPath, intrusionPath, mineralizationPath );
+            CausalGeologyAuthorityBridge::WriteCertArtifact( result,
+                "Docs\\provenance_fablescript_esoterica_geology_authority_parity_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCutCOccupancyParityCert )
+        {
+            CutCOccupancy::CertResult const result = CutCOccupancy::RunCert(
+                cutCOccupancyPath, authorityBridgePath, descriptorPath, exposurePath,
+                erosionPath, intrusionPath, mineralizationPath );
+            CutCOccupancy::WriteCertArtifact( result,
+                "Docs\\provenance_cut_c_occupancy_reconstruction_parity_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldMineralizationCert )
+        {
+            CausalContactMineralization::CertResult const result =
+                CausalContactMineralization::RunCert( descriptorPath, exposurePath,
+                    erosionPath, intrusionPath, mineralizationPath );
+            CausalContactMineralization::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_contact_mineralization_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldFaultCert )
+        {
+            CausalFaultDisplacement::CertResult const result =
+                CausalFaultDisplacement::RunCert( descriptorPath, exposurePath,
+                    erosionPath, intrusionPath, mineralizationPath, faultPath );
+            CausalFaultDisplacement::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_fault_displacement_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldIntrusionCert )
+        {
+            CausalGraniteIntrusion::CertResult const result =
+                CausalGraniteIntrusion::RunCert(
+                    descriptorPath, exposurePath, erosionPath, intrusionPath );
+            CausalGraniteIntrusion::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_granite_intrusion_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldErosionCert )
+        {
+            CausalDifferentialErosion::CertResult const result =
+                CausalDifferentialErosion::RunCert( descriptorPath, exposurePath, erosionPath );
+            CausalDifferentialErosion::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_differential_erosion_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldVisibleCert )
+        {
+            CausalVisibleExposure::CertResult const result =
+                CausalVisibleExposure::RunCert( descriptorPath, exposurePath );
+            CausalVisibleExposure::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_visible_geologic_exposure_cert.txt" );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldExposureCert )
+        {
+            CausalWorldExposure::CertResult const result =
+                CausalWorldExposure::RunCert( descriptorPath, exposurePath );
+            CausalWorldExposure::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_geologic_exposure_cert.txt",
+                descriptorPath, exposurePath );
+            return result.passed ? 0 : 1;
+        }
+        if ( runCausalWorldCert )
+        {
+            CausalWorldGeology::CertResult const result =
+                CausalWorldGeology::RunCert( descriptorPath );
+            CausalWorldGeology::WriteCertArtifact( result,
+                "Docs\\provenance_causal_world_geology_kernel_cert.txt", descriptorPath );
+            return result.passed ? 0 : 1;
+        }
+    }
+
     WSADATA wsa;
     if ( WSAStartup( MAKEWORD( 2, 2 ), &wsa ) != 0 )
     {
@@ -21207,6 +36143,39 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
             for ( int i = 1; i < argc; ++i )
             {
+                if ( _wcsicmp( argv[i], L"--play-phase4" ) == 0
+                  || _wcsicmp( argv[i], L"--legacy-phase4" ) == 0 )
+                {
+                    // Explicit compatibility entry. The argument-free player
+                    // launch is the latest certified worldgen runtime below.
+                    continue;
+                }
+                int presentationIsolationMode=0;
+                if(_wcsicmp(argv[i],L"--cert-presentation-isolation-baseline")==0)
+                {presentationIsolationMode=1;}
+                else if(_wcsicmp(argv[i],L"--cert-presentation-isolation-finish")==0)
+                {presentationIsolationMode=2;}
+                else if(_wcsicmp(argv[i],L"--cert-presentation-isolation-no-terrain")==0)
+                {presentationIsolationMode=3;}
+                else if(_wcsicmp(argv[i],L"--cert-presentation-isolation-no-draw")==0)
+                {presentationIsolationMode=4;}
+                else if(_wcsicmp(argv[i],L"--cert-presentation-isolation-swap1")==0)
+                {presentationIsolationMode=5;}
+                else if(_wcsicmp(argv[i],L"--cert-presentation-isolation-minimal")==0)
+                {presentationIsolationMode=6;}
+                if(presentationIsolationMode!=0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certPresentationIsolation=true;
+                    g.presentationIsolationMode=presentationIsolationMode;
+                    g.playWorldgenBaseline=true;
+                    g.playStage11Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
                 if ( _wcsicmp( argv[i], L"--cert-dig" ) == 0 )
                 {
                     g.certDig = true;
@@ -21295,6 +36264,423 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Range);
                     continue;
                 }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-baseline-perf" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-worldgen-perf" ) == 0
+                  || _wcsicmp( argv[i], L"--worldgen-baseline-perf" ) == 0 )
+                {
+                    g.certWorldgenBaselinePerf = true;
+                    g.playWorldgenBaseline = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage8-playable-perf" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-differential-erosion-perf" ) == 0 )
+                {
+                    g.certStage8Perf = true;
+                    g.certWorldgenBaselinePerf = true;
+                    g.playWorldgenBaseline = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-ladder-audit" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stages-1-10-audit" ) == 0 )
+                {
+                    g.certWorldgenLadderAudit = true;
+                    g.certWorldgenBaselinePerf = true;
+                    g.certStage8Perf = false;
+                    g.playWorldgenBaseline = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-ladder-live-perf" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-worldgen-live-perf" ) == 0 )
+                {
+                    g.certWorldgenLadderLivePerf = true;
+                    g.certWorldgenLadderAudit = false;
+                    g.certWorldgenBaselinePerf = true;
+                    g.certStage8Perf = false;
+                    g.playWorldgenBaseline = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-cardinal-replacement" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-worldgen-full-replacement" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certWorldgenCardinalReplacement = true;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage11-residency-waterfall" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stage11-residency-waterfall-north" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stage11-residency-waterfall-east" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stage11-residency-waterfall-south" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-stage11-residency-waterfall-west" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStage11ResidencyWaterfall=true;
+                    g.certStage11WaterfallBearing=1;
+                    if(wcsstr(argv[i],L"-north"))g.certStage11WaterfallBearing=0;
+                    else if(wcsstr(argv[i],L"-south"))g.certStage11WaterfallBearing=2;
+                    else if(wcsstr(argv[i],L"-west"))g.certStage11WaterfallBearing=3;
+                    g.playWorldgenBaseline=true;g.playStage11Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--live-radius=", 14 ) == 0 )
+                {
+                    int const metres=_wtoi(argv[i]+14);
+                    if(metres>=(int)kStage0TerrainBlockCells&&metres<=2048)
+                    {g.stage0LiveRadiusM=metres;}
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--far-extent=", 13 ) == 0 )
+                {
+                    int const metres=_wtoi(argv[i]+13);
+                    if(metres>=0&&metres<=4096){g.stage0FarExtentM=metres;}
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--freefly-speed=", 16 ) == 0 )
+                {
+                    float const step=(float)_wtof(argv[i]+16);
+                    if(step>0.f&&step<=64.f){g.certStage11FreeFlyStepM=step;}
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--freefly-distance=", 19 ) == 0 )
+                {
+                    int const metres=_wtoi(argv[i]+19);
+                    if(metres>=64&&metres<=8192){g.certStage11FreeFlyDistanceM=metres;}
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage11-freefly" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStage11FreeFly=true;
+                    g.playWorldgenBaseline=true;g.playStage11Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage11-shift-scaling" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStage11ShiftScaling=true;
+                    g.playWorldgenBaseline=true;g.playStage11Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-cardinal-replacement-stage5" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certWorldgenCardinalReplacement = true;
+                    g.certWorldgenCardinalStageFilter = 1;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-cardinal-replacement-stage6" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certWorldgenCardinalReplacement = true;
+                    g.certWorldgenCardinalStageFilter = 2;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-cardinal-replacement-stage11" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;
+                    g.certWorldgenCardinalStageFilter=7;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--play-worldgen-baseline" ) == 0
+                  || _wcsicmp( argv[i], L"--worldgen-baseline-playtest" ) == 0 )
+                {
+                    g.playWorldgenBaseline = true;
+                    g.playWorldgenLatestStableLaunch = true;
+                    g.certWorldgenBaselinePerf = false;
+                    g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--presentation-duration=",24)==0)
+                {
+                    double const seconds=_wtof(argv[i]+24);
+                    if(seconds>=10.0&&seconds<=600.0)
+                    {g.presentationIsolationDurationS=seconds;}
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-worldgen-launch-contract" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;
+                    g.playWorldgenLatestStableLaunch=true;
+                    g.certWorldgenLaunchContract=true;
+                    g.certWorldgenBaselinePerf=false;
+                    g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--play-cut-c-occupancy" ) == 0
+                  || _wcsicmp( argv[i], L"--play-cut-c" ) == 0 )
+                {
+                    g.playWorldgenBaseline = true;
+                    g.playCutCLaunch = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--play-stage11-fault" ) == 0
+                  || _wcsicmp( argv[i], L"--play-fault-displacement" ) == 0 )
+                {
+                    g.playWorldgenBaseline=true;g.playStage11Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage11-fault-visual" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage11Launch=true;
+                    g.certStage11Visual=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-cut-c-visual" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline = true;
+                    g.playCutCLaunch = true;
+                    g.certCutCVisual = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-cut-c-xray-visual" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline = true;
+                    g.playCutCLaunch = true;
+                    g.certCutCXrayVisual = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-portrait" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait = true;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-macro-form-v1" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;
+                    g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=0;
+                    g.certStage0MacroFormV1=true;
+                    g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait = true;
+                    g.certStage0CharacterFullBody = true;
+                    g.certStage0CharacterBodyView = 0;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody-rear" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=1;g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody-profile" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=2;g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody-profile-left" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=3;g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody-top" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=4;g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-fullbody-threequarter" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=5;g.playWorldgenBaseline=true;
+                    g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-pose-crouch" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=2;g.certStage0CharacterPoseAudit=1;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-pose-tool-ready" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterFullBody=true;
+                    g.certStage0CharacterBodyView=5;g.certStage0CharacterPoseAudit=2;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-profile" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait = true;
+                    g.certStage0CharacterProfile = true;
+                    g.certStage0CharacterHeadView = 1;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-rear" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterHeadView=2;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-profile-left" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterHeadView=3;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-threequarter-right" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterHeadView=4;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-character-threequarter-left" ) == 0 )
+                {
+                    g.certStage0CharacterPortrait=true;g.certStage0CharacterHeadView=5;
+                    g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                // ProvRender diagnostic visual-hull inspection. These reuse the six
+                // deterministic head camera routes so the hull plates register against
+                // the accepted character plates, but they draw the loaded envelope and
+                // write only the provrender_visual_hull_* receipt family.
+                {
+                    static wchar_t const* const kHullFlags[6]={
+                        L"--cert-stage0-visual-hull",
+                        L"--cert-stage0-visual-hull-profile",
+                        L"--cert-stage0-visual-hull-rear",
+                        L"--cert-stage0-visual-hull-profile-left",
+                        L"--cert-stage0-visual-hull-threequarter-right",
+                        L"--cert-stage0-visual-hull-threequarter-left"};
+                    int hullView=-1;
+                    for(int h=0;h<6;++h)
+                    {
+                        if(_wcsicmp(argv[i],kHullFlags[h])==0){hullView=h;break;}
+                    }
+                    if(hullView>=0)
+                    {
+                        g.certStage0CharacterPortrait=true;g.certStage0VisualHull=true;
+                        g.certStage0CharacterHeadView=hullView;
+                        g.playWorldgenBaseline=true;g.certWorldgenBaselinePerf=false;
+                        ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                    }
+                }
+                if ( _wcsicmp( argv[i], L"--capture-fixed-distance" ) == 0 )
+                {
+                    g.captureFixedDistance = true;
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--capture-focal=", 16 ) == 0 )
+                {
+                    g.captureFocalMm = (float)_wtof( argv[i] + 16 );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--candidate-atlas" ) == 0 )
+                {
+                    g.candidateUseAtlas = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--capture-unlit" ) == 0 )
+                {
+                    // Render sampled colour with no shade term, for the paint proof.
+                    g.certStage0Unlit = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-visual-hull-mirror" ) == 0 )
+                {
+                    // Chirality probe only; it does not select the mode by itself.
+                    g.certStage0VisualHullMirror = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--play-stage0-character-only" ) == 0 )
+                {
+                    g.stage0CharacterOnly = true;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--provrender-workbench" ) == 0 )
+                {
+                    // Character plus palette, every debug surface closed. The HUD
+                    // and menu defaults are overridden again after the world is
+                    // summoned, because SummonStage0Palette re-enables some of them.
+                    g.provRenderWorkbench = true;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsnicmp( argv[i], L"--parent-hwnd=", 14 ) == 0 )
+                {
+                    g.provRenderParent = (HWND)(UINT_PTR)_wcstoui64( argv[i] + 14, nullptr, 0 );
+                    if ( g.provRenderParent && !IsWindow( g.provRenderParent ) )
+                    {
+                        // A stale handle would silently create an orphan window.
+                        g.provRenderParent = nullptr;
+                    }
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-playable-runtime-independence" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-worldgen-runtime-transitions" ) == 0 )
+                {
+                    g.certPlayableRuntimeIndependence = true;
+                    g.playWorldgenBaseline = true;
+                    g.certWorldgenBaselinePerf = false;
+                    g.stage0LiveRadiusM = 192;
+                    g.stage0FarExtentM = 0;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
                 if ( _wcsnicmp( argv[i], L"--geo-fixture=", 14 ) == 0 )
                 {
                     char fixture[64];
@@ -21328,8 +36714,33 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.port = _wtoi( argv[i] );
                 }
             }
+
+            // The ordinary player launch follows the latest certified runtime.
+            // Phase 4 remains reachable through an explicit legacy flag, but an
+            // argument-free executable launch must not silently enter a separate
+            // UI/runtime whose certification browser is unavailable.
+            if ( argc == 1 )
+            {
+                g.playWorldgenBaseline = true;
+                g.playWorldgenLatestStableLaunch = true;
+                g.certWorldgenBaselinePerf = false;
+                g.stage0LiveRadiusM = 192;
+                g.stage0FarExtentM = 0;
+                ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+            }
             LocalFree( argv );
         }
+    }
+
+    // The uncapped player loop is the frame owner. Terrain derivation workers
+    // already run below normal priority; keep the owner one tier above ordinary
+    // background desktop work so an otherwise idle, fully resident world does
+    // not acquire an unowned 30-100 ms scheduling gap between completed frames.
+    // This does not change simulation cadence, authority, or the presentation
+    // completion policy, and remains below time-critical priority.
+    if ( g.playWorldgenBaseline || g.certWorldgenLadderLivePerf )
+    {
+        SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL );
     }
 
     WNDCLASSW wc = {};
@@ -21341,9 +36752,29 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
     wc.hbrBackground = (HBRUSH)GetStockObject( BLACK_BRUSH );
     RegisterClassW( &wc );
 
-    HWND hwnd = CreateWindowExW( 0, wc.lpszClassName, L"Provenance Client - Phase 4",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800,
-        nullptr, nullptr, hInst, nullptr );
+    wchar_t const* windowTitle = g.playWorldgenBaseline
+        ? L"Provenance - Worldgen Playtest - Certified Runtimes"
+        : L"Provenance Client - Phase 4";
+    int initialW=g.certStage0CharacterPortrait?1536:1280;
+    int initialH=g.certStage0CharacterPortrait?1536:800;
+    int initialX=CW_USEDEFAULT,initialY=CW_USEDEFAULT;
+    DWORD style=WS_OVERLAPPEDWINDOW|WS_VISIBLE;
+    if ( g.provRenderParent )
+    {
+        // Embedded in the ProvRender viewport: a real child of the host panel, so
+        // the host shows the actual renderer and real mouse input, not a preview
+        // image. Detaching later (POP OUT) is a SetParent plus a style swap on the
+        // same window, which keeps the process and the GL context alive.
+        RECT host{};
+        GetClientRect( g.provRenderParent, &host );
+        initialX=0;initialY=0;
+        initialW=(std::max)( 1, (int)( host.right - host.left ) );
+        initialH=(std::max)( 1, (int)( host.bottom - host.top ) );
+        style=WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS|WS_CLIPCHILDREN;
+    }
+    HWND hwnd = CreateWindowExW( 0, wc.lpszClassName, windowTitle,
+        style, initialX, initialY, initialW, initialH,
+        g.provRenderParent, nullptr, hInst, nullptr );
     if ( !hwnd )
     {
         WSACleanup();
@@ -21351,13 +36782,42 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
     }
     ShowWindow( hwnd, nShow );
 
-    MSG msg;
-    while ( GetMessageW( &msg, nullptr, 0, 0 ) > 0 )
+    MSG msg{};
+    if ( g.playWorldgenBaseline || g.certWorldgenLadderLivePerf )
     {
-        TranslateMessage( &msg );
-        DispatchMessageW( &msg );
+        // Stage-0 performance-max lane: drain input/window messages, then render
+        // continuously. WM_TIMER's 15.6 ms quantization turned a requested 16 ms
+        // interval into an observed ~29 ms pacing floor on this machine.
+        bool running = true;
+        while ( running )
+        {
+            while ( PeekMessageW( &msg, nullptr, 0, 0, PM_REMOVE ) )
+            {
+                if ( msg.message == WM_QUIT )
+                {
+                    running = false;
+                    break;
+                }
+                TranslateMessage( &msg );
+                DispatchMessageW( &msg );
+            }
+            if ( running ) { TickFrame(); }
+        }
+    }
+    else
+    {
+        while ( GetMessageW( &msg, nullptr, 0, 0 ) > 0 )
+        {
+            TranslateMessage( &msg );
+            DispatchMessageW( &msg );
+        }
     }
 
+    // Certification lanes post WM_QUIT directly. Destroy the still-owned
+    // window before C++ static teardown so WM_DESTROY joins terrain workers and
+    // releases GL resources; otherwise joinable std::threads fast-fail after a
+    // completely written PASS receipt.
+    if(IsWindow(hwnd)){DestroyWindow(hwnd);}
     WSACleanup();
     return (int)msg.wParam;
 }

@@ -1,0 +1,22 @@
+PROVENANCE_CAUSAL_CONTACT_MINERALIZATION_V1
+# Stage 10: host-valid quartz mineralization caused by the Stage-9 intrusion.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_contact_mineralization_floor
+intrusion_descriptor_digest=08d43814c96ccb1f
+authority_revision=1
+deposit_system_id=c0a7ac7d3e51aa10
+feature_id=da10b0d1e5f01001
+parent_intrusion_feature_id=71a9c48e3052b117
+parent_intrusion_event_id=9d23c7a91b4e4011
+mineralizing_event_id=ab10f10d5e770060
+mineralizing_chronology=60
+contact_min_m=0.10
+contact_max_m=3.00
+permeability_threshold=0.60
+vein_threshold=0.38
+fluid_nx=0.408
+fluid_ny=0.408
+fluid_nz=0.816

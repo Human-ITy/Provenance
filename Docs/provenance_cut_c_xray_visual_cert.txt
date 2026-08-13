@@ -1,0 +1,7 @@
+CUT_C_PLAYER_SCALE_XRAY_VISUAL PASS
+frames=90
+stage=CERTIFIED CUT C OCCUPANCY PARITY
+image=Docs/provenance_cut_c_player_xray.ppm
+xray_deposit_visible=1
+deposit_pixels=18858
+presentation_source=fablescript_cut_b_occupancy

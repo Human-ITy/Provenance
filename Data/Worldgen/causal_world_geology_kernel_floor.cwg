@@ -1,0 +1,25 @@
+PROVENANCE_CAUSAL_WORLD_DESCRIPTOR_V1
+# Canonical authority product. Regenerate with Tools/Worldgen/compile_causal_world_floor.py
+world_identity=provenance:causal-world:kernel-floor:seed-7
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_geology_kernel_floor
+event_program_digest=f72ae1e87bdf0700
+body_catalog_digest=c9b73d677928932d
+authority_revision=1
+fold_amplitude_m=12
+fold_wavelength_m=96
+fold_axis_deg=34
+datum_m=0
+event=deposit_sandstone,0c79078f2a8a7c83,10,deposition
+event=deposit_shale,656540eada4c2e25,10,deposition
+event=lithify_01,1356d333c898f1d0,20,lithification
+event=fold_03,4796135092766a08,30,folding
+formation=F15,297c2b965514fad7,sandstone,-18,-12,deposit_sandstone|lithify_01|fold_03
+formation=F16,297c2c965514fc8a,shale,-12,-6,deposit_shale|lithify_01|fold_03
+formation=F17,297c2d965514fe3d,sandstone,-6,0,deposit_sandstone|lithify_01|fold_03
+formation=F18,297c1e965514e4c0,shale,0,6,deposit_shale|lithify_01|fold_03
+formation=F19,297c1f965514e673,sandstone,6,12,deposit_sandstone|lithify_01|fold_03
+formation=F20,29869896551e0893,shale,12,18,deposit_shale|lithify_01|fold_03

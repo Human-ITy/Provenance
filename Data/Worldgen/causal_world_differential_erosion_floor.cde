@@ -1,0 +1,18 @@
+PROVENANCE_CAUSAL_DIFFERENTIAL_EROSION_V1
+# Compiled-history fixture. This is erosion work, not runtime water or sediment flow.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_differential_erosion_floor
+geology_descriptor_digest=51d60e784559eaba
+surface_program_digest=0ec22ab160c97229
+authority_revision=1
+equal_resistance=1.0
+sandstone_resistance=2.0
+shale_resistance=0.65
+work_datum_m=2.4
+work_amplitude_m=0.7
+work_wavelength_m=52.0
+work_azimuth_deg=23.0
+integration_step_m=0.125

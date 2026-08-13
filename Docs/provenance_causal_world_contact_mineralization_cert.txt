@@ -1,0 +1,27 @@
+CAUSAL_WORLD_CONTACT_MINERALIZATION PASS
+load_reason=ok
+semantic_digest=c019f93792b85a9e
+surface_samples=4225
+deposit_surface_samples=33
+disabled_deposit_samples=0
+stricter_permeability_deposit_samples=1
+fault=0
+surface_breach_proof=0
+occupancy=0
+d2=0
+active_erosion=0
+water_coupling=0
+sediment=0
+p5b=closed
+check.stage9_granite_intrusion_certificate=PASS
+check.linked_mineralization_authority_load=PASS
+check.event_disabled_produces_zero_deposits=PASS
+check.host_and_contact_valid_admission=PASS
+check.permeability_control_moves_or_removes_deposits=PASS
+check.stable_deposit_identity_and_chronology=PASS
+check.underlying_stage9_geology_unchanged=PASS
+check.surface_requeries_assembled_world=PASS
+check.partition_and_query_order_invariant=PASS
+check.reload_deterministic_identity=PASS
+check.stage9_geometry_preserved=PASS
+check.bounded_64m_surface=PASS

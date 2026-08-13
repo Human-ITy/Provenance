@@ -425,6 +425,14 @@ namespace PickFracture
         ev.env.nInto *= normalCoupling * penetrationScale;
         ev.env.tHalf *= 1.f + 0.16f * std::fabs( ev.impactLocalTBN.x ) + 0.14f * pryLeverage;
         ev.env.bHalf *= 1.f + 0.16f * std::fabs( ev.impactLocalTBN.y );
+        if ( ev.env.family == MaterialFamily::GraniteCompactAngular
+            && ev.env.tHalf < ev.env.bHalf + 0.0055f )
+        {
+            // Preserve the certified compact-wedge aspect under oblique action.
+            // B-directed impact may broaden the chip, but it must not turn the
+            // pick's distinct T-oriented angular signature into a square stamp.
+            ev.env.tHalf = ev.env.bHalf + 0.0055f;
+        }
         ev.env.nInto = (std::min)( ev.env.nInto, kMaxFractureExtentM );
         ev.env.tHalf = (std::min)( ev.env.tHalf, kMaxFractureExtentM );
         ev.env.bHalf = (std::min)( ev.env.bHalf, kMaxFractureExtentM );

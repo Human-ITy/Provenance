@@ -1,0 +1,15 @@
+PROVENANCE_GEOLOGY_XRAY_SNAPSHOT
+image=Docs/provenance_geology_xray_snapshot.ppm
+stage=CERTIFIED CONTACT MINERALIZATION
+contact=5.310447,-14.375821,-2.906571
+depth_m=2.754060
+width_m=3.048000
+terminal=2.810447,-15.375821,-3.485231
+material=quartz
+feature_id=da10b0d1e5f01001
+formation=D01_CONTACT_QUARTZ
+deposit_visible=1
+deposit_pixels=23071
+event_count=2
+chronology_count=2
+presentation_only=1

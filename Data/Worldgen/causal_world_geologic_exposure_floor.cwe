@@ -1,0 +1,13 @@
+PROVENANCE_CAUSAL_WORLD_EXPOSURE_V1
+# Canonical present-day surface authority; no runtime erosion simulation.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_geologic_exposure_floor
+geology_descriptor_digest=51d60e784559eaba
+surface_program_digest=0ec22ab160c97229
+authority_revision=1
+surface=present_erosion,erosion,1.5,0,0,2.5,144,71,0
+surface=flat_control,flat,3,0,0,0,1,0,0
+surface=terraced_control,terraced,1.5,0,0,2.5,144,71,2

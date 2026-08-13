@@ -1,0 +1,8 @@
+CUT_C_WORLD_CONTINUITY_VISUAL PASS
+frames=90
+stage=CERTIFIED CUT C OCCUPANCY PARITY
+image=Docs/provenance_cut_c_world_continuity.ppm
+continuity_image_written=1
+lower_frame_sky_pixels=0
+xray_enabled=0
+presentation_source=fablescript_cut_b_occupancy

@@ -1,0 +1,26 @@
+PROVENANCE_CAUSAL_FAULT_DISPLACEMENT_V1
+# Stage 11: a younger fault displaces the complete Stage-10 history.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_fault_displacement_floor
+mineralization_descriptor_digest=6542ba328db4ee9c
+authority_revision=1
+fault_event_id=fa117d15ace00011
+fault_chronology=70
+plane_x_m=0.0
+plane_y_m=0.0
+plane_z_m=0.0
+plane_nx=0.8944271909999159
+plane_ny=-0.4472135954999579
+plane_nz=0.0
+displacement_x_m=3.0
+displacement_y_m=1.5
+displacement_z_m=4.0
+domain_min_x_m=-48.0
+domain_max_x_m=48.0
+domain_min_y_m=-48.0
+domain_max_y_m=48.0
+domain_min_z_m=-40.0
+domain_max_z_m=20.0

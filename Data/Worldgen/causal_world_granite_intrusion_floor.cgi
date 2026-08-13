@@ -1,0 +1,25 @@
+PROVENANCE_CAUSAL_GRANITE_INTRUSION_V1
+# Younger 3D pluton cutting the certified folded sedimentary host.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_granite_intrusion_floor
+geology_descriptor_digest=51d60e784559eaba
+erosion_descriptor_digest=e1cf22194c12edf6
+authority_revision=1
+feature_id=71a9c48e3052b117
+intrusion_event_id=9d23c7a91b4e4011
+cooling_event_id=a4826d11c77f5022
+intrusion_chronology=40
+cooling_chronology=50
+center_x_m=6.0
+center_y_m=0.0
+center_z_m=-7.0
+radius_x_m=19.0
+radius_y_m=13.0
+radius_z_m=22.0
+irregularity=0.12
+joint_nx=0.704
+joint_ny=0.201
+joint_nz=0.681

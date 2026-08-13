@@ -5,7 +5,8 @@
 // Geo fixtures (D2 harness):
 //   RANGE   — default play/dev. Local mountain-flank transect near spawn (see kRangeOrigin*).
 //   TORTURE — prior extreme FBM cliffs/diagonals/voids for edge-case dig/D2 stress.
-// Select: --geo-fixture=range|torture  or F8 in-client. Virgin load stays HF-only (no D2).
+//   BASELINE— constant-cost flat floor for isolated worldgen streaming/performance measurement.
+// Select: --geo-fixture=range|torture|baseline or F8 in-client. Virgin load stays HF-only (no D2).
 #pragma once
 
 #include "VisualMaterial.h"
@@ -28,7 +29,8 @@ namespace ProvenanceGeo
     enum class GeoFixture : uint8_t
     {
         Range = 0,   // PROVENANCE GEOLOGY RANGE (representative)
-        Torture = 1  // D2 TORTURE TERRAIN (extreme prior path)
+        Torture = 1, // D2 TORTURE TERRAIN (extreme prior path)
+        Baseline = 2 // WORLDGEN BASELINE (flat, constant-cost traversal floor)
     };
 
     inline GeoFixture& FixtureMut()
@@ -47,6 +49,7 @@ namespace ProvenanceGeo
         {
         case GeoFixture::Range: return "range";
         case GeoFixture::Torture: return "torture";
+        case GeoFixture::Baseline: return "baseline";
         default: return "range";
         }
     }
@@ -57,6 +60,7 @@ namespace ProvenanceGeo
         {
         case GeoFixture::Range: return "PROVENANCE GEOLOGY RANGE";
         case GeoFixture::Torture: return "D2 TORTURE TERRAIN";
+        case GeoFixture::Baseline: return "WORLDGEN BASELINE FLOOR";
         default: return "PROVENANCE GEOLOGY RANGE";
         }
     }
@@ -88,6 +92,12 @@ namespace ProvenanceGeo
         if ( AsciiEqI( s, "torture" ) || AsciiEqI( s, "extreme" ) || AsciiEqI( s, "f2" ) )
         {
             SetFixture( GeoFixture::Torture );
+            return true;
+        }
+        if ( AsciiEqI( s, "baseline" ) || AsciiEqI( s, "stream-floor" )
+          || AsciiEqI( s, "worldgen-baseline" ) || AsciiEqI( s, "f0" ) )
+        {
+            SetFixture( GeoFixture::Baseline );
             return true;
         }
         return false;
@@ -584,6 +594,18 @@ namespace ProvenanceGeo
         float gradeDatum, float reliefVoxels, float voxelEdgeM )
     {
         SurfaceSample o;
+        if ( Fixture() == GeoFixture::Baseline )
+        {
+            // Deliberately constant-cost certification floor: no FBM, geology, morphology,
+            // water, or authored relief.  Keep the current HF/stream packaging around it.
+            (void)x; (void)y; (void)reliefVoxels; (void)voxelEdgeM;
+            o.province = Province::InteriorPlain;
+            o.rock = RockBody::DirtMantle;
+            o.cap = "dirt";
+            o.reliefM = 0.f;
+            o.grade = gradeDatum;
+            return o;
+        }
         o.province = ProvinceAt( x, y );
         o.rock = RockAt( x, y );
         o.cap = ( Fixture() == GeoFixture::Range )

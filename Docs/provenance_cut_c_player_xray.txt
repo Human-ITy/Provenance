@@ -1,0 +1,15 @@
+PROVENANCE_GEOLOGY_XRAY_SNAPSHOT
+image=Docs/provenance_cut_c_player_xray.ppm
+stage=CERTIFIED CUT C OCCUPANCY PARITY
+contact=-6.812500,-9.687338,-0.510159
+depth_m=1.998700
+width_m=3.048000
+terminal=-6.812500,-9.687145,-2.508859
+material=quartz
+feature_id=da10b0d1e5f01001
+formation=D01_CONTACT_QUARTZ
+deposit_visible=1
+deposit_pixels=18858
+event_count=2
+chronology_count=2
+presentation_only=1
