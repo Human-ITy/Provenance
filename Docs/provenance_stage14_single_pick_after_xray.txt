@@ -1,0 +1,15 @@
+PROVENANCE_GEOLOGY_XRAY_SNAPSHOT
+image=Docs/provenance_stage14_single_pick_after_xray.ppm
+stage=CERTIFIED SINGLE CAUSAL PICK STRIKE
+contact=7.500000,-14.250000,-1.983589
+depth_m=1.000000
+width_m=3.048000
+terminal=7.500000,-14.250000,-2.983589
+material=quartz
+feature_id=da10b0d1e5f01001
+formation=D01_CONTACT_QUARTZ
+deposit_visible=1
+deposit_pixels=11066
+event_count=3
+chronology_count=3
+presentation_only=1

@@ -1,0 +1,14 @@
+STAGE14_SINGLE_PICK_VISUAL PASS
+frames=90
+stage=CERTIFIED SINGLE CAUSAL PICK STRIKE
+before_image=Docs/provenance_stage13_exact_local_materialization_xray.ppm
+after_image=Docs/provenance_stage14_single_pick_after_xray.ppm
+strike_accepted=1
+removed_voxels=5
+body_voxels=4
+structural_loss_ug=10737208946
+detached_body_ug=10209482230
+aggregate_ug=527726716
+conserved=1
+buried_quartz_continues=1
+xray_deposit_visible=1
