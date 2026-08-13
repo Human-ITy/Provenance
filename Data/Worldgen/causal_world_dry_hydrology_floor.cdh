@@ -1,0 +1,17 @@
+PROVENANCE_CAUSAL_DRY_HYDROLOGY_V1
+# Stage 16A: deterministic dry drainage authority derived from Stage 15.
+# This descriptor admits no water occupancy, fluid solve, erosion, sediment,
+# terrain displacement, material paint, or P5b coupling.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_dry_hydrology_floor
+parent_region_key=causal_world_bare_earth_geography_floor
+parent_authority_revision=1
+authority_revision=1
+hydrology_event_id=16d2a00000000001
+chronology=100
+grid_step_m=16.0
+channel_threshold_km2=0.075
+depression_epsilon_m=0.000001

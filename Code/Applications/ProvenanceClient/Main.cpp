@@ -30,6 +30,7 @@
 #include "CausalExactLocalMaterialization.h"
 #include "CausalSinglePickProof.h"
 #include "CausalBareEarthGeography.h"
+#include "CausalDryHydrology.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -334,7 +335,8 @@ namespace
         SurfaceBreachContinuity = 12,
         ExactLocalMaterialization = 13,
         SinglePickProof = 14,
-        BareEarthGeography = 15
+        BareEarthGeography = 15,
+        DryHydrology = 16
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -650,6 +652,7 @@ namespace
         bool playStage13Launch = false;
         bool playStage14Launch = false;
         bool playStage15Launch = false;
+        bool playStage16Launch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -658,6 +661,8 @@ namespace
         int certStage14VisualFrames = 0;
         bool certStage15Visual = false;
         int certStage15VisualFrames = 0;
+        bool certStage16Visual = false;
+        int certStage16VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -816,6 +821,8 @@ namespace
         bool exactLocalCertified = false;
         bool bareEarthAuthorityAttempted = false;
         bool bareEarthCertified = false;
+        bool dryHydrologyAuthorityAttempted = false;
+        bool dryHydrologyCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
         bool cutCOccupancyCertified = false;
         std::string causalGeologyAuthorityReason = "not_loaded";
@@ -828,6 +835,7 @@ namespace
         std::string causalBreachAuthorityReason = "not_loaded";
         std::string exactLocalAuthorityReason = "not_loaded";
         std::string bareEarthAuthorityReason = "not_loaded";
+        std::string dryHydrologyAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -840,6 +848,7 @@ namespace
         std::unique_ptr<CausalExactLocalMaterialization::Fixture> exactLocalRuntime;
         std::unique_ptr<CausalSinglePickProof::Mutation> singlePickRuntime;
         std::unique_ptr<CausalBareEarthGeography::Kernel> bareEarthRuntime;
+        std::unique_ptr<CausalDryHydrology::Kernel> dryHydrologyRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2522,6 +2531,16 @@ namespace
         return view == Stage0PlayView::BareEarthGeography;
     }
 
+    bool IsDryHydrologyView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::DryHydrology;
+    }
+
+    bool UsesBareEarthTerrain( Stage0PlayView view )
+    {
+        return IsBareEarthGeographyView(view)||IsDryHydrologyView(view);
+    }
+
     bool UsesExactLocalMaterialization( Stage0PlayView view )
     {
         return IsExactLocalMaterializationView(view)||IsSinglePickProofView(view);
@@ -2532,7 +2551,7 @@ namespace
         // These views render and collide against their certified 8 m package
         // stream. The older one-metre cell map is only a bounded local
         // diagnostic/tool cache and must not duplicate live terrain residency.
-        return UsesExactLocalMaterialization(view)||IsBareEarthGeographyView(view);
+        return UsesExactLocalMaterialization(view)||UsesBareEarthTerrain(view);
     }
 
     bool IsCausalPlayableView( Stage0PlayView view )
@@ -2542,7 +2561,7 @@ namespace
             || IsGraniteIntrusionView( view ) || IsContactMineralizationView( view )
             || IsCutCOccupancyView( view ) || IsFaultDisplacementView( view )
             || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization( view )
-            || IsBareEarthGeographyView( view );
+            || UsesBareEarthTerrain( view );
     }
 
     char const* PresentationIsolationModeName( int mode )
@@ -2591,6 +2610,31 @@ namespace
             "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc";
         constexpr char const* kGeographyPath =
             "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg";
+        constexpr char const* kHydrologyPath =
+            "Data\\Worldgen\\causal_world_dry_hydrology_floor.cdh";
+
+        if(IsDryHydrologyView(view))
+        {
+            if(!g.dryHydrologyAuthorityAttempted)
+            {
+                g.dryHydrologyAuthorityAttempted=true;
+                auto const cert=CausalDryHydrology::RunCert(kGeologyPath,kExposurePath,
+                    kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,kBreachPath,
+                    kGeographyPath,kHydrologyPath);
+                g.dryHydrologyCertified=cert.passed;
+                g.dryHydrologyAuthorityReason=cert.passed?"certified":cert.reason;
+                if(cert.passed)
+                {
+                    std::string reason;g.dryHydrologyRuntime=CausalDryHydrology::LoadKernel(
+                        kGeologyPath,kExposurePath,kErosionPath,kIntrusionPath,
+                        kMineralizationPath,kFaultPath,kBreachPath,kGeographyPath,
+                        kHydrologyPath,&reason);
+                    if(!g.dryHydrologyRuntime)
+                    {g.dryHydrologyCertified=false;g.dryHydrologyAuthorityReason=reason;}
+                }
+            }
+            return g.dryHydrologyCertified&&g.dryHydrologyRuntime!=nullptr;
+        }
 
         if(IsBareEarthGeographyView(view))
         {
@@ -3023,6 +3067,14 @@ namespace
         return kernel.get();
     }
 
+    CausalBareEarthGeography::Kernel const* ActiveBareEarthKernel(Stage0PlayView view)
+    {
+        if(IsDryHydrologyView(view)&&g.dryHydrologyRuntime)
+            return &g.dryHydrologyRuntime->Geography();
+        if(IsBareEarthGeographyView(view))return g.bareEarthRuntime.get();
+        return nullptr;
+    }
+
     bool SampleResidentCausalPackageSurface(double x,double y,float& outZ)
     {
         double const shiftedX=x+0.5*CausalVisibleExposure::kDualStepM;
@@ -3042,21 +3094,21 @@ namespace
     bool SampleCausalPlayableCell( Stage0PlayView view, double x, double y,
         float& outZ, std::string& outCap )
     {
-        if ( IsBareEarthGeographyView( view ) )
+        if ( UsesBareEarthTerrain( view ) )
         {
-            if(!g.bareEarthRuntime)return false;
+            auto const* geography=ActiveBareEarthKernel(view);if(!geography)return false;
             if(SampleResidentCausalPackageSurface(x,y,outZ))
             {
                 // Material identity is the compiled surface authority, not a
                 // float-round-tripped query just below the reconstructed mesh.
                 // Near a formation contact the latter could choose a different
                 // side depending on whether the package was already resident.
-                auto const geology=g.bareEarthRuntime->SurfaceGeology(x,y);
+                auto const geology=geography->SurfaceGeology(x,y);
                 if(!geology.found)return false;
                 outCap=geology.material;return true;
             }
-            outZ=(float)g.bareEarthRuntime->ReconstructedZ(x,y);
-            auto const geology=g.bareEarthRuntime->SurfaceGeology(x,y);
+            outZ=(float)geography->ReconstructedZ(x,y);
+            auto const geology=geography->SurfaceGeology(x,y);
             if(!geology.found)return false;
             outCap=geology.material;return true;
         }
@@ -3215,8 +3267,8 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
-        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
-        {return g.bareEarthRuntime->Query(x,y,z);}
+        if(UsesBareEarthTerrain(view))
+        {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->Query(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
           &&g.exactLocalRuntime->Owns(x,y))return g.singlePickRuntime->Query(*g.exactLocalRuntime,x,y,z);
         if(UsesExactLocalMaterialization(view)&&g.exactLocalRuntime
@@ -3250,8 +3302,8 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
-        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
-        {return g.bareEarthRuntime->QueryMaterial(x,y,z);}
+        if(UsesBareEarthTerrain(view))
+        {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->QueryMaterial(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
           &&g.exactLocalRuntime->Owns(x,y))
             return g.singlePickRuntime->QueryMaterial(*g.exactLocalRuntime,x,y,z);
@@ -3459,7 +3511,7 @@ namespace
             || IsFaultDisplacementView( g.stage0PlayView )
             || IsSurfaceBreachView( g.stage0PlayView )
             || UsesExactLocalMaterialization( g.stage0PlayView )
-            || IsBareEarthGeographyView( g.stage0PlayView )
+            || UsesBareEarthTerrain( g.stage0PlayView )
             || IsCutCOccupancyView( g.stage0PlayView );
         float const dualOffset = dualSurface ? -0.25f : 0.f;
         b.minX = b.bx0 * kStage0TerrainBlockCells + dualOffset;
@@ -9955,11 +10007,11 @@ namespace
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
-          && IsBareEarthGeographyView( g.stage0PlayView )
-          && g.bareEarthRuntime )
+          && UsesBareEarthTerrain( g.stage0PlayView )
+          && ActiveBareEarthKernel(g.stage0PlayView) )
         {
             if(sampleResidentCausalPackage(outZ))return true;
-            outZ=(float)g.bareEarthRuntime->ReconstructedZ(x,y);
+            outZ=(float)ActiveBareEarthKernel(g.stage0PlayView)->ReconstructedZ(x,y);
             return std::isfinite(outZ);
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
@@ -11953,7 +12005,7 @@ namespace
             collisionEnd{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
         CausalBareEarthGeography::Kernel* const workerGeography=
-            IsBareEarthGeographyView(job.view)?ThreadBareEarthKernel():nullptr;
+            UsesBareEarthTerrain(job.view)?ThreadBareEarthKernel():nullptr;
 
         if(out.integratedCutC)
         {
@@ -11968,7 +12020,7 @@ namespace
         }
         else if(IsSurfaceBreachView(job.view)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(job.bx,job.by);}
-        else if(IsBareEarthGeographyView(job.view)&&workerGeography)
+        else if(UsesBareEarthTerrain(job.view)&&workerGeography)
         {surfaceSamples=workerGeography->SampleBlock(job.bx,job.by);}
         else if(IsFaultDisplacementView(job.view)&&g.causalFaultRuntime)
         {surfaceSamples=g.causalFaultRuntime->SampleBlock(job.bx,job.by);}
@@ -12310,7 +12362,8 @@ namespace
         if ( !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
-          && !g.exactLocalRuntime && !g.bareEarthRuntime ) { return; }
+          && !g.exactLocalRuntime && !g.bareEarthRuntime
+          && !g.dryHydrologyRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -12348,7 +12401,7 @@ namespace
         }
         else if(IsSurfaceBreachView(g.stage0PlayView)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(bx,by);}
-        else if(IsBareEarthGeographyView(g.stage0PlayView)&&g.bareEarthRuntime)
+        else if(UsesBareEarthTerrain(g.stage0PlayView)&&ActiveBareEarthKernel(g.stage0PlayView))
         {surfaceSamples=g.bareEarthRuntime->SampleBlock(bx,by);}
         else if(IsFaultDisplacementView(g.stage0PlayView)&&g.causalFaultRuntime)
         {surfaceSamples=g.causalFaultRuntime->SampleBlock(bx,by);}
@@ -12557,7 +12610,8 @@ namespace
         if ( !stage56 && !stage7 && !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
-          && !g.exactLocalRuntime && !g.bareEarthRuntime ) { return; }
+          && !g.exactLocalRuntime && !g.bareEarthRuntime
+          && !g.dryHydrologyRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -12720,6 +12774,7 @@ namespace
         if ( IsVisibleExposureView( view ) ) { return 3; }
         if ( IsDifferentialErosionView( view ) ) { return 4; }
         if ( IsBareEarthGeographyView( view ) ) { return 12; }
+        if ( IsDryHydrologyView( view ) ) { return 13; }
         if ( IsGraniteIntrusionView( view ) ) { return 5; }
         if ( IsContactMineralizationView( view ) ) { return 6; }
         if ( IsCutCOccupancyView( view ) ) { return 7; }
@@ -12777,6 +12832,8 @@ namespace
           "MAT.EXACT_LOCAL_MATERIALIZATION", "one reconciled pick mutation preserves matter and provenance", Stage0PlayView::SinglePickProof },
         { "GEOLOGY / GEOMORPHOLOGY", "GEOGRAPHY.BARE_EARTH_FLOOR", "Stage 15 - Bare-Earth Causal Geography",
           "MAT.HORIZON_TO_HAND_PICK_PROOF", "regional uplift and compiled erosion produce legible bare landforms", Stage0PlayView::BareEarthGeography },
+        { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.DRY_DRAINAGE_AUTHORITY", "Stage 16A - Dry Watershed Authority",
+          "GEOGRAPHY.BARE_EARTH_FLOOR", "deterministic flow, watersheds, channels, basins, spills, and outlets without water", Stage0PlayView::DryHydrology },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
@@ -12870,6 +12927,8 @@ namespace
         { attempted = g.exactLocalAuthorityAttempted; certified = g.exactLocalCertified; }
         else if ( IsBareEarthGeographyView( entry.view ) )
         { attempted = g.bareEarthAuthorityAttempted; certified = g.bareEarthCertified; }
+        else if ( IsDryHydrologyView( entry.view ) )
+        { attempted = g.dryHydrologyAuthorityAttempted; certified = g.dryHydrologyCertified; }
         else if ( IsCutCOccupancyView( entry.view ) )
         { attempted = g.cutCOccupancyAuthorityAttempted; certified = g.cutCOccupancyCertified; }
         return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
@@ -13063,6 +13122,7 @@ namespace
             if ( IsSurfaceBreachView( view ) ) { reason = &g.causalBreachAuthorityReason; }
             if ( UsesExactLocalMaterialization( view ) ) { reason = &g.exactLocalAuthorityReason; }
             if ( IsBareEarthGeographyView( view ) ) { reason = &g.bareEarthAuthorityReason; }
+            if ( IsDryHydrologyView( view ) ) { reason = &g.dryHydrologyAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
         }
@@ -13124,6 +13184,13 @@ namespace
         else if ( IsBareEarthGeographyView( view ) && g.bareEarthRuntime )
         {
             auto const& authority=g.bareEarthRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsDryHydrologyView( view ) && g.dryHydrologyRuntime )
+        {
+            auto const& authority=g.dryHydrologyRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -13207,6 +13274,17 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
         }
+        if(g.playWorldgenInitialized&&IsDryHydrologyView(view)&&oldView!=view)
+        {
+            // Same frozen Stage-15 terrain and player start; only the dry
+            // drainage diagnostic presentation is added.
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="STAGE 16A - dry watershed authority; no water is active";
+        }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
             // Player-scale certified outcrop and readable oblique flashlight
@@ -13252,6 +13330,7 @@ namespace
             case Stage0PlayView::ExactLocalMaterialization: return "CERTIFIED EXACT LOCAL MATERIALIZATION";
             case Stage0PlayView::SinglePickProof: return "CERTIFIED SINGLE CAUSAL PICK STRIKE";
             case Stage0PlayView::BareEarthGeography: return "CERTIFIED BARE-EARTH CAUSAL GEOGRAPHY";
+            case Stage0PlayView::DryHydrology: return "CERTIFIED DRY WATERSHED AUTHORITY";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -14053,7 +14132,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
-          || IsBareEarthGeographyView( g.stage0PlayView )
+          || UsesBareEarthTerrain( g.stage0PlayView )
           || IsCutCOccupancyView( g.stage0PlayView ) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
@@ -14068,7 +14147,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
-          || IsBareEarthGeographyView( g.stage0PlayView )
+          || UsesBareEarthTerrain( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)std::floor( x / blockSize );
@@ -14085,7 +14164,7 @@ namespace
           || IsFaultDisplacementView( g.stage0PlayView )
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
-          || IsBareEarthGeographyView( g.stage0PlayView )
+          || UsesBareEarthTerrain( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)(int32_t)( key >> 32 );
@@ -14210,7 +14289,7 @@ namespace
                 || IsFaultDisplacementView( g.stage0PlayView )
                 || IsSurfaceBreachView( g.stage0PlayView )
                 || UsesExactLocalMaterialization( g.stage0PlayView )
-                || IsBareEarthGeographyView( g.stage0PlayView )
+                || UsesBareEarthTerrain( g.stage0PlayView )
                 || IsCutCOccupancyView( g.stage0PlayView );
             float const latticeOrigin = dualLattice ? 0.25f : 0.f;
             int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
@@ -18410,6 +18489,57 @@ namespace
         glEnd();glEnable(GL_CULL_FACE);
     }
 
+    void DrawStage16DryHydrologyDiagnostics()
+    {
+        if(!IsDryHydrologyView(g.stage0PlayView)||!g.dryHydrologyRuntime)return;
+        auto const& kernel=*g.dryHydrologyRuntime;double const step=kernel.StepM();
+        int const radiusCells=(int)std::ceil(96.0/step);
+        int const cx=(int)std::floor((g.feetX-kernel.MinX())/step);
+        int const cy=(int)std::floor((g.feetY-kernel.MinY())/step);
+        GLboolean const lightingWasEnabled=glIsEnabled(GL_LIGHTING);
+        GLboolean const textureWasEnabled=glIsEnabled(GL_TEXTURE_2D);
+        glDisable(GL_LIGHTING);glDisable(GL_TEXTURE_2D);glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        for(int oy=-radiusCells;oy<=radiusCells;++oy)
+        for(int ox=-radiusCells;ox<=radiusCells;++ox)
+        {
+            double const qx=kernel.MinX()+(cx+ox+.5)*step;
+            double const qy=kernel.MinY()+(cy+oy+.5)*step;
+            auto const q=kernel.QueryAt(qx,qy);if(!q.found||q.cell.receiver<0)continue;
+            auto const& r=kernel.Cells()[(size_t)q.cell.receiver];
+            if(q.cell.channel)
+            {
+                float const order=(float)q.cell.channelOrder;
+                glColor3f(1.0f,.72f-(std::min)(order,4.f)*.08f,.05f);
+            }
+            else glColor3f(.78f,.76f,.62f);
+            float const z=(float)q.cell.surfaceZ+.18f;
+            float const rz=(float)r.surfaceZ+.18f;
+            glVertex3f((float)q.cell.x,(float)q.cell.y,z);
+            glVertex3f((float)(q.cell.x+.72*(r.x-q.cell.x)),
+                (float)(q.cell.y+.72*(r.y-q.cell.y)),(float)(z+.72*(rz-z)));
+            // Two short arrow wings make direction readable without rendering
+            // a river ribbon or implying present water.
+            double const ax=q.cell.x+.72*(r.x-q.cell.x),ay=q.cell.y+.72*(r.y-q.cell.y);
+            double const px=-q.flowDy*2.0,py=q.flowDx*2.0;
+            glVertex3f((float)ax,(float)ay,(float)(z+.72*(rz-z)));
+            glVertex3f((float)(ax-2.5*q.flowDx+px),(float)(ay-2.5*q.flowDy+py),(float)(z+.72*(rz-z)));
+            glVertex3f((float)ax,(float)ay,(float)(z+.72*(rz-z)));
+            glVertex3f((float)(ax-2.5*q.flowDx-px),(float)(ay-2.5*q.flowDy-py),(float)(z+.72*(rz-z)));
+            if(q.cell.spill)
+            {
+                glColor3f(1.0f,.15f,.65f);
+                glVertex3f((float)q.cell.x-3.f,(float)q.cell.y,z+.12f);
+                glVertex3f((float)q.cell.x+3.f,(float)q.cell.y,z+.12f);
+                glVertex3f((float)q.cell.x,(float)q.cell.y-3.f,z+.12f);
+                glVertex3f((float)q.cell.x,(float)q.cell.y+3.f,z+.12f);
+            }
+        }
+        glEnd();glLineWidth(1.0f);
+        if(lightingWasEnabled)glEnable(GL_LIGHTING);else glDisable(GL_LIGHTING);
+        if(textureWasEnabled)glEnable(GL_TEXTURE_2D);else glDisable(GL_TEXTURE_2D);
+    }
+
     void DrawHeightfield()
     {
         if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
@@ -18434,7 +18564,7 @@ namespace
               || IsFaultDisplacementView( g.stage0PlayView )
               || IsSurfaceBreachView( g.stage0PlayView )
               || UsesExactLocalMaterialization( g.stage0PlayView )
-              || IsBareEarthGeographyView( g.stage0PlayView )
+              || UsesBareEarthTerrain( g.stage0PlayView )
               || IsCutCOccupancyView( g.stage0PlayView ) ) )
             { DrawStage8TerrainBlocks(); }
             else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
@@ -18447,6 +18577,7 @@ namespace
             { DrawStage8TerrainBlocks(); }
             else
             { DrawStage0TerrainBlocks(); }
+            DrawStage16DryHydrologyDiagnostics();
             if ( cutaway )
             {
                 glDisable( GL_STENCIL_TEST );
@@ -19908,6 +20039,22 @@ namespace
             if(std::abs(r-114)<=2&&std::abs(green-158)<=2&&std::abs(b-224)<=2)++sky;
         }
         return sky;
+    }
+
+    int CountLowerPpmDarkPixels(char const* path,int* sampled=nullptr)
+    {
+        if(sampled)*sampled=0;FILE* f=nullptr;if(fopen_s(&f,path,"rb")!=0||!f)return INT_MAX;
+        char magic[3]={};int w=0,h=0,maxv=0;
+        if(std::fscanf(f,"%2s %d %d %d",magic,&w,&h,&maxv)!=4
+          ||std::strcmp(magic,"P6")!=0||w<=0||h<=0||maxv!=255)
+        {std::fclose(f);return INT_MAX;}
+        (void)std::fgetc(f);std::vector<unsigned char> rgb((size_t)w*(size_t)h*3u);
+        bool const read=std::fread(rgb.data(),1,rgb.size(),f)==rgb.size();std::fclose(f);
+        if(!read)return INT_MAX;int dark=0,total=0;
+        for(int y=h*55/100;y<h;++y)for(int x=0;x<w;++x)
+        {size_t const i=((size_t)y*(size_t)w+(size_t)x)*3u;++total;
+            if(rgb[i]<8&&rgb[i+1]<8&&rgb[i+2]<8)++dark;}
+        if(sampled)*sampled=total;return dark;
     }
 
     bool CaptureStage0GeologyXraySnapshot()
@@ -29986,11 +30133,11 @@ namespace
         g.playWorldgenInitialized = true;
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
           &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
-          &&!g.playStage15Launch&&!g.playCutCLaunch)
+          &&!g.playStage15Launch&&!g.playStage16Launch&&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::BareEarthGeography);
+            SelectStage0PlayView(Stage0PlayView::DryHydrology);
         }
         if ( g.playStage11Launch )
         {
@@ -30076,6 +30223,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playStage16Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::DryHydrology);
+            if(g.certStage16Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if ( g.playCutCLaunch )
         {
             g.stage0StageMenuOpen = false;
@@ -30094,7 +30256,7 @@ namespace
             }
         }
         g.statusLine = g.playWorldgenLatestStableLaunch
-            ? "STAGE 15 - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
+            ? "STAGE 16A - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
             : ( g.playStage11Launch ? "STAGE 11 - FAULT DISPLACEMENT  [M] stages"
             : ( g.playCutCLaunch ? "CUT C — FABLESCRIPT OCCUPANCY PARITY"
             : "WORLDGEN PLAYTEST — STAGE 0  [R] residency overlay" ) );
@@ -30106,32 +30268,35 @@ namespace
         {g.statusLine="STAGE 14 - SINGLE CAUSAL PICK STRIKE  [M] stages";}
         if(g.playStage15Launch)
         {g.statusLine="STAGE 15 - BARE-EARTH CAUSAL GEOGRAPHY  [M] stages";}
+        if(g.playStage16Launch)
+        {g.statusLine="STAGE 16A - DRY WATERSHED AUTHORITY  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
             bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
-            bool const latest=g.stage0PlayView==Stage0PlayView::SinglePickProof;
+            bool const latest=g.stage0PlayView==Stage0PlayView::DryHydrology;
             bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
             bool const selection=g.stage0BrowserSelection==
-                BrowserIndexForView(Stage0PlayView::SinglePickProof)
+                BrowserIndexForView(Stage0PlayView::DryHydrology)
                 &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
                     g.stage0BrowserSelection);
             int const savedSelection=g.stage0BrowserSelection;
             int const savedCategory=g.stage0BrowserCategory;
-            MoveCertificationBrowserCategory(1);
-            bool navigation=g.stage0BrowserCategory==0&&g.stage0BrowserSelection==0;
-            MoveCertificationBrowserCategory(1);
-            navigation=navigation&&g.stage0BrowserCategory==1&&g.stage0BrowserSelection==2;
-            MoveCertificationBrowserStage(1);
-            navigation=navigation&&g.stage0BrowserSelection==3;
-            MoveCertificationBrowserCategory(1);
-            navigation=navigation&&g.stage0BrowserCategory==2&&g.stage0BrowserSelection==10;
-            MoveCertificationBrowserStage(1);
-            navigation=navigation&&g.stage0BrowserSelection==11;
+            bool navigation=true;
+            for(int category=0;category<kCertificationBrowserCategoryCount;++category)
+            {
+                std::vector<int> const entries=CertificationBrowserEntriesInCategory(category);
+                navigation=navigation&&!entries.empty();
+                if(entries.empty())continue;
+                g.stage0BrowserCategory=category;g.stage0BrowserSelection=entries.front();
+                MoveCertificationBrowserStage(1);
+                navigation=navigation&&g.stage0BrowserCategory==category
+                    &&g.stage0BrowserSelection==entries[(entries.size()>1)?1:0];
+            }
             g.stage0BrowserSelection=savedSelection;
             g.stage0BrowserCategory=savedCategory;
             bool stageSelection=true;
-            for(int index=2;index<=11;++index)
+            for(int index=2;index<=13;++index)
             {
                 stageSelection=SelectCertificationBrowserEntry(index)&&stageSelection;
                 stageSelection=std::strcmp(CertificationRuntimeStatus(
@@ -30141,9 +30306,11 @@ namespace
                 &&g.causalExposureCertified&&g.causalVisibleCertified
                 &&g.causalErosionCertified&&g.causalIntrusionCertified
                 &&g.causalMineralizationCertified&&g.causalFaultCertified
-                &&g.causalBreachCertified&&g.exactLocalRuntime&&g.singlePickRuntime;
+                &&g.causalBreachCertified&&g.exactLocalRuntime&&g.singlePickRuntime
+                &&g.bareEarthCertified&&g.bareEarthRuntime
+                &&g.dryHydrologyCertified&&g.dryHydrologyRuntime;
             bool const restored=SelectCertificationBrowserEntry(savedSelection)
-                &&g.stage0PlayView==Stage0PlayView::SinglePickProof;
+                &&g.stage0PlayView==Stage0PlayView::DryHydrology;
             bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
             bool const passed=opened&&latest&&closed&&selection&&navigation&&worldSize
                 &&stageSelection&&stageAuthorities&&restored;
@@ -30151,12 +30318,12 @@ namespace
             {
                 std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
                     "menu_open=%d\ntool_drawer_open=%d\n"
-                    "runtime=%s\nlatest_certified_stage=14\n"
+                    "runtime=%s\nlatest_certified_stage=16A\n"
                     "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
                     "browser_selection=%d\nbrowser_category=%s\n"
                     "category_stage_navigation=%s\n"
-                    "stage_5_14_selection=%s\n"
-                    "stage_5_14_authorities=%s\n"
+                    "stage_5_16_selection=%s\n"
+                    "stage_5_16_authorities=%s\n"
                     "fault_authority_certified=%d\n"
                     "breach_authority_certified=%d\n",
                     passed?"PASS":"FAIL",g.stage0StageMenuOpen?1:0,
@@ -30394,6 +30561,8 @@ namespace
         { row( "fixture=exact_local_materialization  authority=STAGE12  voxel=0.125m  bounded=8m" ); }
         else if ( IsSinglePickProofView( g.stage0PlayView ) )
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
+        else if(IsDryHydrologyView(g.stage0PlayView))
+        {row("fixture=dry_hydrology  authority=CERTIFIED  terrain=STAGE15  water=OFF");}
         else if(IsBareEarthGeographyView(g.stage0PlayView))
         {row("fixture=bare_earth_geography  authority=CERTIFIED  region=4096m  beauty_layers=OFF");}
         else if ( IsCutCOccupancyView( g.stage0PlayView ) )
@@ -30405,7 +30574,25 @@ namespace
         std::snprintf( line, sizeof( line ), "stage=%s  calibration_draw=%.3fms",
             Stage0PlayViewName( g.stage0PlayView ), g.stage0FrameCalibrationDrawMs );
         row( line, 0.70f, 0.90f, 1.0f );
-        if ( IsCausalGeologyView( g.stage0PlayView ) && g.causalGeologyRuntime )
+        if(IsDryHydrologyView(g.stage0PlayView)&&g.dryHydrologyRuntime)
+        {
+            auto const q=g.dryHydrologyRuntime->QueryAt(g.feetX,g.feetY);
+            if(q.found)
+            {
+                std::snprintf(line,sizeof(line),"watershed=%s  basin=%s  spill=%s",
+                    CausalWorldGeology::Hex64(q.cell.watershedId).c_str(),
+                    q.cell.basinId?CausalWorldGeology::Hex64(q.cell.basinId).c_str():"none",
+                    q.cell.spill?"HERE":(q.cell.basinId?"explicit":"none"));
+                row(line,.95f,.82f,.30f);
+                std::snprintf(line,sizeof(line),"flow=(%.3f,%.3f)  slope=%.6f  upstream=%.4fkm2  order=%u",
+                    q.flowDx,q.flowDy,q.cell.slope,q.cell.accumulationM2/1e6,
+                    (unsigned)q.cell.channelOrder);row(line,.82f,.92f,.72f);
+                std::snprintf(line,sizeof(line),"head=%.3fm  surface=%.3fm  spill_z=%.3fm  sediment=CLOSED",
+                    q.cell.headZ,q.cell.surfaceZ,q.cell.spillElevationM);
+                row(line,.82f,.92f,.72f);
+            }
+        }
+        else if ( IsCausalGeologyView( g.stage0PlayView ) && g.causalGeologyRuntime )
         {
             CausalWorldGeology::GeoSample const sample =
                 g.causalGeologyRuntime->Query( g.feetX, g.feetY, -0.001 );
@@ -32597,6 +32784,10 @@ namespace
         { "14_to_15", Stage0PlayView::SinglePickProof, Stage0PlayView::BareEarthGeography },
         { "15_to_14", Stage0PlayView::BareEarthGeography, Stage0PlayView::SinglePickProof },
         { "15_to_15", Stage0PlayView::BareEarthGeography, Stage0PlayView::BareEarthGeography },
+        { "cold_clean_to_16", Stage0PlayView::Clean, Stage0PlayView::DryHydrology },
+        { "15_to_16", Stage0PlayView::BareEarthGeography, Stage0PlayView::DryHydrology },
+        { "16_to_15", Stage0PlayView::DryHydrology, Stage0PlayView::BareEarthGeography },
+        { "16_to_16", Stage0PlayView::DryHydrology, Stage0PlayView::DryHydrology },
     };
 
     struct RuntimeIndependenceReceipt
@@ -32669,9 +32860,10 @@ namespace
         Stage0PlayView::ExactLocalMaterialization,
         Stage0PlayView::SinglePickProof,
         Stage0PlayView::BareEarthGeography,
+        Stage0PlayView::DryHydrology,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -33316,7 +33508,7 @@ namespace
           || IsFaultDisplacementView( test.target )
           || IsSurfaceBreachView( test.target )
           || UsesExactLocalMaterialization( test.target )
-          || IsBareEarthGeographyView( test.target ) )
+          || UsesBareEarthTerrain( test.target ) )
         {
             receipt.packages = (int)g.stage8TerrainBlocks.size();
             receipt.triangles = g.stage8TerrainTriangles;
@@ -33499,7 +33691,7 @@ namespace
         if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
           || IsContactMineralizationView( view ) || IsFaultDisplacementView( view )
           || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization(view)
-          || IsBareEarthGeographyView(view) )
+          || UsesBareEarthTerrain(view) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
     }
@@ -33746,8 +33938,8 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
-        if(IsBareEarthGeographyView(view)&&g.bareEarthRuntime)
-        {return g.bareEarthRuntime->SurfaceGeology(x,y);}
+        if(UsesBareEarthTerrain(view))
+        {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->SurfaceGeology(x,y);}
         if(UsesExactLocalMaterialization(view)&&g.exactLocalRuntime&&g.causalBreachRuntime)
         {return g.exactLocalRuntime->Owns(x,y)?g.exactLocalRuntime->SurfaceSample(x,y)
             :g.causalBreachRuntime->SurfaceGeology(x,y);}
@@ -33972,13 +34164,15 @@ namespace
         bool residencyDigestExact = passed;
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
-        char const* certPath=g.certWorldgenCardinalStageFilter==11
+        char const* certPath=g.certWorldgenCardinalStageFilter==12
+            ?"Docs\\provenance_stage16_cardinal_replacement_cert.txt"
+            :(g.certWorldgenCardinalStageFilter==11
             ?"Docs\\provenance_stage15_cardinal_replacement_cert.txt"
             :(g.certWorldgenCardinalStageFilter==10
             ?"Docs\\provenance_stage14_cardinal_replacement_cert.txt"
             :(g.certWorldgenCardinalStageFilter==9
             ?"Docs\\provenance_stage13_cardinal_replacement_cert.txt"
-            :"Docs\\provenance_worldgen_cardinal_replacement_cert.txt"));
+            :"Docs\\provenance_worldgen_cardinal_replacement_cert.txt")));
         if ( fopen_s( &file, certPath, "wb" ) != 0
           || !file ) { return false; }
         // The permitted residency envelope follows the residency law at the
@@ -34097,13 +34291,15 @@ namespace
         if ( !g.certWorldgenCardinalReplacement || !g.playWorldgenInitialized ) { return; }
         if ( !s_cardinalTrace )
         {
-            char const* tracePath=g.certWorldgenCardinalStageFilter==11
+            char const* tracePath=g.certWorldgenCardinalStageFilter==12
+                ?"Docs\\provenance_stage16_cardinal_replacement_trace.csv"
+                :(g.certWorldgenCardinalStageFilter==11
                 ?"Docs\\provenance_stage15_cardinal_replacement_trace.csv"
                 :(g.certWorldgenCardinalStageFilter==10
                 ?"Docs\\provenance_stage14_cardinal_replacement_trace.csv"
                 :(g.certWorldgenCardinalStageFilter==9
                 ?"Docs\\provenance_stage13_cardinal_replacement_trace.csv"
-                :"Docs\\provenance_worldgen_cardinal_replacement_trace.csv"));
+                :"Docs\\provenance_worldgen_cardinal_replacement_trace.csv")));
             fopen_s( &s_cardinalTrace, tracePath, "wb" );
             if ( s_cardinalTrace )
             { std::fprintf( s_cardinalTrace,
@@ -36471,6 +36667,61 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certStage16Visual)
+        {
+            static int visualProbeFrames=0;++visualProbeFrames;
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::DryHydrology);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::DryHydrology);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(settled)++g.certStage16VisualFrames;
+            if(g.certStage16VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_stage16_dry_hydrology_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.dryHydrologyRuntime
+                    ?g.dryHydrologyRuntime->QueryAt(g.feetX,g.feetY):CausalDryHydrology::Query{};
+                bool nearbyChannel=false,nearbySpill=false;
+                if(g.dryHydrologyRuntime)
+                {
+                    double const step=g.dryHydrologyRuntime->StepM();
+                    for(int y=-6;y<=6;++y)for(int x=-6;x<=6;++x)
+                    {auto const n=g.dryHydrologyRuntime->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyChannel=nearbyChannel||(n.found&&n.cell.channel);
+                        nearbySpill=nearbySpill||(n.found&&n.cell.spill);}
+                }
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_stage16_dry_hydrology_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&nearbyChannel
+                    &&g.dryHydrologyCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE16_DRY_HYDROLOGY_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_stage16_dry_hydrology_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "watershed=%s\nlocal_upstream_km2=%.6f\nlocal_channel_order=%u\n"
+                        "nearby_channel=%d\nnearby_spill=%d\n"
+                        "terrain_source=STAGE15_UNCHANGED\nflow_arrows=1\nwatershed_debug=1\n"
+                        "water_occupancy=0\nwater_rendering=0\nfluid_solve=0\n"
+                        "active_erosion=0\nsediment_transport=0\np5b=closed\n",
+                        passed?"PASS":"FAIL",g.certStage16VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,
+                        CausalWorldGeology::Hex64(q.cell.watershedId).c_str(),
+                        q.cell.accumulationM2/1e6,(unsigned)q.cell.channelOrder,
+                        nearbyChannel?1:0,nearbySpill?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -37806,6 +38057,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runExactLocalMaterializationCert = false;
         bool runSinglePickProofCert = false;
         bool runBareEarthGeographyCert = false;
+        bool runDryHydrologyCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -37816,6 +38068,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         char faultPath[MAX_PATH] = "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd";
         char breachPath[MAX_PATH] = "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc";
         char geographyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg";
+        char hydrologyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_dry_hydrology_floor.cdh";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -37886,6 +38139,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 else if(_wcsicmp(certArgv[i],L"--cert-stage15-bare-earth-geography")==0
                   ||_wcsicmp(certArgv[i],L"--cert-causal-bare-earth-geography")==0)
                 {runBareEarthGeographyCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-stage16-dry-hydrology")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-causal-dry-hydrology")==0)
+                {runDryHydrologyCert=true;}
                 else if ( _wcsnicmp( certArgv[i], L"--causal-world-descriptor=", 26 ) == 0 )
                 {
                     WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 26, -1,
@@ -37973,6 +38229,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 breachPath,geographyPath);
             CausalBareEarthGeography::WriteCertArtifact(result,
                 "Docs\\provenance_stage15_bare_earth_geography_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runDryHydrologyCert)
+        {
+            auto const result=CausalDryHydrology::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath);
+            CausalDryHydrology::WriteCertArtifact(result,
+                "Docs\\provenance_stage16_dry_hydrology_cert.txt");
             return result.passed?0:1;
         }
         if ( runCausalWorldMineralizationCert )
@@ -38721,6 +38986,28 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playStage15Launch=true;g.certStage15Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage16")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=12;
+                    g.playWorldgenBaseline=true;g.playStage16Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-stage16-dry-hydrology")==0
+                  ||_wcsicmp(argv[i],L"--play-dry-watershed-authority")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage16Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-stage16-dry-hydrology-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage16Launch=true;g.certStage16Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

@@ -1,0 +1,23 @@
+STAGE16_DRY_HYDROLOGY_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED DRY WATERSHED AUTHORITY
+image=Docs/provenance_stage16_dry_hydrology_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+watershed=a743fb2fbe59ccc0
+local_upstream_km2=0.000256
+local_channel_order=0
+nearby_channel=1
+nearby_spill=1
+terrain_source=STAGE15_UNCHANGED
+flow_arrows=1
+watershed_debug=1
+water_occupancy=0
+water_rendering=0
+fluid_solve=0
+active_erosion=0
+sediment_transport=0
+p5b=closed
