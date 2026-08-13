@@ -50,6 +50,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -642,6 +643,29 @@ namespace
         bool playStage12Launch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
+        // Synthetic, presentation-only game-load ladder. Level 0 is the
+        // terrain-only control; later levels add one workload family at a time.
+        bool certLivingWorldLoad = false;
+        int livingWorldLoadLevel = 0;
+        double livingWorldGrassFrameMs = 0.0;
+        int livingWorldGrassActive = 0;
+        int livingWorldGrassCulled = 0;
+        int livingWorldGrassLod = 0;
+        double livingWorldTreeFrameMs = 0.0;
+        int livingWorldTreeActive = 0;
+        int livingWorldTreeCulled = 0;
+        int livingWorldTreeNear = 0;
+        int livingWorldTreeMid = 0;
+        int livingWorldTreeImpostors = 0;
+        double livingWorldPropFrameMs = 0.0;
+        int livingWorldPropActive = 0;
+        int livingWorldPropCulled = 0;
+        double livingWorldAnimalFrameMs = 0.0;
+        int livingWorldAnimalActive = 0;
+        int livingWorldAnimalCulled = 0;
+        double livingWorldNpcFrameMs = 0.0;
+        int livingWorldNpcActive = 0;
+        int livingWorldNpcCulled = 0;
         bool certStage11Visual = false;
         int certStage11VisualFrames = 0;
         bool certCutCVisual = false;
@@ -1370,6 +1394,7 @@ namespace
     bool Stage8PackageJobsIdle();
     int Stage0PendingPackageCount( Stage0PlayView view );
     void DrawStage0CalibrationPresentation();
+    void DrawLivingWorldLoadPresentation();
     bool TryStage0PickaxeInteraction();
     bool BeginStage0ToolStrike();
     void UpdateStage0ToolStrike();
@@ -17059,6 +17084,191 @@ namespace
         glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
     }
 
+    void DrawLivingWorldLoadPresentation()
+    {
+        g.livingWorldGrassFrameMs=0.0;
+        g.livingWorldGrassActive=0;
+        g.livingWorldGrassCulled=0;
+        g.livingWorldGrassLod=0;
+        g.livingWorldTreeFrameMs=0.0;
+        g.livingWorldTreeActive=0;
+        g.livingWorldTreeCulled=0;
+        g.livingWorldTreeNear=0;
+        g.livingWorldTreeMid=0;
+        g.livingWorldTreeImpostors=0;
+        g.livingWorldPropFrameMs=0.0;g.livingWorldPropActive=0;g.livingWorldPropCulled=0;
+        g.livingWorldAnimalFrameMs=0.0;g.livingWorldAnimalActive=0;g.livingWorldAnimalCulled=0;
+        g.livingWorldNpcFrameMs=0.0;g.livingWorldNpcActive=0;g.livingWorldNpcCulled=0;
+        if(!g.certLivingWorldLoad)return;
+
+        LARGE_INTEGER q0{},q1{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
+        if(g.livingWorldLoadLevel==2||g.livingWorldLoadLevel==6)
+        {
+            // L2 uses a deterministic absolute grid of static tree proxies.
+            // Near and mid trees retain progressively less branch silhouette;
+            // the outer band is a one-stroke impostor. No tree is an actor.
+            constexpr int spacing=12,halfM=108;
+            int const gx0=(int)std::floor((g.feetX-halfM)/(float)spacing);
+            int const gx1=(int)std::ceil((g.feetX+halfM)/(float)spacing);
+            int const gy0=(int)std::floor((g.feetY-halfM)/(float)spacing);
+            int const gy1=(int)std::ceil((g.feetY+halfM)/(float)spacing);
+            glDisable(GL_TEXTURE_2D);glDisable(GL_CULL_FACE);
+            glLineWidth(1.5f);glBegin(GL_LINES);
+            for(int gy=gy0;gy<=gy1;++gy)for(int gx=gx0;gx<=gx1;++gx)
+            {
+                ++g.livingWorldTreeCulled;
+                uint32_t hash=(uint32_t)gx*0x9E3779B1u^(uint32_t)gy*0x85EBCA77u;
+                hash^=hash>>16;hash*=0x7FEB352Du;hash^=hash>>15;
+                if((hash&7u)==0u)continue;
+                float const x=(float)(gx*spacing)+1.5f+(float)(hash&255u)/38.f;
+                float const y=(float)(gy*spacing)+1.5f+(float)((hash>>8)&255u)/38.f;
+                float const dx=x-g.feetX,dy=y-g.feetY,d2=dx*dx+dy*dy;
+                if(d2>(float)(halfM*halfM))continue;
+                float z=0.f;if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
+                float const height=5.f+5.f*(float)((hash>>16)&255u)/255.f;
+                glColor3f(.28f,.18f,.09f);
+                glVertex3f(x,y,z+.02f);glVertex3f(x,y,z+height);
+                if(d2<45.f*45.f)
+                {
+                    ++g.livingWorldTreeNear;
+                    glColor3f(.16f,.34f,.12f);
+                    for(int branch=0;branch<4;++branch)
+                    {
+                        float const angle=.7f*(float)branch+(float)(hash&31u)*.08f;
+                        float const bz=z+height*(.38f+.14f*(float)branch);
+                        float const span=1.2f+.35f*(float)branch;
+                        glVertex3f(x,y,bz);
+                        glVertex3f(x+std::cos(angle)*span,y+std::sin(angle)*span,bz+.5f);
+                    }
+                }
+                else if(d2<82.f*82.f){++g.livingWorldTreeMid;}
+                else{++g.livingWorldTreeImpostors;}
+                ++g.livingWorldTreeActive;--g.livingWorldTreeCulled;
+            }
+            glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
+            QueryPerformanceCounter(&q1);
+            g.livingWorldTreeFrameMs=qpf.QuadPart>0?1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+            if(g.livingWorldLoadLevel==2)return;
+            QueryPerformanceCounter(&q0);
+        }
+        if(g.livingWorldLoadLevel==3||g.livingWorldLoadLevel==6)
+        {
+            // L3: deterministic static rock/prop points. Presentation workload
+            // only; no body, pickup, support, occupancy or persistence authority.
+            constexpr int halfM=72,spacing=5;
+            int const ax=(int)std::floor(g.feetX/(float)spacing);
+            int const ay=(int)std::floor(g.feetY/(float)spacing);
+            glDisable(GL_TEXTURE_2D);glPointSize(3.f);glBegin(GL_POINTS);
+            for(int oy=-halfM/spacing;oy<=halfM/spacing;++oy)
+            for(int ox=-halfM/spacing;ox<=halfM/spacing;++ox)
+            {
+                ++g.livingWorldPropCulled;
+                int const gx=ax+ox,gy=ay+oy;
+                uint32_t hash=(uint32_t)gx*0x27D4EB2Du^(uint32_t)gy*0x165667B1u;
+                hash^=hash>>15;hash*=0x85EBCA77u;hash^=hash>>13;
+                if((hash&3u)==0u)continue;
+                float const x=(float)(gx*spacing)+(float)(hash&255u)/64.f;
+                float const y=(float)(gy*spacing)+(float)((hash>>8)&255u)/64.f;
+                float const dx=x-g.feetX,dy=y-g.feetY;if(dx*dx+dy*dy>halfM*halfM)continue;
+                float z=0.f;if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
+                glColor3f(.34f+.16f*(float)(hash&7u)/7.f,.31f,.27f);
+                glVertex3f(x,y,z+.12f);++g.livingWorldPropActive;--g.livingWorldPropCulled;
+            }
+            glEnd();glPointSize(1.f);QueryPerformanceCounter(&q1);
+            g.livingWorldPropFrameMs=qpf.QuadPart>0?1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+            if(g.livingWorldLoadLevel==3)return;QueryPerformanceCounter(&q0);
+        }
+        if(g.livingWorldLoadLevel==4||g.livingWorldLoadLevel==6)
+        {
+            // L4: bounded locomotion/animation probes, without needs, ecology,
+            // collision avoidance, persistence, reproduction or AI authority.
+            double const t=(double)g.lastFrameMs*.001;
+            glDisable(GL_TEXTURE_2D);glDisable(GL_CULL_FACE);glBegin(GL_LINES);
+            for(int i=0;i<20;++i)
+            {
+                float const phase=(float)i*.73f;
+                float const radius=18.f+(float)(i%5)*9.f;
+                float const x=g.feetX+std::cos((float)t*.23f+phase)*radius;
+                float const y=g.feetY+std::sin((float)t*.23f+phase)*radius;
+                float z=0.f;++g.livingWorldAnimalCulled;
+                if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
+                float const gait=std::sin((float)t*5.f+phase)*.22f;
+                glColor3f(.55f,.35f,.16f);
+                glVertex3f(x-.5f,y,z+.65f);glVertex3f(x+.5f,y,z+.65f);
+                glVertex3f(x-.3f,y,z+.62f);glVertex3f(x-.35f,y+.12f,z+.05f+gait);
+                glVertex3f(x+.3f,y,z+.62f);glVertex3f(x+.35f,y-.12f,z+.05f-gait);
+                ++g.livingWorldAnimalActive;--g.livingWorldAnimalCulled;
+            }
+            glEnd();glEnable(GL_CULL_FACE);QueryPerformanceCounter(&q1);
+            g.livingWorldAnimalFrameMs=qpf.QuadPart>0?1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+            if(g.livingWorldLoadLevel==4)return;QueryPerformanceCounter(&q0);
+        }
+        if(g.livingWorldLoadLevel==5||g.livingWorldLoadLevel==6)
+        {
+            // L5: movement/animation plus fixed-cost cheap-perception math.
+            double const t=(double)g.lastFrameMs*.001;volatile float perceptionSink=0.f;
+            glDisable(GL_TEXTURE_2D);glDisable(GL_CULL_FACE);glBegin(GL_LINES);
+            for(int i=0;i<10;++i)
+            {
+                float const phase=(float)i*.91f;
+                float const x=g.feetX+std::cos((float)t*.17f+phase)*(12.f+i*4.f);
+                float const y=g.feetY+std::sin((float)t*.17f+phase)*(12.f+i*4.f);
+                float z=0.f;++g.livingWorldNpcCulled;
+                for(int ray=0;ray<32;++ray)perceptionSink+=std::sin(phase+ray*.19635f);
+                if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
+                float const gait=std::sin((float)t*4.f+phase)*.18f;
+                glColor3f(.32f,.38f,.62f);
+                glVertex3f(x,y,z+.08f);glVertex3f(x,y,z+1.72f);
+                glVertex3f(x,y,z+.92f);glVertex3f(x-.28f,y,z+.12f+gait);
+                glVertex3f(x,y,z+.92f);glVertex3f(x+.28f,y,z+.12f-gait);
+                ++g.livingWorldNpcActive;--g.livingWorldNpcCulled;
+            }
+            glEnd();glEnable(GL_CULL_FACE);(void)perceptionSink;QueryPerformanceCounter(&q1);
+            g.livingWorldNpcFrameMs=qpf.QuadPart>0?1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+            if(g.livingWorldLoadLevel==5)return;QueryPerformanceCounter(&q0);
+        }
+        if(g.livingWorldLoadLevel!=1&&g.livingWorldLoadLevel!=6)return;
+        // L1 is deliberately derived presentation: an absolute one-metre grid,
+        // deterministically thinned, surface-snapped each frame, and never
+        // admitted to occupancy, support, collision, save data or ecology.
+        constexpr int halfCells=48;
+        int const anchorX=(int)std::floor(g.feetX);
+        int const anchorY=(int)std::floor(g.feetY);
+        glDisable(GL_TEXTURE_2D);glDisable(GL_CULL_FACE);
+        glLineWidth(1.f);glBegin(GL_LINES);
+        for(int oy=-halfCells;oy<=halfCells;++oy)
+        for(int ox=-halfCells;ox<=halfCells;++ox)
+        {
+            float const dx=(float)ox+.37f,dy=(float)oy+.61f;
+            ++g.livingWorldGrassCulled;
+            if(dx*dx+dy*dy>(float)(halfCells*halfCells))continue;
+            int const wx=anchorX+ox,wy=anchorY+oy;
+            uint32_t hash=(uint32_t)wx*0x9E3779B1u^(uint32_t)wy*0x85EBCA77u;
+            hash^=hash>>16;hash*=0x7FEB352Du;hash^=hash>>15;
+            if((hash&3u)==0u)continue;
+            float const x=(float)wx+.18f+(float)(hash&255u)/420.f;
+            float const y=(float)wy+.14f+(float)((hash>>8)&255u)/430.f;
+            float z=0.f;
+            if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
+            float const height=.18f+.26f*(float)((hash>>16)&255u)/255.f;
+            float const lean=((int)((hash>>24)&15u)-7)*.004f;
+            glColor3f(.24f+.04f*(float)(hash&7u)/7.f,
+                .45f+.10f*(float)((hash>>3)&7u)/7.f,.10f);
+            glVertex3f(x,y,z+.018f);glVertex3f(x+lean,y-lean*.4f,z+height);
+            ++g.livingWorldGrassActive;--g.livingWorldGrassCulled;
+        }
+        glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
+        g.livingWorldGrassLod=g.livingWorldGrassActive;
+        QueryPerformanceCounter(&q1);
+        g.livingWorldGrassFrameMs=qpf.QuadPart>0?1000.0
+            *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+    }
+
     void DrawStage0CalibrationPresentation()
     {
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -18771,6 +18981,7 @@ namespace
         glEnable( GL_DEPTH_TEST );
 
         DrawHeightfield();
+        DrawLivingWorldLoadPresentation();
         if(g.certPresentationIsolation&&g.presentationIsolationMode==4)
         {
             stage0Present();
@@ -34124,6 +34335,349 @@ namespace
             g.stage8TerrainBlocks.size(),g.cells.size());
     }
 
+    // ---- Living-world load ladder ----------------------------------------
+    // This is deliberately a workload harness, not ecology authority. L0
+    // proves the exact Stage-12 terrain control before any synthetic grass,
+    // trees, props, animals or NPC probes are admitted by later cuts.
+    struct LivingWorldLoadCase
+    {
+        char const* bearing="";
+        char const* mode="";
+        int bearingIndex=0;
+        float stepM=0.f;
+        int measuredFrames=0;
+        int framesOver16=0;
+        int groundFailures=0;
+        int collisionMismatches=0;
+        int authoritySamples=0;
+        int authorityMismatches=0;
+        int skyPixels=INT_MAX;
+        int fallbackPixels=INT_MAX;
+        int sampledPixels=0;
+        int maxWorkerBacklog=0;
+        int maxResidentPackages=0;
+        int maxGrassActive=0;
+        int maxGrassCulled=0;
+        int maxGrassLod=0;
+        int maxTreeActive=0;
+        int maxTreeCulled=0;
+        int maxTreeNear=0;
+        int maxTreeMid=0;
+        int maxTreeImpostors=0;
+        int maxPropActive=0,maxPropCulled=0;
+        int maxAnimalActive=0,maxAnimalCulled=0;
+        int maxNpcActive=0,maxNpcCulled=0;
+        float minCompleteRadiusM=1e9f;
+        double terrainMs=0.0;
+        double grassMs=0.0,treeSubmitMs=0.0,propMs=0.0;
+        double animalUpdateMs=0.0,npcUpdateMs=0.0,animationMs=0.0;
+        double collisionMs=0.0,presentMs=0.0;
+        std::vector<double> frameMs;
+    };
+
+    struct LivingWorldLoadRun
+    {
+        int phase=0;
+        int caseIndex=0;
+        int warmFrames=0;
+        int settleFrames=0;
+        float distanceM=0.f;
+        bool measureThisFrame=false;
+        bool capturePending=false;
+        bool captureComplete=false;
+        std::vector<LivingWorldLoadCase> receipts;
+    };
+    LivingWorldLoadRun s_livingWorldLoad;
+
+    constexpr int kLivingBearingCount=4;
+    constexpr int kLivingModeCount=4;
+    constexpr float kLivingRouteM=192.f;
+    static char const* const kLivingBearingName[kLivingBearingCount]={
+        "north","east","south","west"};
+    static float const kLivingBearingX[kLivingBearingCount]={0.f,1.f,0.f,-1.f};
+    static float const kLivingBearingY[kLivingBearingCount]={1.f,0.f,-1.f,0.f};
+    static char const* const kLivingModeName[kLivingModeCount]={
+        "walk","sprint","freefly_240","freefly_480"};
+    static float const kLivingModeStepM[kLivingModeCount]={
+        4.f/60.f,8.f/60.f,4.f,8.f};
+
+    void LivingWorldLoadPlace(LivingWorldLoadCase& receipt,float distanceM,bool captureView=false)
+    {
+        float const x=128.5f+kLivingBearingX[receipt.bearingIndex]*distanceM;
+        float const y=128.5f+kLivingBearingY[receipt.bearingIndex]*distanceM;
+        float surfaceZ=0.f;
+        bool const fly=captureView||receipt.stepM>=4.f;
+        Stage11PlaceProbe(x,y,fly,surfaceZ,receipt.groundFailures,
+            receipt.collisionMismatches,receipt.collisionMs,
+            Stage11BearingYaw(receipt.bearingIndex));
+        if(captureView){g.pitch=-.35f;}
+    }
+
+    void LivingWorldLoadAuthorityProbe(LivingWorldLoadCase& receipt,float distanceM)
+    {
+        float const x=128.5f+kLivingBearingX[receipt.bearingIndex]*distanceM;
+        float const y=128.5f+kLivingBearingY[receipt.bearingIndex]*distanceM;
+        float authorityZ=0.f,presentedZ=0.f,collisionZ=0.f;
+        std::string material;
+        bool const authority=SampleCausalPlayableCell(
+            Stage0PlayView::SurfaceBreachContinuity,x,y,authorityZ,material);
+        bool const presented=Stage0CalibrationSurfaceZ(x,y,presentedZ);
+        bool const collision=SampleGroundZ(x,y,collisionZ);
+        CellSample const* cell=GetCell((int)std::floor(x),(int)std::floor(y));
+        auto const geology=CardinalSurfaceAuthority(
+            Stage0PlayView::SurfaceBreachContinuity,x,y,(double)authorityZ);
+        ++receipt.authoritySamples;
+        bool const matches=authority&&presented&&collision&&cell&&cell->valid
+            &&geology.found&&cell->cap==material&&geology.material==material
+            &&std::fabs(authorityZ-presentedZ)<=0.001f
+            &&std::fabs(presentedZ-collisionZ)<=0.001f;
+        if(!matches)++receipt.authorityMismatches;
+    }
+
+    bool CaptureLivingWorldLoadFrame(LivingWorldLoadCase& receipt)
+    {
+        glFinish();
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+        int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0)return false;
+        std::vector<unsigned char> rgba((size_t)w*(size_t)h*4u);
+        glPixelStorei(GL_PACK_ALIGNMENT,1);glReadBuffer(GL_FRONT);
+        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
+        receipt.skyPixels=receipt.fallbackPixels=receipt.sampledPixels=0;
+        for(int y=1;y<h*3/5;++y)for(int x=1;x<w-1;++x)
+        {
+            size_t const i=((size_t)y*(size_t)w+(size_t)x)*4u;
+            int const red=rgba[i],green=rgba[i+1],blue=rgba[i+2];
+            int const dr=red-114,dg=green-158,db=blue-224;
+            ++receipt.sampledPixels;
+            if(dr*dr+dg*dg+db*db<=8*8)++receipt.skyPixels;
+            // Certified grass is olive and may legitimately dominate the lower
+            // frame. The old missing-package sentinel is bright green.
+            if(green>175&&green>red*1.35f&&green>blue*1.35f)++receipt.fallbackPixels;
+        }
+        return true;
+    }
+
+    bool WriteLivingWorldLoadArtifact()
+    {
+        int const level=g.livingWorldLoadLevel;
+        bool passed=level>=0&&level<=6
+            &&s_livingWorldLoad.receipts.size()==kLivingBearingCount*kLivingModeCount;
+        bool completePass=passed,visualPass=passed,authorityPass=passed,framePass=passed;
+        double overallWorst=0.0;
+        FILE* file=nullptr;
+        char artifactPath[128]={};
+        sprintf_s(artifactPath,"Docs\\provenance_living_world_load_%d_cert.txt",level);
+        if(fopen_s(&file,artifactPath,"wb")!=0||!file)
+            return false;
+        std::fprintf(file,"LIVING_WORLD_LOAD_%d\nbase_stage12_sha=2c51bfe9\n"
+            "level=%d\nfixture=%s\nlive_radius_m=%d\nfar_extent_m=%d\n"
+            "synthetic_ecology_authority=0\nwater_coupling=0\nmutation=0\n"
+            "grass_workload=%d\ntrees_workload=%d\nprops_workload=%d\n"
+            "animals_workload=%d\nnpcs_workload=%d\n"
+            "tree_impostors=0\nprops_active=0\nprops_culled=0\n"
+            "animals_active=0\nanimals_culled=0\nnpcs_active=0\nnpcs_culled=0\n",
+            level,level,level==0?"terrain_only":level==1?"grass_presentation_only":
+                level==2?"trees_static_instanced":level==3?"rocks_props_static":
+                level==4?"animals_locomotion_animation":level==5?
+                "npcs_movement_animation_cheap_perception":"combined_l1_l5",
+            g.stage0LiveRadiusM,g.stage0FarExtentM,(level==1||level==6)?1:0,
+            (level==2||level==6)?1:0,(level==3||level==6)?1:0,
+            (level==4||level==6)?1:0,(level==5||level==6)?1:0);
+        for(auto const& receipt:s_livingWorldLoad.receipts)
+        {
+            double const worst=receipt.frameMs.empty()?0.0:
+                *std::max_element(receipt.frameMs.begin(),receipt.frameMs.end());
+            overallWorst=(std::max)(overallWorst,worst);
+            bool const row=receipt.measuredFrames>0&&receipt.framesOver16==0
+                &&receipt.groundFailures==0&&receipt.collisionMismatches==0
+                &&receipt.authoritySamples>0&&receipt.authorityMismatches==0
+                &&receipt.skyPixels==0&&receipt.fallbackPixels==0
+                &&receipt.sampledPixels>0
+                &&receipt.minCompleteRadiusM>=(float)g.stage0LiveRadiusM-.001f;
+            completePass=completePass&&receipt.minCompleteRadiusM
+                >=(float)g.stage0LiveRadiusM-.001f;
+            visualPass=visualPass&&receipt.sampledPixels>0
+                &&receipt.skyPixels==0&&receipt.fallbackPixels==0;
+            authorityPass=authorityPass&&receipt.groundFailures==0
+                &&receipt.collisionMismatches==0&&receipt.authoritySamples>0
+                &&receipt.authorityMismatches==0;
+            framePass=framePass&&receipt.measuredFrames>0&&receipt.framesOver16==0;
+            passed=passed&&row;
+            std::fprintf(file,"case.%s_%s=%s frames=%d mean_ms=%.3f p95_ms=%.3f "
+                "p99_ms=%.3f worst_ms=%.3f frames_over_16_667=%d "
+                "min_complete_radius_m=%.2f max_worker_backlog=%d "
+                "max_resident_packages=%d grass_active=%d grass_culled=%d grass_lod=%d "
+                "trees_active=%d trees_culled=%d tree_lod_near=%d tree_lod_mid=%d "
+                "tree_impostors=%d props_active=%d props_culled=%d "
+                "animals_active=%d animals_culled=%d npcs_active=%d npcs_culled=%d "
+                "ground_failures=%d collision_mismatches=%d "
+                "authority_samples=%d authority_mismatches=%d sky_pixels=%d "
+                "fallback_pixels=%d terrain_ms=%.3f grass_ms=%.3f tree_submit_ms=%.3f "
+                "prop_ms=%.3f animal_update_ms=%.3f npc_update_ms=%.3f animation_ms=%.3f "
+                "collision_ms=%.3f present_ms=%.3f\n",
+                receipt.bearing,receipt.mode,row?"PASS":"FAIL",receipt.measuredFrames,
+                receipt.measuredFrames?std::accumulate(receipt.frameMs.begin(),receipt.frameMs.end(),0.0)
+                    /(double)receipt.measuredFrames:0.0,
+                Stage11WaterfallPercentile(receipt.frameMs,.95),
+                Stage11WaterfallPercentile(receipt.frameMs,.99),worst,receipt.framesOver16,
+                receipt.minCompleteRadiusM,receipt.maxWorkerBacklog,
+                receipt.maxResidentPackages,receipt.maxGrassActive,receipt.maxGrassCulled,
+                receipt.maxGrassLod,receipt.maxTreeActive,receipt.maxTreeCulled,
+                receipt.maxTreeNear,receipt.maxTreeMid,receipt.maxTreeImpostors,
+                receipt.maxPropActive,receipt.maxPropCulled,
+                receipt.maxAnimalActive,receipt.maxAnimalCulled,
+                receipt.maxNpcActive,receipt.maxNpcCulled,
+                receipt.groundFailures,receipt.collisionMismatches,
+                receipt.authoritySamples,receipt.authorityMismatches,receipt.skyPixels,
+                receipt.fallbackPixels,receipt.terrainMs,receipt.grassMs,receipt.treeSubmitMs,
+                receipt.propMs,receipt.animalUpdateMs,receipt.npcUpdateMs,receipt.animationMs,
+                receipt.collisionMs,receipt.presentMs);
+        }
+        std::fprintf(file,"overall=%s\noverall_worst_movement_ms=%.3f\n"
+            "check.complete_192m_terrain=%s\ncheck.zero_holes_or_fallback=%s\n"
+            "check.zero_authority_or_collision_mismatch=%s\n"
+            "check.zero_frames_over_16_667=%s\n"
+            "next_level=%s\n",
+            passed?"PASS":"FAIL",overallWorst,completePass?"PASS":"FAIL",
+            visualPass?"PASS":"FAIL",authorityPass?"PASS":"FAIL",
+            framePass?"PASS":"FAIL",
+            level==0?"L1_GRASS_PRESENTATION_ONLY":level==1?"L2_STATIC_INSTANCED_TREES":
+            level==2?"L3_STATIC_ROCKS_PROPS":level==3?"L4_ANIMAL_LOCOMOTION_ANIMATION":
+            level==4?"L5_NPC_CHEAP_PERCEPTION":level==5?"L6_COMBINED":"COMPLETE");
+        std::fclose(file);return passed;
+    }
+
+    void LivingWorldLoadTick()
+    {
+        if(!g.certLivingWorldLoad||!g.playWorldgenInitialized)return;
+        auto& run=s_livingWorldLoad;
+        int constexpr caseCount=kLivingBearingCount*kLivingModeCount;
+        if(run.caseIndex>=caseCount)
+        {
+            bool const ok=WriteLivingWorldLoadArtifact();
+            g.certLivingWorldLoad=false;PostQuitMessage(ok?0:2);return;
+        }
+        if(run.phase==0)
+        {
+            int const bearing=run.caseIndex/kLivingModeCount;
+            int const mode=run.caseIndex%kLivingModeCount;
+            LivingWorldLoadCase receipt;
+            receipt.bearing=kLivingBearingName[bearing];receipt.mode=kLivingModeName[mode];
+            receipt.bearingIndex=bearing;receipt.stepM=kLivingModeStepM[mode];
+            run.receipts.push_back(std::move(receipt));
+            g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::SurfaceBreachContinuity);
+            g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            RebuildStage0PlayableRuntime();
+            run.warmFrames=0;run.settleFrames=0;run.distanceM=0.f;
+            LivingWorldLoadPlace(run.receipts.back(),0.f);run.phase=1;return;
+        }
+        auto& receipt=run.receipts.back();
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage0PendingPackageCount(g.stage0PlayView)==0&&Stage8PackageJobsIdle();
+        if(run.phase==1)
+        {
+            LivingWorldLoadPlace(receipt,0.f);
+            if(++run.warmFrames>=120&&settled
+              &&Stage0MinCompleteRadiusM(g.stage0PlayView)>=(float)g.stage0LiveRadiusM-.001f)
+            {run.phase=2;run.distanceM=0.f;}
+            return;
+        }
+        if(run.phase==2)
+        {
+            float const previous=run.distanceM;
+            run.distanceM=(std::min)(kLivingRouteM,run.distanceM+receipt.stepM);
+            LivingWorldLoadPlace(receipt,run.distanceM);
+            if((int)std::floor(previous/8.f)!=(int)std::floor(run.distanceM/8.f))
+            {
+                // Probe the canonical package boundary, not the accumulated
+                // fractional movement position just beyond it. This keeps
+                // walk/sprint and exact-step free-flight sampling identical.
+                float const boundaryM=8.f*std::floor(run.distanceM/8.f);
+                LivingWorldLoadAuthorityProbe(receipt,boundaryM);
+            }
+            run.measureThisFrame=true;
+            if(run.distanceM>=kLivingRouteM-.001f)
+            {run.phase=3;run.settleFrames=0;}
+            return;
+        }
+        if(run.phase==3)
+        {
+            LivingWorldLoadPlace(receipt,kLivingRouteM);
+            if(++run.settleFrames>=60&&settled
+              &&Stage0MinCompleteRadiusM(g.stage0PlayView)>=(float)g.stage0LiveRadiusM-.001f)
+            {
+                LivingWorldLoadPlace(receipt,kLivingRouteM,true);
+                run.capturePending=true;run.captureComplete=false;run.phase=4;
+            }
+            return;
+        }
+        if(run.phase==4&&run.captureComplete)
+        {
+            run.captureComplete=false;++run.caseIndex;run.phase=0;
+        }
+    }
+
+    void LivingWorldLoadAfterRender()
+    {
+        if(!g.certLivingWorldLoad||s_livingWorldLoad.receipts.empty())return;
+        auto& run=s_livingWorldLoad;auto& receipt=run.receipts.back();
+        if(run.measureThisFrame)
+        {
+            run.measureThisFrame=false;
+            double const ms=g.stage0FrameCpuMs;
+            receipt.frameMs.push_back(ms);++receipt.measuredFrames;
+            if(ms>16.667)++receipt.framesOver16;
+            receipt.minCompleteRadiusM=(std::min)(receipt.minCompleteRadiusM,
+                Stage0MinCompleteRadiusM(g.stage0PlayView));
+            receipt.maxWorkerBacklog=(std::max)(receipt.maxWorkerBacklog,
+                Stage0PendingPackageCount(g.stage0PlayView));
+            receipt.maxResidentPackages=(std::max)(receipt.maxResidentPackages,
+                (int)CardinalPackageMap(g.stage0PlayView).size());
+            receipt.terrainMs+=g.stage0FrameGenerationMs+g.stage0FrameResidencyMs
+                +g.stage0FrameHfBuildMs+g.stage0FrameHfRetireMs;
+            receipt.grassMs+=g.livingWorldGrassFrameMs;
+            receipt.maxGrassActive=(std::max)(receipt.maxGrassActive,
+                g.livingWorldGrassActive);
+            receipt.maxGrassCulled=(std::max)(receipt.maxGrassCulled,
+                g.livingWorldGrassCulled);
+            receipt.maxGrassLod=(std::max)(receipt.maxGrassLod,
+                g.livingWorldGrassLod);
+            receipt.treeSubmitMs+=g.livingWorldTreeFrameMs;
+            receipt.maxTreeActive=(std::max)(receipt.maxTreeActive,
+                g.livingWorldTreeActive);
+            receipt.maxTreeCulled=(std::max)(receipt.maxTreeCulled,
+                g.livingWorldTreeCulled);
+            receipt.maxTreeNear=(std::max)(receipt.maxTreeNear,g.livingWorldTreeNear);
+            receipt.maxTreeMid=(std::max)(receipt.maxTreeMid,g.livingWorldTreeMid);
+            receipt.maxTreeImpostors=(std::max)(receipt.maxTreeImpostors,
+                g.livingWorldTreeImpostors);
+            receipt.propMs+=g.livingWorldPropFrameMs;
+            receipt.maxPropActive=(std::max)(receipt.maxPropActive,g.livingWorldPropActive);
+            receipt.maxPropCulled=(std::max)(receipt.maxPropCulled,g.livingWorldPropCulled);
+            receipt.animalUpdateMs+=g.livingWorldAnimalFrameMs;
+            receipt.animationMs+=g.livingWorldAnimalFrameMs+g.livingWorldNpcFrameMs;
+            receipt.maxAnimalActive=(std::max)(receipt.maxAnimalActive,
+                g.livingWorldAnimalActive);
+            receipt.maxAnimalCulled=(std::max)(receipt.maxAnimalCulled,
+                g.livingWorldAnimalCulled);
+            receipt.npcUpdateMs+=g.livingWorldNpcFrameMs;
+            receipt.maxNpcActive=(std::max)(receipt.maxNpcActive,g.livingWorldNpcActive);
+            receipt.maxNpcCulled=(std::max)(receipt.maxNpcCulled,g.livingWorldNpcCulled);
+            receipt.presentMs+=g.stage0FramePresentWaitMs;
+        }
+        if(run.capturePending)
+        {
+            run.capturePending=false;
+            CaptureLivingWorldLoadFrame(receipt);
+            // A failed readback is a failed receipt, not an infinite harness wait.
+            run.captureComplete=true;
+        }
+    }
+
     // ---- Stage 11 far-field shift scaling ---------------------------------
     // The constitutional requirement for the incremental cut is that an anchor
     // shift costs work proportional to the newly exposed fringe, not to the
@@ -34443,6 +34997,7 @@ namespace
             Stage11ResidencyWaterfallTick();
             Stage11ShiftScalingTick();
             Stage11FreeFlyTick();
+            LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
         else if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
@@ -35373,6 +35928,7 @@ namespace
         Stage11ResidencyWaterfallAfterRender();
         Stage11ShiftScalingAfterRender();
         Stage11FreeFlyAfterRender();
+        LivingWorldLoadAfterRender();
         CertPickMatrixOnlyTick();
         CertSinglePickBenchmarkAfterRender();
         if(g.shelterPhotoPending>0)
@@ -36683,6 +37239,36 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenCardinalStageFilter=8;
                     g.playWorldgenBaseline=true;g.playStage12Launch=true;
                     g.certWorldgenBaselinePerf=false;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-living-world-load=0" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-0" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=1" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-1" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=2" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-2" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=3" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-3" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=4" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-4" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=5" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-5" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load=6" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-living-world-load-6" ) == 0 )
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certLivingWorldLoad=true;
+                    wchar_t const* eq=wcschr(argv[i],L'=');
+                    if(eq)g.livingWorldLoadLevel=_wtoi(eq+1);
+                    else g.livingWorldLoadLevel=_wtoi(argv[i]+wcslen(argv[i])-1);
+                    g.playWorldgenBaseline=true;
+                    g.playStage12Launch=true;
+                    g.certWorldgenBaselinePerf=false;
+                    // L0 is the immutable terrain control: complete 192 m live
+                    // residency, with the intentionally quarantined far field off.
+                    g.stage0LiveRadiusM=192;
+                    g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);
                     continue;
                 }
