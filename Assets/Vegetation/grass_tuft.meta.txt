@@ -1,0 +1,10 @@
+asset=grass_tuft.png
+role=L1 representative grass-card workload cutout
+dimensions=256x256
+format=RGBA PNG
+rgba_digest_fnv64=7587143d2d23d2d4
+source=locally generated procedural test cutout
+external_imagery=0
+production_art=0
+authority=0
+notes=Required by L1/L6 certification; absence or dimension drift fails closed.

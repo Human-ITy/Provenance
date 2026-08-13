@@ -651,6 +651,19 @@ namespace
         int livingWorldGrassActive = 0;
         int livingWorldGrassCulled = 0;
         int livingWorldGrassLod = 0;
+        bool livingWorldGrassTextureLoaded = false;
+        int livingWorldGrassTextureW = 0;
+        int livingWorldGrassTextureH = 0;
+        uint64_t livingWorldGrassTextureDigest = 0;
+        int livingWorldGrassCandidateCells = 0;
+        int livingWorldGrassHostCells = 0;
+        int livingWorldGrassRejectedSurface = 0;
+        int livingWorldGrassRejectedMaterial = 0;
+        int livingWorldGrassRejectedSlope = 0;
+        int livingWorldGrassCandidateSites = 0;
+        int livingWorldGrassSubmittedCards = 0;
+        int livingWorldGrassSubmittedTriangles = 0;
+        int livingWorldGrassMidClumps = 0;
         double livingWorldTreeFrameMs = 0.0;
         int livingWorldTreeActive = 0;
         int livingWorldTreeCulled = 0;
@@ -17084,12 +17097,126 @@ namespace
         glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
     }
 
+    // ---- L1 representative grass-card presentation helpers -----------------
+    // Deterministic, frame-stateless. This is a synthetic load/admission fixture,
+    // not plant or soil authority. Density creates fullness; height does not --
+    // clumps stay short so terrain shape and exposed geology remain readable.
+    constexpr float kGrassFullEndM  = 20.0f;   // full density inside this radius
+    constexpr float kGrassThinEndM  = 50.0f;   // clumps gone beyond this radius
+    constexpr float kGrassFadeBandM = 5.0f;    // outer height-fade band
+    constexpr float kGrassMinHeightM= 0.08f, kGrassMaxHeightM=0.25f;
+    constexpr float kGrassMinWidthM = 0.055f, kGrassMaxWidthM=0.13f;
+
+    uint32_t GrassHashU(int x,int z,uint32_t salt)
+    {
+        uint32_t h=(uint32_t)x*0x9E3779B1u^(uint32_t)z*0x85EBCA77u^salt;
+        h^=h>>16;h*=0x7FEB352Du;h^=h>>15;h*=0x846CA68Bu;h^=h>>16;return h;
+    }
+    float GrassHash01(int x,int z,uint32_t salt)
+    { return (float)(GrassHashU(x,z,salt)&0x00FFFFFFu)/(float)0x01000000u; }
+
+    float GrassSmooth01(float t)
+    { t=t<0.f?0.f:(t>1.f?1.f:t); return t*t*(3.0f-2.0f*t); }
+
+    // Outer-band fade is geometry scale, not transparency -- the clump shrinks
+    // to nothing across the last few metres so the cull ring is invisible.
+    float GrassHeightFade(float d)
+    {
+        float const start=kGrassThinEndM-kGrassFadeBandM;
+        if(d<=start)return 1.0f;
+        if(d>=kGrassThinEndM)return 0.0f;
+        return 1.0f-GrassSmooth01((d-start)/(kGrassThinEndM-start));
+    }
+    // Density: full inside the near radius, smoothly thinning to zero at the
+    // outer radius. Used to accept/reject deterministic candidate sites.
+    float GrassDensityFactor(float d)
+    {
+        if(d<=kGrassFullEndM)return 1.0f;
+        if(d>=kGrassThinEndM)return 0.0f;
+        return 1.0f-GrassSmooth01((d-kGrassFullEndM)/(kGrassThinEndM-kGrassFullEndM));
+    }
+
+    // One alpha-tested grass cutout, loaded once. L1/L6 certification requires
+    // this exact workload asset; absence is recorded as failure rather than
+    // silently substituting cheaper flat cards.
+    GLuint GrassTuftTexture()
+    {
+        static GLuint tex=0; static bool tried=false;
+        if(tried)return tex;
+        ResolveAssetsRoot();
+        std::string const path=JoinPath(g.assetsRoot,"Vegetation\\grass_tuft.png");
+        if(!FileExistsA(path.c_str()))
+        {
+            g.livingWorldGrassTextureLoaded=false;g.livingWorldGrassTextureW=0;
+            g.livingWorldGrassTextureH=0;g.livingWorldGrassTextureDigest=0;
+            tried=true;return 0;
+        }
+        int w=0,h=0,n=0;
+        unsigned char* px=stbi_load(path.c_str(),&w,&h,&n,4);
+        if(!px||w<=0||h<=0)
+        {
+            if(px)stbi_image_free(px);
+            g.livingWorldGrassTextureLoaded=false;g.livingWorldGrassTextureW=0;
+            g.livingWorldGrassTextureH=0;g.livingWorldGrassTextureDigest=0;
+            tried=true;return 0;
+        }
+        if(!wglGetCurrentContext()){stbi_image_free(px);return 0;} // retry next frame
+        g.livingWorldGrassTextureLoaded=true;g.livingWorldGrassTextureW=w;
+        g.livingWorldGrassTextureH=h;
+        g.livingWorldGrassTextureDigest=CausalWorldGeology::HashBytes(
+            (char const*)px,(size_t)w*(size_t)h*4u);
+        tried=true;
+        glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        constexpr GLint kClampToEdge=0x812F;
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,kClampToEdge);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,kClampToEdge);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,px);
+        stbi_image_free(px);glBindTexture(GL_TEXTURE_2D,0);
+        return tex;
+    }
+
+    struct GrassCardVertex
+    {
+        float x=0.f,y=0.f,z=0.f,u=0.f,v=0.f,r=1.f,g=1.f,b=1.f;
+    };
+
+    // One camera-agnostic vertical card. Z is up in this runtime. The tuft base
+    // sits at the image bottom (v=1), tips at the top (v=0). Vertices accumulate
+    // into one linear client array so the legacy driver sees one bulk draw rather
+    // than hundreds of thousands of immediate-mode calls.
+    void EmitGrassQuadZ(std::vector<GrassCardVertex>& vertices,
+        float cx,float cy,float cz,float halfW,float height,float yaw,
+        float red,float green,float blue)
+    {
+        float const dx=std::cos(yaw)*halfW, dy=std::sin(yaw)*halfW;
+        float const x0=cx-dx,y0=cy-dy,x1=cx+dx,y1=cy+dy;
+        float const zb=cz+0.003f, zt=zb+height;   // slight lift avoids z-fighting
+        vertices.push_back({x0,y0,zb,0.f,1.f,red,green,blue});
+        vertices.push_back({x1,y1,zb,1.f,1.f,red,green,blue});
+        vertices.push_back({x1,y1,zt,1.f,0.f,red,green,blue});
+        vertices.push_back({x0,y0,zb,0.f,1.f,red,green,blue});
+        vertices.push_back({x1,y1,zt,1.f,0.f,red,green,blue});
+        vertices.push_back({x0,y0,zt,0.f,0.f,red,green,blue});
+    }
+
     void DrawLivingWorldLoadPresentation()
     {
         g.livingWorldGrassFrameMs=0.0;
         g.livingWorldGrassActive=0;
         g.livingWorldGrassCulled=0;
         g.livingWorldGrassLod=0;
+        g.livingWorldGrassCandidateCells=0;
+        g.livingWorldGrassHostCells=0;
+        g.livingWorldGrassRejectedSurface=0;
+        g.livingWorldGrassRejectedMaterial=0;
+        g.livingWorldGrassRejectedSlope=0;
+        g.livingWorldGrassCandidateSites=0;
+        g.livingWorldGrassSubmittedCards=0;
+        g.livingWorldGrassSubmittedTriangles=0;
+        g.livingWorldGrassMidClumps=0;
         g.livingWorldTreeFrameMs=0.0;
         g.livingWorldTreeActive=0;
         g.livingWorldTreeCulled=0;
@@ -17233,37 +17360,114 @@ namespace
             if(g.livingWorldLoadLevel==5)return;QueryPerformanceCounter(&q0);
         }
         if(g.livingWorldLoadLevel!=1&&g.livingWorldLoadLevel!=6)return;
-        // L1 is deliberately derived presentation: an absolute one-metre grid,
-        // deterministically thinned, surface-snapped each frame, and never
-        // admitted to occupancy, support, collision, save data or ecology.
-        constexpr int halfCells=48;
+        // L1 representative grass-card presentation. Every 1 m cell owns a fixed
+        // set of candidate sites. A synthetic host gate admits only low-slope
+        // sandstone/shale cells so the load does not cover granite or quartz.
+        // This is explicitly not biological or soil authority. Survivors become
+        // 2-3 crossed alpha-tested quads, snapped to the certified terrain.
+        // Bands: full 0-20 m, thinning 20-50 m, ground-only beyond. Height fades
+        // to zero at the edge. No occupancy, support, collision, save data or
+        // ecology, and never admitted to the streamer's authority.
+        constexpr int   halfCells=(int)kGrassThinEndM;   // iterate cells within 50 m
+        constexpr int   kSitesPerCell=5;                 // fixed => stable scatter topology
         int const anchorX=(int)std::floor(g.feetX);
         int const anchorY=(int)std::floor(g.feetY);
-        glDisable(GL_TEXTURE_2D);glDisable(GL_CULL_FACE);
-        glLineWidth(1.f);glBegin(GL_LINES);
+        GLuint const grassTex=GrassTuftTexture();
+        bool const textured=grassTex!=0u;
+        if(textured)
+        {
+            glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,grassTex);
+            glEnable(GL_ALPHA_TEST);glAlphaFunc(GL_GREATER,0.45f); // reject blade background
+        }
+        else glDisable(GL_TEXTURE_2D);
+        glDisable(GL_CULL_FACE);                         // cards are double-sided
+        static std::vector<GrassCardVertex> grassVertices;
+        grassVertices.clear();
+        grassVertices.reserve(240000);
+        float const thinEnd2=kGrassThinEndM*kGrassThinEndM;
+        int nearClumps=0,midClumps=0;
         for(int oy=-halfCells;oy<=halfCells;++oy)
         for(int ox=-halfCells;ox<=halfCells;++ox)
         {
-            float const dx=(float)ox+.37f,dy=(float)oy+.61f;
-            ++g.livingWorldGrassCulled;
-            if(dx*dx+dy*dy>(float)(halfCells*halfCells))continue;
             int const wx=anchorX+ox,wy=anchorY+oy;
-            uint32_t hash=(uint32_t)wx*0x9E3779B1u^(uint32_t)wy*0x85EBCA77u;
-            hash^=hash>>16;hash*=0x7FEB352Du;hash^=hash>>15;
-            if((hash&3u)==0u)continue;
-            float const x=(float)wx+.18f+(float)(hash&255u)/420.f;
-            float const y=(float)wy+.14f+(float)((hash>>8)&255u)/430.f;
-            float z=0.f;
-            if(!Stage0CalibrationSurfaceZ(x,y,z))continue;
-            float const height=.18f+.26f*(float)((hash>>16)&255u)/255.f;
-            float const lean=((int)((hash>>24)&15u)-7)*.004f;
-            glColor3f(.24f+.04f*(float)(hash&7u)/7.f,
-                .45f+.10f*(float)((hash>>3)&7u)/7.f,.10f);
-            glVertex3f(x,y,z+.018f);glVertex3f(x+lean,y-lean*.4f,z+height);
-            ++g.livingWorldGrassActive;--g.livingWorldGrassCulled;
+            float const cdx=(float)wx+.5f-g.feetX,cdy=(float)wy+.5f-g.feetY;
+            float const cellD2=cdx*cdx+cdy*cdy;
+            if(cellD2>=thinEnd2)continue;                // whole cell out of clump range
+            ++g.livingWorldGrassCandidateCells;
+            CellSample const* cell=GetCell(wx,wy);
+            CellSample const* east=GetCell(wx+1,wy);
+            CellSample const* north=GetCell(wx,wy+1);
+            if(!cell||!east||!north||!cell->valid||!east->valid||!north->valid)
+            {++g.livingWorldGrassRejectedSurface;continue;}
+            if(cell->cap!="sandstone"&&cell->cap!="shale")
+            {++g.livingWorldGrassRejectedMaterial;continue;}
+            float const z0=cell->hasFillZ?cell->fillZ:GradeToZ(cell->grade);
+            float const zx=east->hasFillZ?east->fillZ:GradeToZ(east->grade);
+            float const zy=north->hasFillZ?north->fillZ:GradeToZ(north->grade);
+            float const slope=std::sqrt((zx-z0)*(zx-z0)+(zy-z0)*(zy-z0));
+            constexpr float kSyntheticGrassMaxSlope=0.65f;
+            if(!std::isfinite(slope)||slope>kSyntheticGrassMaxSlope)
+            {++g.livingWorldGrassRejectedSlope;continue;}
+            ++g.livingWorldGrassHostCells;
+            float const density=GrassDensityFactor(std::sqrt(cellD2));
+            for(int s=0;s<kSitesPerCell;++s)
+            {
+                uint32_t const salt=(uint32_t)s*17u;
+                ++g.livingWorldGrassCandidateSites;
+                ++g.livingWorldGrassCulled;
+                if(GrassHash01(wx,wy,salt+0u)>density)continue;   // density accept/reject
+                float const sx=(float)wx+GrassHash01(wx,wy,salt+1u); // sub-cell offset
+                float const sy=(float)wy+GrassHash01(wx,wy,salt+2u);
+                float const pdx=sx-g.feetX,pdy=sy-g.feetY;
+                float const dist=std::sqrt(pdx*pdx+pdy*pdy);
+                if(dist>=kGrassThinEndM)continue;
+                float height=(kGrassMinHeightM+(kGrassMaxHeightM-kGrassMinHeightM)
+                    *GrassHash01(wx,wy,salt+3u))*GrassHeightFade(dist);
+                if(height<0.015f)continue;               // no microscopic geometry
+                float sz=0.f;
+                if(!Stage0CalibrationSurfaceZ(sx,sy,sz))continue; // presentation-only snap
+                float const hw=0.5f*(kGrassMinWidthM+(kGrassMaxWidthM-kGrassMinWidthM)
+                    *GrassHash01(wx,wy,salt+4u));
+                float const yaw=GrassHash01(wx,wy,salt+5u)*6.2831853f;
+                float const tint=0.85f+GrassHash01(wx,wy,salt+6u)*0.30f;
+                // Subtle per-clump tint; the terrain material carries broad colour.
+                float const red=0.22f*tint,green=0.44f*tint,blue=0.16f*tint;
+                EmitGrassQuadZ(grassVertices,sx,sy,sz,hw,height,yaw,red,green,blue);
+                EmitGrassQuadZ(grassVertices,sx,sy,sz,hw,height,yaw+1.5707963f,
+                    red,green,blue);
+                int cards=2;
+                if(dist<12.f&&GrassHash01(wx,wy,salt+7u)>0.55f)   // near LOD: third quad
+                {
+                    EmitGrassQuadZ(grassVertices,sx,sy,sz,hw,height,yaw+0.7853982f,
+                        red,green,blue);
+                    ++nearClumps;++cards;
+                }
+                else ++midClumps;
+                g.livingWorldGrassSubmittedCards+=cards;
+                g.livingWorldGrassSubmittedTriangles+=cards*2;
+                ++g.livingWorldGrassActive;--g.livingWorldGrassCulled;
+            }
         }
-        glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
-        g.livingWorldGrassLod=g.livingWorldGrassActive;
+        if(!grassVertices.empty())
+        {
+            GLsizei const stride=(GLsizei)sizeof(GrassCardVertex);
+            unsigned char const* base=(unsigned char const*)grassVertices.data();
+            glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+            glEnableClientState(GL_COLOR_ARRAY);
+            glVertexPointer(3,GL_FLOAT,stride,base+offsetof(GrassCardVertex,x));
+            glTexCoordPointer(2,GL_FLOAT,stride,base+offsetof(GrassCardVertex,u));
+            glColorPointer(3,GL_FLOAT,stride,base+offsetof(GrassCardVertex,r));
+            glDrawArrays(GL_TRIANGLES,0,(GLsizei)grassVertices.size());
+            glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+            glDisableClientState(GL_VERTEX_ARRAY);
+        }
+        glEnable(GL_CULL_FACE);
+        if(textured)
+        {glDisable(GL_ALPHA_TEST);glBindTexture(GL_TEXTURE_2D,0);glDisable(GL_TEXTURE_2D);}
+        // grass_lod now reports a genuine sub-tier -- clumps drawn at the near
+        // three-quad LOD -- rather than merely echoing the active count.
+        g.livingWorldGrassLod=nearClumps;
+        g.livingWorldGrassMidClumps=midClumps;
         QueryPerformanceCounter(&q1);
         g.livingWorldGrassFrameMs=qpf.QuadPart>0?1000.0
             *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
@@ -34359,6 +34563,16 @@ namespace
         int maxGrassActive=0;
         int maxGrassCulled=0;
         int maxGrassLod=0;
+        int maxGrassMidClumps=0;
+        int maxGrassCandidateCells=0;
+        int maxGrassHostCells=0;
+        int maxGrassRejectedSurface=0;
+        int maxGrassRejectedMaterial=0;
+        int maxGrassRejectedSlope=0;
+        int maxGrassCandidateSites=0;
+        int maxGrassSubmittedCards=0;
+        int maxGrassSubmittedTriangles=0;
+        bool grassVisualWritten=false;
         int maxTreeActive=0;
         int maxTreeCulled=0;
         int maxTreeNear=0;
@@ -34372,6 +34586,8 @@ namespace
         double grassMs=0.0,treeSubmitMs=0.0,propMs=0.0;
         double animalUpdateMs=0.0,npcUpdateMs=0.0,animationMs=0.0;
         double collisionMs=0.0,presentMs=0.0;
+        double worstSimulationMs=0.0,worstTerrainMs=0.0,worstDrawMs=0.0;
+        double worstGrassMs=0.0,worstGpuFinishMs=0.0,worstPresentMs=0.0;
         std::vector<double> frameMs;
     };
 
@@ -34385,6 +34601,8 @@ namespace
         bool measureThisFrame=false;
         bool capturePending=false;
         bool captureComplete=false;
+        int grassVisualW=0,grassVisualH=0;
+        std::vector<unsigned char> grassVisualRgba;
         std::vector<LivingWorldLoadCase> receipts;
     };
     LivingWorldLoadRun s_livingWorldLoad;
@@ -34461,9 +34679,38 @@ namespace
     bool WriteLivingWorldLoadArtifact()
     {
         int const level=g.livingWorldLoadLevel;
-        bool passed=level>=0&&level<=6
+        bool const grassRequired=level==1||level==6;
+        bool grassVisualFileWritten=!grassRequired;
+        if(grassRequired&&s_livingWorldLoad.grassVisualW>0
+            &&s_livingWorldLoad.grassVisualH>0
+            &&s_livingWorldLoad.grassVisualRgba.size()==(size_t)s_livingWorldLoad.grassVisualW
+                *(size_t)s_livingWorldLoad.grassVisualH*4u)
+        {
+            char visualPath[128]={};
+            sprintf_s(visualPath,"Docs\\provenance_living_world_load_%d_grass_visual.ppm",level);
+            FILE* visual=nullptr;
+            if(fopen_s(&visual,visualPath,"wb")==0&&visual)
+            {
+                int const w=s_livingWorldLoad.grassVisualW,h=s_livingWorldLoad.grassVisualH;
+                std::fprintf(visual,"P6\n%d %d\n255\n",w,h);
+                for(int y=h-1;y>=0;--y)for(int x=0;x<w;++x)
+                {
+                    size_t const i=((size_t)y*(size_t)w+(size_t)x)*4u;
+                    unsigned char const rgb[3]={s_livingWorldLoad.grassVisualRgba[i],
+                        s_livingWorldLoad.grassVisualRgba[i+1],
+                        s_livingWorldLoad.grassVisualRgba[i+2]};
+                    std::fwrite(rgb,1,3,visual);
+                }
+                std::fclose(visual);grassVisualFileWritten=true;
+            }
+        }
+        bool const grassTexturePass=!grassRequired||(g.livingWorldGrassTextureLoaded
+            &&g.livingWorldGrassTextureW==256&&g.livingWorldGrassTextureH==256
+            &&g.livingWorldGrassTextureDigest!=0);
+        bool passed=level>=0&&level<=6&&grassTexturePass
             &&s_livingWorldLoad.receipts.size()==kLivingBearingCount*kLivingModeCount;
         bool completePass=passed,visualPass=passed,authorityPass=passed,framePass=passed;
+        bool grassVisualPass=!grassRequired;
         double overallWorst=0.0;
         FILE* file=nullptr;
         char artifactPath[128]={};
@@ -34484,12 +34731,26 @@ namespace
             g.stage0LiveRadiusM,g.stage0FarExtentM,(level==1||level==6)?1:0,
             (level==2||level==6)?1:0,(level==3||level==6)?1:0,
             (level==4||level==6)?1:0,(level==5||level==6)?1:0);
+        std::fprintf(file,"grass_mode=%s\ngrass_authority=0\n"
+            "grass_admission=synthetic_sedimentary_low_slope\n"
+            "grass_admitted_materials=sandstone,shale\ngrass_max_slope_rise_per_m=0.65\n"
+            "grass_texture_required=%d\ngrass_texture_loaded=%d\n"
+            "grass_texture_width=%d\ngrass_texture_height=%d\n"
+            "grass_texture_rgba_digest=%016llx\n",
+            grassRequired?"representative_textured_cards":"none",grassRequired?1:0,
+            g.livingWorldGrassTextureLoaded?1:0,g.livingWorldGrassTextureW,
+            g.livingWorldGrassTextureH,(unsigned long long)g.livingWorldGrassTextureDigest);
         for(auto const& receipt:s_livingWorldLoad.receipts)
         {
+            grassVisualPass=grassVisualPass||receipt.grassVisualWritten;
             double const worst=receipt.frameMs.empty()?0.0:
                 *std::max_element(receipt.frameMs.begin(),receipt.frameMs.end());
             overallWorst=(std::max)(overallWorst,worst);
-            bool const row=receipt.measuredFrames>0&&receipt.framesOver16==0
+            bool const grassRow=!grassRequired||(receipt.maxGrassActive>0
+                &&receipt.maxGrassCandidateCells>0&&receipt.maxGrassHostCells>0
+                &&receipt.maxGrassRejectedSlope>0&&receipt.maxGrassSubmittedCards>0
+                &&receipt.maxGrassSubmittedTriangles>0);
+            bool const row=receipt.measuredFrames>0&&receipt.framesOver16==0&&grassRow
                 &&receipt.groundFailures==0&&receipt.collisionMismatches==0
                 &&receipt.authoritySamples>0&&receipt.authorityMismatches==0
                 &&receipt.skyPixels==0&&receipt.fallbackPixels==0
@@ -34507,7 +34768,13 @@ namespace
             std::fprintf(file,"case.%s_%s=%s frames=%d mean_ms=%.3f p95_ms=%.3f "
                 "p99_ms=%.3f worst_ms=%.3f frames_over_16_667=%d "
                 "min_complete_radius_m=%.2f max_worker_backlog=%d "
-                "max_resident_packages=%d grass_active=%d grass_culled=%d grass_lod=%d "
+                "max_resident_packages=%d max_grass_active_clumps=%d "
+                "max_grass_rejected_candidate_sites=%d max_grass_near_3quad_clumps=%d "
+                "max_grass_mid_2quad_clumps=%d max_grass_candidate_cells=%d "
+                "max_grass_host_cells=%d max_grass_rejected_surface_cells=%d "
+                "max_grass_rejected_material_cells=%d max_grass_rejected_slope_cells=%d "
+                "max_grass_candidate_sites=%d max_grass_submitted_cards=%d "
+                "max_grass_submitted_triangles=%d "
                 "trees_active=%d trees_culled=%d tree_lod_near=%d tree_lod_mid=%d "
                 "tree_impostors=%d props_active=%d props_culled=%d "
                 "animals_active=%d animals_culled=%d npcs_active=%d npcs_culled=%d "
@@ -34523,7 +34790,12 @@ namespace
                 Stage11WaterfallPercentile(receipt.frameMs,.99),worst,receipt.framesOver16,
                 receipt.minCompleteRadiusM,receipt.maxWorkerBacklog,
                 receipt.maxResidentPackages,receipt.maxGrassActive,receipt.maxGrassCulled,
-                receipt.maxGrassLod,receipt.maxTreeActive,receipt.maxTreeCulled,
+                receipt.maxGrassLod,receipt.maxGrassMidClumps,
+                receipt.maxGrassCandidateCells,receipt.maxGrassHostCells,
+                receipt.maxGrassRejectedSurface,receipt.maxGrassRejectedMaterial,
+                receipt.maxGrassRejectedSlope,receipt.maxGrassCandidateSites,
+                receipt.maxGrassSubmittedCards,receipt.maxGrassSubmittedTriangles,
+                receipt.maxTreeActive,receipt.maxTreeCulled,
                 receipt.maxTreeNear,receipt.maxTreeMid,receipt.maxTreeImpostors,
                 receipt.maxPropActive,receipt.maxPropCulled,
                 receipt.maxAnimalActive,receipt.maxAnimalCulled,
@@ -34533,15 +34805,27 @@ namespace
                 receipt.fallbackPixels,receipt.terrainMs,receipt.grassMs,receipt.treeSubmitMs,
                 receipt.propMs,receipt.animalUpdateMs,receipt.npcUpdateMs,receipt.animationMs,
                 receipt.collisionMs,receipt.presentMs);
+            std::fprintf(file,"case.%s_%s_worst_breakdown simulation_ms=%.3f "
+                "terrain_ms=%.3f grass_ms=%.3f draw_submit_ms=%.3f "
+                "gpu_finish_ms=%.3f present_ms=%.3f\n",receipt.bearing,receipt.mode,
+                receipt.worstSimulationMs,receipt.worstTerrainMs,receipt.worstGrassMs,
+                receipt.worstDrawMs,receipt.worstGpuFinishMs,receipt.worstPresentMs);
         }
+        grassVisualPass=grassVisualPass&&grassVisualFileWritten;
+        passed=passed&&grassVisualPass;
         std::fprintf(file,"overall=%s\noverall_worst_movement_ms=%.3f\n"
             "check.complete_192m_terrain=%s\ncheck.zero_holes_or_fallback=%s\n"
             "check.zero_authority_or_collision_mismatch=%s\n"
-            "check.zero_frames_over_16_667=%s\n"
+            "check.zero_frames_over_16_667=%s\ncheck.grass_texture=%s\n"
+            "check.grass_visual_receipt=%s\n"
+            "grass_visual_path=%s\n"
             "next_level=%s\n",
             passed?"PASS":"FAIL",overallWorst,completePass?"PASS":"FAIL",
             visualPass?"PASS":"FAIL",authorityPass?"PASS":"FAIL",
-            framePass?"PASS":"FAIL",
+            framePass?"PASS":"FAIL",grassTexturePass?"PASS":"FAIL",
+            grassVisualPass?"PASS":"FAIL",grassRequired?
+                (level==1?"Docs/provenance_living_world_load_1_grass_visual.ppm":
+                    "Docs/provenance_living_world_load_6_grass_visual.ppm"):"n/a",
             level==0?"L1_GRASS_PRESENTATION_ONLY":level==1?"L2_STATIC_INSTANCED_TREES":
             level==2?"L3_STATIC_ROCKS_PROPS":level==3?"L4_ANIMAL_LOCOMOTION_ANIMATION":
             level==4?"L5_NPC_CHEAP_PERCEPTION":level==5?"L6_COMBINED":"COMPLETE");
@@ -34625,12 +34909,41 @@ namespace
     {
         if(!g.certLivingWorldLoad||s_livingWorldLoad.receipts.empty())return;
         auto& run=s_livingWorldLoad;auto& receipt=run.receipts.back();
+        if(!receipt.grassVisualWritten
+            &&(g.livingWorldLoadLevel==1||g.livingWorldLoadLevel==6)
+            &&receipt.bearingIndex==0&&std::strcmp(receipt.mode,"walk")==0
+            &&run.phase==3&&run.settleFrames>=1)
+        {
+            glFinish();
+            GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+            int const w=vp[2],h=vp[3];
+            if(w>0&&h>0)
+            {
+                s_livingWorldLoad.grassVisualW=w;s_livingWorldLoad.grassVisualH=h;
+                s_livingWorldLoad.grassVisualRgba.resize((size_t)w*(size_t)h*4u);
+                glPixelStorei(GL_PACK_ALIGNMENT,1);glReadBuffer(GL_FRONT);
+                glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,
+                    s_livingWorldLoad.grassVisualRgba.data());
+                receipt.grassVisualWritten=true;
+            }
+        }
         if(run.measureThisFrame)
         {
             run.measureThisFrame=false;
             double const ms=g.stage0FrameCpuMs;
             receipt.frameMs.push_back(ms);++receipt.measuredFrames;
             if(ms>16.667)++receipt.framesOver16;
+            if(ms>=receipt.frameMs.front()
+                &&ms>=*std::max_element(receipt.frameMs.begin(),receipt.frameMs.end()))
+            {
+                receipt.worstSimulationMs=g.stage0FrameSimulationMs;
+                receipt.worstTerrainMs=g.stage0FrameGenerationMs+g.stage0FrameResidencyMs
+                    +g.stage0FrameHfBuildMs+g.stage0FrameHfRetireMs;
+                receipt.worstGrassMs=g.livingWorldGrassFrameMs;
+                receipt.worstDrawMs=g.stage0FrameDrawSubmitMs;
+                receipt.worstGpuFinishMs=g.stage0FrameGpuFinishMs;
+                receipt.worstPresentMs=g.stage0FramePresentWaitMs;
+            }
             receipt.minCompleteRadiusM=(std::min)(receipt.minCompleteRadiusM,
                 Stage0MinCompleteRadiusM(g.stage0PlayView));
             receipt.maxWorkerBacklog=(std::max)(receipt.maxWorkerBacklog,
@@ -34646,6 +34959,24 @@ namespace
                 g.livingWorldGrassCulled);
             receipt.maxGrassLod=(std::max)(receipt.maxGrassLod,
                 g.livingWorldGrassLod);
+            receipt.maxGrassMidClumps=(std::max)(receipt.maxGrassMidClumps,
+                g.livingWorldGrassMidClumps);
+            receipt.maxGrassCandidateCells=(std::max)(receipt.maxGrassCandidateCells,
+                g.livingWorldGrassCandidateCells);
+            receipt.maxGrassHostCells=(std::max)(receipt.maxGrassHostCells,
+                g.livingWorldGrassHostCells);
+            receipt.maxGrassRejectedSurface=(std::max)(receipt.maxGrassRejectedSurface,
+                g.livingWorldGrassRejectedSurface);
+            receipt.maxGrassRejectedMaterial=(std::max)(receipt.maxGrassRejectedMaterial,
+                g.livingWorldGrassRejectedMaterial);
+            receipt.maxGrassRejectedSlope=(std::max)(receipt.maxGrassRejectedSlope,
+                g.livingWorldGrassRejectedSlope);
+            receipt.maxGrassCandidateSites=(std::max)(receipt.maxGrassCandidateSites,
+                g.livingWorldGrassCandidateSites);
+            receipt.maxGrassSubmittedCards=(std::max)(receipt.maxGrassSubmittedCards,
+                g.livingWorldGrassSubmittedCards);
+            receipt.maxGrassSubmittedTriangles=(std::max)(receipt.maxGrassSubmittedTriangles,
+                g.livingWorldGrassSubmittedTriangles);
             receipt.treeSubmitMs+=g.livingWorldTreeFrameMs;
             receipt.maxTreeActive=(std::max)(receipt.maxTreeActive,
                 g.livingWorldTreeActive);
