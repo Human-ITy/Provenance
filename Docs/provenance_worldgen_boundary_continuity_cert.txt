@@ -30,8 +30,12 @@ view.stage11_north=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 grou
 view.stage11_east=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
 view.stage11_south=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
 view.stage11_west=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
+view.stage12_north=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
+view.stage12_east=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
+view.stage12_south=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
+view.stage12_west=PASS sky_pixels=0 fallback_green_pixels=0 sampled=574210 ground_valid=1 freefly_stable=1 image=1
 WORLDGEN_BOUNDARY_CONTINUITY PASS
-capture_policy=stage0_stage5_to_stage11_x_north_east_south_west
+capture_policy=stage0_stage5_to_stage12_x_north_east_south_west
 active_residency_radius_m=192
 active_residency_diameter_m=384
 far_field_extent_m=0

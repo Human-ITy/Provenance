@@ -1,6 +1,6 @@
 # Provenance Certification Browser
 
-Status: Stage-10-integrated playtest shell.
+Status: Stage-12-integrated playtest shell.
 
 ## Ruling
 
@@ -26,6 +26,8 @@ GEO.VISIBLE_EXPOSURE
 GEOMORPH.DIFFERENTIAL_EROSION
 GEO.GRANITE_INTRUSION
 GEO.CONTACT_MINERALIZATION
+GEO.FAULT_DISPLACEMENT
+GEO.BREACH_CONTINUITY
 ```
 
 Stage numbers remain useful historical labels, but stable identifiers are the
@@ -33,8 +35,15 @@ permanent keys. The browser groups entries by domain and shows actual runtime
 state, requirements, and provided authority. It does not impose a numbered-stage
 ceiling.
 
-Navigation is Up/Down or mouse wheel plus Enter. Keys 1-8 are convenience
-shortcuts only. Adding later certificates does not require a new control scheme.
+The browser groups stages by domain. Left/Right selects a domain, Up/Down or the
+mouse wheel selects a stage, and Enter loads it. Number keys remain convenience
+shortcuts for the entries that have them; later stages do not depend on adding
+another global key.
+
+Stage 12 is a proof-only extension of Stage 11. It does not mint a new deposit
+or alter terrain. The selected present surface directly intersects the existing
+faulted quartz body, and the geology flashlight follows that same FeatureId
+below the surface.
 
 ## Tool availability
 

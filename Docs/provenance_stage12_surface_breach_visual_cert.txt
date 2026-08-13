@@ -1,0 +1,11 @@
+STAGE12_SURFACE_BREACH_VISUAL PASS
+frames=90
+stage=CERTIFIED SURFACE BREACH CONTINUITY
+image=Docs/provenance_stage12_surface_breach_xray.ppm
+xray_deposit_visible=1
+deposit_pixels=10118
+surface_material=quartz
+surface_feature_id=da10b0d1e5f01001
+target_feature_id=da10b0d1e5f01001
+surface_is_target=1
+surface_and_terminal_authority=stage11_faulted_quartz

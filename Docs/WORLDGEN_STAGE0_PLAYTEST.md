@@ -19,7 +19,7 @@ location. Opening the copy under `Build\x64_Release` directly is supported; it
 does not depend on Windows supplying the repository as the working directory.
 
 The included `PLAY_WORLDGEN_STAGE0.cmd` launcher uses this command despite its
-legacy filename. It now opens the latest numbered certified runtime, Stage 11,
+legacy filename. It now opens the latest numbered certified runtime, Stage 12,
 with a complete 192 m live radius / 384 m diameter. The far-field path remains
 disabled while its presentation backend is isolated. The clean Stage-0 fixture
 is still selectable as the permanent control.
@@ -65,6 +65,7 @@ number keys remain optional runtime shortcuts:
 [8] GEO.CONTACT_MINERALIZATION           Stage 10 contact mineralization
 [9] GEO.FAULT_DISPLACEMENT                Stage 11 fault displacement
 [0] CUT.C.OCCUPANCY_PARITY                Cut C integration control
+[browser] GEO.BREACH_CONTINUITY            Stage 12 surface breach continuity
 ```
 
 The clean choice is the closest playable counterpart to the permanent headless

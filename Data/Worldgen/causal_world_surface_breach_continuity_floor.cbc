@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_SURFACE_BREACH_CONTINUITY_V1
+# Stage 12: certify a real present-surface intersection of the existing
+# Stage-11 faulted quartz body. This descriptor adds no geology and no runtime
+# erosion; it names the bounded proof and its counterfactual cover control.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_surface_breach_continuity_floor
+fault_descriptor_digest=079be3c473a91396
+authority_revision=1
+target_feature_id=da10b0d1e5f01001
+target_deposit_system_id=c0a7ac7d3e51aa10
+proof_min_x_m=-32.0
+proof_max_x_m=32.0
+proof_min_y_m=-32.0
+proof_max_y_m=32.0
+surface_step_m=0.25
+cover_control_offset_m=4.0
+subsurface_scan_depth_m=24.0
+subsurface_step_m=0.125
