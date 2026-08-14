@@ -1,0 +1,20 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TOPOLOGY_V1
+# Stage 16F.4: topology-changing water on FIXED terrain.
+# Occupancy may grow/shrink; components may split/merge. Terrain digest stays
+# frozen. BodyId names the current connected hydraulic component; water
+# provenance survives independently. Split/merge mint new deterministic IDs
+# with explicit lineage.
+# CLOSED: P5b, rainfall as weather, erosion, sediment remobilization,
+# terrain mutation, generic SimulationDomain / world-connectivity extract.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_topology_floor
+parent_region_key=causal_world_present_water_external_transfer_floor
+parent_authority_revision=1
+authority_revision=1
+topology_event_id=16f4000100000001
+chronology=180
+topology_enabled=1
+default_budget_transactions=48

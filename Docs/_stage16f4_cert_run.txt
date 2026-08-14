@@ -1,0 +1,8 @@
+EXIT=0
+analytical=PASS
+visual=PASS
+cardinal=PASS
+field_digest_disabled=a7f6eebc0fc0579f
+field_digest_unbounded=43068558cd0b4a8e
+movement_frames_over_16_667=0
+p5b=closed

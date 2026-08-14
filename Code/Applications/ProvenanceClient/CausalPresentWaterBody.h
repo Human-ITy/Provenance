@@ -211,6 +211,28 @@ namespace CausalPresentWaterBody
             std::vector<FPresentWaterBody> bodies;BuildBodies(cells,bodies,nullptr);return bodies;
         }
 
+        // Stage 16F.4: install locally reconstructed bodies. Terrain/hydrology
+        // source revisions stay frozen; only occupancy-derived membership changes.
+        bool InstallBodies(std::vector<FPresentWaterBody> next,std::string* reason=nullptr)
+        {
+            uint32_t const landscapeRev=Sediment().GetProgram().authorityRevision;
+            uint32_t const hydroRev=Drainage().GetProgram().authorityRevision;
+            for(FPresentWaterBody& body:next)
+            {
+                if(body.SourceLandscapeRevision!=landscapeRev
+                  ||body.SourceHydrologyRevision!=hydroRev)
+                {if(reason)*reason="source_revision_mutation";return false;}
+            }
+            std::sort(next.begin(),next.end(),[](FPresentWaterBody const& a,FPresentWaterBody const& b)
+            {return a.BodyId<b.BodyId;});
+            m_bodies=std::move(next);
+            m_bodyIndex.clear();
+            for(size_t i=0;i<m_bodies.size();++i)m_bodyIndex[m_bodies[i].BodyId]=(int)i;
+            m_digest=DigestBodies(m_bodies);
+            m_connectivityDigest=ConnectivityDigest(m_bodies);
+            if(reason)*reason="ok";return true;
+        }
+
     private:
         static void SortUnique(std::vector<uint64_t>& values)
         {

@@ -144,6 +144,7 @@ namespace CausalPresentWater
     {
         double x=0,y=0,terrainZ=0,waterSurfaceZ=0,depthM=0;
         uint64_t bodyId=0;
+        uint64_t waterIdentity=0; // matter provenance; survives BodyId split/merge
         BodyKind kind=BodyKind::None;
         bool occupied=false;
         int64_t occupancyUnits=0;
@@ -188,6 +189,7 @@ namespace CausalPresentWater
             {
                 Cell const& a=m_cells[i];Cell const& b=next[i];
                 if(a.occupied!=b.occupied||a.bodyId!=b.bodyId||a.kind!=b.kind
+                  ||a.waterIdentity!=b.waterIdentity
                   ||std::fabs(a.terrainZ-b.terrainZ)>1e-12
                   ||std::fabs(a.x-b.x)>1e-12||std::fabs(a.y-b.y)>1e-12)
                 {if(reason)*reason="identity_or_terrain_mutation";return false;}
@@ -200,7 +202,38 @@ namespace CausalPresentWater
                     {if(reason)*reason="void_or_units_invalid";return false;}
                 }
                 else if(b.depthM!=0||b.occupancyUnits!=0||b.bodyId!=0
-                  ||b.kind!=BodyKind::None)
+                  ||b.kind!=BodyKind::None||b.waterIdentity!=0)
+                {if(reason)*reason="dry_cell_dirty";return false;}
+            }
+            m_cells=next;
+            m_digest=DigestFor(Control::Full);
+            m_occupancyDigest=OccupancyDigestFor(Control::Full);
+            if(reason)*reason="ok";return true;
+        }
+
+        // Stage 16F.4: occupancy-mask + hydraulic identity rewrite on fixed terrain.
+        // May change occupied / bodyId / kind / depth / units / waterIdentity.
+        // Refuses x/y/terrainZ mutation. Wet cells must remain void-consistent.
+        bool RewriteOccupancyAndIdentity(std::vector<Cell> const& next,std::string* reason=nullptr)
+        {
+            if(next.size()!=m_cells.size())
+            {if(reason)*reason="cell_count_mismatch";return false;}
+            for(size_t i=0;i<m_cells.size();++i)
+            {
+                Cell const& a=m_cells[i];Cell const& b=next[i];
+                if(std::fabs(a.terrainZ-b.terrainZ)>1e-12
+                  ||std::fabs(a.x-b.x)>1e-12||std::fabs(a.y-b.y)>1e-12)
+                {if(reason)*reason="terrain_mutation";return false;}
+                if(b.occupied)
+                {
+                    if(b.depthM<=m_program.occupancyEpsilonM
+                      ||b.waterSurfaceZ+1e-12<b.terrainZ
+                      ||std::fabs((b.waterSurfaceZ-b.terrainZ)-b.depthM)>1e-6
+                      ||b.occupancyUnits<=0||b.bodyId==0||b.kind==BodyKind::None)
+                    {if(reason)*reason="void_or_units_invalid";return false;}
+                }
+                else if(b.depthM!=0||b.occupancyUnits!=0||b.bodyId!=0
+                  ||b.kind!=BodyKind::None||b.waterIdentity!=0)
                 {if(reason)*reason="dry_cell_dirty";return false;}
             }
             m_cells=next;
@@ -424,17 +457,17 @@ namespace CausalPresentWater
                 if(!cell.occupied||cell.depthM<=m_program.occupancyEpsilonM)
                 {
                     cell.occupied=false;cell.depthM=0;cell.waterSurfaceZ=cell.terrainZ;
-                    cell.kind=BodyKind::None;cell.bodyId=0;cell.occupancyUnits=0;
+                    cell.kind=BodyKind::None;cell.bodyId=0;cell.waterIdentity=0;cell.occupancyUnits=0;
                     continue;
                 }
                 // Void consistency: water surface must sit at/above terrain.
                 if(cell.waterSurfaceZ+1e-12<cell.terrainZ)
                 {cell.waterSurfaceZ=cell.terrainZ;cell.depthM=0;cell.occupied=false;
-                    cell.kind=BodyKind::None;cell.bodyId=0;cell.occupancyUnits=0;continue;}
+                    cell.kind=BodyKind::None;cell.bodyId=0;cell.waterIdentity=0;cell.occupancyUnits=0;continue;}
                 cell.depthM=cell.waterSurfaceZ-cell.terrainZ;
                 if(cell.depthM<=m_program.occupancyEpsilonM)
                 {cell.occupied=false;cell.depthM=0;cell.kind=BodyKind::None;cell.bodyId=0;
-                    cell.occupancyUnits=0;continue;}
+                    cell.waterIdentity=0;cell.occupancyUnits=0;continue;}
                 // P5a capacity contract scale (100 units ⇔ 1 m³ on 1 m² footprint).
                 // Seeded occupancy only — not a live ledger / P5b wake.
                 double const volume=cell.depthM*cellArea;
@@ -483,6 +516,7 @@ namespace CausalPresentWater
                 for(int i:component)
                 {
                     out[(size_t)i].bodyId=bodyId;
+                    out[(size_t)i].waterIdentity=bodyId;
                     if(kinds>=2&&out[(size_t)i].kind!=BodyKind::None)
                     {
                         // Keep cell-local kind for diagnostics; body is Connected.
