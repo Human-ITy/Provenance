@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_RESPONSE_V1
+# P5b.1: one-way terrain mutation → water response on frozen Stage 16F.4.
+# Authoritative terrain change bumps revision R → R+1, invalidates local
+# hydraulic geometry, re-evaluates occupancy against the new void, then
+# 16F.4 local topology / 16F.1 equilibration / 16F.2 certified spill.
+# Water mass is conserved independently of terrain matter.
+# CLOSED: P5b.2 player interaction, P5b.3 water→terrain effects, rainfall,
+# infiltration, groundwater, water-driven erosion, sediment remobilization,
+# bank collapse, active 16B erosion, ecology, SimulationDomain extract.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_response_floor
+parent_region_key=causal_world_present_water_topology_floor
+parent_authority_revision=1
+authority_revision=1
+p5b1_event_id=a5b1000100000001
+chronology=190
+p5b1_enabled=1
+default_budget_transactions=48

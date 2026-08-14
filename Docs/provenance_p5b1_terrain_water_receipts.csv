@@ -1,0 +1,5 @@
+TransactionId,Fixture,Class,ContactCell,DeltaZ,WaterBefore,WaterAfter,MatterBefore,MatterAfter,HeldBefore,HeldAfter,TerrainRevBefore,TerrainRevAfter,WaterTopoBefore,WaterTopoAfter,PublishedTerrain,PublishedWater,RenderTerrain,CollisionTerrain,RefusedNoAdmissible,CellsVisited,BodiesExamined,InputBodies,OutputBodies
+2ea7e9dbaf45177e,lower_sill,grow,12398,-0.779682,456302579,456302579,353567014766,353566235084,1000000000000,1000000779682,0,1,4,5,1,5,1,1,0,14,1,abd2bebf6b55dbdc,abd2bebf6b55dbdc
+6fed041dbca27cda,dig_channel,merge,125,-4.430436,456302579,456302579,353566235084,353561804648,1000000779682,1000005210118,1,2,5,6,2,6,2,2,0,12,2,2bf19e5630a4ecc5|834d774dd5873189,df39f5aa90ae0971
+533fbff6c8dcb035,raise_fill,shrink,46522,5.655781,456302579,456302579,353561804648,353567460429,1000005210118,999999554337,2,3,6,7,3,7,3,3,0,7,1,03076c8b050b9325,03076c8b050b9325
+55a2c6b6175ef10a,remove_floor,none,42,-0.500000,456302579,456302579,353567460429,353566960429,999999554337,1000000054337,3,4,7,8,4,8,4,4,0,4,1,b96b3a3eddc20064,b96b3a3eddc20064

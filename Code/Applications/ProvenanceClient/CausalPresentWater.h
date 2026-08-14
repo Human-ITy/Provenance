@@ -242,6 +242,37 @@ namespace CausalPresentWater
             if(reason)*reason="ok";return true;
         }
 
+        // P5b.1: one-way terrain mutation + occupancy rewrite. May change terrainZ
+        // together with occupancy/identity. Refuses x/y mutation. Wet cells must
+        // remain void-consistent (no water inside solid terrain). Reverse
+        // coupling (water erodes terrain) stays closed.
+        bool RewriteTerrainAndOccupancy(std::vector<Cell> const& next,std::string* reason=nullptr)
+        {
+            if(next.size()!=m_cells.size())
+            {if(reason)*reason="cell_count_mismatch";return false;}
+            for(size_t i=0;i<m_cells.size();++i)
+            {
+                Cell const& a=m_cells[i];Cell const& b=next[i];
+                if(std::fabs(a.x-b.x)>1e-12||std::fabs(a.y-b.y)>1e-12)
+                {if(reason)*reason="xy_mutation";return false;}
+                if(b.occupied)
+                {
+                    if(b.depthM<=m_program.occupancyEpsilonM
+                      ||b.waterSurfaceZ+1e-12<b.terrainZ
+                      ||std::fabs((b.waterSurfaceZ-b.terrainZ)-b.depthM)>1e-6
+                      ||b.occupancyUnits<=0||b.bodyId==0||b.kind==BodyKind::None)
+                    {if(reason)*reason="void_or_units_invalid";return false;}
+                }
+                else if(b.depthM!=0||b.occupancyUnits!=0||b.bodyId!=0
+                  ||b.kind!=BodyKind::None||b.waterIdentity!=0)
+                {if(reason)*reason="dry_cell_dirty";return false;}
+            }
+            m_cells=next;
+            m_digest=DigestFor(Control::Full);
+            m_occupancyDigest=OccupancyDigestFor(Control::Full);
+            if(reason)*reason="ok";return true;
+        }
+
         double ReconstructedZ(double x,double y) const
         {return m_sediment->ReconstructedZ(x,y);}
 

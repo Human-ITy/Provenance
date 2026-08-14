@@ -218,8 +218,26 @@ Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34,
 
 **Authority note:** Esoterica-local `WaterLedger.h` for this floor. Fablescript `engine/water.py` remains the intended long-term ledger authority; P5a may stay client-local until that wire is consumed here.
 
-**P5a status:** foundation-ready for later gates (settle/units/solid/determinism green).  
-**P5b remains CLOSED** — do not open terrain–water coupling depth. Also closed: P5c presentation · P5d flow stress.
+**P5a status:** foundation-ready for later gates (settle/units/solid/determinism green).
+
+```
+P5b.1 TERRAIN → WATER RESPONSE (ONE-WAY)
+SHA: pending-commit
+```
+
+**Law:** Authoritative terrain mutation wakes a local hydraulic neighborhood only.
+Water mass is conserved independently of terrain matter. Occupancy, surface, and
+topology may change; water is never deleted. Publish terrain + water as one
+coherent revision pair. Disabled P5b.1 == exact 16F.4 field `43068558cd0b4a8e`.
+
+`--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
+Play: `PLAY_P5B1_TERRAIN_WATER.cmd` / `--play-p5b1-terrain-water`  
+Handoff: `P5B1_TERRAIN_WATER_HANDOFF.md`
+
+**P5b.2 CLOSED** — repeated/player interaction around water.  
+**P5b.3 CLOSED** — water→terrain mechanical effects.  
+Also closed: water erosion, sediment transport, bank collapse, rainfall,
+infiltration, groundwater, active 16B erosion, 16C remobilization, ecology.
 
 ```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
@@ -239,7 +257,7 @@ Committed artifact: `Docs/provenance_pick_fracture_cert.txt` — **PASS 9/0**.
 Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morphology`, `rotation_equivalence` (gravel/granite/mica_schist 0°…90°), `two_strike_gravel`, `outside_recon_halo_identity`, `no_world_up_fracture_law`, `presentation_coverage_closed`, `outside_strike_volume_deform`.
 
 **P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
-**P5b remains CLOSED** — STOP; do not open terrain–water coupling.
+**P5b.1 OPEN (one-way terrain→water only).** P5b.2 / P5b.3 / erosion / rainfall CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
 Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.

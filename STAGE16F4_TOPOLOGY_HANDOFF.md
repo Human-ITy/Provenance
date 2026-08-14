@@ -4,14 +4,15 @@ Stage 16F.4 answers one question: on **immutable terrain**, can water occupancy
 change (`dry↔wet`) and can hydraulic components **grow / shrink / split /
 merge** with deterministic lineage, without rediscovering the whole body set?
 
-It does not rain, erode, remobilize sediment, mutate terrain, open P5b, or
-extract a generic SimulationDomain / world-connectivity service.
+It does not rain, erode, remobilize sediment, mutate terrain, open P5b.2 /
+P5b.3, or extract a generic SimulationDomain / world-connectivity service.
 
 ## Freeze
 
-Stage 16F.3 remains frozen at `76ad83694ea2205b0d77d9490b1701723c9a15b1` on
-`provenance/client-spike`. Stage 16F.2 remains `cfc16d26`. Stage 16F.1 remains
-`3701dc51`. Stage 16E ontology remains `bc3e680c`.
+Stage 16F.4 is frozen at `3d84eac4b169c8a1e2b0f3971695b811bd9a5a61` on
+`provenance/client-spike`. Stage 16F.3 remains frozen at `76ad83694ea2205b0d77d9490b1701723c9a15b1`.
+Stage 16F.2 remains `cfc16d26`. Stage 16F.1 remains `3701dc51`. Stage 16E ontology
+remains `bc3e680c`.
 
 ## Occupancy / topology model
 
@@ -102,8 +103,11 @@ Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-stag
 
 ## Boundaries (CLOSED)
 
-- terrain mutation / excavation changing a basin
 - rainfall as weather
 - terrain-water feedback / erosion / sediment remobilization
-- **P5b**
+- **P5b.2** player interaction around water
+- **P5b.3** water→terrain mechanical effects
 - generic SimulationDomain / world-connectivity framework extract
+
+P5b.1 (one-way terrain→water) is a child of this freeze. It must not change the
+disabled-path 16F.4 field digest `43068558cd0b4a8e`. See `P5B1_TERRAIN_WATER_HANDOFF.md`.
