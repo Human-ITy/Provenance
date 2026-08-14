@@ -10,8 +10,10 @@ generic SimulationDomain, or open **P5b.2** / **P5b.3**.
 
 ## Freeze
 
-Stage 16F.4 remains frozen at `3d84eac4b169c8a1e2b0f3971695b811bd9a5a61` on
-`provenance/client-spike`. Disabled P5b.1 must reproduce that field exactly.
+P5b.1 landed at `4e6db8433fb136ab2068bab114a04d4ab265e935` on
+`provenance/client-spike`. Stage 16F.4 remains frozen at
+`3d84eac4b169c8a1e2b0f3971695b811bd9a5a61`. Disabled P5b.1 must reproduce that
+field exactly.
 
 ```
 P5b off → exact 16F.4 field digest 43068558cd0b4a8e

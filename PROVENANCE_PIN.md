@@ -222,7 +222,7 @@ Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34,
 
 ```
 P5b.1 TERRAIN → WATER RESPONSE (ONE-WAY)
-SHA: pending-commit
+SHA: 4e6db8433fb136ab2068bab114a04d4ab265e935
 ```
 
 **Law:** Authoritative terrain mutation wakes a local hydraulic neighborhood only.
