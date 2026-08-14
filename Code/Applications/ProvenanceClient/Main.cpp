@@ -32,6 +32,7 @@
 #include "CausalBareEarthGeography.h"
 #include "CausalDryHydrology.h"
 #include "CausalCompiledFluvialErosion.h"
+#include "CausalCompiledSediment.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -338,7 +339,8 @@ namespace
         SinglePickProof = 14,
         BareEarthGeography = 15,
         DryHydrology = 16,
-        CompiledFluvialErosion = 17
+        CompiledFluvialErosion = 17,
+        CompiledSediment = 18
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -656,6 +658,7 @@ namespace
         bool playStage15Launch = false;
         bool playStage16Launch = false;
         bool playStage16BLaunch = false;
+        bool playStage16CLaunch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -668,6 +671,8 @@ namespace
         int certStage16VisualFrames = 0;
         bool certStage16BVisual = false;
         int certStage16BVisualFrames = 0;
+        bool certStage16CVisual = false;
+        int certStage16CVisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -830,6 +835,8 @@ namespace
         bool dryHydrologyCertified = false;
         bool compiledFluvialAuthorityAttempted = false;
         bool compiledFluvialCertified = false;
+        bool compiledSedimentAuthorityAttempted = false;
+        bool compiledSedimentCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
         bool cutCOccupancyCertified = false;
         std::string causalGeologyAuthorityReason = "not_loaded";
@@ -844,6 +851,7 @@ namespace
         std::string bareEarthAuthorityReason = "not_loaded";
         std::string dryHydrologyAuthorityReason = "not_loaded";
         std::string compiledFluvialAuthorityReason = "not_loaded";
+        std::string compiledSedimentAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -858,6 +866,7 @@ namespace
         std::unique_ptr<CausalBareEarthGeography::Kernel> bareEarthRuntime;
         std::unique_ptr<CausalDryHydrology::Kernel> dryHydrologyRuntime;
         std::unique_ptr<CausalCompiledFluvialErosion::Kernel> compiledFluvialRuntime;
+        std::unique_ptr<CausalCompiledSediment::Kernel> compiledSedimentRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2550,10 +2559,15 @@ namespace
         return view == Stage0PlayView::CompiledFluvialErosion;
     }
 
+    bool IsCompiledSedimentView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::CompiledSediment;
+    }
+
     bool UsesBareEarthTerrain( Stage0PlayView view )
     {
         return IsBareEarthGeographyView(view)||IsDryHydrologyView(view)
-            ||IsCompiledFluvialErosionView(view);
+            ||IsCompiledFluvialErosionView(view)||IsCompiledSedimentView(view);
     }
 
     bool UsesExactLocalMaterialization( Stage0PlayView view )
@@ -2629,6 +2643,33 @@ namespace
             "Data\\Worldgen\\causal_world_dry_hydrology_floor.cdh";
         constexpr char const* kFluvialPath =
             "Data\\Worldgen\\causal_world_compiled_fluvial_erosion_floor.cfe";
+        constexpr char const* kSedimentPath =
+            "Data\\Worldgen\\causal_world_compiled_sediment_floor.csd";
+
+        if(IsCompiledSedimentView(view))
+        {
+            if(!g.compiledSedimentAuthorityAttempted)
+            {
+                g.compiledSedimentAuthorityAttempted=true;
+                auto const cert=CausalCompiledSediment::RunCert(kGeologyPath,
+                    kExposurePath,kErosionPath,kIntrusionPath,kMineralizationPath,
+                    kFaultPath,kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                    kSedimentPath);
+                g.compiledSedimentCertified=cert.passed;
+                g.compiledSedimentAuthorityReason=cert.passed?"certified":cert.reason;
+                if(cert.passed)
+                {
+                    std::string reason;g.compiledSedimentRuntime=
+                        CausalCompiledSediment::LoadKernel(kGeologyPath,kExposurePath,
+                            kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,
+                            kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                            kSedimentPath,&reason);
+                    if(!g.compiledSedimentRuntime)
+                    {g.compiledSedimentCertified=false;g.compiledSedimentAuthorityReason=reason;}
+                }
+            }
+            return g.compiledSedimentCertified&&g.compiledSedimentRuntime!=nullptr;
+        }
 
         if(IsCompiledFluvialErosionView(view))
         {
@@ -3128,8 +3169,32 @@ namespace
         return samples;
     }
 
+    CausalVisibleExposure::BlockSurfaceSamples SampleCompiledSedimentWorkerBlock(
+        CausalBareEarthGeography::Kernel const& geography,
+        CausalCompiledSediment::Kernel const& sediment,int bx,int by)
+    {
+        CausalVisibleExposure::BlockSurfaceSamples samples;samples.blockX=bx;samples.blockY=by;
+        samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockSampleSpan
+            *CausalVisibleExposure::kBlockSampleSpan);
+        int const baseX=bx*CausalVisibleExposure::kBlockCells-1;
+        int const baseY=by*CausalVisibleExposure::kBlockCells-1;
+        for(int y=0;y<CausalVisibleExposure::kBlockSampleSpan;++y)
+        for(int x=0;x<CausalVisibleExposure::kBlockSampleSpan;++x)
+        {
+            double const wx=(baseX+x+.5)*CausalVisibleExposure::kDualStepM;
+            double const wy=(baseY+y+.5)*CausalVisibleExposure::kDualStepM;
+            double const stage15Z=geography.ReconstructedZ(wx,wy);
+            double const stage16bZ=stage15Z-sediment.Erosion().AuthorizedIncisionDepth(
+                geography,wx,wy,stage15Z);
+            samples.vertices.push_back({wx,wy,stage16bZ+sediment.DepositDepth(wx,wy)});
+        }
+        return samples;
+    }
+
     CausalBareEarthGeography::Kernel const* ActiveBareEarthKernel(Stage0PlayView view)
     {
+        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+            return &g.compiledSedimentRuntime->Geography();
         if(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime)
             return &g.compiledFluvialRuntime->Geography();
         if(IsDryHydrologyView(view)&&g.dryHydrologyRuntime)
@@ -3166,15 +3231,21 @@ namespace
                 // float-round-tripped query just below the reconstructed mesh.
                 // Near a formation contact the latter could choose a different
                 // side depending on whether the package was already resident.
-                auto const geology=IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
-                    ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y);
+                auto const geology=IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
+                    ?g.compiledSedimentRuntime->SurfaceGeology(x,y)
+                    :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
+                        ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y));
                 if(!geology.found)return false;
                 outCap=geology.material;return true;
             }
-            outZ=(float)(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
-                ?g.compiledFluvialRuntime->ReconstructedZ(x,y):geography->ReconstructedZ(x,y));
-            auto const geology=IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
-                ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y);
+            outZ=(float)(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
+                ?g.compiledSedimentRuntime->ReconstructedZ(x,y)
+                :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
+                    ?g.compiledFluvialRuntime->ReconstructedZ(x,y):geography->ReconstructedZ(x,y)));
+            auto const geology=IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
+                ?g.compiledSedimentRuntime->SurfaceGeology(x,y)
+                :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
+                    ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y));
             if(!geology.found)return false;
             outCap=geology.material;return true;
         }
@@ -3333,6 +3404,12 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+        {
+            double const surface=g.compiledSedimentRuntime->ReconstructedZ(x,y);
+            if(z>=surface-0.05)return g.compiledSedimentRuntime->SurfaceGeology(x,y);
+            return g.compiledSedimentRuntime->QueryGeology(x,y,z);
+        }
         if(UsesBareEarthTerrain(view))
         {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->Query(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
@@ -3368,6 +3445,23 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+        {
+            double const surface=g.compiledSedimentRuntime->ReconstructedZ(x,y);
+            if(z>=surface-0.05)
+            {
+                auto const geology=g.compiledSedimentRuntime->SurfaceGeology(x,y);
+                if(!geology.found)return {};
+                char const* material=
+                    geology.material=="shale"?"shale":
+                    geology.material=="sandstone"?"sandstone":
+                    geology.material=="granite"?"granite":
+                    geology.material=="quartz"?"quartz":"dirt";
+                return {true,material,
+                    geology.chronology.empty()?0u:geology.chronology.back()};
+            }
+            return g.compiledSedimentRuntime->Geography().QueryMaterial(x,y,z);
+        }
         if(UsesBareEarthTerrain(view))
         {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->QueryMaterial(x,y,z);}
         if(IsSinglePickProofView(view)&&g.singlePickRuntime&&g.exactLocalRuntime
@@ -10077,9 +10171,11 @@ namespace
           && ActiveBareEarthKernel(g.stage0PlayView) )
         {
             if(sampleResidentCausalPackage(outZ))return true;
-            outZ=(float)(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime
-                ?g.compiledFluvialRuntime->ReconstructedZ(x,y)
-                :ActiveBareEarthKernel(g.stage0PlayView)->ReconstructedZ(x,y));
+            outZ=(float)(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime
+                ?g.compiledSedimentRuntime->ReconstructedZ(x,y)
+                :(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime
+                    ?g.compiledFluvialRuntime->ReconstructedZ(x,y)
+                    :ActiveBareEarthKernel(g.stage0PlayView)->ReconstructedZ(x,y)));
             return std::isfinite(outZ);
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
@@ -12088,6 +12184,9 @@ namespace
         }
         else if(IsSurfaceBreachView(job.view)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(job.bx,job.by);}
+        else if(IsCompiledSedimentView(job.view)&&workerGeography&&g.compiledSedimentRuntime)
+        {surfaceSamples=SampleCompiledSedimentWorkerBlock(*workerGeography,
+            *g.compiledSedimentRuntime,job.bx,job.by);}
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
         {surfaceSamples=SampleCompiledFluvialWorkerBlock(*workerGeography,
             *g.compiledFluvialRuntime,job.bx,job.by);}
@@ -12129,9 +12228,25 @@ namespace
             {
                 point=CausalVisibleExposure::PresentationSamplePoint(
                     surfaceSamples,descriptors.crossings[i]);
-                auto const geology=workerGeography
-                    ?workerGeography->QueryMaterial(point.x,point.y,point.z-0.001)
-                    :CausalMaterialAt(job.view,point.x,point.y,point.z-0.001);
+                CausalWorldGeology::MaterialSample geology{};
+                if(IsCompiledSedimentView(job.view)&&g.compiledSedimentRuntime&&workerGeography)
+                {
+                    // Mirror SampleCompiledSedimentWorkerBlock: use the
+                    // thread-local geography for Stage-15 Z and shared sediment
+                    // only for incision/deposit tables (POD reads).
+                    double const stage15Z=workerGeography->ReconstructedZ(point.x,point.y);
+                    double const parentZ=stage15Z-g.compiledSedimentRuntime->Erosion()
+                        .AuthorizedIncisionDepth(*workerGeography,point.x,point.y,stage15Z);
+                    geology=workerGeography->QueryMaterial(point.x,point.y,parentZ-0.001);
+                }
+                else if(workerGeography)
+                {
+                    geology=workerGeography->QueryMaterial(point.x,point.y,point.z-0.001);
+                }
+                else
+                {
+                    geology=CausalMaterialAt(job.view,point.x,point.y,point.z-0.001);
+                }
                 out.materials.emplace_back(geology.found&&geology.material
                     ?geology.material:"dirt");
             }
@@ -12434,7 +12549,8 @@ namespace
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
-          && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime ) { return; }
+          && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
+          && !g.compiledSedimentRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -12472,6 +12588,8 @@ namespace
         }
         else if(IsSurfaceBreachView(g.stage0PlayView)&&g.causalBreachRuntime)
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(bx,by);}
+        else if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
+        {surfaceSamples=g.compiledSedimentRuntime->SampleBlock(bx,by);}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {surfaceSamples=g.compiledFluvialRuntime->SampleBlock(bx,by);}
         else if(UsesBareEarthTerrain(g.stage0PlayView)&&ActiveBareEarthKernel(g.stage0PlayView))
@@ -12684,7 +12802,8 @@ namespace
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
-          && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime ) { return; }
+          && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
+          && !g.compiledSedimentRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -12849,6 +12968,7 @@ namespace
         if ( IsBareEarthGeographyView( view ) ) { return 12; }
         if ( IsDryHydrologyView( view ) ) { return 13; }
         if ( IsCompiledFluvialErosionView( view ) ) { return 14; }
+        if ( IsCompiledSedimentView( view ) ) { return 15; }
         if ( IsGraniteIntrusionView( view ) ) { return 5; }
         if ( IsContactMineralizationView( view ) ) { return 6; }
         if ( IsCutCOccupancyView( view ) ) { return 7; }
@@ -12910,6 +13030,8 @@ namespace
           "GEOGRAPHY.BARE_EARTH_FLOOR", "deterministic flow, watersheds, channels, basins, spills, and outlets without water", Stage0PlayView::DryHydrology },
         { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.COMPILED_FLUVIAL_EROSION", "Stage 16B - Compiled Fluvial Erosion",
           "HYDROLOGY.DRY_DRAINAGE_AUTHORITY", "drainage-derived incision, widening, and headward erosion without water", Stage0PlayView::CompiledFluvialErosion },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.COMPILED_SEDIMENT", "Stage 16C - Compiled Sediment Routing",
+          "GEOMORPH.COMPILED_FLUVIAL_EROSION", "dry sediment source, transport, deposition, and outlet export without water", Stage0PlayView::CompiledSediment },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
@@ -13007,6 +13129,8 @@ namespace
         { attempted = g.dryHydrologyAuthorityAttempted; certified = g.dryHydrologyCertified; }
         else if ( IsCompiledFluvialErosionView( entry.view ) )
         { attempted = g.compiledFluvialAuthorityAttempted; certified = g.compiledFluvialCertified; }
+        else if ( IsCompiledSedimentView( entry.view ) )
+        { attempted = g.compiledSedimentAuthorityAttempted; certified = g.compiledSedimentCertified; }
         else if ( IsCutCOccupancyView( entry.view ) )
         { attempted = g.cutCOccupancyAuthorityAttempted; certified = g.cutCOccupancyCertified; }
         return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
@@ -13202,6 +13326,7 @@ namespace
             if ( IsBareEarthGeographyView( view ) ) { reason = &g.bareEarthAuthorityReason; }
             if ( IsDryHydrologyView( view ) ) { reason = &g.dryHydrologyAuthorityReason; }
             if ( IsCompiledFluvialErosionView( view ) ) { reason = &g.compiledFluvialAuthorityReason; }
+            if ( IsCompiledSedimentView( view ) ) { reason = &g.compiledSedimentAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
         }
@@ -13277,6 +13402,13 @@ namespace
         else if ( IsCompiledFluvialErosionView( view ) && g.compiledFluvialRuntime )
         {
             auto const& authority=g.compiledFluvialRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsCompiledSedimentView( view ) && g.compiledSedimentRuntime )
+        {
+            auto const& authority=g.compiledSedimentRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -13380,6 +13512,15 @@ namespace
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="STAGE 16B - compiled fluvial erosion; water and sediment closed";
         }
+        if(g.playWorldgenInitialized&&IsCompiledSedimentView(view)&&oldView!=view)
+        {
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="STAGE 16C - compiled sediment routing; water and P5b closed";
+        }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
             // Player-scale certified outcrop and readable oblique flashlight
@@ -13427,6 +13568,7 @@ namespace
             case Stage0PlayView::BareEarthGeography: return "CERTIFIED BARE-EARTH CAUSAL GEOGRAPHY";
             case Stage0PlayView::DryHydrology: return "CERTIFIED DRY WATERSHED AUTHORITY";
             case Stage0PlayView::CompiledFluvialErosion: return "CERTIFIED COMPILED FLUVIAL EROSION";
+            case Stage0PlayView::CompiledSediment: return "CERTIFIED COMPILED SEDIMENT ROUTING";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -18589,7 +18731,10 @@ namespace
     {
         CausalDryHydrology::Kernel const* kernel=nullptr;
         CausalCompiledFluvialErosion::Kernel const* fluvial=nullptr;
-        if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
+        CausalCompiledSediment::Kernel const* sediment=nullptr;
+        if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
+        {sediment=g.compiledSedimentRuntime.get();fluvial=&sediment->Erosion();kernel=&sediment->Drainage();}
+        else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {fluvial=g.compiledFluvialRuntime.get();kernel=&fluvial->Drainage();}
         else if(IsDryHydrologyView(g.stage0PlayView)&&g.dryHydrologyRuntime)
         {kernel=g.dryHydrologyRuntime.get();}
@@ -18609,7 +18754,14 @@ namespace
             auto const q=kernel->QueryAt(qx,qy);if(!q.found||q.cell.receiver<0)continue;
             auto const& r=kernel->Cells()[(size_t)q.cell.receiver];
             double const incision=fluvial?fluvial->Cells()[(size_t)q.index].incisionM:0.0;
-            if(fluvial&&incision>0)
+            double const deposit=sediment?sediment->Cells()[(size_t)q.index].depositDepthM:0.0;
+            if(sediment&&deposit>0.01)
+            {
+                float const normalized=(float)std::clamp(deposit/2.0,0.0,1.0);
+                // Amber/sand — never green; cardinal fallback detects green pixels.
+                glColor3f(.92f,.72f-.18f*normalized,.18f+.10f*normalized);
+            }
+            else if(fluvial&&incision>0)
             {
                 float const normalized=(float)std::clamp(incision/6.0,0.0,1.0);
                 glColor3f(1.0f,.62f-.42f*normalized,.04f);
@@ -18620,8 +18772,9 @@ namespace
                 glColor3f(1.0f,.72f-(std::min)(order,4.f)*.08f,.05f);
             }
             else glColor3f(.78f,.76f,.62f);
-            float const z=(float)(fluvial?fluvial->Cells()[(size_t)q.index].surfaceZ
-                :q.cell.surfaceZ)+.18f;
+            float const z=(float)(sediment?sediment->Cells()[(size_t)q.index].surfaceZ
+                :(fluvial?fluvial->Cells()[(size_t)q.index].surfaceZ
+                :q.cell.surfaceZ))+.18f;
             float const rz=(float)(fluvial?fluvial->Cells()[(size_t)q.cell.receiver].surfaceZ
                 :r.surfaceZ)+.18f;
             glVertex3f((float)q.cell.x,(float)q.cell.y,z);
@@ -30243,11 +30396,12 @@ namespace
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
           &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
           &&!g.playStage15Launch&&!g.playStage16Launch&&!g.playStage16BLaunch
+          &&!g.playStage16CLaunch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::CompiledFluvialErosion);
+            SelectStage0PlayView(Stage0PlayView::CompiledSediment);
         }
         if ( g.playStage11Launch )
         {
@@ -30348,6 +30502,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playStage16CLaunch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::CompiledSediment);
+            if(g.certStage16CVisual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playStage16BLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -30397,14 +30566,16 @@ namespace
         {g.statusLine="STAGE 16A - DRY WATERSHED AUTHORITY  [M] stages";}
         if(g.playStage16BLaunch)
         {g.statusLine="STAGE 16B - COMPILED FLUVIAL EROSION  [M] stages";}
+        if(g.playStage16CLaunch)
+        {g.statusLine="STAGE 16C - COMPILED SEDIMENT ROUTING  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
             bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
-            bool const latest=g.stage0PlayView==Stage0PlayView::CompiledFluvialErosion;
+            bool const latest=g.stage0PlayView==Stage0PlayView::CompiledSediment;
             bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
             bool const selection=g.stage0BrowserSelection==
-                BrowserIndexForView(Stage0PlayView::CompiledFluvialErosion)
+                BrowserIndexForView(Stage0PlayView::CompiledSediment)
                 &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
                     g.stage0BrowserSelection);
             int const savedSelection=g.stage0BrowserSelection;
@@ -30423,7 +30594,7 @@ namespace
             g.stage0BrowserSelection=savedSelection;
             g.stage0BrowserCategory=savedCategory;
             bool stageSelection=true;
-            for(int index=2;index<=14;++index)
+            for(int index=2;index<=15;++index)
             {
                 stageSelection=SelectCertificationBrowserEntry(index)&&stageSelection;
                 stageSelection=std::strcmp(CertificationRuntimeStatus(
@@ -30436,9 +30607,10 @@ namespace
                 &&g.causalBreachCertified&&g.exactLocalRuntime&&g.singlePickRuntime
                 &&g.bareEarthCertified&&g.bareEarthRuntime
                 &&g.dryHydrologyCertified&&g.dryHydrologyRuntime
-                &&g.compiledFluvialCertified&&g.compiledFluvialRuntime;
+                &&g.compiledFluvialCertified&&g.compiledFluvialRuntime
+                &&g.compiledSedimentCertified&&g.compiledSedimentRuntime;
             bool const restored=SelectCertificationBrowserEntry(savedSelection)
-                &&g.stage0PlayView==Stage0PlayView::CompiledFluvialErosion;
+                &&g.stage0PlayView==Stage0PlayView::CompiledSediment;
             bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
             bool const passed=opened&&latest&&closed&&selection&&navigation&&worldSize
                 &&stageSelection&&stageAuthorities&&restored;
@@ -30446,7 +30618,7 @@ namespace
             {
                 std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
                     "menu_open=%d\ntool_drawer_open=%d\n"
-                    "runtime=%s\nlatest_certified_stage=16B\n"
+                    "runtime=%s\nlatest_certified_stage=16C\n"
                     "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
                     "browser_selection=%d\nbrowser_category=%s\n"
                     "category_stage_navigation=%s\n"
@@ -30691,6 +30863,8 @@ namespace
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
         else if(IsDryHydrologyView(g.stage0PlayView))
         {row("fixture=dry_hydrology  authority=CERTIFIED  terrain=STAGE15  water=OFF");}
+        else if(IsCompiledSedimentView(g.stage0PlayView))
+        {row("fixture=compiled_sediment  authority=CERTIFIED  source=STAGE16B  water=OFF");}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView))
         {row("fixture=compiled_fluvial_erosion  authority=CERTIFIED  source=STAGE16A  water=OFF");}
         else if(IsBareEarthGeographyView(g.stage0PlayView))
@@ -30704,7 +30878,28 @@ namespace
         std::snprintf( line, sizeof( line ), "stage=%s  calibration_draw=%.3fms",
             Stage0PlayViewName( g.stage0PlayView ), g.stage0FrameCalibrationDrawMs );
         row( line, 0.70f, 0.90f, 1.0f );
-        if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
+        if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
+        {
+            auto const q=g.compiledSedimentRuntime->QueryAt(g.feetX,g.feetY);
+            if(q.erosion.drainage.found)
+            {
+                std::snprintf(line,sizeof(line),"watershed=%s  facies=%s  grain=%s",
+                    CausalWorldGeology::Hex64(q.erosion.drainage.cell.watershedId).c_str(),
+                    CausalCompiledSediment::DepositFaciesName(q.sediment.facies),
+                    CausalCompiledSediment::GrainClassName(q.sediment.grain));
+                row(line,.95f,.82f,.30f);
+                std::snprintf(line,sizeof(line),"source=%.3ekg  deposit=%.3ekg  mobile=%.3ekg  export=%.3ekg",
+                    q.sediment.sourceMassG/1000.0,q.sediment.depositedMassG/1000.0,
+                    q.sediment.mobileMassG/1000.0,q.sediment.exportedMassG/1000.0);
+                row(line,1.0f,.62f,.24f);
+                std::snprintf(line,sizeof(line),"incision=%.3fm  aggrade=%.3fm  material=%s  water=OFF",
+                    q.erosion.incisionM,q.depositDepthM,
+                    q.sediment.depositMaterial.empty()?q.sediment.sourceMaterial.c_str()
+                        :q.sediment.depositMaterial.c_str());
+                row(line,.82f,.92f,.72f);
+            }
+        }
+        else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {
             auto const q=g.compiledFluvialRuntime->QueryAt(g.feetX,g.feetY);
             if(q.drainage.found)
@@ -32940,6 +33135,10 @@ namespace
         { "16_to_16b", Stage0PlayView::DryHydrology, Stage0PlayView::CompiledFluvialErosion },
         { "16b_to_16", Stage0PlayView::CompiledFluvialErosion, Stage0PlayView::DryHydrology },
         { "16b_to_16b", Stage0PlayView::CompiledFluvialErosion, Stage0PlayView::CompiledFluvialErosion },
+        { "cold_clean_to_16c", Stage0PlayView::Clean, Stage0PlayView::CompiledSediment },
+        { "16b_to_16c", Stage0PlayView::CompiledFluvialErosion, Stage0PlayView::CompiledSediment },
+        { "16c_to_16b", Stage0PlayView::CompiledSediment, Stage0PlayView::CompiledFluvialErosion },
+        { "16c_to_16c", Stage0PlayView::CompiledSediment, Stage0PlayView::CompiledSediment },
     };
 
     struct RuntimeIndependenceReceipt
@@ -33014,9 +33213,10 @@ namespace
         Stage0PlayView::BareEarthGeography,
         Stage0PlayView::DryHydrology,
         Stage0PlayView::CompiledFluvialErosion,
+        Stage0PlayView::CompiledSediment,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -33186,7 +33386,7 @@ namespace
             && s_boundaryPopChangedPixels == 0;
         std::fprintf( file,
             "WORLDGEN_BOUNDARY_CONTINUITY %s\n"
-            "capture_policy=stage0_stage5_to_stage16b_x_north_east_south_west\n"
+            "capture_policy=stage0_stage5_to_stage16c_x_north_east_south_west\n"
             "active_residency_radius_m=%d\nactive_residency_diameter_m=%d\n"
             "far_field_extent_m=%d\nfar_field_collision=0\n"
             "check.partial_edge_packages_closed=%s\n"
@@ -33567,6 +33767,7 @@ namespace
             uint64_t stage15Digest = 0;
             uint64_t stage16Digest = 0;
             uint64_t stage16BDigest = 0;
+            uint64_t stage16CDigest = 0;
             for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
             {
                 basePassed = basePassed && r.selected && r.terrainVisible && r.resident
@@ -33601,7 +33802,12 @@ namespace
                     if ( stage15Digest == 0 ) { stage15Digest = r.digest; }
                     else { basePassed = basePassed && stage15Digest == r.digest; }
                 }
-                if(std::strstr(r.id,"to_16b"))
+                if(std::strstr(r.id,"to_16c"))
+                {
+                    if(stage16CDigest==0)stage16CDigest=r.digest;
+                    else basePassed=basePassed&&stage16CDigest==r.digest;
+                }
+                else if(std::strstr(r.id,"to_16b"))
                 {
                     if(stage16BDigest==0)stage16BDigest=r.digest;
                     else basePassed=basePassed&&stage16BDigest==r.digest;
@@ -34105,6 +34311,8 @@ namespace
     {
         if(UsesBareEarthTerrain(view))
         {
+            if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+                return g.compiledSedimentRuntime->SurfaceGeology(x,y);
             if(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime)
                 return g.compiledFluvialRuntime->SurfaceGeology(x,y);
             auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->SurfaceGeology(x,y);
@@ -34334,7 +34542,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==13)
+        if(g.certWorldgenCardinalStageFilter==14)
+            certPath="Docs\\provenance_stage16c_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==13)
             certPath="Docs\\provenance_stage16b_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==12)
             certPath="Docs\\provenance_stage16_cardinal_replacement_cert.txt";
@@ -34463,7 +34673,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==13)
+            if(g.certWorldgenCardinalStageFilter==14)
+                tracePath="Docs\\provenance_stage16c_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==13)
                 tracePath="Docs\\provenance_stage16b_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==12)
                 tracePath="Docs\\provenance_stage16_cardinal_replacement_trace.csv";
@@ -36961,6 +37173,72 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certStage16CVisual)
+        {
+            static ULONGLONG visualStartMs16c=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::CompiledSediment);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::CompiledSediment);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMs16c>30000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_stage16c_compiled_sediment_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"STAGE16C_COMPILED_SEDIMENT_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certStage16CVisualFrames;
+            if(g.certStage16CVisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_stage16c_compiled_sediment_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.compiledSedimentRuntime
+                    ?g.compiledSedimentRuntime->QueryAt(g.feetX,g.feetY)
+                    :CausalCompiledSediment::Query{};
+                bool nearbyDeposit=false,nearbyChannel=false;
+                if(g.compiledSedimentRuntime)
+                {
+                    double const step=g.compiledSedimentRuntime->Drainage().StepM();
+                    for(int y=-6;y<=6;++y)for(int x=-6;x<=6;++x)
+                    {auto const n=g.compiledSedimentRuntime->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyDeposit=nearbyDeposit||(n.erosion.drainage.found&&n.depositDepthM>.01);
+                        nearbyChannel=nearbyChannel||(n.erosion.drainage.found&&n.erosion.drainage.cell.channel);}
+                }
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_stage16c_compiled_sediment_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.erosion.drainage.found&&nearbyChannel
+                    &&g.compiledSedimentCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE16C_COMPILED_SEDIMENT_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_stage16c_compiled_sediment_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "local_deposit_m=%.6f\nlocal_source_g=%.3f\nnearby_channel=%d\nnearby_deposit=%d\n"
+                        "terrain_source=STAGE16B_DERIVED_COMPILED_SEDIMENT\n"
+                        "water_occupancy=0\nwater_rendering=0\nfluid_solve=0\n"
+                        "runtime_erosion=0\nlive_ecology=0\np5b=closed\n",
+                        passed?"PASS":"FAIL",g.certStage16CVisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,q.depositDepthM,
+                        q.sediment.sourceMassG,nearbyChannel?1:0,nearbyDeposit?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -38298,6 +38576,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runBareEarthGeographyCert = false;
         bool runDryHydrologyCert = false;
         bool runCompiledFluvialErosionCert = false;
+        bool runCompiledSedimentCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -38310,6 +38589,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         char geographyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg";
         char hydrologyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_dry_hydrology_floor.cdh";
         char fluvialErosionPath[MAX_PATH] = "Data\\Worldgen\\causal_world_compiled_fluvial_erosion_floor.cfe";
+        char sedimentPath[MAX_PATH] = "Data\\Worldgen\\causal_world_compiled_sediment_floor.csd";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -38386,6 +38666,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16b-fluvial-erosion")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-fluvial-erosion")==0)
                 {runCompiledFluvialErosionCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
+                {runCompiledSedimentCert=true;}
                 else if ( _wcsnicmp( certArgv[i], L"--causal-world-descriptor=", 26 ) == 0 )
                 {
                     WideCharToMultiByte( CP_UTF8, 0, certArgv[i] + 26, -1,
@@ -38491,6 +38774,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 breachPath,geographyPath,hydrologyPath,fluvialErosionPath);
             CausalCompiledFluvialErosion::WriteCertArtifact(result,
                 "Docs\\provenance_stage16b_compiled_fluvial_erosion_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runCompiledSedimentCert)
+        {
+            auto const result=CausalCompiledSediment::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath);
+            CausalCompiledSediment::WriteCertArtifact(result,
+                "Docs\\provenance_stage16c_compiled_sediment_cert.txt");
             return result.passed?0:1;
         }
         if ( runCausalWorldMineralizationCert )
@@ -39283,6 +39575,28 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playStage16BLaunch=true;g.certStage16BVisual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage16c")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=14;
+                    g.playWorldgenBaseline=true;g.playStage16CLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-stage16c-sediment")==0
+                  ||_wcsicmp(argv[i],L"--play-compiled-sediment")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage16CLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-stage16c-sediment-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage16CLaunch=true;g.certStage16CVisual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

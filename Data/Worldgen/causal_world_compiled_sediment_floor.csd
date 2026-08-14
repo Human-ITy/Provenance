@@ -1,0 +1,31 @@
+PROVENANCE_CAUSAL_COMPILED_SEDIMENT_V1
+# Stage 16C: dry compiled sediment source / transport / deposition over frozen
+# Stage 16B. No water occupancy, fluid solve, live erosion, ecology, or P5b.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_compiled_sediment_floor
+parent_region_key=causal_world_compiled_fluvial_erosion_floor
+parent_authority_revision=1
+authority_revision=1
+sediment_event_id=16c05ed100000001
+chronology=120
+transport_enabled=1
+erosion_source_enabled=1
+deposition_enabled=1
+bulk_density_kg_m3=2650.0
+max_deposit_depth_m=4.0
+capacity_scale=0.085
+basin_settle_ratio=0.55
+floodplain_settle_ratio=0.22
+fan_settle_ratio=0.18
+channel_settle_ratio=0.08
+mobility_shale=1.00
+mobility_sandstone=0.62
+mobility_granite=0.28
+mobility_quartz=0.22
+density_shale_kg_m3=2400.0
+density_sandstone_kg_m3=2500.0
+density_granite_kg_m3=2700.0
+density_quartz_kg_m3=2650.0

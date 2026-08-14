@@ -1,0 +1,20 @@
+STAGE16C_COMPILED_SEDIMENT_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED COMPILED SEDIMENT ROUTING
+image=Docs/provenance_stage16c_compiled_sediment_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+local_deposit_m=0.033126
+local_source_g=0.000
+nearby_channel=1
+nearby_deposit=1
+terrain_source=STAGE16B_DERIVED_COMPILED_SEDIMENT
+water_occupancy=0
+water_rendering=0
+fluid_solve=0
+runtime_erosion=0
+live_ecology=0
+p5b=closed
