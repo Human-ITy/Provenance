@@ -1,0 +1,27 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_V1
+# Stage 16D: deterministic present-water body authority and occupancy over the
+# frozen Stage 16C landscape. Static surfaces only — no flow tick, live erosion,
+# ecology, or P5b.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_floor
+parent_region_key=causal_world_compiled_sediment_floor
+parent_authority_revision=1
+authority_revision=1
+water_event_id=16d0a00100000001
+chronology=130
+water_enabled=1
+lakes_enabled=1
+rivers_enabled=1
+wetlands_enabled=1
+lake_min_depth_m=0.08
+lake_min_cells=8
+river_base_depth_m=0.18
+river_order_scale_m=0.22
+river_area_scale_m=0.35
+river_max_depth_m=2.40
+wetland_max_depth_m=0.35
+wetland_min_depth_m=0.04
+occupancy_epsilon_m=0.001
