@@ -4,6 +4,9 @@
 // response. Frozen Stage 16F.4 parent. Water cannot erode terrain, transport
 // sediment, collapse banks, rain, infiltrate, or open P5b.2 / P5b.3.
 //
+// A terrain mutation does not directly manipulate water. It changes world
+// truth, issues a bounded causal receipt, and the hydraulic domain responds.
+//
 // Pipeline after an admitted terrain mutation receipt:
 //   terrain R → R+1
 //     → affected hydraulic neighborhood (from the receipt, not all bodies)
@@ -15,6 +18,7 @@
 //     → sleep
 //     → publish terrain + water as one coherent pair
 //
+// Player lane (pick/shovel legal receipt) is the same pipeline as fixtures.
 // Disabled path must reproduce exact 16F.4 field digest 43068558cd0b4a8e.
 
 #include "CausalPresentWaterTopology.h"
@@ -51,8 +55,12 @@ namespace CausalPresentWaterTerrainResponse
         RaiseFill=3,
         RemoveFloor=4,
         NegativeFar=5,
-        FillRefuse=6
+        FillRefuse=6,
+        PlayerCut=7,
+        PlayerFill=8
     };
+
+    enum class PlayerTool:uint8_t { None=0, Pick=1, Shovel=2 };
 
     inline char const* FixtureName(FixtureKind value)
     {
@@ -64,6 +72,18 @@ namespace CausalPresentWaterTerrainResponse
             case FixtureKind::RemoveFloor:return "remove_floor";
             case FixtureKind::NegativeFar:return "negative_far";
             case FixtureKind::FillRefuse:return "fill_refuse";
+            case FixtureKind::PlayerCut:return "player_cut";
+            case FixtureKind::PlayerFill:return "player_fill";
+            default:return "none";
+        }
+    }
+
+    inline char const* PlayerToolName(PlayerTool value)
+    {
+        switch(value)
+        {
+            case PlayerTool::Pick:return "pick";
+            case PlayerTool::Shovel:return "shovel";
             default:return "none";
         }
     }
@@ -155,6 +175,9 @@ namespace CausalPresentWaterTerrainResponse
         std::vector<uint64_t> InputBodyIds,OutputBodyIds;
         std::vector<int> AddedWetCells,RemovedWetCells;
         uint64_t WaterIdentityAtContact=0;
+        uint64_t PlayerActionId=0;
+        PlayerTool Tool=PlayerTool::None;
+        bool PlayerLane=false;
     };
 
     struct TerrainRequest
@@ -166,6 +189,20 @@ namespace CausalPresentWaterTerrainResponse
         uint32_t WaterTopologyRevision=0;
         bool CheckRevision=true;
         bool ExpectRefuse=false;
+        uint64_t PlayerActionId=0;
+        PlayerTool Tool=PlayerTool::None;
+        bool PlayerLane=false;
+    };
+
+    struct LegalPlayerMutation
+    {
+        uint64_t actionId=0;
+        PlayerTool tool=PlayerTool::None;
+        int contactCell=-1;
+        double requestedTerrainZ=0;
+        uint32_t expectedTerrainRevision=0;
+        uint32_t expectedWaterRevision=0;
+        bool fillAttempt=false;
     };
 
     struct SolveStats
@@ -208,6 +245,19 @@ namespace CausalPresentWaterTerrainResponse
         CausalWorldGeology::HashAppend(h,&seq,sizeof(seq));
         uint8_t const k=(uint8_t)kind;
         CausalWorldGeology::HashAppend(h,&k,sizeof(k));
+        return h?h:1;
+    }
+
+    inline uint64_t MakePlayerActionId(PlayerTool tool,int cell,double z,uint32_t terrainRev)
+    {
+        uint64_t h=14695981039346656037ull;
+        uint64_t const tag=0xA5B10011ull;
+        CausalWorldGeology::HashAppend(h,&tag,sizeof(tag));
+        uint8_t const t=(uint8_t)tool;
+        CausalWorldGeology::HashAppend(h,&t,sizeof(t));
+        CausalWorldGeology::HashAppend(h,&cell,sizeof(cell));
+        CausalWorldGeology::HashAppend(h,&z,sizeof(z));
+        CausalWorldGeology::HashAppend(h,&terrainRev,sizeof(terrainRev));
         return h?h:1;
     }
 
@@ -513,6 +563,61 @@ namespace CausalPresentWaterTerrainResponse
         FP5bTerrainWaterTransaction ApplyRequest(TerrainRequest req,bool reverseNeighbors=false)
         {return CommitOne(req,reverseNeighbors);}
 
+        FP5bTerrainWaterTransaction ApplyPlayerMutation(LegalPlayerMutation const& act)
+        {
+            FP5bTerrainWaterTransaction txn;
+            txn.PlayerLane=true;
+            txn.Tool=act.tool;
+            txn.PlayerActionId=act.actionId;
+            txn.ContactCell=act.contactCell;
+            txn.TerrainRevisionBefore=m_terrainRevision;
+            txn.WaterTopologyRevisionBefore=m_waterGeometryRevision;
+            txn.WaterMassBefore=TotalMass();
+            txn.TerrainMatterBefore=TotalMatter();
+            txn.HeldMatterBefore=m_heldMatter;
+            txn.PublishedTerrainRevision=m_publishedTerrainRevision;
+            txn.PublishedWaterTopologyRevision=m_publishedWaterRevision;
+            auto refuse=[&](bool stale,bool invalid,bool noAdmissible)
+            {
+                txn.RefusedStale=stale;txn.RefusedInvalid=invalid;
+                txn.RefusedNoAdmissible=noAdmissible;
+                txn.WaterMassAfter=txn.WaterMassBefore;
+                txn.TerrainMatterAfter=txn.TerrainMatterBefore;
+                txn.HeldMatterAfter=m_heldMatter;
+                txn.TerrainRevisionAfter=m_terrainRevision;
+                txn.WaterTopologyRevisionAfter=m_waterGeometryRevision;
+                txn.PublishedCoherent=true;
+                txn.RenderTerrainRevision=m_publishedTerrainRevision;
+                txn.CollisionTerrainRevision=m_publishedTerrainRevision;
+                return txn;
+            };
+            if(act.tool!=PlayerTool::Pick&&act.tool!=PlayerTool::Shovel)
+                return refuse(false,true,false);
+            if(act.actionId==0||act.actionId!=MakePlayerActionId(act.tool,act.contactCell,
+                act.requestedTerrainZ,act.expectedTerrainRevision))
+                return refuse(false,true,false);
+            TerrainRequest req;
+            req.ContactCell=act.contactCell;
+            req.NewTerrainZ=act.requestedTerrainZ;
+            req.TerrainRevision=act.expectedTerrainRevision;
+            req.WaterTopologyRevision=act.expectedWaterRevision;
+            req.CheckRevision=true;
+            req.PlayerActionId=act.actionId;
+            req.Tool=act.tool;
+            req.PlayerLane=true;
+            if(act.fillAttempt)
+            {
+                req.Fixture=FixtureKind::PlayerFill;
+                req.ExpectRefuse=true;
+            }
+            else req.Fixture=FixtureKind::PlayerCut;
+            txn=CommitOne(req,false);
+            txn.PlayerLane=true;
+            txn.Tool=act.tool;
+            txn.PlayerActionId=act.actionId;
+            return txn;
+        }
+
         bool Tick(uint32_t budget)
         {
             if(!m_parent->Complete())
@@ -647,10 +752,14 @@ namespace CausalPresentWaterTerrainResponse
             double const oldZ=cell.terrainZ;
             txn.DeltaTerrainZ=req.NewTerrainZ-oldZ;
             txn.AffectedTerrainCells={req.ContactCell};
-            uint64_t const mutationId=MakeMutationId(req.ContactCell,req.NewTerrainZ,
+            uint64_t const mutationId=req.PlayerActionId?req.PlayerActionId:
+                MakeMutationId(req.ContactCell,req.NewTerrainZ,
                 (uint32_t)(m_txns.size()+1u),req.Fixture);
             txn.TerrainMutationId=mutationId;
             txn.TransactionId=mutationId;
+            txn.PlayerActionId=req.PlayerActionId;
+            txn.Tool=req.Tool;
+            txn.PlayerLane=req.PlayerLane;
 
             std::unordered_set<uint64_t> neighborhoodBodies;
             std::unordered_set<int> neighborhoodCells;
@@ -731,7 +840,8 @@ namespace CausalPresentWaterTerrainResponse
 
             // Fill-refuse: attempt to eliminate remaining void with nowhere legal
             // to put conserved water. Never delete water — refuse the terrain.
-            if(req.Fixture==FixtureKind::FillRefuse||req.ExpectRefuse)
+            if(req.Fixture==FixtureKind::FillRefuse||req.Fixture==FixtureKind::PlayerFill
+              ||req.ExpectRefuse)
             {
                 bool lastVoid=true;
                 uint64_t bodyId=cell.bodyId;
@@ -797,7 +907,8 @@ namespace CausalPresentWaterTerrainResponse
             occ.RequestedMass=minU;
             occ.CheckRevision=false;
 
-            if(req.Fixture==FixtureKind::LowerSill||req.Fixture==FixtureKind::DigChannel)
+            if(req.Fixture==FixtureKind::LowerSill||req.Fixture==FixtureKind::DigChannel
+              ||req.Fixture==FixtureKind::PlayerCut)
             {
                 if(cell.occupied)
                 {
@@ -1119,6 +1230,7 @@ namespace CausalPresentWaterTerrainResponse
         size_t transactionsCertified=0,transactionsAdmitted=0,spillEdges=0;
         size_t lowerSill=0,digChannel=0,raiseFill=0,removeFloor=0;
         size_t maxCellsVisited=0,maxBodiesExamined=0,connectivityRebuilds=0;
+        size_t playerCutCellsVisited=0,playerCutBodiesExamined=0;
         std::vector<std::pair<std::string,bool>> checks;
     };
 
@@ -1358,6 +1470,100 @@ namespace CausalPresentWaterTerrainResponse
             c.checks.push_back({"fill_refuse_never_deletes_water",refuseOk});
         }
 
+        // Ordinary player-facing mutation lane: pick/shovel legal receipt, not
+        // the synthetic fixture work queue. Same CommitOne response.
+        {
+            auto topo=reloadTopo();
+            auto k=MakeFromTopology(std::move(topo),p5bPath,1,kHoldBudget,reason);
+            bool receiptOk=false,cutOk=false,localOk=false,coherentOk=false;
+            if(k)
+            {
+                auto fixtures=BuildFixtures(k->Water().Cells(),k->Body().Bodies(),k->Water());
+                LegalPlayerMutation act;
+                act.tool=PlayerTool::Shovel;
+                act.contactCell=fixtures.sill.ContactCell;
+                act.requestedTerrainZ=fixtures.sill.NewTerrainZ;
+                act.expectedTerrainRevision=k->TerrainRevision();
+                act.expectedWaterRevision=k->WaterTopologyRevision();
+                act.fillAttempt=false;
+                act.actionId=MakePlayerActionId(act.tool,act.contactCell,
+                    act.requestedTerrainZ,act.expectedTerrainRevision);
+                int64_t const mw=k->TotalMass();
+                int64_t const tm=k->TotalMatter();
+                int64_t const hm=k->HeldMatter();
+                uint32_t const tRev=k->TerrainRevision();
+                uint32_t const wRev=k->WaterTopologyRevision();
+                auto rec=k->ApplyPlayerMutation(act);
+                c.playerCutCellsVisited=rec.CellsVisited;
+                c.playerCutBodiesExamined=rec.BodiesExamined;
+                receiptOk=rec.PlayerLane&&rec.Tool==PlayerTool::Shovel
+                    &&rec.PlayerActionId==act.actionId&&rec.PlayerActionId!=0
+                    &&rec.TerrainMutationId==act.actionId;
+                cutOk=!rec.RefusedStale&&!rec.RefusedInvalid&&!rec.RefusedNoAdmissible
+                    &&rec.Fixture==FixtureKind::PlayerCut
+                    &&rec.AddedWetCells.size()>=1
+                    &&rec.Class==CausalPresentWaterTopology::TopologyClass::Grow
+                    &&rec.OutputBodyIds.size()==1&&rec.InputBodyIds.size()==1
+                    &&rec.OutputBodyIds[0]==rec.InputBodyIds[0]
+                    &&rec.WaterMassBefore==rec.WaterMassAfter&&rec.WaterMassAfter==mw
+                    &&(rec.TerrainMatterAfter-rec.TerrainMatterBefore)
+                      +(rec.HeldMatterAfter-rec.HeldMatterBefore)==0
+                    &&k->TotalMass()==mw
+                    &&rec.TerrainRevisionAfter==tRev+1
+                    &&rec.WaterTopologyRevisionAfter==wRev+1;
+                localOk=rec.CellsVisited>0&&rec.CellsVisited<=64
+                    &&rec.BodiesExamined>0&&rec.BodiesExamined<6515;
+                coherentOk=rec.PublishedCoherent
+                    &&rec.RenderTerrainRevision==rec.CollisionTerrainRevision
+                    &&rec.PublishedTerrainRevision==rec.TerrainRevisionAfter
+                    &&rec.PublishedWaterTopologyRevision==rec.WaterTopologyRevisionAfter
+                    &&rec.RenderTerrainRevision==rec.PublishedTerrainRevision
+                    &&k->PublishedTerrainRevision()==k->TerrainRevision()
+                    &&k->PublishedWaterTopologyRevision()==k->WaterTopologyRevision();
+                (void)tm;(void)hm;
+            }
+            c.checks.push_back({"player_legal_mutation_receipt",receiptOk});
+            c.checks.push_back({"player_cut_retaining_edge_water_grows",cutOk});
+            c.checks.push_back({"player_path_local_neighborhood",localOk});
+            c.checks.push_back({"player_path_published_pair_coherent",coherentOk});
+        }
+
+        {
+            auto topo=reloadTopo();
+            auto k=MakeFromTopology(std::move(topo),p5bPath,1,kHoldBudget,reason);
+            bool playerRefuseOk=false;
+            if(k)
+            {
+                auto fixtures=BuildFixtures(k->Water().Cells(),k->Body().Bodies(),k->Water());
+                LegalPlayerMutation act;
+                act.tool=PlayerTool::Shovel;
+                act.contactCell=fixtures.refuse.ContactCell;
+                act.requestedTerrainZ=fixtures.refuse.NewTerrainZ;
+                act.expectedTerrainRevision=k->TerrainRevision();
+                act.expectedWaterRevision=k->WaterTopologyRevision();
+                act.fillAttempt=true;
+                act.actionId=MakePlayerActionId(act.tool,act.contactCell,
+                    act.requestedTerrainZ,act.expectedTerrainRevision);
+                uint64_t const before=k->FieldDigestValue();
+                int64_t const mw=k->TotalMass();
+                int64_t const tm=k->TotalMatter();
+                int64_t const hm=k->HeldMatter();
+                uint32_t const tRev=k->TerrainRevision();
+                uint32_t const wRev=k->WaterTopologyRevision();
+                auto rec=k->ApplyPlayerMutation(act);
+                playerRefuseOk=rec.PlayerLane&&rec.Tool==PlayerTool::Shovel
+                    &&rec.PlayerActionId==act.actionId
+                    &&rec.RefusedNoAdmissible&&!rec.RefusedStale&&!rec.RefusedInvalid
+                    &&k->TotalMass()==mw&&k->TotalMatter()==tm&&k->HeldMatter()==hm
+                    &&k->FieldDigestValue()==before
+                    &&k->TerrainRevision()==tRev
+                    &&k->WaterTopologyRevision()==wRev
+                    &&rec.TerrainRevisionAfter==rec.TerrainRevisionBefore
+                    &&rec.WaterTopologyRevisionAfter==rec.WaterTopologyRevisionBefore;
+            }
+            c.checks.push_back({"player_fill_occupied_water_refuses",playerRefuseOk});
+        }
+
         // Stale revision refuse.
         {
             auto topo=reloadTopo();
@@ -1450,7 +1656,8 @@ namespace CausalPresentWaterTerrainResponse
             "held_matter_before=%lld\nheld_matter_after=%lld\n"
             "transactions_certified=%zu\ntransactions_admitted=%zu\nspill_edges=%zu\n"
             "lower_sill=%zu\ndig_channel=%zu\nraise_fill=%zu\nremove_floor=%zu\n"
-            "max_cells_visited=%zu\nmax_bodies_examined=%zu\nconnectivity_rebuilds=%zu\n",
+            "max_cells_visited=%zu\nmax_bodies_examined=%zu\nconnectivity_rebuilds=%zu\n"
+            "player_cut_cells_visited=%zu\nplayer_cut_bodies_examined=%zu\n",
             c.passed?"PASS":"FAIL",c.reason.c_str(),
             CausalWorldGeology::Hex64(c.stage16f4FieldDigest).c_str(),
             CausalWorldGeology::Hex64(c.fieldDigestDisabled).c_str(),
@@ -1463,14 +1670,31 @@ namespace CausalPresentWaterTerrainResponse
             (long long)c.heldMatterBefore,(long long)c.heldMatterAfter,
             c.transactionsCertified,c.transactionsAdmitted,c.spillEdges,
             c.lowerSill,c.digChannel,c.raiseFill,c.removeFloor,
-            c.maxCellsVisited,c.maxBodiesExamined,c.connectivityRebuilds);
+            c.maxCellsVisited,c.maxBodiesExamined,c.connectivityRebuilds,
+            c.playerCutCellsVisited,c.playerCutBodiesExamined);
+        bool playerPathOk=false;
+        for(auto const& q:c.checks)
+        {
+            if(q.first=="player_legal_mutation_receipt"
+              ||q.first=="player_cut_retaining_edge_water_grows"
+              ||q.first=="player_path_local_neighborhood"
+              ||q.first=="player_path_published_pair_coherent"
+              ||q.first=="player_fill_occupied_water_refuses")
+            {
+                if(!q.second){playerPathOk=false;break;}
+                playerPathOk=true;
+            }
+        }
         std::fprintf(f,"coupling=terrain_to_water_one_way\n"
-            "p5b1=open\np5b2=closed\np5b3=closed\n"
+            "player_path=%s\n"
+            "p5b1=%s\np5b2=closed\np5b3=closed\n"
             "rainfall=0\ninfiltration=0\ngroundwater=0\n"
             "water_erosion=0\nsediment_remobilization=0\nbank_collapse=0\n"
             "active_16b_erosion=0\necology=0\n"
             "simulation_domain_framework=closed\n"
-            "stage16f4=frozen\nreverse_coupling=closed\n");
+            "stage16f4=frozen\nreverse_coupling=closed\n",
+            playerPathOk?"certified":"failed",
+            c.passed?"certified":"failed");
         for(auto const& q:c.checks)
             std::fprintf(f,"check.%s=%s\n",q.first.c_str(),q.second?"PASS":"FAIL");
         std::fclose(f);return true;

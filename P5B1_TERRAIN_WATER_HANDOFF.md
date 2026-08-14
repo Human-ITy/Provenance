@@ -10,14 +10,25 @@ generic SimulationDomain, or open **P5b.2** / **P5b.3**.
 
 ## Freeze
 
-P5b.1 landed at `4e6db8433fb136ab2068bab114a04d4ab265e935` on
-`provenance/client-spike`. Stage 16F.4 remains frozen at
+P5b.1 coupling landed at `4e6db8433fb136ab2068bab114a04d4ab265e935` on
+`provenance/client-spike`. Player-path certification (pick/shovel legal
+receipt) is recorded below. Stage 16F.4 remains frozen at
 `3d84eac4b169c8a1e2b0f3971695b811bd9a5a61`. Disabled P5b.1 must reproduce that
 field exactly.
 
 ```
+16F.4  dynamic hydraulic topology       CERTIFIED
+P5b.1  terrain → water coupling          CERTIFIED
+P5b.2  reverse state coupling            CLOSED
+P5b.3  reverse matter/erosion coupling   CLOSED
+```
+
+```
 P5b off → exact 16F.4 field digest 43068558cd0b4a8e
 ```
+
+A terrain mutation does not directly manipulate water. It changes world truth,
+issues a bounded causal receipt, and the hydraulic domain responds.
 
 ## Coupling model (one-way)
 
@@ -62,6 +73,32 @@ Reverse coupling remains **CLOSED**.
 | remove a floor beneath water | cavity deepens; same mass occupies the new void; identity preserved |
 | **negative:** terrain far from all water | exact 16F.4 water field `43068558cd0b4a8e` |
 | fill refuse | no admissible conserved resolution → refuse; water untouched |
+| **player cut** (pick/shovel legal receipt) | retaining edge lowered; water grows into new void; BodyId kept (grow); coherent publish |
+| **player fill refuse** | shovel fill into occupied water with no admissible conserved resolution → refuse; terrain and water unchanged |
+
+## Player-path lane
+
+Ordinary hand/tool mutations use the same coupling as the fixtures. They are
+not a second architecture.
+
+```
+player makes one legal terrain mutation beside water
+  → normal terrain mutation receipt (pick/shovel action id + revision)
+  → P5b.1 sees affected hydraulic neighborhood
+  → water responds
+  → terrain + water publish coherently
+```
+
+Certified:
+
+- shovel cuts retaining edge → terrain matter conserved (`column + held`);
+  water occupancy grows; BodyId kept (grow); water grams conserved; no
+  mixed-revision frame; neighborhood stays local.
+- shovel fill into occupied water with no admissible conserved resolution →
+  refuse; terrain unchanged; water unchanged.
+
+`--cert-p5b1-terrain-water` runs this lane. It does not open P5b.2 (repeated
+player interaction) or P5b.3.
 
 ## Certified results
 
@@ -73,6 +110,9 @@ Reverse coupling remains **CLOSED**.
   fill-shrink / floor-geometry. Fill-refuse control admitted 0 and deleted 0.
 - Local neighborhood: max 14 cells visited, max 2 bodies examined, 3 connectivity
   rebuilds (sill/channel/fill). Floor is geometry-only. Idle complete: zero extra rebuilds.
+- Player path: shovel legal receipt cuts retaining edge (grow; 14 cells, 1
+  body; coherent publish); shovel fill into occupied water refuses with
+  terrain and water unchanged. P5b.1 fully done.
 - Controls: stale terrain/water revision refuse; partition-independent channel
   merge; cold==reload==unbounded; published terrain revision == collision
   revision == render revision; no water inside solid terrain.
@@ -108,8 +148,9 @@ Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b1
 
 ## Boundaries (CLOSED)
 
-- **P5b.2** repeated/player interaction around water
-- **P5b.3** water→terrain mechanical effects
+- **P5b.2** reverse state coupling (saturation/moisture). Repeated player
+  interaction around water stays closed.
+- **P5b.3** reverse matter/erosion coupling (water→terrain mechanical effects)
 - water erodes terrain / flow transports sediment / bank collapse
 - rainfall as weather / infiltration / groundwater
 - active 16B erosion / 16C sediment remobilization
