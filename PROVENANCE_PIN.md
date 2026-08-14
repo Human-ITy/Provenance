@@ -222,7 +222,7 @@ Cert summary: `level_equal_floor_share`, `height_neq_grams` (derived sA=sB=0.34,
 
 ```
 P5b.1 TERRAIN → WATER RESPONSE (ONE-WAY) — FULLY DONE
-SHA: pending-commit
+SHA: 5f4c075d7ef0b6af192a3afe7e088cd493e842aa
 LAND: 4e6db8433fb136ab2068bab114a04d4ab265e935
 ```
 

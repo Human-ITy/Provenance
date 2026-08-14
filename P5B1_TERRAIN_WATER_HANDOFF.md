@@ -11,8 +11,8 @@ generic SimulationDomain, or open **P5b.2** / **P5b.3**.
 ## Freeze
 
 P5b.1 coupling landed at `4e6db8433fb136ab2068bab114a04d4ab265e935` on
-`provenance/client-spike`. Player-path certification (pick/shovel legal
-receipt) is recorded below. Stage 16F.4 remains frozen at
+`provenance/client-spike`. Player-path certification is
+`5f4c075d7ef0b6af192a3afe7e088cd493e842aa`. Stage 16F.4 remains frozen at
 `3d84eac4b169c8a1e2b0f3971695b811bd9a5a61`. Disabled P5b.1 must reproduce that
 field exactly.
 
