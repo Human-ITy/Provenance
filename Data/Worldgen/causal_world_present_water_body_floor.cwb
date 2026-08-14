@@ -1,0 +1,14 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_BODY_V1
+# Stage 16E: deterministic present-water body semantics / connectivity over the
+# frozen Stage 16D occupancy. Ontology only — no flow tick, live erosion,
+# ecology, P5b, or terrain mutation.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_body_floor
+parent_region_key=causal_world_present_water_floor
+parent_authority_revision=1
+authority_revision=1
+body_event_id=16e0a00100000001
+chronology=140
