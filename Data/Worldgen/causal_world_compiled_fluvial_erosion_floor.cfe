@@ -1,0 +1,27 @@
+PROVENANCE_CAUSAL_COMPILED_FLUVIAL_EROSION_V1
+# Stage 16B: compiled fluvial incision derived from frozen Stage 16A drainage.
+# No water occupancy, fluid solve, sediment transport/deposition, or P5b.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_compiled_fluvial_erosion_floor
+parent_region_key=causal_world_dry_hydrology_floor
+parent_authority_revision=1
+authority_revision=1
+erosion_event_id=16b0e20510000001
+chronology=110
+forcing_enabled=1
+incision_scale_m=2.4
+max_incision_m=12.0
+headward_area_ratio=0.25
+base_valley_half_width_m=18.0
+order_width_m=8.0
+fault_weakness_radius_m=45.0
+fault_weakness_multiplier=0.35
+contact_weakness_multiplier=0.18
+equal_resistance=1.0
+sandstone_resistance=2.0
+shale_resistance=0.72
+granite_resistance=2.8
+quartz_resistance=3.2

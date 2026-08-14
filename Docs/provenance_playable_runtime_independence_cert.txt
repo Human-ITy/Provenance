@@ -1,5 +1,5 @@
 PLAYABLE_RUNTIME_INDEPENDENCE PASS
-case_count=36
+case_count=40
 case.cold_clean_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
 case.5_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
 case.6_to_10 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=12853 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000017405 palette_error_m=0.000012517 digest=559a5bf71d054d3f
@@ -36,6 +36,10 @@ case.cold_clean_to_16 selected=1 terrain_visible=1 resident=1 settled=1 collisio
 case.15_to_16 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
 case.16_to_15 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
 case.16_to_16 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
+case.cold_clean_to_16b selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000045776 digest=8c2a4418f237d507
+case.16_to_16b selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000045776 digest=8c2a4418f237d507
+case.16b_to_16 selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000038147 digest=4b001ab4de67cced
+case.16b_to_16b selected=1 terrain_visible=1 resident=1 settled=1 collision=1 grounded=1 cells=797 packages=2601 triangles=1331712 ruler_triangles=1240 ruler_error_m=0.000068665 palette_error_m=0.000045776 digest=8c2a4418f237d507
 check.cold_stage10_independent=PASS
 check.cold_stage11_independent=PASS
 check.cold_stage12_independent=PASS

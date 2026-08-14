@@ -1,0 +1,21 @@
+STAGE16B_COMPILED_FLUVIAL_EROSION_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED COMPILED FLUVIAL EROSION
+image=Docs/provenance_stage16b_compiled_fluvial_erosion_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+local_incision_m=0.000000
+local_potential=0.000000
+nearby_channel=1
+nearby_incision=1
+terrain_source=STAGE16A_DERIVED_COMPILED_HISTORY
+water_occupancy=0
+water_rendering=0
+fluid_solve=0
+runtime_erosion=0
+sediment_transport=0
+sediment_deposition=0
+p5b=closed
