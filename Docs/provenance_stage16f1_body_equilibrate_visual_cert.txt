@@ -1,0 +1,25 @@
+STAGE16F1_BODY_EQUILIBRATE_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED BODY-LOCAL EQUILIBRATION
+image=Docs/provenance_stage16f1_body_equilibrate_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+local_depth_m=0.000000
+local_kind=none
+nearby_water=1
+nearby_channel=1
+terrain_source=STAGE16E_BODY_LOCAL_EQUILIBRATE
+present_water_occupancy=1
+body_local_equilibration=1
+water_rendering=1
+inter_body_transfer=0
+fluid_solve=0
+flow_simulation=0
+runtime_erosion=0
+live_ecology=0
+p5b=closed
+stage16f2=closed
+stage16f3=closed

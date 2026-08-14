@@ -35,6 +35,7 @@
 #include "CausalCompiledSediment.h"
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
+#include "CausalPresentWaterEquilibrate.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -344,7 +345,8 @@ namespace
         CompiledFluvialErosion = 17,
         CompiledSediment = 18,
         PresentWater = 19,
-        PresentWaterBody = 20
+        PresentWaterBody = 20,
+        PresentWaterEquilibrate = 21
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -665,6 +667,7 @@ namespace
         bool playStage16CLaunch = false;
         bool playStage16DLaunch = false;
         bool playStage16ELaunch = false;
+        bool playStage16F1Launch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -683,6 +686,8 @@ namespace
         int certStage16DVisualFrames = 0;
         bool certStage16EVisual = false;
         int certStage16EVisualFrames = 0;
+        bool certStage16F1Visual = false;
+        int certStage16F1VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -868,6 +873,9 @@ namespace
         bool presentWaterBodyAuthorityAttempted = false;
         bool presentWaterBodyCertified = false;
         std::string presentWaterBodyAuthorityReason = "not_loaded";
+        bool presentWaterEquilibrateAuthorityAttempted = false;
+        bool presentWaterEquilibrateCertified = false;
+        std::string presentWaterEquilibrateAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -885,6 +893,7 @@ namespace
         std::unique_ptr<CausalCompiledSediment::Kernel> compiledSedimentRuntime;
         std::unique_ptr<CausalPresentWater::Kernel> presentWaterRuntime;
         std::unique_ptr<CausalPresentWaterBody::Kernel> presentWaterBodyRuntime;
+        std::unique_ptr<CausalPresentWaterEquilibrate::Kernel> presentWaterEquilibrateRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2592,13 +2601,20 @@ namespace
         return view == Stage0PlayView::PresentWaterBody;
     }
 
+    bool IsPresentWaterEquilibrateView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::PresentWaterEquilibrate;
+    }
+
     bool UsesPresentWaterOccupancy( Stage0PlayView view )
     {
-        return IsPresentWaterView(view) || IsPresentWaterBodyView(view);
+        return IsPresentWaterView(view) || IsPresentWaterBodyView(view)
+            || IsPresentWaterEquilibrateView(view);
     }
 
     CausalPresentWater::Kernel* ActivePresentWaterKernel()
     {
+        if ( g.presentWaterEquilibrateRuntime ) { return &g.presentWaterEquilibrateRuntime->Water(); }
         if ( g.presentWaterBodyRuntime ) { return &g.presentWaterBodyRuntime->Water(); }
         return g.presentWaterRuntime.get();
     }
@@ -2689,7 +2705,27 @@ namespace
             "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         constexpr char const* kPresentWaterBodyPath =
             "Data\\Worldgen\\causal_world_present_water_body_floor.cwb";
+        constexpr char const* kPresentWaterEquilibratePath =
+            "Data\\Worldgen\\causal_world_present_water_equilibrate_floor.cpe";
 
+        if(IsPresentWaterEquilibrateView(view))
+        {
+            if(!g.presentWaterEquilibrateAuthorityAttempted)
+            {
+                // Analytical --cert-stage16f1-body-equilibrate owns the full gate.
+                g.presentWaterEquilibrateAuthorityAttempted=true;
+                std::string reason;g.presentWaterEquilibrateRuntime=
+                    CausalPresentWaterEquilibrate::LoadKernel(kGeologyPath,kExposurePath,
+                        kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,
+                        kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                        kSedimentPath,kPresentWaterPath,kPresentWaterBodyPath,
+                        kPresentWaterEquilibratePath,&reason);
+                g.presentWaterEquilibrateCertified=g.presentWaterEquilibrateRuntime!=nullptr;
+                g.presentWaterEquilibrateAuthorityReason=
+                    g.presentWaterEquilibrateCertified?"certified":reason;
+            }
+            return g.presentWaterEquilibrateCertified&&g.presentWaterEquilibrateRuntime!=nullptr;
+        }
         if(IsPresentWaterBodyView(view))
         {
             if(!g.presentWaterBodyAuthorityAttempted)
@@ -12668,7 +12704,8 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime ) { return; }
+          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.presentWaterEquilibrateRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -12923,7 +12960,8 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime ) { return; }
+          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.presentWaterEquilibrateRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -13090,6 +13128,7 @@ namespace
         if ( IsCompiledFluvialErosionView( view ) ) { return 14; }
         if ( IsCompiledSedimentView( view ) ) { return 15; }
         if ( IsPresentWaterBodyView( view ) ) { return 17; }
+        if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterView( view ) ) { return 16; }
         if ( IsGraniteIntrusionView( view ) ) { return 5; }
         if ( IsContactMineralizationView( view ) ) { return 6; }
@@ -13158,6 +13197,8 @@ namespace
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
           "HYDROLOGY.PRESENT_WATER", "body identity, type, spill, inlets/outlets, and connectivity without flow", Stage0PlayView::PresentWaterBody },
+        { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.BODY_LOCAL_EQUILIBRATE", "Stage 16F.1 - Body-Local Equilibration",
+          "HYDROLOGY.PRESENT_WATER_BODY", "body-local conserved surface relax without inter-body transfer", Stage0PlayView::PresentWaterEquilibrate },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
@@ -13259,6 +13300,8 @@ namespace
         { attempted = g.compiledSedimentAuthorityAttempted; certified = g.compiledSedimentCertified; }
         else if ( IsPresentWaterBodyView( entry.view ) )
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
+        else if ( IsPresentWaterEquilibrateView( entry.view ) )
+        { attempted = g.presentWaterEquilibrateAuthorityAttempted; certified = g.presentWaterEquilibrateCertified; }
         else if ( IsPresentWaterView( entry.view ) )
         { attempted = g.presentWaterAuthorityAttempted; certified = g.presentWaterCertified; }
         else if ( IsCutCOccupancyView( entry.view ) )
@@ -13458,6 +13501,7 @@ namespace
             if ( IsCompiledFluvialErosionView( view ) ) { reason = &g.compiledFluvialAuthorityReason; }
             if ( IsCompiledSedimentView( view ) ) { reason = &g.compiledSedimentAuthorityReason; }
             if ( IsPresentWaterBodyView( view ) ) { reason = &g.presentWaterBodyAuthorityReason; }
+            if ( IsPresentWaterEquilibrateView( view ) ) { reason = &g.presentWaterEquilibrateAuthorityReason; }
             if ( IsPresentWaterView( view ) ) { reason = &g.presentWaterAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
@@ -13678,6 +13722,15 @@ namespace
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="STAGE 16E - present water body semantics; flow and P5b closed";
         }
+        if(g.playWorldgenInitialized&&IsPresentWaterEquilibrateView(view)&&oldView!=view)
+        {
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="STAGE 16F.1 - body-local equilibration; 16F.2+/P5b closed";
+        }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
             // Player-scale certified outcrop and readable oblique flashlight
@@ -13728,6 +13781,7 @@ namespace
             case Stage0PlayView::CompiledSediment: return "CERTIFIED COMPILED SEDIMENT ROUTING";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
+            case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -17647,8 +17701,8 @@ namespace
             return tex[slot];
         if(!wglGetCurrentContext())return 0; // retry next frame
         // Same flip as icon textures: PNG row 0 is the top of the image, OpenGL
-        // t=0 is the bottom. flip=0 inverted V across every xatlas chart and
-        // wrapped the gallery in random atlas patches.
+        // t=0 is the bottom. Loading unflipped inverted V across every xatlas
+        // chart and wrapped the gallery in random atlas patches.
         stbi_set_flip_vertically_on_load(1);
         int w=0,h=0,n=0;
         unsigned char* pixels=stbi_load(path.c_str(),&w,&h,&n,3);
@@ -30599,11 +30653,12 @@ namespace
           &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
           &&!g.playStage15Launch&&!g.playStage16Launch&&!g.playStage16BLaunch
           &&!g.playStage16CLaunch&&!g.playStage16DLaunch&&!g.playStage16ELaunch
+          &&!g.playStage16F1Launch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::PresentWaterBody);
+            SelectStage0PlayView(Stage0PlayView::PresentWaterEquilibrate);
         }
         if ( g.playStage11Launch )
         {
@@ -30719,6 +30774,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playStage16F1Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::PresentWaterEquilibrate);
+            if(g.certStage16F1Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playStage16DLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -30804,14 +30874,16 @@ namespace
         {g.statusLine="STAGE 16D - PRESENT WATER OCCUPANCY  [M] stages";}
         if(g.playStage16ELaunch)
         {g.statusLine="STAGE 16E - PRESENT WATER BODY SEMANTICS  [M] stages";}
+        if(g.playStage16F1Launch)
+        {g.statusLine="STAGE 16F.1 - BODY-LOCAL EQUILIBRATION  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
             bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
-            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterBody;
+            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterEquilibrate;
             bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
             bool const selection=g.stage0BrowserSelection==
-                BrowserIndexForView(Stage0PlayView::PresentWaterBody)
+                BrowserIndexForView(Stage0PlayView::PresentWaterEquilibrate)
                 &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
                     g.stage0BrowserSelection);
             int const savedSelection=g.stage0BrowserSelection;
@@ -30830,7 +30902,7 @@ namespace
             g.stage0BrowserSelection=savedSelection;
             g.stage0BrowserCategory=savedCategory;
             bool stageSelection=true;
-            for(int index=2;index<=16;++index)
+            for(int index=2;index<=17;++index)
             {
                 stageSelection=SelectCertificationBrowserEntry(index)&&stageSelection;
                 stageSelection=std::strcmp(CertificationRuntimeStatus(
@@ -30845,7 +30917,8 @@ namespace
                 &&g.dryHydrologyCertified&&g.dryHydrologyRuntime
                 &&g.compiledFluvialCertified&&g.compiledFluvialRuntime
                 &&g.compiledSedimentCertified&&g.compiledSedimentRuntime
-                &&g.presentWaterBodyCertified&&g.presentWaterBodyRuntime;
+                &&g.presentWaterBodyCertified&&g.presentWaterBodyRuntime
+                &&g.presentWaterEquilibrateCertified&&g.presentWaterEquilibrateRuntime;
             bool const restored=SelectCertificationBrowserEntry(savedSelection)
                 &&g.stage0PlayView==Stage0PlayView::PresentWater;
             bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
@@ -30855,7 +30928,7 @@ namespace
             {
                 std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
                     "menu_open=%d\ntool_drawer_open=%d\n"
-                    "runtime=%s\nlatest_certified_stage=16E\n"
+                    "runtime=%s\nlatest_certified_stage=16F.1\n"
                     "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
                     "browser_selection=%d\nbrowser_category=%s\n"
                     "category_stage_navigation=%s\n"
@@ -31100,6 +31173,8 @@ namespace
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
         else if(IsDryHydrologyView(g.stage0PlayView))
         {row("fixture=dry_hydrology  authority=CERTIFIED  terrain=STAGE15  water=OFF");}
+        else if(IsPresentWaterEquilibrateView(g.stage0PlayView))
+        {row("fixture=body_local_equilibrate  authority=CERTIFIED  source=STAGE16E  transfer=OFF  p5b=CLOSED");}
         else if(IsPresentWaterBodyView(g.stage0PlayView))
         {row("fixture=present_water_body  authority=CERTIFIED  source=STAGE16D  flow=OFF  p5b=CLOSED");}
         else if(IsPresentWaterView(g.stage0PlayView))
@@ -31134,7 +31209,24 @@ namespace
                 row(line,.20f,.58f,.88f);
                 std::snprintf(line,sizeof(line),"flow=OFF  fluid_solve=0  p5b=CLOSED  source=STAGE16C");
                 row(line,.82f,.92f,.72f);
-                if(IsPresentWaterBodyView(g.stage0PlayView)&&g.presentWaterBodyRuntime&&q.water.bodyId)
+                if(IsPresentWaterEquilibrateView(g.stage0PlayView)&&g.presentWaterEquilibrateRuntime&&q.water.bodyId)
+                {
+                    auto const bq=g.presentWaterEquilibrateRuntime->QueryAt(g.feetX,g.feetY);
+                    if(bq.body)
+                    {
+                        std::snprintf(line,sizeof(line),"bodyType=%s  surface=%s  spill=%.3fm  eq=%s",
+                            CausalPresentWaterBody::BodyTypeName(bq.body->Type),
+                            CausalPresentWaterBody::SurfaceRuleName(bq.body->Surface),
+                            bq.body->SpillElevation,
+                            g.presentWaterEquilibrateRuntime->Complete()?"DONE":"BUDGET");
+                        row(line,.45f,.78f,.95f);
+                        std::snprintf(line,sizeof(line),"mass=%lld  bodies_mut=%zu  16F.2=CLOSED  p5b=CLOSED",
+                            (long long)g.presentWaterEquilibrateRuntime->TotalMass(),
+                            g.presentWaterEquilibrateRuntime->Stats().bodiesMutated);
+                        row(line,.35f,.70f,.90f);
+                    }
+                }
+                else if(IsPresentWaterBodyView(g.stage0PlayView)&&g.presentWaterBodyRuntime&&q.water.bodyId)
                 {
                     auto const bq=g.presentWaterBodyRuntime->QueryAt(g.feetX,g.feetY);
                     if(bq.body)
@@ -33421,6 +33513,10 @@ namespace
         { "16d_to_16e", Stage0PlayView::PresentWater, Stage0PlayView::PresentWaterBody },
         { "16e_to_16d", Stage0PlayView::PresentWaterBody, Stage0PlayView::PresentWater },
         { "16e_to_16e", Stage0PlayView::PresentWaterBody, Stage0PlayView::PresentWaterBody },
+        { "cold_clean_to_16f1", Stage0PlayView::Clean, Stage0PlayView::PresentWaterEquilibrate },
+        { "16e_to_16f1", Stage0PlayView::PresentWaterBody, Stage0PlayView::PresentWaterEquilibrate },
+        { "16f1_to_16e", Stage0PlayView::PresentWaterEquilibrate, Stage0PlayView::PresentWaterBody },
+        { "16f1_to_16f1", Stage0PlayView::PresentWaterEquilibrate, Stage0PlayView::PresentWaterEquilibrate },
     };
 
     struct RuntimeIndependenceReceipt
@@ -33498,9 +33594,10 @@ namespace
         Stage0PlayView::CompiledSediment,
         Stage0PlayView::PresentWater,
         Stage0PlayView::PresentWaterBody,
+        Stage0PlayView::PresentWaterEquilibrate,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -34054,6 +34151,7 @@ namespace
             uint64_t stage16CDigest = 0;
             uint64_t stage16DDigest = 0;
             uint64_t stage16EDigest = 0;
+            uint64_t stage16F1Digest = 0;
             for ( RuntimeIndependenceReceipt const& r : s_runtimeIndependenceReceipts )
             {
                 basePassed = basePassed && r.selected && r.terrainVisible && r.resident
@@ -34088,7 +34186,12 @@ namespace
                     if ( stage15Digest == 0 ) { stage15Digest = r.digest; }
                     else { basePassed = basePassed && stage15Digest == r.digest; }
                 }
-                if(std::strstr(r.id,"to_16e"))
+                if(std::strstr(r.id,"to_16f1"))
+                {
+                    if(stage16F1Digest==0)stage16F1Digest=r.digest;
+                    else basePassed=basePassed&&stage16F1Digest==r.digest;
+                }
+                else if(std::strstr(r.id,"to_16e"))
                 {
                     if(stage16EDigest==0)stage16EDigest=r.digest;
                     else basePassed=basePassed&&stage16EDigest==r.digest;
@@ -34840,7 +34943,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==16)
+        if(g.certWorldgenCardinalStageFilter==17)
+            certPath="Docs\\provenance_stage16f1_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==16)
             certPath="Docs\\provenance_stage16e_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==15)
             certPath="Docs\\provenance_stage16d_cardinal_replacement_cert.txt";
@@ -34975,7 +35080,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==16)
+            if(g.certWorldgenCardinalStageFilter==17)
+                tracePath="Docs\\provenance_stage16f1_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==16)
                 tracePath="Docs\\provenance_stage16e_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==15)
                 tracePath="Docs\\provenance_stage16d_cardinal_replacement_trace.csv";
@@ -36796,6 +36903,8 @@ namespace
         else if ( g.playWorldgenBaseline )
         {
             WorldgenPlayInitialize();
+            if(g.presentWaterEquilibrateRuntime&&!g.presentWaterEquilibrateRuntime->Complete())
+                g.presentWaterEquilibrateRuntime->Tick(48);
             RuntimeIndependenceTick();
             WorldgenCardinalReplacementTick();
             Stage11ResidencyWaterfallTick();
@@ -37539,6 +37648,77 @@ namespace
                         "fluid_solve=0\nflow_simulation=0\nruntime_erosion=0\nlive_ecology=0\n"
                         "p5b=closed\ndynamic_flow=closed\nstage16f=closed\n",
                         passed?"PASS":"FAIL",g.certStage16EVisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,q.depthM,
+                        CausalPresentWater::BodyKindName(q.water.kind),
+                        nearbyWater?1:0,nearbyChannel?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
+        if(g.certStage16F1Visual)
+        {
+            static ULONGLONG visualStartMs16f1=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::PresentWaterEquilibrate);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::PresentWaterEquilibrate);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMs16f1>90000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_stage16f1_body_equilibrate_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"STAGE16F1_BODY_EQUILIBRATE_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certStage16F1VisualFrames;
+            if(g.certStage16F1VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_stage16f1_body_equilibrate_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const* water=ActivePresentWaterKernel();
+                auto const q=water?water->QueryAt(g.feetX,g.feetY):CausalPresentWater::Query{};
+                bool nearbyWater=false,nearbyChannel=false;
+                if(water)
+                {
+                    double const step=water->Drainage().StepM();
+                    for(int y=-8;y<=8;++y)for(int x=-8;x<=8;++x)
+                    {auto const n=water->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyWater=nearbyWater||(n.found&&n.occupied);
+                        nearbyChannel=nearbyChannel||(n.found&&n.sediment.erosion.drainage.found
+                            &&n.sediment.erosion.drainage.cell.channel);}
+                }
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_stage16f1_body_equilibrate_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&nearbyWater&&nearbyChannel
+                    &&g.presentWaterEquilibrateCertified&&g.presentWaterEquilibrateRuntime
+                    &&g.presentWaterEquilibrateRuntime->Complete()
+                    &&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE16F1_BODY_EQUILIBRATE_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_stage16f1_body_equilibrate_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "local_depth_m=%.6f\nlocal_kind=%s\nnearby_water=%d\nnearby_channel=%d\n"
+                        "terrain_source=STAGE16E_BODY_LOCAL_EQUILIBRATE\n"
+                        "present_water_occupancy=1\nbody_local_equilibration=1\nwater_rendering=1\n"
+                        "inter_body_transfer=0\nfluid_solve=0\nflow_simulation=0\n"
+                        "runtime_erosion=0\nlive_ecology=0\np5b=closed\n"
+                        "stage16f2=closed\nstage16f3=closed\n",
+                        passed?"PASS":"FAIL",g.certStage16F1VisualFrames,
                         Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
                         g.stage8TerrainBlocks.size(),pendingPackages,q.depthM,
                         CausalPresentWater::BodyKindName(q.water.kind),
@@ -39022,6 +39202,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runCompiledSedimentCert = false;
         bool runPresentWaterCert = false;
         bool runPresentWaterBodyCert = false;
+        bool runPresentWaterEquilibrateCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -39037,6 +39218,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         char sedimentPath[MAX_PATH] = "Data\\Worldgen\\causal_world_compiled_sediment_floor.csd";
         char presentWaterPath[MAX_PATH] = "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         char presentWaterBodyPath[MAX_PATH] = "Data\\Worldgen\\causal_world_present_water_body_floor.cwb";
+        char presentWaterEquilibratePath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_present_water_equilibrate_floor.cpe";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -39119,6 +39302,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16e-water-body")==0
                   ||_wcsicmp(certArgv[i],L"--cert-present-water-body")==0)
                 {runPresentWaterBodyCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-stage16f1-body-equilibrate")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-body-local-equilibrate")==0)
+                {runPresentWaterEquilibrateCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -39236,6 +39422,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath);
             CausalCompiledSediment::WriteCertArtifact(result,
                 "Docs\\provenance_stage16c_compiled_sediment_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runPresentWaterEquilibrateCert)
+        {
+            auto const result=CausalPresentWaterEquilibrate::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                presentWaterPath,presentWaterBodyPath,presentWaterEquilibratePath);
+            CausalPresentWaterEquilibrate::WriteCertArtifact(result,
+                "Docs\\provenance_stage16f1_body_equilibrate_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterBodyCert)
@@ -40059,6 +40255,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage16f1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=17;
+                    g.playWorldgenBaseline=true;g.playStage16F1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--play-stage16e-water-body")==0
                   ||_wcsicmp(argv[i],L"--play-stage16e")==0)
                 {
@@ -40066,10 +40270,24 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-stage16f1-body-equilibrate")==0
+                  ||_wcsicmp(argv[i],L"--play-stage16f1")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage16F1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-stage16e-water-body-visual")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playStage16ELaunch=true;g.certStage16EVisual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-stage16f1-body-equilibrate-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage16F1Launch=true;g.certStage16F1Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

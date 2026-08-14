@@ -1,0 +1,17 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_EQUILIBRATE_V1
+# Stage 16F.1: body-local equilibration over frozen Stage 16E ontology /
+# Stage 16D occupancy. Redistributes water inside a body only — no inter-body
+# transfer, outlet propagation, rainfall, pours, terrain coupling, erosion,
+# sediment motion, P5b, 16F.2, or 16F.3.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_equilibrate_floor
+parent_region_key=causal_world_present_water_body_floor
+parent_authority_revision=1
+authority_revision=1
+equilibrate_event_id=16f1000100000001
+chronology=150
+equilibration_enabled=1
+default_budget_bodies=48

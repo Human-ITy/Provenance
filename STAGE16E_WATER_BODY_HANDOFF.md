@@ -63,8 +63,8 @@ type, spill, and inlet/outlet counts — not flow.
 ## Boundaries
 
 Still closed: fluid solve, **flow simulation**, live erosion, ecology, **P5b**,
-dynamic flow, and **Stage 16F**. Stage 16D occupancy remains frozen at
-`061bec0b`.
+dynamic flow, and **Stage 16F.2 / 16F.3**. Stage 16F.1 body-local equilibration
+is the next certified layer. Stage 16D occupancy remains frozen at `061bec0b`.
 
 ## Re-run
 
