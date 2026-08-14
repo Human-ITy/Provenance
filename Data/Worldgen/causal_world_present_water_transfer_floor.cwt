@@ -1,0 +1,19 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TRANSFER_V1
+# Stage 16F.2: graph-authorized inter-body spill/transfer over frozen Stage 16E
+# connectivity and Stage 16F.1 body-local equilibration. One certified 16E
+# body-edge at a time, then 16F.1 locally on the two affected bodies, then sleep.
+# CLOSED: rainfall, bucket pours, arbitrary disturbances, terrain-water feedback,
+# erosion, sediment remobilization, P5b, 16F.3, dynamic connectivity discovery,
+# generic SimulationDomain framework extract, whole-river downstream propagation.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_transfer_floor
+parent_region_key=causal_world_present_water_equilibrate_floor
+parent_authority_revision=1
+authority_revision=1
+transfer_event_id=16f2000100000001
+chronology=160
+transfer_enabled=1
+default_budget_edges=48

@@ -1,0 +1,24 @@
+STAGE16F2_WATER_TRANSFER_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED GRAPH-AUTHORIZED TRANSFER
+image=Docs/provenance_stage16f2_water_transfer_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+local_depth_m=0.000000
+local_kind=none
+nearby_water=1
+nearby_channel=1
+terrain_source=STAGE16F2_GRAPH_AUTHORIZED_TRANSFER
+present_water_occupancy=1
+body_local_equilibration=1
+graph_authorized_transfer=1
+water_rendering=1
+fluid_solve=0
+flow_simulation=0
+runtime_erosion=0
+live_ecology=0
+p5b=closed
+stage16f3=closed
