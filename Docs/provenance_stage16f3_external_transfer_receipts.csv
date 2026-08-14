@@ -1,0 +1,5 @@
+TransactionId,Cause,Fixture,Direction,BodyId,ContactCell,RequestedMass,AdmittedMass,BodyMassBefore,BodyMassAfter,ContainerBefore,ContainerAfter,BodyRevision,OccupancyRevision
+1519cea340610d9d,bucket,bucket_to_lake,into_body,0026601d720e5127,8169,50000,50000,310863,360863,10000000,9950000,1,4182864709
+7bd9df45a2d66312,bucket,bucket_to_river,into_body,004c646d79b69a5a,27002,50000,50000,22015,72015,9950000,9900000,1,4182864709
+440f2989f7c36ee9,bucket,bucket_to_wetland,into_body,000f38adf0da9aac,22113,50000,50000,4992,54992,9900000,9850000,1,4182864709
+866c1a489c571dd2,bucket,lake_to_bucket,out_of_body,0026601d720e5127,8169,20000,20000,360863,340863,9850000,9870000,1,4182864709

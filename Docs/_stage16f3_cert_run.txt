@@ -1,0 +1,4 @@
+EXIT=0
+analytical=PASS
+visual=PASS
+cardinal=PASS

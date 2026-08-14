@@ -1,0 +1,20 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_EXTERNAL_TRANSFER_V1
+# Stage 16F.3: external conserved body transfer over frozen Stage 16F.2.
+# Something outside the water solver adds or removes conserved water from one
+# existing body; 16F.1 restores equilibrium; spill-eligible bodies may then
+# take one certified 16F.2 edge. Occupancy mask / topology unchanged.
+# CLOSED: 16F.4 topology-changing water, P5b, rainfall as weather, new puddles,
+# body split/merge, wet-cell growth, dry-cell retirement, channel overtopping,
+# terrain-water feedback, erosion, sediment remobilization, SimulationDomain.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_external_transfer_floor
+parent_region_key=causal_world_present_water_transfer_floor
+parent_authority_revision=1
+authority_revision=1
+external_event_id=16f3000100000001
+chronology=170
+external_enabled=1
+default_budget_transfers=48
