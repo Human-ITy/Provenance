@@ -41,3 +41,6 @@ check.watertight_stage7_topology=PASS
 check.collision_render_generation_parity=PASS
 check.bounded_64m_region=PASS
 check.geological_ancestry_descriptor_unchanged=PASS
+check.dual_cache_matches_compile_surface=PASS
+check.dual_cache_enabled_equals_forced_cold=PASS
+check.dual_cache_evict_recomputes_identically=PASS

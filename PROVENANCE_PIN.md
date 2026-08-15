@@ -303,15 +303,16 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   yet solve “indefinitely novel macro geography.”
 - 2B persistent-water soak: `--soak-water-backend=persistent` (default).
   90 s frame **PASS** (0 / 84138 >16.667, max 8.688 ms). 12 km / 500 s
-  frame **PASS** (0 / 476790, max 7.277). Water GPU 2 batches / 170 KB,
+  frame **PASS** (0 / 482125, max 11.282). Water GPU 2 batches / 170 KB,
   travel growth 0. FollowStream scratch growth 0, CRT segment 0.
   Package-worker scratch **PASS**: 4 × 12562 B, fallback CRT 0, overflow 0,
-  event/chronology high-water 0. SampleBlock / descriptor / GeoSample
-  temps closed. CRT slope still **FAIL** `crt_heap_committed`: 8→12 km
-  +415 MB (136 → 2149 MB). Remaining named site: per-worker Stage-12
-  dual-surface vertex cache (`m_differentialDualCache`), not package
-  scratch. GL residual plateaus at 8 km (~1438 MB). Return origin CRT
-  2643 MB. 16.667 not relaxed. P5b.2C / P5b.3 CLOSED.
+  event/chronology high-water 0. SampleBlock temps closed. Worker Stage-12
+  dual-surface cache **bounded**: 4 workers, entries warmup 0.93 M → plateau
+  1.3–1.5 M (8→12 km 1.50 M → 1.34 M), bytes ~70 MB plateau, 116 M evictions.
+  CRT 8→12 km **+1.5 MB** (197 → 199 MB), `PASS_plateau`. Return CRT 208 MB.
+  `erosion_cache_entries` now reads the four worker kernels. Golden:
+  cache enabled == forced-cold recompute. 16.667 not relaxed.
+  P5b.2C / P5b.3 CLOSED.
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

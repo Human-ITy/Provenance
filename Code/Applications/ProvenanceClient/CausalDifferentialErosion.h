@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -165,6 +166,281 @@ namespace CausalDifferentialErosion
         return result;
     }
 
+    // Derived dual-surface acceleration. Not a lifetime map of every dual
+    // vertex ever queried. Stage-15 WrapIntoRegion happens before DualVertex,
+    // so keys are wrapped analytical cells (4096 m tile). Z is a pure function
+    // of those wrapped coords plus immutable gen params, so sharing across
+    // tiled world instances is legitimate. Residency is the active 192 m live
+    // envelope + apron + lookahead, measured in that same wrapped cell space
+    // with toroidal distance so a seam-straddling window stays one neighborhood.
+    // Absolute world location is the published player origin (wrapped for
+    // lookup); travel distance must not grow this cache.
+    inline std::atomic<int> g_dualCacheResidencyCellX{ 0 };
+    inline std::atomic<int> g_dualCacheResidencyCellY{ 0 };
+    inline std::atomic<uint32_t> g_dualCacheResidencySeq{ 0 };
+
+    inline void PublishDualCacheResidency( int cellX, int cellY )
+    {
+        g_dualCacheResidencyCellX.store( cellX, std::memory_order_relaxed );
+        g_dualCacheResidencyCellY.store( cellY, std::memory_order_relaxed );
+        g_dualCacheResidencySeq.fetch_add( 1, std::memory_order_release );
+    }
+
+    inline bool ReadDualCacheResidency( int& cellX, int& cellY )
+    {
+        if ( g_dualCacheResidencySeq.load( std::memory_order_acquire ) == 0 )
+        { return false; }
+        cellX = g_dualCacheResidencyCellX.load( std::memory_order_relaxed );
+        cellY = g_dualCacheResidencyCellY.load( std::memory_order_relaxed );
+        return true;
+    }
+
+    struct DualCacheSnapshot
+    {
+        size_t entries = 0;
+        size_t buckets = 0;
+        size_t estimatedBytes = 0;
+        uint64_t insertions = 0;
+        uint64_t hits = 0;
+        uint64_t misses = 0;
+        uint64_t evictions = 0;
+        uint64_t generationResets = 0;
+        size_t highWaterEntries = 0;
+    };
+
+    inline int DualCacheFloorDiv( int a, int b )
+    {
+        int q = a / b;
+        int r = a % b;
+        if ( r != 0 && ( ( a < 0 ) != ( b < 0 ) ) ) { --q; }
+        return q;
+    }
+
+    inline int DualCacheTorusDelta( int a, int b, int period )
+    {
+        int d = a - b;
+        int const half = period / 2;
+        if ( d > half ) { d -= period; }
+        if ( d < -half ) { d += period; }
+        if ( d > half ) { d -= period; }
+        if ( d < -half ) { d += period; }
+        return d;
+    }
+
+    class DualVertexCache
+    {
+    public:
+        // 192 m live + 8 m apron + 16 m lookahead + 32 m snap + 8 m dual skirt.
+        static constexpr int kRadiusCells = 512;
+        static constexpr int kTileCells = 64;
+        static constexpr int kSnapCells = 32;
+        static constexpr int kPeriodCells = 8192; // 4096 m / 0.5 m
+        static constexpr size_t kNodeBytes = sizeof( uint32_t ) + sizeof( double ) + 32u;
+
+        DualVertexCache() = default;
+        DualVertexCache( DualVertexCache const& ) = delete;
+        DualVertexCache& operator=( DualVertexCache const& ) = delete;
+        DualVertexCache( DualVertexCache&& o ) noexcept { MoveFrom( std::move( o ) ); }
+        DualVertexCache& operator=( DualVertexCache&& o ) noexcept
+        {
+            if ( this != &o ) { MoveFrom( std::move( o ) ); }
+            return *this;
+        }
+
+        bool Find( int cellX, int cellY, double& z )
+        {
+            NoteResidency( cellX, cellY );
+            auto const tile = m_tiles.find( TileKey( cellX, cellY ) );
+            if ( tile == m_tiles.end() )
+            {
+                m_misses.fetch_add( 1, std::memory_order_relaxed );
+                return false;
+            }
+            auto const found = tile->second.find( LocalKey( cellX, cellY ) );
+            if ( found == tile->second.end() )
+            {
+                m_misses.fetch_add( 1, std::memory_order_relaxed );
+                return false;
+            }
+            z = found->second;
+            m_hits.fetch_add( 1, std::memory_order_relaxed );
+            return true;
+        }
+
+        void Insert( int cellX, int cellY, double z )
+        {
+            NoteResidency( cellX, cellY );
+            uint64_t const tk = TileKey( cellX, cellY );
+            auto& tile = m_tiles[tk];
+            auto const placed = tile.emplace( LocalKey( cellX, cellY ), z );
+            if ( !placed.second ) { return; }
+            m_insertions.fetch_add( 1, std::memory_order_relaxed );
+            size_t const n = m_entries.fetch_add( 1, std::memory_order_relaxed ) + 1;
+            size_t hw = m_highWater.load( std::memory_order_relaxed );
+            while ( n > hw && !m_highWater.compare_exchange_weak(
+                hw, n, std::memory_order_relaxed ) ) {}
+            RefreshEstimate();
+        }
+
+        void ForceCold()
+        {
+            m_tiles.clear();
+            m_entries.store( 0, std::memory_order_relaxed );
+            m_hasOrigin = false;
+            m_generationResets.fetch_add( 1, std::memory_order_relaxed );
+            RefreshEstimate();
+        }
+
+        DualCacheSnapshot Snapshot() const
+        {
+            DualCacheSnapshot s;
+            s.entries = m_entries.load( std::memory_order_relaxed );
+            s.buckets = m_buckets.load( std::memory_order_relaxed );
+            s.estimatedBytes = m_estimatedBytes.load( std::memory_order_relaxed );
+            s.insertions = m_insertions.load( std::memory_order_relaxed );
+            s.hits = m_hits.load( std::memory_order_relaxed );
+            s.misses = m_misses.load( std::memory_order_relaxed );
+            s.evictions = m_evictions.load( std::memory_order_relaxed );
+            s.generationResets = m_generationResets.load( std::memory_order_relaxed );
+            s.highWaterEntries = m_highWater.load( std::memory_order_relaxed );
+            return s;
+        }
+
+        size_t size() const { return m_entries.load( std::memory_order_relaxed ); }
+
+    private:
+        using TileMap = std::unordered_map<uint32_t, double>;
+        std::unordered_map<uint64_t, TileMap> m_tiles;
+        std::atomic<size_t> m_entries{ 0 };
+        std::atomic<size_t> m_buckets{ 0 };
+        std::atomic<size_t> m_estimatedBytes{ 0 };
+        std::atomic<uint64_t> m_insertions{ 0 };
+        std::atomic<uint64_t> m_hits{ 0 };
+        std::atomic<uint64_t> m_misses{ 0 };
+        std::atomic<uint64_t> m_evictions{ 0 };
+        std::atomic<uint64_t> m_generationResets{ 0 };
+        std::atomic<size_t> m_highWater{ 0 };
+        int m_originX = 0;
+        int m_originY = 0;
+        bool m_hasOrigin = false;
+
+        static int Snap( int cell )
+        {
+            return DualCacheFloorDiv( cell, kSnapCells ) * kSnapCells;
+        }
+
+        static uint64_t TileKey( int cellX, int cellY )
+        {
+            int const tx = DualCacheFloorDiv( cellX, kTileCells );
+            int const ty = DualCacheFloorDiv( cellY, kTileCells );
+            return ( (uint64_t)(uint32_t)tx << 32 ) ^ (uint32_t)ty;
+        }
+
+        static uint32_t LocalKey( int cellX, int cellY )
+        {
+            int const lx = cellX - DualCacheFloorDiv( cellX, kTileCells ) * kTileCells;
+            int const ly = cellY - DualCacheFloorDiv( cellY, kTileCells ) * kTileCells;
+            return (uint32_t)lx | ( (uint32_t)ly << 16 );
+        }
+
+        static void DecodeTile( uint64_t key, int& tx, int& ty )
+        {
+            tx = (int)(int32_t)(uint32_t)( key >> 32 );
+            ty = (int)(int32_t)(uint32_t)key;
+        }
+
+        void NoteResidency( int cellX, int cellY )
+        {
+            int ox = cellX, oy = cellY;
+            if ( !ReadDualCacheResidency( ox, oy ) )
+            {
+                ox = cellX;
+                oy = cellY;
+            }
+            EnsureResidency( Snap( ox ), Snap( oy ) );
+        }
+
+        void EnsureResidency( int originX, int originY )
+        {
+            if ( m_hasOrigin && originX == m_originX && originY == m_originY )
+            { return; }
+            bool const first = !m_hasOrigin;
+            m_originX = originX;
+            m_originY = originY;
+            m_hasOrigin = true;
+            if ( first ) { return; }
+            EvictOutside();
+        }
+
+        void EvictOutside()
+        {
+            size_t dropped = 0;
+            for ( auto it = m_tiles.begin(); it != m_tiles.end(); )
+            {
+                int tx = 0, ty = 0;
+                DecodeTile( it->first, tx, ty );
+                int const cx = tx * kTileCells + kTileCells / 2;
+                int const cy = ty * kTileCells + kTileCells / 2;
+                int const dx = DualCacheTorusDelta( cx, m_originX, kPeriodCells );
+                int const dy = DualCacheTorusDelta( cy, m_originY, kPeriodCells );
+                int const chebyshev = (std::max)( std::abs( dx ), std::abs( dy ) );
+                if ( chebyshev > kRadiusCells )
+                {
+                    dropped += it->second.size();
+                    it = m_tiles.erase( it );
+                }
+                else { ++it; }
+            }
+            if ( dropped == 0 ) { RefreshEstimate(); return; }
+            m_evictions.fetch_add( dropped, std::memory_order_relaxed );
+            size_t const have = m_entries.load( std::memory_order_relaxed );
+            m_entries.store( have > dropped ? have - dropped : 0,
+                std::memory_order_relaxed );
+            if ( m_tiles.empty() )
+            { m_generationResets.fetch_add( 1, std::memory_order_relaxed ); }
+            RefreshEstimate();
+        }
+
+        void RefreshEstimate()
+        {
+            size_t const e = m_entries.load( std::memory_order_relaxed );
+            size_t const t = m_tiles.size();
+            size_t const buckets = m_tiles.bucket_count() + e + t;
+            m_buckets.store( buckets, std::memory_order_relaxed );
+            m_estimatedBytes.store(
+                e * kNodeBytes + t * 80u + buckets * sizeof( void* ),
+                std::memory_order_relaxed );
+        }
+
+        void MoveFrom( DualVertexCache&& o ) noexcept
+        {
+            m_tiles = std::move( o.m_tiles );
+            m_entries.store( o.m_entries.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_buckets.store( o.m_buckets.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_estimatedBytes.store( o.m_estimatedBytes.exchange( 0,
+                std::memory_order_relaxed ), std::memory_order_relaxed );
+            m_insertions.store( o.m_insertions.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_hits.store( o.m_hits.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_misses.store( o.m_misses.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_evictions.store( o.m_evictions.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_generationResets.store( o.m_generationResets.exchange( 0,
+                std::memory_order_relaxed ), std::memory_order_relaxed );
+            m_highWater.store( o.m_highWater.exchange( 0, std::memory_order_relaxed ),
+                std::memory_order_relaxed );
+            m_originX = o.m_originX;
+            m_originY = o.m_originY;
+            m_hasOrigin = o.m_hasOrigin;
+            o.m_tiles.clear();
+            o.m_hasOrigin = false;
+        }
+    };
+
     struct ReliefSample
     {
         bool found = false;
@@ -242,14 +518,14 @@ namespace CausalDifferentialErosion
 
         CausalVisibleExposure::Vec3 DualVertex( Control control, int cellX, int cellY ) const
         {
-            uint64_t const key = ( (uint64_t)(uint32_t)cellX << 32 ) ^ (uint32_t)cellY;
-            auto& cache = control == Control::EqualResistance ? m_equalDualCache : m_differentialDualCache;
-            auto const found = cache.find( key );
+            DualVertexCache& cache = control == Control::EqualResistance
+                ? m_equalDualCache : m_differentialDualCache;
             double const x = ( (double)cellX + 0.5 ) * CausalVisibleExposure::kDualStepM;
             double const y = ( (double)cellY + 0.5 ) * CausalVisibleExposure::kDualStepM;
-            if ( found != cache.end() ) { return { x, y, found->second }; }
+            double cachedZ = 0.0;
+            if ( cache.Find( cellX, cellY, cachedZ ) ) { return { x, y, cachedZ }; }
             double const z = SurfaceZ( control, x, y );
-            cache.emplace( key, z );
+            cache.Insert( cellX, cellY, z );
             return { x, y, z };
         }
 
@@ -321,12 +597,38 @@ namespace CausalDifferentialErosion
             return control == Control::EqualResistance
                 ? m_equalDualCache.size() : m_differentialDualCache.size();
         }
+        DualCacheSnapshot DualCacheStats( Control control ) const
+        {
+            return control == Control::EqualResistance
+                ? m_equalDualCache.Snapshot() : m_differentialDualCache.Snapshot();
+        }
+        DualCacheSnapshot DualCacheStatsTotal() const
+        {
+            DualCacheSnapshot a = m_differentialDualCache.Snapshot();
+            DualCacheSnapshot const b = m_equalDualCache.Snapshot();
+            a.entries += b.entries;
+            a.buckets += b.buckets;
+            a.estimatedBytes += b.estimatedBytes;
+            a.insertions += b.insertions;
+            a.hits += b.hits;
+            a.misses += b.misses;
+            a.evictions += b.evictions;
+            a.generationResets += b.generationResets;
+            if ( b.highWaterEntries > a.highWaterEntries )
+            { a.highWaterEntries = b.highWaterEntries; }
+            return a;
+        }
+        void ForceColdDualCaches() const
+        {
+            m_equalDualCache.ForceCold();
+            m_differentialDualCache.ForceCold();
+        }
 
     private:
         CausalWorldExposure::Kernel m_exposure;
         Program m_program;
-        mutable std::unordered_map<uint64_t, double> m_equalDualCache;
-        mutable std::unordered_map<uint64_t, double> m_differentialDualCache;
+        mutable DualVertexCache m_equalDualCache;
+        mutable DualVertexCache m_differentialDualCache;
         mutable uint64_t m_surfaceCompilations = 0;
     };
 
@@ -569,6 +871,52 @@ namespace CausalDifferentialErosion
         cert.checks.push_back( { "bounded_64m_region", tiled.size() == 32768 } );
         cert.checks.push_back( { "geological_ancestry_descriptor_unchanged",
             erosion.program.geologyDescriptorDigest == CausalWorldGeology::HashText( geologySource ) } );
+
+        // Derived acceleration, not world truth: a cache hit, a forced cold
+        // recompute, and CompileSurfaceZ must agree exactly.
+        struct DualProbe { int x, y; double z = 0.0; };
+        std::vector<DualProbe> probes;
+        for ( int y = -40; y <= 40; y += 5 )
+        for ( int x = -40; x <= 40; x += 5 )
+        { probes.push_back( { x, y, 0.0 } ); }
+        bool cacheMatchesCompile = true;
+        for ( auto& probe : probes )
+        {
+            double const wx = ( (double)probe.x + 0.5 ) * CausalVisibleExposure::kDualStepM;
+            double const wy = ( (double)probe.y + 0.5 ) * CausalVisibleExposure::kDualStepM;
+            probe.z = kernel.DualVertex( Control::DifferentialResistance, probe.x, probe.y ).z;
+            cacheMatchesCompile = cacheMatchesCompile
+                && std::fabs( probe.z - kernel.CompileSurfaceZ(
+                    Control::DifferentialResistance, wx, wy ) ) < 1e-12;
+        }
+        kernel.ForceColdDualCaches();
+        bool coldMatchesWarm = kernel.CachedVertexCount( Control::DifferentialResistance ) == 0;
+        for ( auto const& probe : probes )
+        {
+            double const z = kernel.DualVertex(
+                Control::DifferentialResistance, probe.x, probe.y ).z;
+            coldMatchesWarm = coldMatchesWarm && std::fabs( z - probe.z ) < 1e-12;
+        }
+        int ox = 0, oy = 0;
+        ReadDualCacheResidency( ox, oy );
+        PublishDualCacheResidency( ox + DualVertexCache::kPeriodCells / 2,
+            oy + DualVertexCache::kPeriodCells / 2 );
+        kernel.DualVertex( Control::DifferentialResistance, ox + DualVertexCache::kPeriodCells / 2,
+            oy + DualVertexCache::kPeriodCells / 2 );
+        PublishDualCacheResidency( probes.front().x, probes.front().y );
+        bool evictRecompute = true;
+        for ( auto const& probe : probes )
+        {
+            double const z = kernel.DualVertex(
+                Control::DifferentialResistance, probe.x, probe.y ).z;
+            evictRecompute = evictRecompute && std::fabs( z - probe.z ) < 1e-12;
+        }
+        if ( g_dualCacheResidencySeq.load( std::memory_order_relaxed ) )
+        { PublishDualCacheResidency( ox, oy ); }
+        cert.checks.push_back( { "dual_cache_matches_compile_surface", cacheMatchesCompile } );
+        cert.checks.push_back( { "dual_cache_enabled_equals_forced_cold", coldMatchesWarm } );
+        cert.checks.push_back( { "dual_cache_evict_recomputes_identically", evictRecompute } );
+
         cert.passed = std::all_of( cert.checks.begin(), cert.checks.end(),
             []( auto const& check ) { return check.second; } );
         return cert;

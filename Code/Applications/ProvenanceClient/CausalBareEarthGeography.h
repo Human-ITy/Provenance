@@ -419,6 +419,8 @@ namespace CausalBareEarthGeography
             s,CausalVisibleExposure::DescribeBlock(s));}
 
         CausalSurfaceBreachContinuity::Kernel const& Stage12() const{return m_stage12;}
+        CausalDifferentialErosion::Kernel const& DifferentialErosion() const
+        {return m_stage12.Stage11().Stage10().Intrusion().Erosion();}
         Program const& GetProgram() const{return m_program;}
 
     private:

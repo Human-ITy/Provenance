@@ -3939,6 +3939,7 @@ namespace
     // instance between terrain workers would race those maps. Each worker owns
     // an identical descriptor-linked kernel instead; results remain byte-stable
     // while the cache is private to the job lane that mutates it.
+    void RegisterWorkerDualCache(CausalDifferentialErosion::Kernel const& kernel);
     CausalBareEarthGeography::Kernel* ThreadBareEarthKernel()
     {
         thread_local std::unique_ptr<CausalBareEarthGeography::Kernel> kernel;
@@ -3954,7 +3955,9 @@ namespace
                 "Data\\Worldgen\\causal_world_contact_mineralization_floor.ccm",
                 "Data\\Worldgen\\causal_world_fault_displacement_floor.cfd",
                 "Data\\Worldgen\\causal_world_surface_breach_continuity_floor.cbc",
-                "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg",&reason);
+                    "Data\\Worldgen\\causal_world_bare_earth_geography_floor.cbg",&reason);
+            if(kernel)
+                RegisterWorkerDualCache(kernel->DifferentialErosion());
         }
         return kernel.get();
     }
@@ -13234,6 +13237,99 @@ namespace
         return r;
     }
 
+    constexpr int kWorkerDualCacheSlots=8;
+    CausalDifferentialErosion::Kernel const* s_workerDualCacheSlots[kWorkerDualCacheSlots]={};
+    std::atomic<int> s_workerDualCacheCount{0};
+
+    struct WorkerDualCacheRow
+    {
+        int differentialEntries=0;
+        int equalEntries=0;
+        int buckets=0;
+        unsigned long long estimatedBytes=0;
+        unsigned long long insertions=0;
+        unsigned long long hits=0;
+        unsigned long long misses=0;
+        unsigned long long evictions=0;
+        unsigned long long generationResets=0;
+        int highWaterEntries=0;
+    };
+
+    struct WorkerDualCacheReceipt
+    {
+        int workers=0;
+        int entriesTotal=0;
+        unsigned long long bytesTotal=0;
+        int differentialEntries=0;
+        int equalEntries=0;
+        int buckets=0;
+        unsigned long long insertions=0;
+        unsigned long long hits=0;
+        unsigned long long misses=0;
+        unsigned long long evictions=0;
+        unsigned long long generationResets=0;
+        int highWaterEntries=0;
+        WorkerDualCacheRow row[kWorkerDualCacheSlots]{};
+    };
+
+    void RegisterWorkerDualCache(CausalDifferentialErosion::Kernel const& kernel)
+    {
+        int const i=s_workerDualCacheCount.fetch_add(1);
+        if(i>=0&&i<kWorkerDualCacheSlots)
+            s_workerDualCacheSlots[i]=&kernel;
+    }
+
+    WorkerDualCacheReceipt CaptureWorkerDualCacheReceipt()
+    {
+        WorkerDualCacheReceipt r;
+        int const n=s_workerDualCacheCount.load();
+        int const slots=(std::min)(n,kWorkerDualCacheSlots);
+        for(int i=0;i<slots;++i)
+        {
+            CausalDifferentialErosion::Kernel const* k=s_workerDualCacheSlots[i];
+            if(!k)continue;
+            auto const diff=k->DualCacheStats(
+                CausalDifferentialErosion::Control::DifferentialResistance);
+            auto const equal=k->DualCacheStats(
+                CausalDifferentialErosion::Control::EqualResistance);
+            WorkerDualCacheRow& row=r.row[r.workers];
+            row.differentialEntries=(int)diff.entries;
+            row.equalEntries=(int)equal.entries;
+            row.buckets=(int)(diff.buckets+equal.buckets);
+            row.estimatedBytes=(unsigned long long)(diff.estimatedBytes+equal.estimatedBytes);
+            row.insertions=diff.insertions+equal.insertions;
+            row.hits=diff.hits+equal.hits;
+            row.misses=diff.misses+equal.misses;
+            row.evictions=diff.evictions+equal.evictions;
+            row.generationResets=diff.generationResets+equal.generationResets;
+            row.highWaterEntries=(int)(std::max)(diff.highWaterEntries,equal.highWaterEntries);
+            r.entriesTotal+=row.differentialEntries+row.equalEntries;
+            r.bytesTotal+=row.estimatedBytes;
+            r.differentialEntries+=row.differentialEntries;
+            r.equalEntries+=row.equalEntries;
+            r.buckets+=row.buckets;
+            r.insertions+=row.insertions;
+            r.hits+=row.hits;
+            r.misses+=row.misses;
+            r.evictions+=row.evictions;
+            r.generationResets+=row.generationResets;
+            if(row.highWaterEntries>r.highWaterEntries)
+                r.highWaterEntries=row.highWaterEntries;
+            ++r.workers;
+        }
+        return r;
+    }
+
+    void PublishWorkerDualCacheResidency()
+    {
+        double x=(double)g.feetX,y=(double)g.feetY;
+        if(auto const* geo=ActiveBareEarthKernel(g.stage0PlayView))
+            CausalBareEarthGeography::Kernel::WrapIntoRegion(geo->GetProgram(),x,y);
+        int const cellX=(int)std::floor(x/CausalVisibleExposure::kDualStepM-0.5);
+        int const cellY=(int)std::floor(y/CausalVisibleExposure::kDualStepM-0.5);
+        CausalDifferentialErosion::PublishDualCacheResidency(cellX,cellY);
+    }
+
     void RecycleCollisionSurface(
         std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const>& surface,
         Stage8RecycledBuffers* into)
@@ -14482,6 +14578,7 @@ namespace
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+        PublishWorkerDualCacheResidency();
         // CPU products completed by the workers are the only packages allowed
         // to cross into GL ownership.  Publication is bounded independently of
         // authority sampling so a fast flight cannot force either phase into a
@@ -39140,6 +39237,19 @@ namespace
         int farMaterialEntries=0;
         int cellEntries=0;
         int erosionCacheEntries=0;
+        int workerCacheWorkers=0;
+        int workerCacheEntriesTotal=0;
+        unsigned long long workerCacheBytesTotal=0;
+        int workerCacheDifferentialEntries=0;
+        int workerCacheEqualEntries=0;
+        int workerCacheBuckets=0;
+        unsigned long long workerCacheInsertions=0;
+        unsigned long long workerCacheHits=0;
+        unsigned long long workerCacheMisses=0;
+        unsigned long long workerCacheEvictions=0;
+        unsigned long long workerCacheGenerationResets=0;
+        int workerCacheHighWaterEntries=0;
+        WorkerDualCacheRow workerCacheRow[kWorkerDualCacheSlots]{};
         double frameP95Ms=0.0;
         double frameP99Ms=0.0;
         double frameMaxMs=0.0;
@@ -39492,8 +39602,22 @@ namespace
         ledger.farFilteredEntries=(int)g.stage0FarFilteredCache.size();
         ledger.farMaterialEntries=(int)g.stage0FarMaterialCache.size();
         ledger.cellEntries=(int)g.cells.size();
-        ledger.erosionCacheEntries=g.causalErosionRuntime
-            ?(int)g.causalErosionRuntime->CachedVertexCount(g.stage8Control):0;
+        WorkerDualCacheReceipt const workerCache=CaptureWorkerDualCacheReceipt();
+        ledger.erosionCacheEntries=workerCache.entriesTotal;
+        ledger.workerCacheWorkers=workerCache.workers;
+        ledger.workerCacheEntriesTotal=workerCache.entriesTotal;
+        ledger.workerCacheBytesTotal=workerCache.bytesTotal;
+        ledger.workerCacheDifferentialEntries=workerCache.differentialEntries;
+        ledger.workerCacheEqualEntries=workerCache.equalEntries;
+        ledger.workerCacheBuckets=workerCache.buckets;
+        ledger.workerCacheInsertions=workerCache.insertions;
+        ledger.workerCacheHits=workerCache.hits;
+        ledger.workerCacheMisses=workerCache.misses;
+        ledger.workerCacheEvictions=workerCache.evictions;
+        ledger.workerCacheGenerationResets=workerCache.generationResets;
+        ledger.workerCacheHighWaterEntries=workerCache.highWaterEntries;
+        for(int i=0;i<workerCache.workers&&i<kWorkerDualCacheSlots;++i)
+            ledger.workerCacheRow[i]=workerCache.row[i];
         ledger.cacheEntries=ledger.farSurfaceEntries+ledger.farFilteredEntries
             +ledger.farMaterialEntries+ledger.cellEntries+ledger.erosionCacheEntries;
         ledger.pendingPackages=Stage0PendingPackageCount(g.stage0PlayView);
@@ -39693,6 +39817,56 @@ namespace
             ledger.phase,(unsigned long long)ledger.otherPersistentBytes,
             ledger.phase,(unsigned long long)ledger.accountedLogicalBytes,
             ledger.phase,ledger.ownerClass);
+        std::fprintf(f,
+            "ledger.%s.worker_cache_workers=%d\n"
+            "ledger.%s.worker_cache_entries_total=%d\n"
+            "ledger.%s.worker_cache_bytes_total=%llu\n"
+            "ledger.%s.worker_cache_differential_entries=%d\n"
+            "ledger.%s.worker_cache_equal_entries=%d\n"
+            "ledger.%s.worker_cache_buckets=%d\n"
+            "ledger.%s.worker_cache_insertions=%llu\n"
+            "ledger.%s.worker_cache_hits=%llu\n"
+            "ledger.%s.worker_cache_misses=%llu\n"
+            "ledger.%s.worker_cache_evictions=%llu\n"
+            "ledger.%s.worker_cache_generation_resets=%llu\n"
+            "ledger.%s.worker_cache_high_water_entries=%d\n",
+            ledger.phase,ledger.workerCacheWorkers,
+            ledger.phase,ledger.workerCacheEntriesTotal,
+            ledger.phase,(unsigned long long)ledger.workerCacheBytesTotal,
+            ledger.phase,ledger.workerCacheDifferentialEntries,
+            ledger.phase,ledger.workerCacheEqualEntries,
+            ledger.phase,ledger.workerCacheBuckets,
+            ledger.phase,(unsigned long long)ledger.workerCacheInsertions,
+            ledger.phase,(unsigned long long)ledger.workerCacheHits,
+            ledger.phase,(unsigned long long)ledger.workerCacheMisses,
+            ledger.phase,(unsigned long long)ledger.workerCacheEvictions,
+            ledger.phase,(unsigned long long)ledger.workerCacheGenerationResets,
+            ledger.phase,ledger.workerCacheHighWaterEntries);
+        for(int i=0;i<ledger.workerCacheWorkers&&i<kWorkerDualCacheSlots;++i)
+        {
+            WorkerDualCacheRow const& row=ledger.workerCacheRow[i];
+            std::fprintf(f,
+                "ledger.%s.worker_cache.w%d.differential_entries=%d\n"
+                "ledger.%s.worker_cache.w%d.equal_entries=%d\n"
+                "ledger.%s.worker_cache.w%d.buckets=%d\n"
+                "ledger.%s.worker_cache.w%d.estimated_bytes=%llu\n"
+                "ledger.%s.worker_cache.w%d.insertions=%llu\n"
+                "ledger.%s.worker_cache.w%d.hits=%llu\n"
+                "ledger.%s.worker_cache.w%d.misses=%llu\n"
+                "ledger.%s.worker_cache.w%d.evictions=%llu\n"
+                "ledger.%s.worker_cache.w%d.generation_resets=%llu\n"
+                "ledger.%s.worker_cache.w%d.high_water_entries=%d\n",
+                ledger.phase,i,row.differentialEntries,
+                ledger.phase,i,row.equalEntries,
+                ledger.phase,i,row.buckets,
+                ledger.phase,i,(unsigned long long)row.estimatedBytes,
+                ledger.phase,i,(unsigned long long)row.insertions,
+                ledger.phase,i,(unsigned long long)row.hits,
+                ledger.phase,i,(unsigned long long)row.misses,
+                ledger.phase,i,(unsigned long long)row.evictions,
+                ledger.phase,i,(unsigned long long)row.generationResets,
+                ledger.phase,i,row.highWaterEntries);
+        }
     }
 
     SoakResourceLedger const* FindSoakLedger(char const* phase)
@@ -39827,6 +40001,31 @@ namespace
         return "PASS_plateau";
     }
 
+    char const* SoakWorkerCacheBoundedVerdict()
+    {
+        SoakResourceLedger const* a=FindOwnershipDrain(8000);
+        SoakResourceLedger const* b=FindOwnershipDrain(12000);
+        if(!a||!b)return "INCOMPLETE_need_12km";
+        int const da=a->workerCacheEntriesTotal;
+        int const db=b->workerCacheEntriesTotal;
+        unsigned long long const ba=a->workerCacheBytesTotal;
+        unsigned long long const bb=b->workerCacheBytesTotal;
+        if(da<=0&&db<=0)return "FAIL_telemetry_unwired";
+        if(db>da+da/4+65536)return "FAIL_scales_with_distance";
+        if(bb>ba+ba/4+8ull*1024ull*1024ull)return "FAIL_scales_with_distance";
+        return "PASS_bounded";
+    }
+
+    char const* SoakCrtEightToTwelveVerdict()
+    {
+        SoakResourceLedger const* a=FindOwnershipDrain(8000);
+        SoakResourceLedger const* b=FindOwnershipDrain(12000);
+        if(!a||!b)return "INCOMPLETE";
+        long long const d=(long long)b->crtHeapCommitted-(long long)a->crtHeapCommitted;
+        if(d>64ll*1024ll*1024ll)return "FAIL_scales_with_distance";
+        return "PASS_plateau";
+    }
+
     bool WriteStreamingSoakArtifact()
     {
         auto& run=s_streamingSoak;
@@ -39869,6 +40068,11 @@ namespace
         bool const packageScratchOk=packageScratch.fallbackCrtAllocs==0
             &&packageScratch.overflowEvents==0
             &&packageScratch.growthEvents==0;
+        WorkerDualCacheReceipt const workerCache=CaptureWorkerDualCacheReceipt();
+        char const* const workerCacheVerdict=SoakWorkerCacheBoundedVerdict();
+        char const* const crtEightTwelve=SoakCrtEightToTwelveVerdict();
+        bool const workerCacheOk=std::strncmp(workerCacheVerdict,"FAIL",4)!=0;
+        bool const crtEightTwelveOk=std::strncmp(crtEightTwelve,"FAIL",4)!=0;
         RecalcWaterGpuBytes();
         bool const waterGpuReady=g.soakWaterBackend==0||s_waterGpu.procsReady;
         bool const waterGpuBounded=g.soakWaterBackend==0
@@ -39879,7 +40083,8 @@ namespace
             ||s_waterGpu.growthEventsTravel==0;
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
-            &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk;
+            &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
+            &&workerCacheOk&&crtEightTwelveOk;
         char certPathBuf[160];
         char const* certPath=g.certStreamingSoakStageFilter==23
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
@@ -40018,6 +40223,22 @@ namespace
             "check.package_scratch_fallback_crt=%s\n"
             "check.package_scratch_overflow=%s\n"
             "check.package_scratch_growth=%s\n"
+            "worker_cache.workers=%d\n"
+            "worker_cache.entries_total=%d\n"
+            "worker_cache.bytes_total=%llu\n"
+            "worker_cache.differential_entries=%d\n"
+            "worker_cache.equal_entries=%d\n"
+            "worker_cache.buckets=%d\n"
+            "worker_cache.insertions=%llu\n"
+            "worker_cache.hits=%llu\n"
+            "worker_cache.misses=%llu\n"
+            "worker_cache.evictions=%llu\n"
+            "worker_cache.generation_resets=%llu\n"
+            "worker_cache.high_water_entries=%d\n"
+            "worker_cache.key=wrapped_analytical_dual_cell\n"
+            "worker_cache.residency=192m_live_plus_apron_lookahead_toroidal\n"
+            "check.worker_dual_cache_bounded=%s\n"
+            "check.crt_8_to_12_plateau=%s\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
@@ -40107,8 +40328,73 @@ namespace
             packageScratch.fallbackCrtAllocs==0?"PASS":"FAIL",
             packageScratch.overflowEvents==0?"PASS":"FAIL",
             packageScratch.growthEvents==0?"PASS":"FAIL",
+            workerCache.workers,
+            workerCache.entriesTotal,
+            (unsigned long long)workerCache.bytesTotal,
+            workerCache.differentialEntries,
+            workerCache.equalEntries,
+            workerCache.buckets,
+            (unsigned long long)workerCache.insertions,
+            (unsigned long long)workerCache.hits,
+            (unsigned long long)workerCache.misses,
+            (unsigned long long)workerCache.evictions,
+            (unsigned long long)workerCache.generationResets,
+            workerCache.highWaterEntries,
+            workerCacheVerdict,
+            crtEightTwelve,
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
+        {
+            int const stations[]={0,1000,2000,4000,8000,12000};
+            for(int s:stations)
+            {
+                SoakResourceLedger const* l=FindOwnershipDrain(s);
+                if(!l)continue;
+                std::fprintf(f,
+                    "station.%dm.worker_cache_entries_total=%d\n"
+                    "station.%dm.worker_cache_bytes_total=%llu\n"
+                    "station.%dm.crt_heap_committed=%llu\n",
+                    s,l->workerCacheEntriesTotal,
+                    s,(unsigned long long)l->workerCacheBytesTotal,
+                    s,(unsigned long long)l->crtHeapCommitted);
+            }
+            SoakResourceLedger const* ret=FindSoakLedger("after_return_settle");
+            if(ret)
+            {
+                std::fprintf(f,
+                    "station.return.worker_cache_entries_total=%d\n"
+                    "station.return.worker_cache_bytes_total=%llu\n"
+                    "station.return.crt_heap_committed=%llu\n",
+                    ret->workerCacheEntriesTotal,
+                    (unsigned long long)ret->workerCacheBytesTotal,
+                    (unsigned long long)ret->crtHeapCommitted);
+            }
+            for(int i=0;i<workerCache.workers;++i)
+            {
+                WorkerDualCacheRow const& row=workerCache.row[i];
+                std::fprintf(f,
+                    "worker_cache.w%d.differential_entries=%d\n"
+                    "worker_cache.w%d.equal_entries=%d\n"
+                    "worker_cache.w%d.buckets=%d\n"
+                    "worker_cache.w%d.estimated_bytes=%llu\n"
+                    "worker_cache.w%d.insertions=%llu\n"
+                    "worker_cache.w%d.hits=%llu\n"
+                    "worker_cache.w%d.misses=%llu\n"
+                    "worker_cache.w%d.evictions=%llu\n"
+                    "worker_cache.w%d.generation_resets=%llu\n"
+                    "worker_cache.w%d.high_water_entries=%d\n",
+                    i,row.differentialEntries,
+                    i,row.equalEntries,
+                    i,row.buckets,
+                    i,(unsigned long long)row.estimatedBytes,
+                    i,(unsigned long long)row.insertions,
+                    i,(unsigned long long)row.hits,
+                    i,(unsigned long long)row.misses,
+                    i,(unsigned long long)row.evictions,
+                    i,(unsigned long long)row.generationResets,
+                    i,row.highWaterEntries);
+            }
+        }
         for(SoakResourceLedger const& ledger:run.ledgers)WriteSoakLedger(f,ledger);
         for(SoakOverrunReceipt const& o:run.overruns)
         {

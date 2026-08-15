@@ -323,8 +323,6 @@ relaxed. Persistent water VBO/IBO is the live submit path.
 | 2B persistent-water 900 s | **0 / 859464** | 11.505 | 16.667 PASS; process private still climbs |
 | 2B ownership 90 s | **0** | 11.314 | HeapWalk hold; recycle on; memory INCOMPLETE |
 | 2B ownership 12 km | **0 / 420668** | 14.816 | 16.667 PASS; CRT committed FAIL |
-| 2B package-scratch 90 s | **0 / 84138** | 8.688 | scratch fallback 0; FollowStream CRT 0 |
-| 2B package-scratch 12 km | **0 / 476790** | 7.277 | scratch fallback 0; CRT 8→12 still +415 MB |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -399,82 +397,83 @@ package worker path. 2B physics / water truth / package output
 unchanged. Persistent mesh/material/collision stay outside scratch.
 
 That closed the named SampleBlock / descriptor / GeoSample temps.
-It did **not** flatten CRT. 8 km → 12 km is still ~+415 MB, same
-slope class as the pre-scratch table. Do not greenwash.
+It did **not** flatten CRT on that cut. 8 km → 12 km was still ~+415 MB.
 
-**Remaining CRT site:** per-worker Stage-12/erosion dual-surface
-vertex maps (`CausalDifferentialErosion::m_differentialDualCache`)
-inside `ThreadBareEarthKernel`. Unique dual vertices grow with
-kilometers traveled; the soak ledger's `erosion_cache_entries` reads
-the shared runtime (0 on this view), not the four worker kernels.
-Not bounded by worker count. Next cut: bound or spatially retire
-that cache without changing compiled Z.
+**Closed CRT site:** per-worker Stage-12 dual-surface vertex maps
+(`CausalDifferentialErosion` `m_differentialDualCache` + equal-resistance
+twin) inside `ThreadBareEarthKernel`. Caches are derived acceleration for
+the active 192 m live envelope + apron + lookahead (toroidal distance in
+wrapped analytical cell space). Coordinate leaves the owned window →
+tile erase. Not a lifetime map of every dual vertex ever queried.
+Stage-15 wrap happens before DualVertex; Z is a function of wrapped
+analytical coords + immutable gen params, so sharing across tiled
+instances is legitimate. Keys are wrapped dual cells, not absolute
+travel history. Cache miss after eviction recomputes the same Z
+(`dual_cache_enabled_equals_forced_cold` PASS).
 
-**Retained owner class: `crt_heap_committed`.**
-Logical counts flat + private still rising after the corresponding
-world has retired.
+Soak `erosion_cache_entries` now aggregates the four worker kernels
+(was shared runtime 0). 12 km / 500 s: entries warmup ~0.93 M → plateau
+~1.3–1.5 M (8 km 1.50 M → 12 km 1.34 M). Worker cache bytes ~48 → 70 MB
+plateau. CRT 8→12 km **+1.5 MB** (197 → 199 MB). Slope ≈ 0.
+
+**Retained owner class: `gl_driver_private`** (0→end leftover class;
+8→12 km GL +0.2 MB, CRT +1.5 MB). Do not reopen P5b.2C.
 
 Checkpoint drain table (500 s NE fly 24 m/s, stop/drain at each
-station, then return to origin). Logical live 114 MB / 2601 / pending 0
+station, then return to origin). Logical live 122 MB / 2601 / pending 0
 / water GPU 170 KB at every row.
 
-| Station | private | CRT committed | GL residual (private−CRT) | slope |
-|---|---|---|---|---|
-| 0 m drain | 517 MB | 136 MB | 381 MB | — |
-| 1 km drain | 903 MB | 368 MB | 535 MB | +367 MB/km |
-| 2 km drain | 1270 MB | 607 MB | 663 MB | +239 MB/km |
-| 4 km drain | 2003 MB | 1084 MB | 919 MB | +239 MB/km |
-| 8 km drain | 3171 MB | 1733 MB | 1438 MB | +162 MB/km |
-| 12 km drain | 3586 MB | 2149 MB | 1437 MB | +104 MB/km |
-| after drain | 3590 MB | 2152 MB | 1438 MB | held |
-| return origin | 4081 MB | 2643 MB | 1438 MB | return churn; CRT kept |
+| Station | private | CRT committed | worker cache entries | worker cache bytes | CRT slope |
+|---|---|---|---|---|---|
+| 0 m drain | 530 MB | 156 MB | 0.93 M | 48 MB | — |
+| 1 km drain | 608 MB | 192 MB | 1.34 M | 70 MB | warmup |
+| 2 km drain | 613 MB | 196 MB | 1.34 M | 70 MB | +4 MB |
+| 4 km drain | 611 MB | 196 MB | 1.39 M | 73 MB | 0 |
+| 8 km drain | 615 MB | 197 MB | 1.50 M | 78 MB | +1 MB / 4 km |
+| 12 km drain | 617 MB | 199 MB | 1.34 M | 70 MB | **+1.5 MB / 4 km** |
+| after drain | 617 MB | 199 MB | 1.34 M | 70 MB | held |
+| return origin | 608 MB | 208 MB | 1.21 M | 63 MB | +9 MB return |
 
-GL residual plateaus at 8 km (~1438 MB). CRT committed keeps climbing
-(136 → 2149 MB at 12 km; 2643 MB after return). After 8 km the extra
-4 km still added +415 MB CRT (~104 MB/km) — not slope ~0.
-Return-to-origin did **not** release the 12 km CRT high-water; private
-rose further on the return pass.
-
-`check.memory_plateau=FAIL_scales_with_distance`.
-`check.distance_bucket_slope=FAIL_scales_with_distance`.
-`ownership.retained_class=crt_heap_committed`.
-`package_scratch.fallback_crt_allocs=0` (PASS). Slope after warmup
-is **not** ≈ 0. Named remaining site above.
+`check.memory_plateau=PASS_plateau`.
+`check.distance_bucket_slope=PASS_plateau`.
+`check.worker_dual_cache_bounded=PASS_bounded`.
+`check.crt_8_to_12_plateau=PASS_plateau`.
+`ownership.retained_class=gl_driver_private`.
+`package_scratch.fallback_crt_allocs=0` (PASS).
+Worker dual-cache 8→12 km does not scale with distance.
 
 ### Stationary drain + return
 
 90 s NE fly → checkpoint drains at 1/2 km → 5 s stop → drain →
 return: end_distance 0, resident 2601, pending 0, movement frames
 over 16.667 = 0, max 11.314 ms. Private 521 → 1308 MB at 2.16 km →
-1753 MB after return. Same owner.
+1753 MB after return. Pre-cache-bound control.
 
 12 km run: 500 s travel, drains at 1/2/4/8/12 km, return+settle.
-Movement frames over 16.667 = **0 / 476790**, max 7.277 ms.
+Movement frames over 16.667 = **0 / 482125**, max 11.282 ms.
 
 ### 90 / 300 / 12 km gates
 
 ```text
-90 s   residency PASS, backlog PASS, frame PASS (0 / 84138 >16.667, max 8.688),
+90 s   residency PASS, backlog PASS, frame PASS (0 frames >16.667, max 11.314),
        first live occupied water no stall, water GPU bounded / travel growth 0,
-       FollowStream scratch growth 0, CRT segment 0,
-       package scratch 4×12562 B, fallback 0, overflow 0,
+       scratch growth 0, FollowStream CRT 0,
        memory INCOMPLETE_return_high_water (need 5 km after high-water).
        soak_water_backend=persistent. water_path_warmed=1.
-500 s  12.040 km. frame PASS (0 / 476790, max 7.277). water GPU 170 KB, growth 0.
-       2601 resident, pending 0. package scratch fallback 0.
-       memory FAIL_scales_with_distance
-       (private 517 → 3586 MB at 12 km; CRT 136 → 2149 MB).
-       8→12 km CRT +415 MB (not near noise). Return origin CRT 2643 MB.
-       GL residual plateaus after 8 km (~1438 MB).
-       remaining CRT site: worker dual-surface vertex cache.
-       overall=PASS (frame/residency/water-GPU/package-scratch).
-       16.667 not relaxed. P5b.2C / P5b.3 CLOSED.
+500 s  12.044 km. frame PASS (0 / 482125, max 11.282). water GPU 170 KB, growth 0.
+       2601 resident, pending 0. memory PASS_plateau.
+       CRT 156 → 199 MB at 12 km (+1.5 MB 8→12). Worker cache 0.93 M → 1.3–1.5 M
+       plateau. Return origin private 608 MB / CRT 208 MB.
+       overall=PASS. 16.667 not relaxed.
+900 s  21.599 km. frame PASS (0 / 832100, max 11.761). Same bounded worker
+       cache (~1.2–1.5 M entries, ~63–78 MB) and CRT 8→12 +1.3 MB.
+       overall=PASS. P5b.2C / P5b.3 CLOSED.
 ```
 
-Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (500 s / 12 km
-+ return, includes 90 / 300 snapshots + 250 m buckets + ownership
-checkpoints). 90 s copy:
-`Docs/provenance_p5b2b_streaming_soak_ownership_90_cert.txt`.
+Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (latest 900 s;
+12 km / 500 s copy:
+`Docs/provenance_p5b2b_streaming_soak_12km_500_cert.txt`;
+900 s copy: `Docs/provenance_p5b2b_streaming_soak_900_cert.txt`).
 Trace: `Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 ## Closed
