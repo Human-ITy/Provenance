@@ -12,8 +12,8 @@ This is the standing matrix. Cardinal replacement and the long-haul soak are
 narrow a future stage to “cardinal movement passed.”
 
 P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
-`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2C.
-P5b.3, rainfall, and erosion stay **CLOSED**.
+`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.3A.
+**P5b.3B / P5b.3C**, rainfall, and erosion stay **CLOSED**.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -80,12 +80,13 @@ Proves **replacement correctness over a bounded route**.
 - Declared resident package bound (2601 at 192 m). Do not weaken.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2c
+Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b3a
 ```
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
 
-Latest play-stage receipt: `Docs/provenance_p5b2c_cardinal_replacement_cert.txt`
+Latest play-stage receipt: `Docs/provenance_p5b3a_cardinal_replacement_cert.txt`
+2C receipt: `Docs/provenance_p5b2c_cardinal_replacement_cert.txt`
 2A control receipt: `Docs/provenance_p5b2a_cardinal_replacement_cert.txt`
 
 ### B. Long-haul streaming soak (timed, no return)
@@ -97,13 +98,13 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2c --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b3a --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
 
-Receipt: `Docs/provenance_p5b2c_streaming_soak_cert.txt`  
-Trace: `Docs/provenance_p5b2c_streaming_soak_trace.csv`
+Receipt: `Docs/provenance_p5b3a_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3a_streaming_soak_trace.csv`
 
 Standing metrics (required on every receipt; do not invent green):
 
@@ -120,6 +121,8 @@ oldest pending age, worker queue depth, min complete radius
   representation rebuilds (derived mesh)
   P5b.2C: pore transfers, wet→dry / dry→wet occupancy, 16F.4
   topology rebuilds, body split/merge/grow/shrink (travel delta)
+  P5b.3A: detachments, admitted mass, stale refuse, water responses,
+  topology rebuilds, terrain/water revision, loose mass (travel delta)
 mean / p95 / p99 / max frame time, frames > 16.667 ms
 memory high-water mark (working set + private)
 exact return/reload digest where applicable (Test A only)
@@ -196,7 +199,7 @@ MILESTONE / RELEASE GATE
 - cold / reload cycle
 ```
 
-`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.2C).
+`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.3A).
 `CERT_STREAMING_SOAK.cmd` runs the first-landing 90 s Test B. Milestone soak
 is the same harness with `--soak-duration-s=300` or `900`.
 
@@ -535,5 +538,39 @@ admit pore transfers or 16F.4 rebuilds. Drain/stop still recorded 5
 INCOMPLETE_need_5km (same class as 2B 90 s). Long-haul 300/900 stay on
 the 2B baseline `f7ae29ea` / pin `156df62d`.
 
-**P5b.3 stays CLOSED.** No 300/900 on 2C unless a later cut adds an
-accumulating wake or movement-frame FAIL.
+P5b.3A hydraulic detachment is **CERTIFIED** this cut. Test A digest
+changed with stage identity: 2C `f743150420e22175` → 3A `8b0f3cca9ccb1bb6`.
+Movement frames over 16.667 = 0 on EVERY-CUT cardinal.
+
+### Test B — P5b.3A 90 s NE free-flight (this cut) — PASS
+
+Receipt: `Docs/provenance_p5b3a_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3a_streaming_soak_trace.csv`
+
+90 s travel, stop=0, return=0, persistent water, live 192 m / far 0.
+`--cert-streaming-soak-p5b3a`. 16.667 not relaxed. 300/900 **not run**:
+no new accumulating wake class, 0 movement frames >16.667.
+
+| Metric | 3A 90 s |
+|---|---|
+| elapsed / distance | 90.001 s / 2160.9 m |
+| created / retired | 19291 / 19291 |
+| max / end resident | 2601 / 2601 |
+| end pending / max pending | 0 / 78 |
+| min complete radius | 192.00 m |
+| frames | 86035 |
+| mean / p95 / p99 / max ms | 0.954 / 1.203 / 1.558 / **6.965** |
+| frames >16.667 (movement) | **0 PASS** |
+| water-body / topology / terrain-state wakes | 0 / 0 / 0 |
+| derived mesh / collision | 19291 / 19291 |
+| p5b3a detachments / admitted mass | **0 / 0** |
+| p5b3a stale refuse / water responses | **0 / 0** |
+| p5b3a topology rebuilds | **0** |
+| p5b3a terrain / water revision delta | **0 / 0** |
+| p5b3a loose mass delta | **0** |
+| check.p5b3a_travel_physics | PASS_idle |
+| p5b2c travel physics | PASS_idle |
+
+Ordinary traversal did not fire 3A. Mutation/wake-only. **P5b.3B and
+P5b.3C stay CLOSED.** No 300/900 unless travel fires 3A or a later cut
+adds an accumulating wake.

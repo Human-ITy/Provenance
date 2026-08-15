@@ -1,0 +1,20 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_HYDRAULIC_DETACHMENT_V1
+# P5b.3A: certified hydraulic conditions may detach one bounded parcel of
+# susceptible terrain matter. Terrain solid loss == new loose matter.
+# Water mass unchanged unless an explicit water transaction runs.
+# Detached matter stays a local loose body/aggregate (choice A).
+# CLOSED: P5b.3B sediment transport, P5b.3C bank/support collapse,
+# general erosion, 16B active erosion, 16C remobilization, rainfall,
+# evaporation, groundwater, plant uptake, ecology.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_hydraulic_detachment_floor
+parent_region_key=causal_world_present_water_terrain_pore_occupancy_floor
+parent_authority_revision=1
+authority_revision=1
+p5b3a_event_id=a5b3000a00000001
+chronology=203
+p5b3a_enabled=1
+default_budget_transactions=48

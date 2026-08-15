@@ -43,7 +43,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P4.3** Terrain residency / invalidation | Terrain wakes only on terrain-relevant affect; `--cert-residency` | See `PROVENANCE_PIN.md` |
 | **P4.4** Upstream body id wire | Production `terrain_mutate` emits body/agg ids; `--cert-p4` vs committed bridge | See `PROVENANCE_PIN.md` |
 | **P4.5** Gameplay-scale stress floor | History must not scale recurring frame cost; `--cert-stress` | See `PROVENANCE_PIN.md` |
-| **P5** Water | P5a ledger freeze; **P5b.1 FROZEN** one-way; **P5b.2A FROZEN** state-only; **P5b.2B CERTIFIED** bounded pore. P5b.2C/P5b.3 CLOSED | See `PROVENANCE_PIN.md` / `P5B2B_TERRAIN_PORE_HANDOFF.md` |
+| **P5** Water | P5a ledger freeze; **P5b.1 FROZEN** one-way; **P5b.2A FROZEN** state-only; **P5b.2B FROZEN** bounded pore; **P5b.2C FROZEN** occupancy. **P5b.3A CERTIFIED** hydraulic detachment (choice A local loose). **P5b.3B/P5b.3C CLOSED** | See `PROVENANCE_PIN.md` / `P5B3A_HYDRAULIC_DETACHMENT_HANDOFF.md` |
 | **Traversal** | Standing matrix: Test A cardinal ≠ Test B soak. 2A control: Test A PASS; Test B residency PASS / frame FAIL (do not relax 16.667) | `TRAVERSAL_STREAMING_SOAK_HANDOFF.md` |
 
 ### The voxel-form gate (user law)
@@ -60,7 +60,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 - Geography interaction cert (RANGE as H2H transect, not D2-only): `GEOGRAPHY_INTERACTION_CERT_HANDOFF.md` — `--cert-geo`.
 - Local Surface Intent / presentation-closure: `--cert-lsi` → `%TEMP%\provenance_local_surface_intent_cert.txt` (mouth annulus + place open-skin expected; cross-cell accidental opens FAIL; canonical per-column-crest seam).
 - Async + determinism (includes LSI hashes/closure): `--cert-async` → `%TEMP%\provenance_async_determinism_cert.txt`.
-- **Pick / surface continued testing:** `PICK_FRACTURE_HANDOFF.md` — `--cert-pick-fracture`; sky/clear in|around hole = FAIL (no mouth exception); P5a freeze; P5b.1 FROZEN one-way; P5b.2A FROZEN state-only; P5b.2B CERTIFIED bounded pore (P5b.2C/P5b.3 closed).
+- **Pick / surface continued testing:** `PICK_FRACTURE_HANDOFF.md` — `--cert-pick-fracture`; sky/clear in|around hole = FAIL (no mouth exception); P5a freeze; P5b.1 FROZEN one-way; P5b.2A FROZEN state-only; P5b.2B/P5b.2C FROZEN; **P5b.3A CERTIFIED** (choice A local loose); **P5b.3B/P5b.3C closed**.
 - **Scalability:** material vocabulary is cheap; instantiated representation is what costs (wake geometry/physics/optics on exposure, detachment, proximity, or gameplay meaning).
 - Material distribution / appearance docs for **review** (not cert authority): plaintxt-decoded branches `claude/terrain-material-distribution-v1` and `claude/terrain-material-set-appearance` under `fablescript/docs`. **Heightfield object palette is a keeper** — do not overwrite when merging; separate from dig/geo cert. See `PROVENANCE_PIN.md`.
 
