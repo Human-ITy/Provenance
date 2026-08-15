@@ -301,12 +301,12 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   fix only if we explicitly accept **repeated macro geography** as the
   current production shortcut. It solves “flat fallback.” It does **not**
   yet solve “indefinitely novel macro geography.”
-- 2B after Test S 90 s: residency PASS, memory INCOMPLETE_need_300s,
-  FollowStream CRT segment 0, scratch growth 0. Frame gate FAIL
-  (1 / 32372; hitch **persisted** — diagnostic `glFinish` 95.925 ms
-  after first live `glDrawArrays/water` 36 tris at 509.6 m).
-  `water_path_warmed=1`. Discriminator GPU, lane water. 300 / 900 not
-  run. Do not relax 16.667. No water-backend cut. P5b.2C / P5b.3 CLOSED.
+- 2B persistent-water soak: `--soak-water-backend=persistent` (default).
+  90 s frame **PASS** (0 / 79961, max 10.091 ms). First live occupied
+  water did not stall. 300 s / 900 s frame PASS (max 11.942 / 11.505).
+  Water GPU 2 batches / 170 KB, travel growth 0. Process private still
+  `FAIL_scales_with_distance` (1.32 → 2.62 → 4.19 GB); logical residency
+  114 MB flat. 16.667 not relaxed. P5b.2C / P5b.3 CLOSED.
 - 250 m ledger + per-overrun receipts + stop/drain/optional return
   are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

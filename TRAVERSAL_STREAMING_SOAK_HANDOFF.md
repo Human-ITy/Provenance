@@ -86,7 +86,7 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2b --soak-duration-s=90 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2b --soak-duration-s=90 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
@@ -299,9 +299,10 @@ the hard 10.667 ms publication budget. A diagonal row-crossing no
 longer compiles ~101 lists on the crossing frame. 2B physics is
 untouched.
 
-### Classified frame tail — still FAIL
+### Classified frame tail
 
-Do not treat a lower over-budget count as a gate change. 16.667 stays.
+Do not treat a lower over-budget count as a gate change. 16.667 is not
+relaxed. Persistent water VBO/IBO is the live submit path.
 
 | Run | frames >16.667 | max ms | primary classes |
 |---|---|---|---|
@@ -317,6 +318,9 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B draw-attrib 90 s | **1 / 34858** | 61.920 | 1 glFinish after first `glDrawArrays/water` @ 527.7 m |
 | 2B water-warmup 90 s | **1 / 35305** | 74.206 | hitch **persisted**: glFinish after first live water @ 525.9 m |
 | 2B after Test S 90 s | **1 / 32372** | 99.430 | hitch **persisted**: glFinish 95.925 ms after first live `glDrawArrays/water` 36 tris @ 509.6 m |
+| 2B persistent-water 90 s | **0 / 79961** | 10.091 | first live occupied water, no stall |
+| 2B persistent-water 300 s | **0 / 283198** | 11.942 | water GPU 170 KB, travel growth 0 |
+| 2B persistent-water 900 s | **0 / 859464** | 11.505 | 16.667 PASS; process private still climbs |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -336,48 +340,48 @@ max 3249 (hw 101), geo-disk max 16384 (hw 12853), sort max 3249
 (hw 3025), reserved 13047328 B, observed 13047328 B, growth 0,
 overflow 0, FollowStream CRT segment events 0.
 
-16.667 stays FAIL on this binary. Draw-submit attribution split the
-old 60 ms `draw_submit` owner:
+16.667 is **PASS** on the persistent-water binary. Occupied-water
+submit is owned GPU VBO/IBO: same CPU geometry / occupancy /
+visibility / presentation revisions; subrange `glBufferSubData` on
+window or revision change; atomic publish; retire after fence (or
+two frames if `ARB_sync` is missing). No per-frame client arrays,
+no per-frame buffer create/destroy, no GPU mesh generation.
 
-- Discriminator **GPU**. Presentation lane **water**.
-- Named call: diagnostic `glFinish` 71.975 ms after first live
-  `glDrawArrays/water` (30 tris / 15 quads) at 525.9 m. Previous
-  call: `glBegin/geology_lines` 0.007 ms. Terrain CallLists 0.04 ms.
-  CPU `draw_submit` 2.058 ms (batched).
-- `--soak-draw=no-water` (same residency): travel **0 / 28041+**
-  over 16.667, max 5.612 ms. Water submit owns the stall.
-- Occupied-water first-use warmup (`water_path_warmed=1`): create/bind
-  the exact water client-array pipeline, submit one in-view lake quad
-  on that path, `glFinish` once, then begin timed travel. Hitch
-  **persisted** at the first live occupied-water batch (~526 m). It
-  did not move to another owner. Dummy / frustum / full-kernel and
-  this exact-path warmup all failed to absorb it. Backend / resource
-  lifecycle remains. Do not switch backend in this cut.
+A/B (physics unchanged):
 
-FollowStream scratch growth 0, CRT segment 0. Stop had one 74 ms
-frame (discriminator B, GPU fence cheap — not the travel first-use).
-Drain / return over 16.667 = 0. 300 / 900 not run — 90 s is not
-green. Do not relax 16.667. P5b.2C / P5b.3 stay CLOSED.
+```text
+--soak-water-backend=persistent   live path (default)
+--soak-water-backend=legacy       client-array control
+--soak-draw=no-water              negative control
+```
 
-### Memory — logical set bounded; process high-water plateaus
+90 s persistent: first live occupied water did not stall. 0 / 79961
+over 16.667, max 10.091 ms. Water GPU live 2 batches / 170 KB,
+alloc 2, travel growth 0, draw 1/frame, first_live_occupied=1.
+`--soak-draw=no-water` previously 0 / 28041+, max 5.612 ms.
 
-250 m buckets: logical live (2601 packages / 114 MB, 22 MB worker
-results) is flat from the first bucket. Private climbs through the
-first ~3 km (CRT/GL high-water), then sits at ~1.31–1.33 GB out to
-21.6 km. Working set follows private, not travel distance.
+FollowStream scratch growth 0, CRT segment 0. P5b.2C / P5b.3 stay
+CLOSED.
 
-| Ledger | 90 s / 2160 m | 300 s / 7188 m | 900 s / 21597 m | after stop+drain |
-|---|---|---|---|---|
-| resident packages | 2601 | 2601 | 2601 | 2601 |
-| live package bytes | 114 MB | 114 MB | 114 MB | 114 MB |
-| worker-result bytes | 22 MB | 22 MB | 22 MB | 22 MB |
-| completed/held results | 424 | 424 | 424 | 424 |
-| private bytes | 1405 MB | 1325 MB | 1327 MB | 1327 MB |
-| working set | 1218 MB | 1214 MB | 1222 MB | 1222 MB |
+### Memory — logical set bounded; process private still climbs
 
-`check.memory_plateau=PASS_plateau`.
-`check.distance_bucket_slope=PASS_plateau` (post-3 km window).
-d3000 private 1528 MB → d7000 1324 MB → d15000 1324 MB → d21000 1327 MB.
+250 m buckets: logical live (2601 packages / 114 MB) is flat from
+the first bucket. Water GPU stays 170 KB. Process private does **not**
+plateau on this binary (unlike the pre-backend 1.33 GB sit). Owner is
+not the water VBO. Do not invent a third water backend this cut.
+
+| Ledger | 90 s / 2161 m | 300 s / 7189 m | 900 s / 21600 m |
+|---|---|---|---|
+| resident packages | 2601 | 2601 | 2601 |
+| live package bytes | 114 MB | 114 MB | 114 MB |
+| water GPU live | 170 KB | 170 KB | 170 KB |
+| water GPU travel growth | 0 | 0 | 0 |
+| private bytes | 1318 MB | 2616 MB | 4190 MB |
+| working set | 1138 MB | 2380 MB | 3899 MB |
+
+`check.memory_plateau=FAIL_scales_with_distance`.
+`check.distance_bucket_slope=FAIL_scales_with_distance`.
+d3000 private 1528 MB → d7000 2593 MB → d15000 3880 MB → d21000 4166 MB.
 
 ### Stationary drain + return (90 s run)
 
@@ -392,15 +396,16 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 ### 90 / 300 / 900 gates
 
 ```text
-90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s,
-       frame FAIL (1 / 32372; hitch persisted: glFinish 95.925 ms
-       after first live glDrawArrays/water 36 tris @ 509.6 m).
-       water_path_warmed=1. discriminator GPU, lane water.
-       scratch growth 0, overflow 0, FollowStream CRT segment 0.
-       Test S PASS first; 90 s still FAIL. No backend cut in this turn.
-300 s  not run — 90 s not green
-900 s  not run — 90 s not green
-       192 m complete, 2601 resident max, pending drains to 0, max pending 74
+90 s   residency PASS, backlog PASS, frame PASS (0 / 79961, max 10.091),
+       first live occupied water no stall, water GPU bounded / travel growth 0,
+       scratch growth 0, FollowStream CRT 0, memory INCOMPLETE_need_300s.
+       soak_water_backend=persistent. water_path_warmed=1.
+300 s  frame PASS (0 / 283198, max 11.942). water GPU 170 KB, growth 0.
+       memory FAIL_scales_with_distance (private 1.32 GB → 2.62 GB).
+900 s  frame PASS (0 / 859464, max 11.505). 21600 m, 2601 resident,
+       pending 0. memory FAIL_scales_with_distance (private 4.19 GB).
+       overall=PASS (frame/residency/water-GPU). 16.667 not relaxed.
+       P5b.2C / P5b.3 CLOSED.
 ```
 
 Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run

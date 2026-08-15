@@ -806,6 +806,9 @@ namespace
         // only what is submitted to GL changes. 0=full 1=terrain 2=no-terrain
         // 3=no-water 4=no-overlays 5=no-derived (water+grass+overlays).
         int soakDrawLane = 0;
+        // Water presentation submit backend. Physics / occupancy truth stay
+        // identical. 0=legacy client-array  1=persistent VBO/IBO (default).
+        int soakWaterBackend = 1;
         bool certStage11ResidencyWaterfall = false;
         // Capture-free traversal bearing for the waterfall route.
         // 0=north(+Y) 1=east(+X) 2=south(-Y) 3=west(-X), matching the cardinal
@@ -1757,6 +1760,15 @@ namespace
             default:return "full";
         }
     }
+
+    char const* SoakWaterBackendName()
+    {
+        return g.soakWaterBackend==0?"legacy":"persistent";
+    }
+
+    bool EnsureWaterGlProcs();
+    void ShutdownWaterGpuPool();
+    void RecalcWaterGpuBytes();
 
     bool SoakSuppressTerrainSubmit()
     {return g.certStreamingSoak&&g.soakDrawLane==2;}
@@ -10233,6 +10245,7 @@ namespace
         DeleteObject( font );
         LoadIconTextures();
         SeedStarterBag();
+        EnsureWaterGlProcs();
         return true;
     }
 
@@ -10279,6 +10292,7 @@ namespace
         if ( g.stage0RulerList ) { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
         if ( g.stage0PaletteList ) { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
         if ( g.fontBase ) { glDeleteLists( g.fontBase, 96 ); g.fontBase = 0; }
+        ShutdownWaterGpuPool();
         UnloadIconTextures();
         wglMakeCurrent( nullptr, nullptr );
         if ( g.glrc ) { wglDeleteContext( g.glrc ); g.glrc = nullptr; }
@@ -20182,20 +20196,313 @@ namespace
 
     struct WaterQuadVertex { float x,y,z,r,g,b,a; };
     std::vector<WaterQuadVertex> s_waterSubmitVerts;
+    std::vector<uint32_t> s_waterSubmitIdx;
     bool s_waterPathWarmed=false;
 
-    void SubmitOccupiedWaterClientArray()
+#ifndef GL_ARRAY_BUFFER
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_DYNAMIC_DRAW 0x88E8
+#endif
+#ifndef GL_SYNC_GPU_COMMANDS_COMPLETE
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_ALREADY_SIGNALED 0x911A
+#define GL_CONDITION_SATISFIED 0x911C
+#endif
+
+    using GlGenBuffersFn=void (APIENTRY*)(GLsizei,GLuint*);
+    using GlBindBufferFn=void (APIENTRY*)(GLenum,GLuint);
+    using GlBufferDataFn=void (APIENTRY*)(GLenum,ptrdiff_t,void const*,GLenum);
+    using GlBufferSubDataFn=void (APIENTRY*)(GLenum,ptrdiff_t,ptrdiff_t,void const*);
+    using GlDeleteBuffersFn=void (APIENTRY*)(GLsizei,GLuint const*);
+    using GlFenceSyncFn=void* (APIENTRY*)(GLenum,unsigned int);
+    using GlClientWaitSyncFn=unsigned int (APIENTRY*)(void*,unsigned int,unsigned long long);
+    using GlDeleteSyncFn=void (APIENTRY*)(void*);
+
+    GlGenBuffersFn s_glGenBuffers=nullptr;
+    GlBindBufferFn s_glBindBuffer=nullptr;
+    GlBufferDataFn s_glBufferData=nullptr;
+    GlBufferSubDataFn s_glBufferSubData=nullptr;
+    GlDeleteBuffersFn s_glDeleteBuffers=nullptr;
+    GlFenceSyncFn s_glFenceSync=nullptr;
+    GlClientWaitSyncFn s_glClientWaitSync=nullptr;
+    GlDeleteSyncFn s_glDeleteSync=nullptr;
+
+    struct WaterGpuBatch
     {
-        if(s_waterSubmitVerts.empty())return;
+        uint32_t BatchId=0;
+        uint32_t SourceWaterRevision=0;
+        uint32_t SourceTerrainRevision=0;
+        uint64_t SourceOccupancyDigest=0;
+        int WindowCx=INT_MIN;
+        int WindowCy=INT_MIN;
+        uint64_t GeomHash=0;
+        GLuint VertexBuffer=0;
+        GLuint IndexBuffer=0;
+        int VertexCapacity=0;
+        int IndexCapacity=0;
+        int VertexCount=0;
+        int IndexCount=0;
+        int RetireInFrames=0;
+        int State=0; // 0 free 1 published 2 retiring
+        void* Fence=nullptr;
+    };
+
+    struct WaterGpuPool
+    {
+        bool procsReady=false;
+        bool procsFailed=false;
+        bool fenceReady=false;
+        WaterGpuBatch batches[2]{};
+        int published=-1;
+        uint32_t nextBatchId=1;
+        int liveBatches=0;
+        int allocated=0;
+        int reused=0;
+        int retired=0;
+        int growthEvents=0;
+        int growthEventsTravel=0;
+        int skippedUploads=0;
+        uint64_t gpuBytesLive=0;
+        uint64_t gpuBytesHighWater=0;
+        uint64_t declaredBytesCap=0;
+        int uploadBytesFrame=0;
+        int drawCallsFrame=0;
+        int uploadBytesFrameHw=0;
+        int drawCallsFrameHw=0;
+        uint64_t uploadBytesTotal=0;
+        int uploads=0;
+        int firstLiveOccupied=0;
+    };
+    WaterGpuPool s_waterGpu;
+
+    bool EnsureWaterGlProcs()
+    {
+        if(s_waterGpu.procsReady)return true;
+        if(s_waterGpu.procsFailed)return false;
+        if(!wglGetCurrentContext())return false;
+        s_glGenBuffers=(GlGenBuffersFn)wglGetProcAddress("glGenBuffers");
+        if(!s_glGenBuffers)s_glGenBuffers=(GlGenBuffersFn)wglGetProcAddress("glGenBuffersARB");
+        s_glBindBuffer=(GlBindBufferFn)wglGetProcAddress("glBindBuffer");
+        if(!s_glBindBuffer)s_glBindBuffer=(GlBindBufferFn)wglGetProcAddress("glBindBufferARB");
+        s_glBufferData=(GlBufferDataFn)wglGetProcAddress("glBufferData");
+        if(!s_glBufferData)s_glBufferData=(GlBufferDataFn)wglGetProcAddress("glBufferDataARB");
+        s_glBufferSubData=(GlBufferSubDataFn)wglGetProcAddress("glBufferSubData");
+        if(!s_glBufferSubData)s_glBufferSubData=(GlBufferSubDataFn)wglGetProcAddress("glBufferSubDataARB");
+        s_glDeleteBuffers=(GlDeleteBuffersFn)wglGetProcAddress("glDeleteBuffers");
+        if(!s_glDeleteBuffers)s_glDeleteBuffers=(GlDeleteBuffersFn)wglGetProcAddress("glDeleteBuffersARB");
+        if(!s_glGenBuffers||!s_glBindBuffer||!s_glBufferData||!s_glBufferSubData||!s_glDeleteBuffers)
+        {
+            s_waterGpu.procsFailed=true;
+            return false;
+        }
+        s_glFenceSync=(GlFenceSyncFn)wglGetProcAddress("glFenceSync");
+        s_glClientWaitSync=(GlClientWaitSyncFn)wglGetProcAddress("glClientWaitSync");
+        s_glDeleteSync=(GlDeleteSyncFn)wglGetProcAddress("glDeleteSync");
+        s_waterGpu.fenceReady=s_glFenceSync&&s_glClientWaitSync&&s_glDeleteSync;
+        s_waterGpu.procsReady=true;
+        return true;
+    }
+
+    void DeleteWaterFence(WaterGpuBatch& b)
+    {
+        if(b.Fence&&s_glDeleteSync)s_glDeleteSync(b.Fence);
+        b.Fence=nullptr;
+    }
+
+    void InsertWaterDrawFence(WaterGpuBatch& b)
+    {
+        DeleteWaterFence(b);
+        if(s_waterGpu.fenceReady)b.Fence=s_glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);
+    }
+
+    bool WaterFenceSignaled(WaterGpuBatch& b)
+    {
+        if(!b.Fence||!s_waterGpu.fenceReady)return b.RetireInFrames<=0;
+        unsigned int const r=s_glClientWaitSync(b.Fence,0,0ull);
+        return r==GL_ALREADY_SIGNALED||r==GL_CONDITION_SATISFIED;
+    }
+
+    bool UsePersistentWaterBackend()
+    {
+        if(g.soakWaterBackend==0)return false;
+        return EnsureWaterGlProcs();
+    }
+
+    int WaterPoolMaxQuads(double stepM)
+    {
+        int const radiusM=g.stage0LiveRadiusM>0?g.stage0LiveRadiusM:192;
+        double const step=stepM>0.5?stepM:16.0;
+        int const cells=(int)std::ceil((double)radiusM/step);
+        int const axis=cells*2+1;
+        int const quads=axis*axis;
+        return (std::min)(quads,97*97);
+    }
+
+    void RecalcWaterGpuBytes()
+    {
+        uint64_t bytes=0;int live=0;
+        for(WaterGpuBatch const& b:s_waterGpu.batches)
+        {
+            if(!b.VertexBuffer&&!b.IndexBuffer)continue;
+            ++live;
+            bytes+=(uint64_t)b.VertexCapacity*sizeof(WaterQuadVertex)
+                +(uint64_t)b.IndexCapacity*sizeof(uint32_t);
+        }
+        s_waterGpu.liveBatches=live;
+        s_waterGpu.gpuBytesLive=bytes;
+        if(bytes>s_waterGpu.gpuBytesHighWater)s_waterGpu.gpuBytesHighWater=bytes;
+    }
+
+    void ReleaseWaterGpuBatch(WaterGpuBatch& b)
+    {
+        DeleteWaterFence(b);
+        if(!s_glDeleteBuffers)return;
+        if(b.VertexBuffer){s_glDeleteBuffers(1,&b.VertexBuffer);b.VertexBuffer=0;}
+        if(b.IndexBuffer){s_glDeleteBuffers(1,&b.IndexBuffer);b.IndexBuffer=0;}
+        b=WaterGpuBatch{};
+    }
+
+    void ShutdownWaterGpuPool()
+    {
+        if(!s_waterGpu.procsReady){s_waterGpu=WaterGpuPool{};return;}
+        for(WaterGpuBatch& b:s_waterGpu.batches)ReleaseWaterGpuBatch(b);
+        s_waterGpu=WaterGpuPool{};
+        s_waterGpu.procsReady=true;
+    }
+
+    bool EnsureWaterGpuCapacity(WaterGpuBatch& b,int vertCap,int idxCap)
+    {
+        if(vertCap<4)vertCap=4;
+        if(idxCap<6)idxCap=6;
+        bool const grew=b.VertexBuffer&&(vertCap>b.VertexCapacity||idxCap>b.IndexCapacity);
+        if(grew)
+        {
+            ++s_waterGpu.growthEvents;
+            if(s_waterPathWarmed)++s_waterGpu.growthEventsTravel;
+            ReleaseWaterGpuBatch(b);
+        }
+        if(b.VertexBuffer&&b.IndexBuffer
+          &&b.VertexCapacity>=vertCap&&b.IndexCapacity>=idxCap)
+        {
+            ++s_waterGpu.reused;
+            return true;
+        }
+        if(!EnsureWaterGlProcs())return false;
+        s_glGenBuffers(1,&b.VertexBuffer);
+        s_glGenBuffers(1,&b.IndexBuffer);
+        if(!b.VertexBuffer||!b.IndexBuffer)return false;
+        b.VertexCapacity=vertCap;
+        b.IndexCapacity=idxCap;
+        s_glBindBuffer(GL_ARRAY_BUFFER,b.VertexBuffer);
+        s_glBufferData(GL_ARRAY_BUFFER,(ptrdiff_t)((size_t)vertCap*sizeof(WaterQuadVertex)),
+            nullptr,GL_DYNAMIC_DRAW);
+        s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,b.IndexBuffer);
+        s_glBufferData(GL_ELEMENT_ARRAY_BUFFER,(ptrdiff_t)((size_t)idxCap*sizeof(uint32_t)),
+            nullptr,GL_DYNAMIC_DRAW);
+        s_glBindBuffer(GL_ARRAY_BUFFER,0);
+        s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+        ++s_waterGpu.allocated;
+        uint64_t const cap=(uint64_t)vertCap*sizeof(WaterQuadVertex)
+            +(uint64_t)idxCap*sizeof(uint32_t);
+        if(s_waterGpu.declaredBytesCap<cap*2ull)s_waterGpu.declaredBytesCap=cap*2ull;
+        RecalcWaterGpuBytes();
+        return true;
+    }
+
+    void TickWaterGpuRetirement()
+    {
+        for(WaterGpuBatch& b:s_waterGpu.batches)
+        {
+            if(b.State!=2)continue;
+            if(s_waterGpu.fenceReady)
+            {
+                if(!WaterFenceSignaled(b))continue;
+            }
+            else if(--b.RetireInFrames>0)continue;
+            DeleteWaterFence(b);
+            b.State=0;
+            b.VertexCount=0;
+            b.IndexCount=0;
+            b.RetireInFrames=0;
+            ++s_waterGpu.retired;
+        }
+    }
+
+    int AcquireWaterGpuUploadSlot()
+    {
+        for(int i=0;i<2;++i)
+        {
+            if(i==s_waterGpu.published)continue;
+            WaterGpuBatch& b=s_waterGpu.batches[i];
+            if(b.State==0)return i;
+            if(b.State==2&&WaterFenceSignaled(b))
+            {
+                DeleteWaterFence(b);
+                b.State=0;
+                b.RetireInFrames=0;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    void PublishWaterGpuBatch(int slot)
+    {
+        if(s_waterGpu.published>=0&&s_waterGpu.published!=slot)
+        {
+            WaterGpuBatch& old=s_waterGpu.batches[s_waterGpu.published];
+            old.State=2;
+            InsertWaterDrawFence(old);
+            old.RetireInFrames=s_waterGpu.fenceReady?0:2;
+        }
+        s_waterGpu.published=slot;
+        s_waterGpu.batches[slot].State=1;
+        s_waterGpu.batches[slot].RetireInFrames=0;
+        RecalcWaterGpuBytes();
+    }
+
+    void BindOccupiedWaterClientState(void const* vertexBase)
+    {
         GLsizei const stride=(GLsizei)sizeof(WaterQuadVertex);
-        unsigned char const* base=(unsigned char const*)s_waterSubmitVerts.data();
+        unsigned char const* base=(unsigned char const*)vertexBase;
         glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
         glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
         glVertexPointer(3,GL_FLOAT,stride,base);
         glColorPointer(4,GL_FLOAT,stride,base+offsetof(WaterQuadVertex,r));
-        glDrawArrays(GL_TRIANGLES,0,(GLsizei)s_waterSubmitVerts.size());
+    }
+
+    void UnbindOccupiedWaterClientState()
+    {
         glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
         glDisable(GL_BLEND);
+        if(s_glBindBuffer)
+        {
+            s_glBindBuffer(GL_ARRAY_BUFFER,0);
+            s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+        }
+    }
+
+    void SubmitOccupiedWaterClientArray()
+    {
+        if(s_waterSubmitVerts.empty())return;
+        BindOccupiedWaterClientState(s_waterSubmitVerts.data());
+        glDrawArrays(GL_TRIANGLES,0,(GLsizei)s_waterSubmitVerts.size());
+        UnbindOccupiedWaterClientState();
+        ++s_waterGpu.drawCallsFrame;
+    }
+
+    void SubmitOccupiedWaterPersistentDraw(WaterGpuBatch& b)
+    {
+        if(!b.VertexBuffer||b.IndexCount<=0)return;
+        s_glBindBuffer(GL_ARRAY_BUFFER,b.VertexBuffer);
+        s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,b.IndexBuffer);
+        BindOccupiedWaterClientState((void const*)0);
+        glColorPointer(4,GL_FLOAT,(GLsizei)sizeof(WaterQuadVertex),
+            (void const*)(uintptr_t)offsetof(WaterQuadVertex,r));
+        glDrawElements(GL_TRIANGLES,(GLsizei)b.IndexCount,GL_UNSIGNED_INT,(void const*)0);
+        UnbindOccupiedWaterClientState();
+        ++s_waterGpu.drawCallsFrame;
     }
 
     void PushOccupiedWaterQuad(float x,float y,float z,float half,
@@ -20207,22 +20514,147 @@ namespace
         push(x-half,y-half,z);push(x+half,y+half,z);push(x-half,y+half,z);
     }
 
+    void PushOccupiedWaterQuadIndexed(float x,float y,float z,float half,
+        float r,float gcol,float b,float a)
+    {
+        uint32_t const base=(uint32_t)s_waterSubmitVerts.size();
+        auto push=[&](float px,float py,float pz)
+        {s_waterSubmitVerts.push_back({px,py,pz,r,gcol,b,a});};
+        push(x-half,y-half,z);push(x+half,y-half,z);
+        push(x+half,y+half,z);push(x-half,y+half,z);
+        s_waterSubmitIdx.push_back(base+0);s_waterSubmitIdx.push_back(base+1);
+        s_waterSubmitIdx.push_back(base+2);s_waterSubmitIdx.push_back(base+0);
+        s_waterSubmitIdx.push_back(base+2);s_waterSubmitIdx.push_back(base+3);
+    }
+
+    void OccupiedWaterPresentationRevisions(uint32_t& waterRev,uint32_t& terrainRev,
+        uint64_t& occupancyDigest)
+    {
+        waterRev=0;terrainRev=0;occupancyDigest=0;
+        CausalPresentWater::Kernel const* water=ActivePresentWaterKernel();
+        if(water)
+        {
+            waterRev=water->GetProgram().authorityRevision;
+            terrainRev=water->GetProgram().parentAuthorityRevision;
+            occupancyDigest=water->OccupancyDigest();
+        }
+        if(g.presentWaterTerrainPoreRuntime)
+        {
+            waterRev=g.presentWaterTerrainPoreRuntime->Parent().WaterContactRevision();
+            terrainRev=g.presentWaterTerrainPoreRuntime->TerrainRevision();
+        }
+        else if(g.presentWaterTerrainStateRuntime)
+        {
+            waterRev=g.presentWaterTerrainStateRuntime->WaterContactRevision();
+            terrainRev=g.presentWaterTerrainStateRuntime->TerrainRevision();
+        }
+        else if(g.presentWaterTerrainResponseRuntime)
+        {
+            waterRev=g.presentWaterTerrainResponseRuntime->WaterTopologyRevision();
+            terrainRev=g.presentWaterTerrainResponseRuntime->TerrainRevision();
+        }
+    }
+
+    bool PublishedWaterBatchMatches(int cx,int cy,uint32_t waterRev,uint32_t terrainRev,
+        uint64_t occupancyDigest)
+    {
+        if(s_waterGpu.published<0)return false;
+        WaterGpuBatch const& b=s_waterGpu.batches[s_waterGpu.published];
+        return b.State==1&&b.WindowCx==cx&&b.WindowCy==cy
+            &&b.SourceWaterRevision==waterRev&&b.SourceTerrainRevision==terrainRev
+            &&b.SourceOccupancyDigest==occupancyDigest;
+    }
+
+    bool UploadOccupiedWaterPersistent(int cx,int cy,uint32_t waterRev,uint32_t terrainRev,
+        uint64_t occupancyDigest,uint64_t geomHash,double stepM)
+    {
+        int const quads=WaterPoolMaxQuads(stepM);
+        int const vertCap=quads*4;
+        int const idxCap=quads*6;
+        int const slot=AcquireWaterGpuUploadSlot();
+        if(slot<0){++s_waterGpu.skippedUploads;return false;}
+        WaterGpuBatch& b=s_waterGpu.batches[slot];
+        if(!EnsureWaterGpuCapacity(b,vertCap,idxCap))return false;
+        if((int)s_waterSubmitVerts.size()>b.VertexCapacity
+          ||(int)s_waterSubmitIdx.size()>b.IndexCapacity)
+        {
+            if(!EnsureWaterGpuCapacity(b,(int)s_waterSubmitVerts.size(),
+                (int)s_waterSubmitIdx.size()))return false;
+        }
+        int const uploadBytes=(int)(s_waterSubmitVerts.size()*sizeof(WaterQuadVertex)
+            +s_waterSubmitIdx.size()*sizeof(uint32_t));
+        if(!s_waterSubmitVerts.empty())
+        {
+            s_glBindBuffer(GL_ARRAY_BUFFER,b.VertexBuffer);
+            s_glBufferSubData(GL_ARRAY_BUFFER,0,
+                (ptrdiff_t)(s_waterSubmitVerts.size()*sizeof(WaterQuadVertex)),
+                s_waterSubmitVerts.data());
+        }
+        if(!s_waterSubmitIdx.empty())
+        {
+            s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,b.IndexBuffer);
+            s_glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,0,
+                (ptrdiff_t)(s_waterSubmitIdx.size()*sizeof(uint32_t)),
+                s_waterSubmitIdx.data());
+        }
+        s_glBindBuffer(GL_ARRAY_BUFFER,0);
+        s_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+        b.BatchId=s_waterGpu.nextBatchId++;
+        b.SourceWaterRevision=waterRev;
+        b.SourceTerrainRevision=terrainRev;
+        b.SourceOccupancyDigest=occupancyDigest;
+        b.WindowCx=cx;b.WindowCy=cy;b.GeomHash=geomHash;
+        b.VertexCount=(int)s_waterSubmitVerts.size();
+        b.IndexCount=(int)s_waterSubmitIdx.size();
+        s_waterGpu.uploadBytesFrame+=uploadBytes;
+        s_waterGpu.uploadBytesTotal+=(uint64_t)uploadBytes;
+        ++s_waterGpu.uploads;
+        PublishWaterGpuBatch(slot);
+        return true;
+    }
+
+    void PreallocateWaterGpuPool(double stepM)
+    {
+        if(!EnsureWaterGlProcs())return;
+        int const quads=WaterPoolMaxQuads(stepM);
+        for(int i=0;i<2;++i)
+            EnsureWaterGpuCapacity(s_waterGpu.batches[i],quads*4,quads*6);
+        RecalcWaterGpuBytes();
+    }
+
     void WarmOccupiedWaterFirstUse()
     {
         if(s_waterPathWarmed)return;
         if(SoakSuppressWaterSubmit())
         {s_waterPathWarmed=true;return;}
         if(s_waterSubmitVerts.capacity()<4096u)s_waterSubmitVerts.reserve(4096u);
-        // Origin usually has no occupied cells. The 528 m hitch is first-use of
-        // this exact blend + client-array path, not generic GL. One lake-colored
-        // occupied quad in the view forces that compile during unmeasured warmup.
-        if(s_waterSubmitVerts.empty())
+        if(s_waterSubmitIdx.capacity()<4096u)s_waterSubmitIdx.reserve(4096u);
+        float const cyw=std::cos(g.yaw),sy=std::sin(g.yaw);
+        float const cp=std::cos(g.pitch),sp=std::sin(g.pitch);
+        float const qx=g.camX+sy*cp*2.5f,qy=g.camY+cyw*cp*2.5f,qz=g.camZ+sp*2.5f;
+        if(UsePersistentWaterBackend())
         {
-            float const cyw=std::cos(g.yaw),sy=std::sin(g.yaw);
-            float const cp=std::cos(g.pitch),sp=std::sin(g.pitch);
-            PushOccupiedWaterQuad(
-                g.camX+sy*cp*2.5f,g.camY+cyw*cp*2.5f,g.camZ+sp*2.5f,0.46f,
-                .10f,.34f,.72f,.42f);
+            CausalPresentWater::Kernel const* water=ActivePresentWaterKernel();
+            double const step=water?water->Drainage().StepM():16.0;
+            PreallocateWaterGpuPool(step);
+            s_waterSubmitVerts.clear();s_waterSubmitIdx.clear();
+            // Compile SubData + DrawElements on this owned VBO at a size near
+            // the first live occupied batch (~18 quads / 36 tris), plus one
+            // large quad so the blend fragment path is not a 1-pixel dummy.
+            for(int i=0;i<32;++i)
+            {
+                float const ox=((float)(i%8)-3.5f)*1.2f;
+                float const oy=((float)(i/8)-1.5f)*1.2f;
+                PushOccupiedWaterQuadIndexed(qx+ox,qy+oy,qz,0.46f,.10f,.34f,.72f,.42f);
+            }
+            PushOccupiedWaterQuadIndexed(qx,qy,qz,48.f,.10f,.34f,.72f,.42f);
+            UploadOccupiedWaterPersistent(INT_MIN,INT_MIN,0,0,0,1ull,step);
+            if(s_waterGpu.published>=0)
+                SubmitOccupiedWaterPersistentDraw(s_waterGpu.batches[s_waterGpu.published]);
+        }
+        else if(s_waterSubmitVerts.empty())
+        {
+            PushOccupiedWaterQuad(qx,qy,qz,0.46f,.10f,.34f,.72f,.42f);
             SubmitOccupiedWaterClientArray();
         }
         glFinish();
@@ -20334,40 +20766,104 @@ namespace
         }
         if(drawWater)
         {
-            // One client-array batch. Immediate glBegin/GL_QUADS + first
-            // GL_BLEND use on this driver produced the 60 ms draw_submit
-            // stall at ~528 m (same class as the grass-cut 60-95 ms hitch).
-            // Cardinal replacement still skips water so Test A stays isolated.
+            // Persistent VBO/IBO is the live submit path. Legacy client-array
+            // remains for soak A/B (--soak-water-backend=legacy). Same CPU
+            // occupied-cell window, same triangles, same visibility.
             LARGE_INTEGER water0{},water1{};
             if(SoakDrawAttribOn())QueryPerformanceCounter(&water0);
-            if(s_waterSubmitVerts.capacity()<4096u)s_waterSubmitVerts.reserve(4096u);
-            s_waterSubmitVerts.clear();
-            float const half=(float)(step*.46);
-            auto push=[&](float x,float y,float z,float r,float g,float b,float a)
-            {s_waterSubmitVerts.push_back({x,y,z,r,g,b,a});};
-            for(int oy=-radiusCells;oy<=radiusCells;++oy)
-            for(int ox=-radiusCells;ox<=radiusCells;++ox)
+            s_waterGpu.uploadBytesFrame=0;
+            s_waterGpu.drawCallsFrame=0;
+            TickWaterGpuRetirement();
+            uint32_t waterRev=0,terrainRev=0;uint64_t occupancyDigest=0;
+            OccupiedWaterPresentationRevisions(waterRev,terrainRev,occupancyDigest);
+            bool const persistent=UsePersistentWaterBackend();
+            int waterTris=0;
+            bool firstLive=false;
+            if(persistent&&PublishedWaterBatchMatches(cx,cy,waterRev,terrainRev,occupancyDigest))
             {
-                double const qx=kernel->MinX()+(cx+ox+.5)*step;
-                double const qy=kernel->MinY()+(cy+oy+.5)*step;
-                auto const q=water->QueryAt(qx,qy);if(!q.found||!q.occupied)continue;
-                float a=.42f,r=.12f,gcol=.40f,b=.70f;
-                if(q.water.kind==CausalPresentWater::BodyKind::Lake){r=.10f;gcol=.34f;b=.72f;}
-                else if(q.water.kind==CausalPresentWater::BodyKind::River){r=.08f;gcol=.48f;b=.78f;}
-                else if(q.water.kind==CausalPresentWater::BodyKind::Wetland){r=.18f;gcol=.52f;b=.58f;}
-                float const z=(float)q.waterSurfaceZ+.04f;
-                float const x=(float)q.water.x,y=(float)q.water.y;
-                push(x-half,y-half,z,r,gcol,b,a);push(x+half,y-half,z,r,gcol,b,a);
-                push(x+half,y+half,z,r,gcol,b,a);push(x-half,y-half,z,r,gcol,b,a);
-                push(x+half,y+half,z,r,gcol,b,a);push(x-half,y+half,z,r,gcol,b,a);
+                WaterGpuBatch& pub=s_waterGpu.batches[s_waterGpu.published];
+                waterTris=pub.IndexCount/3;
+                SubmitOccupiedWaterPersistentDraw(pub);
             }
-            int const waterTris=(int)s_waterSubmitVerts.size()/3;
-            SubmitOccupiedWaterClientArray();
+            else
+            {
+                if(s_waterSubmitVerts.capacity()<4096u)s_waterSubmitVerts.reserve(4096u);
+                if(s_waterSubmitIdx.capacity()<4096u)s_waterSubmitIdx.reserve(4096u);
+                s_waterSubmitVerts.clear();s_waterSubmitIdx.clear();
+                float const half=(float)(step*.46);
+                uint64_t geomHash=14695981039346656037ull;
+                for(int oy=-radiusCells;oy<=radiusCells;++oy)
+                for(int ox=-radiusCells;ox<=radiusCells;++ox)
+                {
+                    double const qx=kernel->MinX()+(cx+ox+.5)*step;
+                    double const qy=kernel->MinY()+(cy+oy+.5)*step;
+                    auto const q=water->QueryAt(qx,qy);if(!q.found||!q.occupied)continue;
+                    float a=.42f,r=.12f,gcol=.40f,b=.70f;
+                    if(q.water.kind==CausalPresentWater::BodyKind::Lake){r=.10f;gcol=.34f;b=.72f;}
+                    else if(q.water.kind==CausalPresentWater::BodyKind::River){r=.08f;gcol=.48f;b=.78f;}
+                    else if(q.water.kind==CausalPresentWater::BodyKind::Wetland){r=.18f;gcol=.52f;b=.58f;}
+                    float const z=(float)q.waterSurfaceZ+.04f;
+                    float const x=(float)q.water.x,y=(float)q.water.y;
+                    CausalWorldGeology::HashAppend(geomHash,&x,sizeof(x));
+                    CausalWorldGeology::HashAppend(geomHash,&y,sizeof(y));
+                    CausalWorldGeology::HashAppend(geomHash,&z,sizeof(z));
+                    CausalWorldGeology::HashAppend(geomHash,&q.water.bodyId,sizeof(q.water.bodyId));
+                    CausalWorldGeology::HashAppend(geomHash,&q.water.kind,sizeof(q.water.kind));
+                    if(persistent)PushOccupiedWaterQuadIndexed(x,y,z,half,r,gcol,b,a);
+                    else
+                    {
+                        s_waterSubmitVerts.push_back({x-half,y-half,z,r,gcol,b,a});
+                        s_waterSubmitVerts.push_back({x+half,y-half,z,r,gcol,b,a});
+                        s_waterSubmitVerts.push_back({x+half,y+half,z,r,gcol,b,a});
+                        s_waterSubmitVerts.push_back({x-half,y-half,z,r,gcol,b,a});
+                        s_waterSubmitVerts.push_back({x+half,y+half,z,r,gcol,b,a});
+                        s_waterSubmitVerts.push_back({x-half,y+half,z,r,gcol,b,a});
+                    }
+                }
+                if(persistent)
+                {
+                    waterTris=(int)s_waterSubmitIdx.size()/3;
+                    firstLive=s_waterGpu.firstLiveOccupied==0&&waterTris>0;
+                    bool skipUpload=false;
+                    if(s_waterGpu.published>=0)
+                    {
+                        WaterGpuBatch const& pub=s_waterGpu.batches[s_waterGpu.published];
+                        skipUpload=pub.GeomHash==geomHash&&pub.VertexCount==(int)s_waterSubmitVerts.size()
+                            &&pub.IndexCount==(int)s_waterSubmitIdx.size();
+                        if(skipUpload)
+                        {
+                            WaterGpuBatch& mut=s_waterGpu.batches[s_waterGpu.published];
+                            mut.WindowCx=cx;mut.WindowCy=cy;
+                            mut.SourceWaterRevision=waterRev;
+                            mut.SourceTerrainRevision=terrainRev;
+                            mut.SourceOccupancyDigest=occupancyDigest;
+                        }
+                    }
+                    if(!skipUpload)
+                        UploadOccupiedWaterPersistent(cx,cy,waterRev,terrainRev,
+                            occupancyDigest,geomHash,step);
+                    if(s_waterGpu.published>=0)
+                        SubmitOccupiedWaterPersistentDraw(s_waterGpu.batches[s_waterGpu.published]);
+                    if(firstLive)s_waterGpu.firstLiveOccupied=1;
+                }
+                else
+                {
+                    waterTris=(int)s_waterSubmitVerts.size()/3;
+                    firstLive=s_waterGpu.firstLiveOccupied==0&&waterTris>0;
+                    SubmitOccupiedWaterClientArray();
+                    if(firstLive)s_waterGpu.firstLiveOccupied=1;
+                }
+            }
+            if(s_waterGpu.uploadBytesFrame>s_waterGpu.uploadBytesFrameHw)
+                s_waterGpu.uploadBytesFrameHw=s_waterGpu.uploadBytesFrame;
+            if(s_waterGpu.drawCallsFrame>s_waterGpu.drawCallsFrameHw)
+                s_waterGpu.drawCallsFrameHw=s_waterGpu.drawCallsFrame;
             if(SoakDrawAttribOn())
             {
                 QueryPerformanceCounter(&water1);
                 double const ms=DrawAttribMs(water0,water1);
-                NoteGlSubmit("glDrawArrays/water",0,0,0,waterTris,ms,false);
+                NoteGlSubmit(persistent?"glDrawElements/water":"glDrawArrays/water",
+                    0,0,0,waterTris,ms,firstLive);
                 ++s_drawSubmitAttrib.water.draws;
                 s_drawSubmitAttrib.water.triangles+=waterTris;
                 s_drawSubmitAttrib.water.cpuMs+=ms;
@@ -38753,8 +39249,17 @@ namespace
             ?100.0*(1.0-(double)scratch.observedMaxBytes/(double)scratch.reservedBytes):0.0;
         bool const scratchOk=scratchGrowth==0&&scratchOverflow==0;
         bool const followStreamCrtOk=run.classFollowStreamCrt==0;
+        RecalcWaterGpuBytes();
+        bool const waterGpuReady=g.soakWaterBackend==0||s_waterGpu.procsReady;
+        bool const waterGpuBounded=g.soakWaterBackend==0
+            ||(s_waterGpu.gpuBytesHighWater<=s_waterGpu.declaredBytesCap
+                &&s_waterGpu.liveBatches<=2)
+            ||(s_waterGpu.declaredBytesCap==0&&s_waterGpu.gpuBytesHighWater==0);
+        bool const waterGpuNoTravelGrowth=g.soakWaterBackend==0
+            ||s_waterGpu.growthEventsTravel==0;
+        bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
-            &&scratchOk&&followStreamCrtOk;
+            &&scratchOk&&followStreamCrtOk&&waterGpuOk;
         char certPathBuf[160];
         char const* certPath=g.certStreamingSoakStageFilter==23
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
@@ -38768,6 +39273,10 @@ namespace
                 SoakDrawLaneName(g.soakDrawLane));
             certPath=certPathBuf;
         }
+        else if(g.soakWaterBackend==0&&g.certStreamingSoakStageFilter==23)
+        {
+            certPath="Docs\\provenance_p5b2b_streaming_soak_water-legacy_cert.txt";
+        }
         FILE* f=nullptr;
         if(fopen_s(&f,certPath,"wb")!=0||!f)return false;
         std::fprintf(f,
@@ -38778,6 +39287,7 @@ namespace
             "duration_s=%.3f\nelapsed_s=%.3f\nconfigured_speed_mps=%.3f\n"
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
             "soak_draw=%s\n"
+            "soak_water_backend=%s\n"
             "p5b2b=%s\np5b2c=CLOSED\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
             "stop_duration_s=%.3f\nstop_elapsed_s=%.3f\ndrain_elapsed_s=%.3f\n"
             "return_to_origin=%d\nreturn_elapsed_s=%.3f\nsettle_elapsed_s=%.3f\n"
@@ -38830,6 +39340,26 @@ namespace
             "heap_prewarm_bytes=%llu\n"
             "heap_previsit_m=%.1f\n"
             "water_path_warmed=%d\n"
+            "water.gpu.ready=%d\n"
+            "water.gpu.fence_ready=%d\n"
+            "water.gpu.batches_live=%d\n"
+            "water.gpu.bytes_live=%llu\n"
+            "water.gpu.bytes_high_water=%llu\n"
+            "water.gpu.declared_bytes_cap=%llu\n"
+            "water.gpu.buffers_allocated=%d\n"
+            "water.gpu.buffers_reused=%d\n"
+            "water.gpu.buffers_retired=%d\n"
+            "water.gpu.growth_events=%d\n"
+            "water.gpu.growth_events_travel=%d\n"
+            "water.gpu.skipped_uploads=%d\n"
+            "water.gpu.upload_bytes_total=%llu\n"
+            "water.gpu.upload_bytes_frame_hw=%d\n"
+            "water.gpu.draw_calls_frame_hw=%d\n"
+            "water.gpu.uploads=%d\n"
+            "water.gpu.first_live_occupied=%d\n"
+            "check.water_gpu_ready=%s\n"
+            "check.water_gpu_bounded=%s\n"
+            "check.water_buffer_growth_travel=%s\n"
             "scratch.required_key_max=%d\n"
             "scratch.eviction_candidate_max=%d\n"
             "scratch.geo_disk_sample_max=%d\n"
@@ -38854,6 +39384,7 @@ namespace
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
             SoakBearingName(g.soakBearing),informational?1:0,
             SoakDrawLaneName(g.soakDrawLane),
+            SoakWaterBackendName(),
             g.certStreamingSoakStageFilter==23?"FROZEN":"CLOSED",
             g.soakStopDurationS,run.stopElapsedS,run.drainElapsedS,
             g.soakReturnToOrigin?1:0,run.returnElapsedS,run.settleElapsedS,
@@ -38893,6 +39424,19 @@ namespace
             run.classDeferredRetire,run.classDrawSubmit,run.classWorkerWait,
             run.classUnclassified,(unsigned long long)run.heapPrewarmBytes,
             run.heapPrevisitM,s_waterPathWarmed?1:0,
+            s_waterGpu.procsReady?1:0,s_waterGpu.fenceReady?1:0,s_waterGpu.liveBatches,
+            (unsigned long long)s_waterGpu.gpuBytesLive,
+            (unsigned long long)s_waterGpu.gpuBytesHighWater,
+            (unsigned long long)s_waterGpu.declaredBytesCap,
+            s_waterGpu.allocated,s_waterGpu.reused,s_waterGpu.retired,
+            s_waterGpu.growthEvents,s_waterGpu.growthEventsTravel,
+            s_waterGpu.skippedUploads,
+            (unsigned long long)s_waterGpu.uploadBytesTotal,
+            s_waterGpu.uploadBytesFrameHw,s_waterGpu.drawCallsFrameHw,
+            s_waterGpu.uploads,s_waterGpu.firstLiveOccupied,
+            waterGpuReady?"PASS":"FAIL",
+            waterGpuBounded?"PASS":"FAIL",
+            waterGpuNoTravelGrowth?"PASS":"FAIL",
             kFollowStreamRequiredKeyMax,kFollowStreamEvictCandidateMax,
             kFollowStreamGeoDiskSampleMax,kFollowStreamSortWorkspaceMax,
             (unsigned long long)scratch.reservedBytes,
@@ -39452,7 +39996,13 @@ namespace
             run.bucketFrameMs.reserve(8192);
             run.ledgers.reserve(128);
             run.overruns.reserve(256);
-            run.warmFrames=0;run.phase=1;s_waterPathWarmed=false;return;
+            run.warmFrames=0;run.phase=1;s_waterPathWarmed=false;
+            s_waterGpu.firstLiveOccupied=0;s_waterGpu.growthEventsTravel=0;
+            s_waterGpu.skippedUploads=0;
+            s_waterGpu.uploadBytesFrame=0;s_waterGpu.drawCallsFrame=0;
+            s_waterGpu.uploadBytesFrameHw=0;s_waterGpu.drawCallsFrameHw=0;
+            s_waterGpu.uploadBytesTotal=0;s_waterGpu.uploads=0;
+            return;
         }
         bool const fly=g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps;
         bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
@@ -44316,6 +44866,17 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     {g.soakDrawLane=4;}
                     else if(_wcsicmp(lane,L"no-derived")==0||_wcsicmp(lane,L"noderived")==0)
                     {g.soakDrawLane=5;}
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-water-backend=",21)==0)
+                {
+                    wchar_t const* backend=argv[i]+21;
+                    if(_wcsicmp(backend,L"legacy")==0||_wcsicmp(backend,L"client")==0
+                      ||_wcsicmp(backend,L"client-array")==0)
+                    {g.soakWaterBackend=0;}
+                    else if(_wcsicmp(backend,L"persistent")==0||_wcsicmp(backend,L"vbo")==0
+                      ||_wcsicmp(backend,L"ibo")==0)
+                    {g.soakWaterBackend=1;}
                     continue;
                 }
                 if(_wcsicmp(argv[i],L"--play-stage16f2-water-transfer")==0
