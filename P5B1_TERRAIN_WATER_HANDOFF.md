@@ -17,10 +17,11 @@ P5b.1 coupling landed at `4e6db8433fb136ab2068bab114a04d4ab265e935` on
 field exactly.
 
 ```
-16F.4  dynamic hydraulic topology       CERTIFIED
-P5b.1  terrain → water coupling          CERTIFIED
-P5b.2  reverse state coupling            CLOSED
-P5b.3  reverse matter/erosion coupling   CLOSED
+16F.4   dynamic hydraulic topology       CERTIFIED
+P5b.1   terrain → water coupling          CERTIFIED / FROZEN @ e64a4df3
+P5b.2A  reverse state coupling            see P5B2A_TERRAIN_STATE_HANDOFF.md
+P5b.2B  porous storage / infiltration     CLOSED
+P5b.3   reverse matter/erosion coupling   CLOSED
 ```
 
 ```
@@ -148,8 +149,8 @@ Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b1
 
 ## Boundaries (CLOSED)
 
-- **P5b.2** reverse state coupling (saturation/moisture). Repeated player
-  interaction around water stays closed.
+- **P5b.2A** is a certified child (state only). See `P5B2A_TERRAIN_STATE_HANDOFF.md`.
+- **P5b.2B** porous storage / infiltration stays closed.
 - **P5b.3** reverse matter/erosion coupling (water→terrain mechanical effects)
 - water erodes terrain / flow transports sediment / bank collapse
 - rainfall as weather / infiltration / groundwater

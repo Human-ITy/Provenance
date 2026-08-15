@@ -235,10 +235,11 @@ water as one coherent revision pair. Disabled P5b.1 == exact 16F.4 field
 `43068558cd0b4a8e`.
 
 ```
-16F.4  dynamic hydraulic topology       CERTIFIED
-P5b.1  terrain → water coupling          CERTIFIED
-P5b.2  reverse state coupling            CLOSED
-P5b.3  reverse matter/erosion coupling   CLOSED
+16F.4   dynamic hydraulic topology       CERTIFIED
+P5b.1   terrain → water coupling          CERTIFIED / FROZEN @ e64a4df3
+P5b.2A  reverse state coupling            CERTIFIED
+P5b.2B  porous storage / infiltration     CLOSED
+P5b.3   reverse matter/erosion coupling   CLOSED
 ```
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
@@ -249,11 +250,27 @@ Player path (pick/shovel legal receipt, not only synthetic fixtures) is inside
 `--cert-p5b1-terrain-water`: cut retaining edge → water grows; fill into
 occupied water with no admissible conserved resolution → refuse.
 
-**P5b.2 CLOSED** — reverse state coupling (saturation/moisture). Repeated
-player interaction around water is also closed.  
-**P5b.3 CLOSED** — water→terrain mechanical effects.  
+```
+P5b.2A WATER → TERRAIN MATERIAL STATE — REVERSE STATE ONLY
+SHA: (landed this commit)
+PARENT: e64a4df3 / 5f4c075d / 4e6db843
+```
+
+**Law:** Water may change how terrain matter behaves, but not how much
+terrain matter exists. Contact revision → neighborhood → wetting query →
+`FTerrainMaterialStateDelta` receipt. No infiltration, no terrain mass
+movement. Disabled P5b.1 == 16F.4 `43068558cd0b4a8e`. Disabled P5b.2A ==
+exact P5b.1 field `b1340afeef311fd8` / state `d3bd4455d64ca895`.
+Enabled state digest `176ffe1c3845f721` (budget 1 == N == unbounded).
+
+`--cert-p5b2a` / `--cert-p5b2a-terrain-state` → `Docs/provenance_p5b2a_terrain_state_cert.txt`  
+Play: `PLAY_P5B2A_TERRAIN_STATE.cmd` / `--play-p5b2a-terrain-state`  
+Handoff: `P5B2A_TERRAIN_STATE_HANDOFF.md`
+
+**P5b.2B CLOSED** — porous storage / infiltration (water-mass transfer into terrain).  
+**P5b.3 CLOSED** — water→terrain mechanical / matter movement.  
 Also closed: water erosion, sediment transport, bank collapse, rainfall,
-infiltration, groundwater, active 16B erosion, 16C remobilization, ecology.
+groundwater, active 16B erosion, 16C remobilization, ecology.
 
 ```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
@@ -273,8 +290,9 @@ Committed artifact: `Docs/provenance_pick_fracture_cert.txt` — **PASS 9/0**.
 Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morphology`, `rotation_equivalence` (gravel/granite/mica_schist 0°…90°), `two_strike_gravel`, `outside_recon_halo_identity`, `no_world_up_fracture_law`, `presentation_coverage_closed`, `outside_strike_volume_deform`.
 
 **P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
-**P5b.1 FULLY DONE** (one-way terrain→water, including pick/shovel legal
-receipt). **P5b.2 / P5b.3 CLOSED.** Erosion / rainfall / infiltration CLOSED.
+**P5b.1 FULLY DONE / FROZEN** (one-way terrain→water, including pick/shovel
+legal receipt) @ `e64a4df3`. **P5b.2A CERTIFIED** (state only).
+**P5b.2B / P5b.3 CLOSED.** Erosion / rainfall / infiltration CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
 Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.

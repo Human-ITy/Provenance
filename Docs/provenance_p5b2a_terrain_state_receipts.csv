@@ -1,0 +1,5 @@
+TransactionId,Fixture,TerrainCell,MaterialId,MoistureBefore,MoistureAfter,SaturationBefore,SaturationAfter,CohesionBefore,CohesionAfter,WetnessBefore,WetnessAfter,PermeableBefore,PermeableAfter,TerrainRevBefore,TerrainRevAfter,WaterBodyId,WaterRevision,WaterGramsBefore,WaterGramsAfter,TerrainGramsBefore,TerrainGramsAfter,CellsVisited,BodiesExamined,RefusedStale,RefusedInvalid
+f4de71673b91579f,lake_edge_wets_dirt,69,10df5aebf51f8b90,0.0000,0.4500,0.0000,0.3500,1.0000,0.7200,0.0000,0.8000,0,1,0,1,2d1bfc8354e3ad0d,0,456302579,456302579,353566960429,353566960429,4,1,0,0
+63e5cd4e1b061151,wetland_keeps_soil_saturated,33,10df5aebf51f8b90,0.0000,1.0000,0.0000,1.0000,1.0000,0.5500,0.0000,1.0000,0,1,1,2,adb12b99e7030d31,0,456302579,456302579,353566960429,353566960429,4,1,0,0
+20895ea5cec1d34c,river_contact_wets_bank,41,10df5aebf51f8b90,0.0000,0.4000,0.0000,0.2800,1.0000,0.7600,0.0000,0.7000,0,1,2,3,b96b3a3eddc20064,0,456302579,456302579,353566960429,353566960429,4,1,0,0
+1112f1c7a2936871,water_removed_begins_drying,69,10df5aebf51f8b90,0.4500,0.3150,0.3500,0.1750,0.7200,0.8600,0.8000,0.4400,1,1,3,4,2d1bfc8354e3ad0d,1,456302579,456302579,353566960429,353566960429,4,1,0,0

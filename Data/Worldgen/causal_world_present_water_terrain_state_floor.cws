@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_STATE_V1
+# P5b.2A: reverse state coupling only. Water contact may change how
+# terrain matter behaves, not how much terrain matter exists.
+# Authoritative path: water body/contact revision → affected terrain
+# neighborhood → material wetting query → FTerrainMaterialStateDelta
+# receipt → revision-stamped state. Water never scribbles terrain.
+# CLOSED: P5b.2B porous storage / infiltration, P5b.3 water-induced
+# terrain matter movement, erosion, sediment, bank collapse, 16C
+# remobilization, rainfall, groundwater, ecology, SimulationDomain.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_state_floor
+parent_region_key=causal_world_present_water_terrain_response_floor
+parent_authority_revision=1
+authority_revision=1
+p5b2a_event_id=a5b2000a00000001
+chronology=200
+p5b2a_enabled=1
+default_budget_transactions=48
