@@ -63,6 +63,7 @@
 #include <malloc.h>
 #include <limits>
 #include <memory>
+#include <new>
 #include <deque>
 #include <atomic>
 #include <condition_variable>
@@ -331,6 +332,181 @@ namespace
     // cap amortizes the fringe across idle frames so a dual-axis snap cannot
     // spend 8-10 ms compiling lists the player does not yet need.
     constexpr double kStage0ApronPublishBudgetMs = 2.5;
+
+    // FollowStream / streaming-frame scratch. Derived from residency law:
+    // live 192 m, package 8 m, resident 2601, plus apron + lookahead + a
+    // bounded transition ring. Reserved once at startup; gameplay only
+    // clear()+reuse. Persistent resident packages stay outside this arena.
+    constexpr int kFollowStreamLiveRadiusM = 192;
+    constexpr int kFollowStreamPackageM = 8;
+    constexpr int kFollowStreamLookaheadRows = 2;
+    constexpr int kFollowStreamTransitionRings = 1;
+    constexpr int kFollowStreamLivePackagesPerAxis =
+        2 * ( kFollowStreamLiveRadiusM / kFollowStreamPackageM ) + 1; // 49
+    constexpr int kFollowStreamResidentPerAxis =
+        kFollowStreamLivePackagesPerAxis + 2 * kStage0PackageApron; // 51
+    constexpr int kFollowStreamDiscoverPerAxis =
+        kFollowStreamResidentPerAxis + 2 * kFollowStreamLookaheadRows
+        + 2 * kFollowStreamTransitionRings; // 57
+    constexpr int kFollowStreamRequiredKeyMax =
+        kFollowStreamDiscoverPerAxis * kFollowStreamDiscoverPerAxis; // 3249
+    constexpr int kFollowStreamEvictCandidateMax = kFollowStreamRequiredKeyMax;
+    constexpr int kFollowStreamCellCacheMax = 16384; // 68 m diagnostic disk + slack
+    constexpr int kFollowStreamGeoDiskSampleMax = 16384;
+    constexpr int kFollowStreamSortWorkspaceMax = kFollowStreamRequiredKeyMax;
+    constexpr int kFollowStreamBlockEraseMax = 4096;
+    constexpr int kFollowStreamScheduledMax = 4096;
+    constexpr size_t kFollowStreamArenaBytes = 12u * 1024u * 1024u;
+
+    struct FollowStreamArena
+    {
+        std::vector<char> storage;
+        size_t bump = 0;
+        static constexpr int kBins = 64;
+        void* freeHead[kBins] = {};
+        struct LargeFree { void* p = nullptr; size_t n = 0; };
+        std::vector<LargeFree> largeFree;
+        size_t reservedBytes = 0;
+        size_t highWater = 0;
+        int overflowEvents = 0;
+        int growthEvents = 0;
+        bool ready = false;
+
+        static size_t Align16( size_t n ) { return ( n + 15u ) & ~size_t( 15u ); }
+        static int BinOf( size_t n )
+        {
+            size_t const a = Align16( n );
+            size_t const i = a / 16u;
+            return ( i > 0u && i < (size_t)kBins ) ? (int)i : -1;
+        }
+
+        void EnsureReady()
+        {
+            if ( ready ) { return; }
+            storage.resize( kFollowStreamArenaBytes );
+            reservedBytes = storage.size();
+            largeFree.reserve( 64 );
+            ready = true;
+        }
+
+        void* Alloc( size_t n )
+        {
+            EnsureReady();
+            size_t const a = Align16( n < 16u ? 16u : n );
+            int const bin = BinOf( a );
+            if ( bin >= 0 && freeHead[bin] )
+            {
+                void* p = freeHead[bin];
+                freeHead[bin] = *reinterpret_cast<void**>( p );
+                return p;
+            }
+            if ( bin < 0 )
+            {
+                for ( size_t i = 0; i < largeFree.size(); ++i )
+                {
+                    if ( largeFree[i].n == a )
+                    {
+                        void* p = largeFree[i].p;
+                        largeFree[i] = largeFree.back();
+                        largeFree.pop_back();
+                        return p;
+                    }
+                }
+            }
+            if ( bump + a > storage.size() )
+            {
+                ++overflowEvents;
+                return nullptr;
+            }
+            void* p = storage.data() + bump;
+            bump += a;
+            if ( bump > highWater ) { highWater = bump; }
+            return p;
+        }
+
+        void Free( void* p, size_t n )
+        {
+            if ( !p ) { return; }
+            size_t const a = Align16( n < 16u ? 16u : n );
+            int const bin = BinOf( a );
+            if ( bin >= 0 )
+            {
+                *reinterpret_cast<void**>( p ) = freeHead[bin];
+                freeHead[bin] = p;
+                return;
+            }
+            if ( largeFree.size() < largeFree.capacity() )
+            {
+                largeFree.push_back( LargeFree{ p, a } );
+            }
+        }
+    };
+
+    FollowStreamArena s_followStreamArena;
+
+    template<typename T>
+    struct FollowStreamAlloc
+    {
+        using value_type = T;
+        using size_type = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using propagate_on_container_move_assignment = std::true_type;
+        using is_always_equal = std::true_type;
+        FollowStreamAlloc() noexcept = default;
+        template<typename U>
+        FollowStreamAlloc( FollowStreamAlloc<U> const& ) noexcept {}
+        T* allocate( std::size_t n )
+        {
+            void* p = s_followStreamArena.Alloc( n * sizeof( T ) );
+            if ( !p )
+            {
+                ++s_followStreamArena.growthEvents;
+                throw std::bad_alloc();
+            }
+            return static_cast<T*>( p );
+        }
+        void deallocate( T* p, std::size_t n ) noexcept
+        {
+            s_followStreamArena.Free( p, n * sizeof( T ) );
+        }
+    };
+    template<typename A, typename B>
+    bool operator==( FollowStreamAlloc<A> const&, FollowStreamAlloc<B> const& ) noexcept
+    { return true; }
+    template<typename A, typename B>
+    bool operator!=( FollowStreamAlloc<A> const&, FollowStreamAlloc<B> const& ) noexcept
+    { return false; }
+
+    using FollowStreamCellMap = std::unordered_map<uint64_t, CellSample,
+        std::hash<uint64_t>, std::equal_to<uint64_t>,
+        FollowStreamAlloc<std::pair<uint64_t const, CellSample>>>;
+
+    struct FollowStreamScratch
+    {
+        std::vector<std::pair<int, int>> requiredKeys;
+        std::vector<std::pair<int, int>> collarKeys;
+        std::vector<std::pair<int, int>> lookaheadKeys;
+        std::vector<uint64_t> evictKeys;
+        std::vector<uint64_t> cellsToErase;
+        std::vector<uint64_t> blocksToErase;
+        std::vector<uint64_t> scheduledKeys;
+        std::vector<uint64_t> dirtyKeys;
+        std::vector<std::pair<int, int>> geoDiskKeys;
+        size_t reservedBytes = 0;
+        size_t observedMaxBytes = 0;
+        size_t requiredHighWater = 0;
+        size_t evictHighWater = 0;
+        size_t geoDiskHighWater = 0;
+        size_t sortHighWater = 0;
+        size_t cellsCapHighWater = 0;
+        size_t cellsBucketHighWater = 0;
+        int reallocEvents = 0;
+        int overflowEvents = 0;
+        int persistentGrowthEvents = 0;
+        bool reserved = false;
+    };
+
+    FollowStreamScratch s_followStreamScratch;
 
     struct Stage0PresentationBounds
     {
@@ -1230,7 +1406,7 @@ namespace
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
-        std::unordered_map<uint64_t, CellSample> cells;
+        FollowStreamCellMap cells;
         std::unordered_map<uint64_t, Stage0TerrainBlock> stage0TerrainBlocks;
         std::unordered_set<uint64_t> stage0DirtyTerrainBlocks;
         std::unordered_set<uint64_t> fetchedBlocks;
@@ -3930,6 +4106,121 @@ namespace
         return {};
     }
 
+    size_t FollowStreamVectorBytes()
+    {
+        FollowStreamScratch const& s = s_followStreamScratch;
+        return s.requiredKeys.capacity() * sizeof( std::pair<int, int> )
+            + s.collarKeys.capacity() * sizeof( std::pair<int, int> )
+            + s.lookaheadKeys.capacity() * sizeof( std::pair<int, int> )
+            + s.evictKeys.capacity() * sizeof( uint64_t )
+            + s.cellsToErase.capacity() * sizeof( uint64_t )
+            + s.blocksToErase.capacity() * sizeof( uint64_t )
+            + s.scheduledKeys.capacity() * sizeof( uint64_t )
+            + s.dirtyKeys.capacity() * sizeof( uint64_t )
+            + s.geoDiskKeys.capacity() * sizeof( std::pair<int, int> );
+    }
+
+    void FollowStreamNoteObservedBytes()
+    {
+        size_t const n = FollowStreamVectorBytes() + s_followStreamArena.highWater;
+        if ( n > s_followStreamScratch.observedMaxBytes )
+        {
+            s_followStreamScratch.observedMaxBytes = n;
+        }
+    }
+
+    void FollowStreamNotePersistent( size_t bucketsBefore )
+    {
+        FollowStreamScratch& s = s_followStreamScratch;
+        // Initial reserve(16384) is paid at startup. Only a later bucket
+        // increase is runtime growth.
+        if ( bucketsBefore >= (size_t)kFollowStreamCellCacheMax
+          && g.cells.bucket_count() > bucketsBefore )
+        {
+            ++s.persistentGrowthEvents;
+            ++s.reallocEvents;
+        }
+        if ( g.cells.size() > s.cellsCapHighWater )
+        {
+            s.cellsCapHighWater = g.cells.size();
+        }
+        if ( g.cells.bucket_count() > s.cellsBucketHighWater )
+        {
+            s.cellsBucketHighWater = g.cells.bucket_count();
+        }
+    }
+
+    template<typename T>
+    bool FollowStreamPush( std::vector<T>& v, T const& value )
+    {
+        if ( v.size() >= v.capacity() )
+        {
+            ++s_followStreamScratch.overflowEvents;
+            return false;
+        }
+        v.push_back( value );
+        return true;
+    }
+
+    void EnsureFollowStreamScratch()
+    {
+        s_followStreamArena.EnsureReady();
+        FollowStreamScratch& s = s_followStreamScratch;
+        if ( s.reserved ) { return; }
+        s.requiredKeys.reserve( (size_t)kFollowStreamRequiredKeyMax );
+        s.collarKeys.reserve( (size_t)kFollowStreamRequiredKeyMax );
+        s.lookaheadKeys.reserve( (size_t)kFollowStreamRequiredKeyMax );
+        s.evictKeys.reserve( (size_t)kFollowStreamEvictCandidateMax );
+        s.cellsToErase.reserve( (size_t)kFollowStreamCellCacheMax );
+        s.blocksToErase.reserve( (size_t)kFollowStreamBlockEraseMax );
+        s.scheduledKeys.reserve( (size_t)kFollowStreamScheduledMax );
+        s.dirtyKeys.reserve( (size_t)kFollowStreamBlockEraseMax );
+        s.geoDiskKeys.reserve( (size_t)kFollowStreamGeoDiskSampleMax );
+        s.reservedBytes = FollowStreamVectorBytes() + s_followStreamArena.reservedBytes;
+        s.observedMaxBytes = s.reservedBytes;
+        s.reserved = true;
+    }
+
+    bool FollowStreamScheduledHas( uint64_t key )
+    {
+        auto const& v = s_followStreamScratch.scheduledKeys;
+        return std::binary_search( v.begin(), v.end(), key );
+    }
+
+    // FollowStream cell create must not copy GeoSample event/chronology
+    // vectors. Those grow with unique query locations and rehashed into a
+    // new ~8 MB CRT segment at ~2018 m (65536 unique cells). Package Z +
+    // QueryMaterial are the bounded residency path; full provenance Query
+    // stays off the traversal loop.
+    bool SampleFollowStreamCell( Stage0PlayView view, double x, double y,
+        float& outZ, std::string& outCap )
+    {
+        if ( UsesPackageOwnedTerrain( view ) && SampleResidentCausalPackageSurface( x, y, outZ ) )
+        {
+            if ( auto const* geography = ActiveBareEarthKernel( view ) )
+            {
+                auto const mat = geography->QueryMaterial( x, y, (double)outZ - 0.001 );
+                if ( mat.found && mat.material )
+                {
+                    outCap = mat.material;
+                    return true;
+                }
+            }
+            if ( UsesExactLocalMaterialization( view ) && g.exactLocalRuntime )
+            {
+                auto const mat = g.exactLocalRuntime->QueryMaterial( x, y, (double)outZ - 0.001 );
+                if ( mat.found && mat.material )
+                {
+                    outCap = mat.material;
+                    return true;
+                }
+            }
+            outCap = "dirt";
+            return true;
+        }
+        return SampleCausalPlayableCell( view, x, y, outZ, outCap );
+    }
+
     void EnsureGeoCell( int cx, int cy )
     {
         float sampleGrade = g.gradeDatum;
@@ -3939,7 +4230,7 @@ namespace
           && IsCausalPlayableView( g.stage0PlayView ) )
         {
             float surfaceZ = 0.0f;
-            if ( !SampleCausalPlayableCell( g.stage0PlayView,
+            if ( !SampleFollowStreamCell( g.stage0PlayView,
                     (double)cx + 0.5, (double)cy + 0.5, surfaceZ, sampleCap ) )
             {
                 g.statusLine = "CAUSAL WORLD REFUSED - authoritative sample unavailable";
@@ -4015,6 +4306,7 @@ namespace
 
     void EnsureGeoDisk( int px, int py, int radCells )
     {
+        EnsureFollowStreamScratch();
         LARGE_INTEGER q0{}, q1{}, qpf{};
         QueryPerformanceFrequency( &qpf );
         QueryPerformanceCounter( &q0 );
@@ -4022,30 +4314,43 @@ namespace
         bool any = false;
         int requested = 0;
         double pureGenerationMs = 0.0;
+        size_t const bucketsBefore = g.cells.bucket_count();
+        FollowStreamScratch& scratch = s_followStreamScratch;
+        scratch.geoDiskKeys.clear();
         for ( int dy = -radCells; dy <= radCells; ++dy )
         {
             for ( int dx = -radCells; dx <= radCells; ++dx )
             {
                 if ( dx * dx + dy * dy > radCells * radCells ) { continue; }
-                int const cx = px + dx, cy = py + dy;
-                if ( GetCell( cx, cy ) ) { continue; }
-                ++requested;
-                LARGE_INTEGER gen0{}, gen1{};
-                QueryPerformanceCounter( &gen0 );
-                EnsureGeoCell( cx, cy );
-                QueryPerformanceCounter( &gen1 );
-                if ( qpf.QuadPart > 0 )
-                {
-                    pureGenerationMs += 1000.0 * (double)( gen1.QuadPart - gen0.QuadPart )
-                        / (double)qpf.QuadPart;
-                }
-                if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
-                {
-                    MarkStage0TerrainVertexDirty( cx, cy );
-                }
-                any = true;
+                FollowStreamPush( scratch.geoDiskKeys, std::pair<int, int>{ px + dx, py + dy } );
             }
         }
+        if ( scratch.geoDiskKeys.size() > scratch.geoDiskHighWater )
+        {
+            scratch.geoDiskHighWater = scratch.geoDiskKeys.size();
+        }
+        for ( auto const& cell : scratch.geoDiskKeys )
+        {
+            int const cx = cell.first, cy = cell.second;
+            if ( GetCell( cx, cy ) ) { continue; }
+            ++requested;
+            LARGE_INTEGER gen0{}, gen1{};
+            QueryPerformanceCounter( &gen0 );
+            EnsureGeoCell( cx, cy );
+            QueryPerformanceCounter( &gen1 );
+            if ( qpf.QuadPart > 0 )
+            {
+                pureGenerationMs += 1000.0 * (double)( gen1.QuadPart - gen0.QuadPart )
+                    / (double)qpf.QuadPart;
+            }
+            if ( g.certWorldgenBaselinePerf || g.playWorldgenBaseline )
+            {
+                MarkStage0TerrainVertexDirty( cx, cy );
+            }
+            any = true;
+        }
+        FollowStreamNotePersistent( bucketsBefore );
+        FollowStreamNoteObservedBytes();
         QueryPerformanceCounter( &q1 );
         double const requestMs = qpf.QuadPart > 0
             ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart
@@ -4136,8 +4441,10 @@ namespace
             ? 20 : 68;
         int const cacheRadiusSq = cacheRadius * cacheRadius;
 
-        std::vector<uint64_t> cellsToErase;
-        cellsToErase.reserve( 256 );
+        EnsureFollowStreamScratch();
+        FollowStreamScratch& scratch = s_followStreamScratch;
+        size_t const bucketsBefore = g.cells.bucket_count();
+        scratch.cellsToErase.clear();
         for ( auto const& kv : g.cells )
         {
             int const cx = (int)(int32_t)( kv.first >> 32 );
@@ -4146,13 +4453,17 @@ namespace
             int const dy = cy - centerY;
             if ( dx * dx + dy * dy <= cacheRadiusSq ) { continue; }
             if ( Stage0CellHasPersistentAuthority( kv.second ) ) { continue; }
-            cellsToErase.push_back( kv.first );
+            FollowStreamPush( scratch.cellsToErase, kv.first );
         }
-        for ( uint64_t const key : cellsToErase )
+        if ( scratch.cellsToErase.size() > scratch.evictHighWater )
+        {
+            scratch.evictHighWater = scratch.cellsToErase.size();
+        }
+        for ( uint64_t const key : scratch.cellsToErase )
         {
             g.cells.erase( key );
         }
-        g.perfGeoCellsEvicted += (int)cellsToErase.size();
+        g.perfGeoCellsEvicted += (int)scratch.cellsToErase.size();
         g.playWorldgenEvicted = g.perfGeoCellsEvicted;
         g.cellsLoaded = (int)g.cells.size();
 
@@ -4160,7 +4471,7 @@ namespace
         // ownership set (plus one package of cache) even when its corners lie
         // outside the circular authority residency.
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
-        std::vector<uint64_t> blocksToErase;
+        scratch.blocksToErase.clear();
         for ( auto const& kv : g.stage0TerrainBlocks )
         {
             int const bx = (int)(int32_t)( kv.first >> 32 );
@@ -4168,10 +4479,10 @@ namespace
             if ( bx < bounds.bx0 - 1 || bx > bounds.bx1 + 1
               || by < bounds.by0 - 1 || by > bounds.by1 + 1 )
             {
-                blocksToErase.push_back( kv.first );
+                FollowStreamPush( scratch.blocksToErase, kv.first );
             }
         }
-        for ( uint64_t const key : blocksToErase )
+        for ( uint64_t const key : scratch.blocksToErase )
         {
             auto const it = g.stage0TerrainBlocks.find( key );
             if ( it == g.stage0TerrainBlocks.end() ) { continue; }
@@ -4180,7 +4491,9 @@ namespace
             g.stage0TerrainBlocks.erase( it );
             g.stage0DirtyTerrainBlocks.erase( key );
         }
-        g.perfHfBlocksEvicted += (int)blocksToErase.size();
+        g.perfHfBlocksEvicted += (int)scratch.blocksToErase.size();
+        FollowStreamNotePersistent( bucketsBefore );
+        FollowStreamNoteObservedBytes();
         QueryPerformanceCounter( &q1 );
         if ( qpf.QuadPart > 0 )
         {
@@ -11750,6 +12063,7 @@ namespace
 
     void FollowStreamCenter()
     {
+        EnsureFollowStreamScratch();
         int const cx = (int)std::floor( g.feetX );
         int const cy = (int)std::floor( g.feetY );
         if ( cx == g.playerX && cy == g.playerY ) { return; }
@@ -12186,10 +12500,15 @@ namespace
         }
         else if ( !g.stage0DirtyTerrainBlocks.empty() )
         {
-            std::vector<uint64_t> dirty(
-                g.stage0DirtyTerrainBlocks.begin(), g.stage0DirtyTerrainBlocks.end() );
+            EnsureFollowStreamScratch();
+            FollowStreamScratch& scratch = s_followStreamScratch;
+            scratch.dirtyKeys.clear();
+            for ( uint64_t const key : g.stage0DirtyTerrainBlocks )
+            {
+                FollowStreamPush( scratch.dirtyKeys, key );
+            }
             g.stage0DirtyTerrainBlocks.clear();
-            for ( uint64_t const key : dirty )
+            for ( uint64_t const key : scratch.dirtyKeys )
             {
                 int const bx = (int)(int32_t)( key >> 32 );
                 int const by = (int)(int32_t)( key & 0xffffffffu );
@@ -12932,10 +13251,17 @@ namespace
             &&s_stage8PackageWorkers.active==0;
     }
 
-    std::unordered_set<uint64_t> Stage8ScheduledPackageSnapshot()
+    void Stage8CopyScheduledIntoScratch()
     {
+        EnsureFollowStreamScratch();
+        FollowStreamScratch& scratch = s_followStreamScratch;
+        scratch.scheduledKeys.clear();
         std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
-        return s_stage8PackageWorkers.scheduled;
+        for ( uint64_t const key : s_stage8PackageWorkers.scheduled )
+        {
+            FollowStreamPush( scratch.scheduledKeys, key );
+        }
+        std::sort( scratch.scheduledKeys.begin(), scratch.scheduledKeys.end() );
     }
 
     void QueueStage8Package(int bx,int by)
@@ -13494,7 +13820,9 @@ namespace
         // authority sampling so a fast flight cannot force either phase into a
         // monolithic frame-thread burst.
         ServiceStage8CompletedPackages(bounds);
-        auto const scheduled=Stage8ScheduledPackageSnapshot();
+        EnsureFollowStreamScratch();
+        Stage8CopyScheduledIntoScratch();
+        FollowStreamScratch& scratch=s_followStreamScratch;
         bool const profileWaterfall=s_stage11Waterfall.collecting
             &&(g.certStage11ResidencyWaterfall||g.certStage11ShiftScaling
                ||g.certStage11FreeFly)
@@ -13502,13 +13830,13 @@ namespace
         LARGE_INTEGER discover0{},discover1{},retireScan0{},retireScan1{},qpf{};
         if(profileWaterfall)
         {QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&discover0);}
-        std::vector<std::pair<int,int>> requiredBuilds;
+        scratch.requiredKeys.clear();
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
         for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
         {
             uint64_t const key=CellKey(bx,by);
-            if(!terrainBlocks.count(key)&&!scheduled.count(key))
-            {requiredBuilds.emplace_back(bx,by);}
+            if(!terrainBlocks.count(key)&&!FollowStreamScheduledHas(key))
+            {FollowStreamPush(scratch.requiredKeys,std::pair<int,int>{bx,by});}
         }
 
         // Pre-build the collar ahead of travel. Idle frames between anchor
@@ -13525,22 +13853,22 @@ namespace
         constexpr int collar=1;
         int const loX=bounds.bx0-collar,hiX=bounds.bx1+collar;
         int const loY=bounds.by0-collar,hiY=bounds.by1+collar;
-        std::vector<std::pair<int,int>> collarBuilds;
+        scratch.collarKeys.clear();
         for ( int by = loY; by <= hiY; ++by )
         for ( int bx = loX; bx <= hiX; ++bx )
         {
             if ( bx >= bounds.bx0 && bx <= bounds.bx1
               && by >= bounds.by0 && by <= bounds.by1 ) { continue; }
             uint64_t const key=CellKey(bx,by);
-            if(terrainBlocks.count(key)||scheduled.count(key)){continue;}
-            collarBuilds.emplace_back(bx,by);
+            if(terrainBlocks.count(key)||FollowStreamScheduledHas(key)){continue;}
+            FollowStreamPush(scratch.collarKeys,std::pair<int,int>{bx,by});
         }
         // CPU-only omnidirectional lookahead. Two rows beyond the one-package
         // resident apron cover a 16 m/frame move or abrupt turn in any cardinal
         // plane without changing the 2,601 published-package ownership law.
         // ServiceStage8CompletedPackages holds these products until their
         // coordinates enter the legal apron.
-        std::vector<std::pair<int,int>> lookaheadBuilds;
+        scratch.lookaheadKeys.clear();
         constexpr int lookaheadRows=kStage8LookaheadRows;
         int const deriveLoX=loX-lookaheadRows,deriveHiX=hiX+lookaheadRows;
         int const deriveLoY=loY-lookaheadRows,deriveHiY=hiY+lookaheadRows;
@@ -13549,14 +13877,20 @@ namespace
         {
             if(bx>=loX&&bx<=hiX&&by>=loY&&by<=hiY){continue;}
             uint64_t const key=CellKey(bx,by);
-            if(!terrainBlocks.count(key)&&!scheduled.count(key))
-            {lookaheadBuilds.emplace_back(bx,by);}
+            if(!terrainBlocks.count(key)&&!FollowStreamScheduledHas(key))
+            {FollowStreamPush(scratch.lookaheadKeys,std::pair<int,int>{bx,by});}
         }
+        if(scratch.requiredKeys.size()>scratch.requiredHighWater)
+        {scratch.requiredHighWater=scratch.requiredKeys.size();}
+        size_t const sortUsed=scratch.requiredKeys.size()+scratch.collarKeys.size()
+            +scratch.lookaheadKeys.size();
+        if(sortUsed>scratch.sortHighWater)scratch.sortHighWater=sortUsed;
         if(profileWaterfall)
         {
             QueryPerformanceCounter(&discover1);
             s_stage11Waterfall.packageDiscoveryCandidates+=
-                (int)(requiredBuilds.size()+collarBuilds.size()+lookaheadBuilds.size());
+                (int)(scratch.requiredKeys.size()+scratch.collarKeys.size()
+                    +scratch.lookaheadKeys.size());
             if(qpf.QuadPart>0)s_stage11Waterfall.packageDiscoveryMs+=1000.0
                 *(double)(discover1.QuadPart-discover0.QuadPart)/(double)qpf.QuadPart;
         }
@@ -13573,7 +13907,7 @@ namespace
             float const bx=(float)b.first+.5f-feetBx,by=(float)b.second+.5f-feetBy;
             return ax*ax+ay*ay<bx*bx+by*by;
         };
-        std::sort(requiredBuilds.begin(),requiredBuilds.end(),nearestFirst);
+        std::sort(scratch.requiredKeys.begin(),scratch.requiredKeys.end(),nearestFirst);
         // Collar packages ahead of travel are the ones about to be needed, so
         // they are built first; the rest of the ring fills with leftover budget.
         auto aheadFirst=[&](std::pair<int,int> const& a,std::pair<int,int> const& b)
@@ -13585,17 +13919,17 @@ namespace
             if(aAhead!=bAhead)return aAhead;
             return ax*ax+ay*ay<bx*bx+by*by;
         };
-        std::sort(collarBuilds.begin(),collarBuilds.end(),aheadFirst);
+        std::sort(scratch.collarKeys.begin(),scratch.collarKeys.end(),aheadFirst);
         // Queueing is cheap and complete: required packages are nearest-first,
         // then the forward-biased apron. Workers consume the immutable CPU
         // stages while the render thread continues with eviction and drawing.
-        for(auto const& package:requiredBuilds)
+        for(auto const& package:scratch.requiredKeys)
         {QueueStage8Package(package.first,package.second);}
-        for(auto const& package:collarBuilds)
+        for(auto const& package:scratch.collarKeys)
         {QueueStage8Package(package.first,package.second);}
-        for(auto const& package:lookaheadBuilds)
+        for(auto const& package:scratch.lookaheadKeys)
         {QueueStage8Package(package.first,package.second);}
-        std::vector<uint64_t> evict;
+        scratch.evictKeys.clear();
         if(profileWaterfall)QueryPerformanceCounter(&retireScan0);
         for ( auto const& entry : terrainBlocks )
         {
@@ -13605,16 +13939,19 @@ namespace
             // would discard the packages the bearing-deep collar just built,
             // reintroducing the burst the collar exists to prevent.
             if ( bx < loX || bx > hiX || by < loY || by > hiY )
-            { evict.push_back( entry.first ); }
+            { FollowStreamPush(scratch.evictKeys,entry.first); }
         }
+        if(scratch.evictKeys.size()>scratch.evictHighWater)
+        {scratch.evictHighWater=scratch.evictKeys.size();}
+        FollowStreamNoteObservedBytes();
         if(profileWaterfall)
         {
             QueryPerformanceCounter(&retireScan1);
-            s_stage11Waterfall.packagesRetired+=(int)evict.size();
+            s_stage11Waterfall.packagesRetired+=(int)scratch.evictKeys.size();
             if(qpf.QuadPart>0)s_stage11Waterfall.packageRetirementScanMs+=1000.0
                 *(double)(retireScan1.QuadPart-retireScan0.QuadPart)/(double)qpf.QuadPart;
         }
-        for ( uint64_t const key : evict )
+        for ( uint64_t const key : scratch.evictKeys )
         {
             auto const it = terrainBlocks.find( key );
             if ( it == terrainBlocks.end() ) { continue; }
@@ -13624,9 +13961,9 @@ namespace
             g.perfHfTris -= it->second.tris;
             terrainBlocks.erase( it );
         }
-        g.perfHfBlocksEvicted += (int)evict.size();
-        s_traversalWake.packagesRetired += (int)evict.size();
-        s_soakFrame.packagesRetired += (int)evict.size();
+        g.perfHfBlocksEvicted += (int)scratch.evictKeys.size();
+        s_traversalWake.packagesRetired += (int)scratch.evictKeys.size();
+        s_soakFrame.packagesRetired += (int)scratch.evictKeys.size();
         int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
         int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
@@ -14017,8 +14354,11 @@ namespace
         // 320 m on the 480 m/s route; one EnsureGeoCell insertion then rehashed
         // the whole store and produced a repeatable 16-17 ms generation stall.
         // Reserving the certified bound changes allocation only, never cell
-        // identity, material, authority, or eviction semantics.
+        // identity, material, authority, or eviction semantics. Cell nodes live
+        // in FollowStreamArena so insert/erase during travel does not grow CRT.
+        EnsureFollowStreamScratch();
         g.cells.reserve( 16384 );
+        g.stage0DirtyTerrainBlocks.reserve( 4096 );
         g.stage0TerrainBlocks.reserve( 4096 );
         g.stage7TerrainBlocks.reserve( 4096 );
         g.stage8TerrainBlocks.reserve( 4096 );
@@ -37600,6 +37940,7 @@ namespace
         int classDrawSubmit=0;
         int classWorkerWait=0;
         int classUnclassified=0;
+        int classFollowStreamCrt=0;
         bool snapped90=false;
         bool snapped300=false;
         bool snapped900=false;
@@ -37782,7 +38123,10 @@ namespace
         if(named[best].hist==&s_streamingSoak.classAllocatorGrowth)
         {
             if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/follow_stream")==0)
+            {
+                ++s_streamingSoak.classFollowStreamCrt;
                 return "crt_heap_segment/follow_stream";
+            }
             if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/sample_ground")==0)
                 return "crt_heap_segment/sample_ground";
             if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/water_query")==0)
@@ -37999,7 +38343,16 @@ namespace
         bool const frameOk=informational||(run.movementFrames>0&&run.framesOver16==0);
         bool const integrity=run.movementFrames>0&&run.groundFailures==0
             &&run.collisionMismatches==0;
-        bool const passed=integrity&&complete&&bounded&&traveled&&frameOk;
+        FollowStreamScratch const& scratch=s_followStreamScratch;
+        int const scratchGrowth=scratch.reallocEvents+scratch.persistentGrowthEvents
+            +s_followStreamArena.growthEvents;
+        int const scratchOverflow=scratch.overflowEvents+s_followStreamArena.overflowEvents;
+        double const scratchHeadroom=scratch.reservedBytes>0
+            ?100.0*(1.0-(double)scratch.observedMaxBytes/(double)scratch.reservedBytes):0.0;
+        bool const scratchOk=scratchGrowth==0&&scratchOverflow==0;
+        bool const followStreamCrtOk=run.classFollowStreamCrt==0;
+        bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
+            &&scratchOk&&followStreamCrtOk;
         char const* certPath=g.certStreamingSoakStageFilter==23
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
@@ -38065,6 +38418,25 @@ namespace
             "overrun.class.unclassified=%d\n"
             "heap_prewarm_bytes=%llu\n"
             "heap_previsit_m=%.1f\n"
+            "scratch.required_key_max=%d\n"
+            "scratch.eviction_candidate_max=%d\n"
+            "scratch.geo_disk_sample_max=%d\n"
+            "scratch.sort_workspace_max=%d\n"
+            "scratch.reserved_bytes=%llu\n"
+            "scratch.observed_max_bytes=%llu\n"
+            "scratch.headroom_pct=%.1f\n"
+            "scratch.required_high_water=%llu\n"
+            "scratch.evict_high_water=%llu\n"
+            "scratch.geo_disk_high_water=%llu\n"
+            "scratch.sort_high_water=%llu\n"
+            "scratch.cells_size_high_water=%llu\n"
+            "scratch.cells_bucket_high_water=%llu\n"
+            "scratch.runtime_growth_events=%d\n"
+            "scratch.overflow_events=%d\n"
+            "scratch.arena_high_water=%llu\n"
+            "check.scratch_growth_events=%s\n"
+            "check.scratch_overflow=%s\n"
+            "check.follow_stream_crt_segment=%s\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
@@ -38108,6 +38480,21 @@ namespace
             run.classDeferredRetire,run.classDrawSubmit,run.classWorkerWait,
             run.classUnclassified,(unsigned long long)run.heapPrewarmBytes,
             run.heapPrevisitM,
+            kFollowStreamRequiredKeyMax,kFollowStreamEvictCandidateMax,
+            kFollowStreamGeoDiskSampleMax,kFollowStreamSortWorkspaceMax,
+            (unsigned long long)scratch.reservedBytes,
+            (unsigned long long)scratch.observedMaxBytes,scratchHeadroom,
+            (unsigned long long)scratch.requiredHighWater,
+            (unsigned long long)scratch.evictHighWater,
+            (unsigned long long)scratch.geoDiskHighWater,
+            (unsigned long long)scratch.sortHighWater,
+            (unsigned long long)scratch.cellsCapHighWater,
+            (unsigned long long)scratch.cellsBucketHighWater,
+            scratchGrowth,scratchOverflow,
+            (unsigned long long)s_followStreamArena.highWater,
+            scratchGrowth==0?"PASS":"FAIL",
+            scratchOverflow==0?"PASS":"FAIL",
+            followStreamCrtOk?"PASS":"FAIL",
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
         for(SoakResourceLedger const& ledger:run.ledgers)WriteSoakLedger(f,ledger);
@@ -38197,6 +38584,7 @@ namespace
             g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
             SelectStage0PlayView(view);
             g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            EnsureFollowStreamScratch();
             RebuildStage0PlayableRuntime();
             run.wakeStart=s_traversalWake;
             run.startWorkingSet=ProcessWorkingSetBytes();

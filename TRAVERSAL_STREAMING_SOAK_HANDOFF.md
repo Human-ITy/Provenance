@@ -274,25 +274,30 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B lifecycle 300 s | **1 / 216362** | 35.311 | 1 allocator_growth |
 | 2B lifecycle 900 s | **1 / 786675** | 38.301 | 1 allocator_growth |
 | 2B follow_stream 90 s | **1 / 28504** | 45.276 | 1 crt_heap_segment/follow_stream |
+| 2B scratch-owner 90 s | **1 / 32399** | 60.176 | 1 draw_submit @ 528.4 m |
 
-The row-crossing publish burst is closed. The remaining owner is a
-**deterministic ~8.4 MB CRT heap segment** at 2018.8 m / 84.117 s
-during `FollowStreamCenter` (`EnsureGeoDisk` / `EvictStage0Residency`
-on a 1 m cell cross). Package / GL / worker / present = 0;
-draw_submit ~4.2 ms; private delta 8404992. Not a named game cache
-(atlas / far-ring / collision / package). 192 MB of 8 KB committed
-CRT slack does not absorb it (new 8 MB VirtualAlloc, not small-block
-reuse). A 2120 m unmeasured pre-visit only **moved** the hitch
-(1823.6 m) — high-water first-commit, not a sticky location object.
-HeapWalk/VirtualQuery was taken off the frame path (it poisoned the
-next frame to 150 ms). 16.667 stays FAIL; owner is now
-`crt_heap_segment/follow_stream`, not generic `allocator_growth`.
-Stop and drain frames over 16.667 = 0.
+The FollowStream CRT segment is closed. Capacity instrumentation
+showed the 8.4 MB first-commit was **not** a retained package: per-call
+eviction / required-key / scheduled snapshot vectors doubled on the
+CRT heap, and `EnsureGeoCell` copied `GeoSample` event/chronology
+vectors (unique-query high-water ≈ 65536 cells at ~2018 m).
 
-300 / 900 were not re-run on this binary: the 90 s hitch is the same
-deterministic FollowStreamCenter commit that 300 / 900 already
-showed once. Residency / backlog / memory plateau from the lifecycle
-900 s still stand.
+`FollowStreamScratch` is reserved once from residency law (live 192 m,
+package 8 m, 2601 resident + apron + lookahead + one transition ring).
+Gameplay is `clear()` + reuse; overflow is cert FAIL, no CRT fallback.
+Cell-map nodes live in a 12 MB arena (packages stay outside). Package-
+owned cell create uses package Z + `QueryMaterial`, not full provenance
+`Query` / `SurfaceGeology`.
+
+Scratch receipt (90 s): required-key max 3249 (hw 2401), eviction
+max 3249 (hw 101), geo-disk max 16384 (hw 12853), sort max 3249
+(hw 3025), reserved 13047328 B, observed 13047328 B, growth 0,
+overflow 0, FollowStream CRT segment events 0.
+
+16.667 stays FAIL on this binary: one `draw_submit` 60.176 ms at
+528.4 m / 22.019 s (allocator delta 0; not FollowStream). Stop /
+drain / return frames over 16.667 = 0. 300 / 900 not run — 90 s is
+not green. Do not relax 16.667.
 
 ### Memory — logical set bounded; process high-water plateaus
 
@@ -327,10 +332,11 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 ### 90 / 300 / 900 gates
 
 ```text
-90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 crt_heap_segment/follow_stream)
-300 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth) — lifecycle binary; not re-run
-900 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth) — lifecycle binary; not re-run
-       192 m complete, 2601 resident max, pending drains to 0, max pending 83
+90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 draw_submit @ 528.4 m)
+       scratch growth 0, overflow 0, FollowStream CRT segment 0
+300 s  not run — 90 s not green
+900 s  not run — 90 s not green
+       192 m complete, 2601 resident max, pending drains to 0, max pending 82
 ```
 
 Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run
