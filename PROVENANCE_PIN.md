@@ -301,7 +301,11 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 - Test A: `--cert-worldgen-cardinal-replacement-p5b2c` (EVERY CUT, latest).
   Digest `f743150420e22175` (2B was `2396f444f66f1234`; stage identity
   changed). Movement frames over 16.667 = 0 on N/E/S/W.
-- Test B: `--cert-streaming-soak-p5b2b` (certified soak receipts; 2C soak not in this cut)
+- Test B: `--cert-streaming-soak-p5b2c` (90 s NE fly **PASS** this cut:
+  0 / 86317 movement frames >16.667, max 7.233 ms, 2601, pending 0.
+  2C travel physics **idle**: pore transfers / occupancy / 16F.4 /
+  body split-merge-grow-shrink all 0. 300/900 not run. Long-haul 300/900
+  remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
 - Test S `--cert-semantic-distance` PASS (8/8 stations) at `6b14d8fd`.
@@ -323,11 +327,10 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   CRT 8→12 km **+1.5 MB** (197 → 199 MB), `PASS_plateau`. Return CRT 208 MB.
   `erosion_cache_entries` now reads the four worker kernels. Golden:
   cache enabled == forced-cold recompute. 16.667 not relaxed.
-  P5b.2C / P5b.3 CLOSED.
+  P5b.2C 90 s Test B **PASS** (idle 2C physics). **P5b.3 stays CLOSED.**
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
-- P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /
-  erosion remain CLOSED.
+- P5b.2B gameplay frozen at `8bb75265`. P5b.3 / rainfall / erosion remain CLOSED.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE

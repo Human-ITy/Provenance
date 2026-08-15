@@ -54,6 +54,12 @@ Test A cardinal (EVERY CUT) — PASS. Stage identity changed vs 2B:
 `2396f444f66f1234` → `f743150420e22175` (origin==return). Movement frames
 over 16.667 = 0 on N/E/S/W. Wake water-body / topology / terrain-state = 0.
 
+Test B 90 s NE fly (this cut) — **PASS**. Receipt
+`Docs/provenance_p5b2c_streaming_soak_cert.txt`. 0 / 86317 movement frames
+>16.667, max 7.233 ms, 2601 resident, pending 0. All 2C travel counters 0
+(pore transfers, wet→dry, dry→wet, 16F.4 rebuilds, body split/merge/grow/shrink).
+300/900 not run. P5b.3 stays CLOSED.
+
 **P5b.3 stays CLOSED.** No water-induced terrain matter movement, no
 erosion, no sediment remobilization.
 
@@ -77,6 +83,7 @@ erosion, no sediment remobilization.
 - 2C disabled → exact 2B state
 - Test A digest if stage identity changes, document it
 - 0 movement frames >16.667 on EVERY-CUT cardinal
+- Test B 90 s: 0 movement frames >16.667; 2C travel counters idle or bounded
 
 ## Player runtime
 
@@ -92,9 +99,11 @@ CERT_P5B2C_TERRAIN_PORE_OCCUPANCY.cmd
 Build\x64_Release\ProvenanceClient.exe --cert-p5b2c-terrain-pore-occupancy
 Build\x64_Release\ProvenanceClient.exe --cert-p5b2c-terrain-pore-occupancy-visual
 Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2c
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2c --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
 ```
 
 Analytical receipt: `Docs/provenance_p5b2c_terrain_pore_occupancy_cert.txt`  
 Txn receipt: `Docs/provenance_p5b2c_terrain_pore_occupancy_receipts.csv`
+Soak receipt: `Docs/provenance_p5b2c_streaming_soak_cert.txt`
 
 P5b.3 / rainfall / groundwater / erosion / sediment remobilization stay CLOSED.

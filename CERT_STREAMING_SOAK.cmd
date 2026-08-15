@@ -8,7 +8,7 @@ if not exist "Build\x64_Release\ProvenanceClient.exe" (
   exit /b 1
 )
 
-REM First-landing soak: 90 s travel, checkpoint drain at 1/2 km, stop, drain, return.
+REM First-landing 90 s Test B on latest play stage (P5b.2C). Stop/return off.
 REM Ownership / 8-12 km plateau: --soak-duration-s=500 --soak-stop-s=5 --soak-return=1
 REM Milestone / release: add --soak-duration-s=300 or --soak-duration-s=900
 REM 480 m/s certified stress: --soak-speed-mps=480
@@ -17,8 +17,9 @@ REM Water submit A/B (physics/occupancy unchanged):
 REM   --soak-water-backend=persistent   owned VBO/IBO (default)
 REM   --soak-water-backend=legacy       client-array control
 REM   --soak-draw=no-water              negative control (water submit off)
-"Build\x64_Release\ProvenanceClient.exe" --cert-streaming-soak-p5b2b --soak-duration-s=90 --soak-stop-s=60 --soak-return=1 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
+REM 2B control remains --cert-streaming-soak-p5b2b. P5b.3 stays CLOSED.
+"Build\x64_Release\ProvenanceClient.exe" --cert-streaming-soak-p5b2c --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
 set RESULT=%ERRORLEVEL%
-if exist "Docs\provenance_p5b2b_streaming_soak_cert.txt" type "Docs\provenance_p5b2b_streaming_soak_cert.txt"
+if exist "Docs\provenance_p5b2c_streaming_soak_cert.txt" type "Docs\provenance_p5b2c_streaming_soak_cert.txt"
 popd
 exit /b %RESULT%

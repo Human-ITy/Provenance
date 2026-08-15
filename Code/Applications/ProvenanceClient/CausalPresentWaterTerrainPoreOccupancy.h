@@ -184,6 +184,7 @@ namespace CausalPresentWaterTerrainPoreOccupancy
         size_t transactionsCertified=0,transactionsAdmitted=0,transactionsRefused=0;
         size_t dryShrink=0,growWet=0,saturatedRefuse=0,rockZero=0,farUnchanged=0;
         size_t shrink=0,split=0,grow=0,merge=0;
+        size_t poreTransfers=0,wetToDry=0,dryToWet=0,topologyRebuilds=0;
         int64_t bodyMassBefore=0,bodyMassAfter=0;
         int64_t poreMassBefore=0,poreMassAfter=0;
         int64_t containerBefore=0,containerAfter=0;
@@ -691,6 +692,7 @@ namespace CausalPresentWaterTerrainPoreOccupancy
             ++m_topologyRevision;
             m_publishedWaterRevision=m_topologyRevision;
             rec.TopologyRevisionAfter=m_topologyRevision;
+            ++m_stats.topologyRebuilds;
             using TC=CausalPresentWaterTopology::TopologyClass;
             rec.LineageDeterministic=
                 (delta.Class==TC::Shrink&&delta.OutputBodyIds.size()<=1)
@@ -870,6 +872,9 @@ namespace CausalPresentWaterTerrainPoreOccupancy
             if(rec.RefusedStale||rec.RefusedInvalid){++m_stats.transactionsRefused;return;}
             ++m_stats.transactionsAdmitted;
             using TC=CausalPresentWaterTopology::TopologyClass;
+            if(rec.AdmittedGrams>0)++m_stats.poreTransfers;
+            if(rec.OccupancyChanged&&rec.Kind==TransferKind::Infiltrate)++m_stats.wetToDry;
+            if(rec.OccupancyChanged&&rec.Kind==TransferKind::Exfiltrate)++m_stats.dryToWet;
             if(rec.Fixture==FixtureKind::ThinCellInfiltrateDry)++m_stats.dryShrink;
             else if(rec.Fixture==FixtureKind::PoreExfiltrateGrow)++m_stats.growWet;
             else if(rec.Fixture==FixtureKind::SaturatedRefuse)++m_stats.saturatedRefuse;

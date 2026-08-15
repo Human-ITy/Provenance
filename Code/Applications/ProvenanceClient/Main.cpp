@@ -39470,6 +39470,20 @@ namespace
         char ownerLane[32]="";
     };
 
+    struct P5b2cSoakTelemetry
+    {
+        int poreTransfers=0;
+        int wetToDry=0;
+        int dryToWet=0;
+        int topologyRebuilds=0;
+        int bodySplit=0;
+        int bodyMerge=0;
+        int bodyGrow=0;
+        int bodyShrink=0;
+        uint32_t poreRevision=0;
+        uint32_t topologyRevision=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -39536,6 +39550,7 @@ namespace
         int warmSeekSettle=0;
         float heapPrevisitM=0.f;
         TraversalWakeCost wakeStart{};
+        P5b2cSoakTelemetry p5b2cStart{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -39543,6 +39558,29 @@ namespace
         FILE* trace=nullptr;
     };
     StreamingSoakRun s_streamingSoak;
+
+    P5b2cSoakTelemetry CaptureP5b2cSoakTelemetry()
+    {
+        P5b2cSoakTelemetry t;
+        if(!g.presentWaterTerrainPoreOccupancyRuntime)return t;
+        auto const& st=g.presentWaterTerrainPoreOccupancyRuntime->Stats();
+        t.poreTransfers=(int)st.poreTransfers;
+        t.wetToDry=(int)st.wetToDry;
+        t.dryToWet=(int)st.dryToWet;
+        t.topologyRebuilds=(int)st.topologyRebuilds;
+        t.bodySplit=(int)st.split;
+        t.bodyMerge=(int)st.merge;
+        t.bodyGrow=(int)st.grow;
+        t.bodyShrink=(int)st.shrink;
+        t.poreRevision=g.presentWaterTerrainPoreOccupancyRuntime->PoreRevision();
+        t.topologyRevision=g.presentWaterTerrainPoreOccupancyRuntime->WaterTopologyRevision();
+        return t;
+    }
+
+    int SoakDeltaNonneg(int now,int start)
+    {
+        return now>=start?now-start:0;
+    }
 
     char const* SoakBearingName(int bearing)
     {
@@ -40158,6 +40196,30 @@ namespace
         int const collision=s_traversalWake.collisionPublications
             -run.wakeStart.collisionPublications;
         int const bodies=s_traversalWake.waterBodiesQueried-run.wakeStart.waterBodiesQueried;
+        P5b2cSoakTelemetry const p5b2cNow=CaptureP5b2cSoakTelemetry();
+        int const p5b2cPoreXfer=SoakDeltaNonneg(p5b2cNow.poreTransfers,run.p5b2cStart.poreTransfers);
+        int const p5b2cWetToDry=SoakDeltaNonneg(p5b2cNow.wetToDry,run.p5b2cStart.wetToDry);
+        int const p5b2cDryToWet=SoakDeltaNonneg(p5b2cNow.dryToWet,run.p5b2cStart.dryToWet);
+        int const p5b2cTopoRebuild=SoakDeltaNonneg(p5b2cNow.topologyRebuilds,run.p5b2cStart.topologyRebuilds);
+        int const p5b2cSplit=SoakDeltaNonneg(p5b2cNow.bodySplit,run.p5b2cStart.bodySplit);
+        int const p5b2cMerge=SoakDeltaNonneg(p5b2cNow.bodyMerge,run.p5b2cStart.bodyMerge);
+        int const p5b2cGrow=SoakDeltaNonneg(p5b2cNow.bodyGrow,run.p5b2cStart.bodyGrow);
+        int const p5b2cShrink=SoakDeltaNonneg(p5b2cNow.bodyShrink,run.p5b2cStart.bodyShrink);
+        int const p5b2cPoreRev=SoakDeltaNonneg((int)p5b2cNow.poreRevision,(int)run.p5b2cStart.poreRevision);
+        int const p5b2cTopoRev=SoakDeltaNonneg((int)p5b2cNow.topologyRevision,(int)run.p5b2cStart.topologyRevision);
+        int const p5b2cEvents=p5b2cPoreXfer+p5b2cWetToDry+p5b2cDryToWet+p5b2cTopoRebuild
+            +p5b2cSplit+p5b2cMerge+p5b2cGrow+p5b2cShrink+p5b2cPoreRev+p5b2cTopoRev;
+        char const* p5b2cPhysicsVerdict="PASS_idle";
+        if(p5b2cEvents==0)p5b2cPhysicsVerdict="PASS_idle";
+        else if(p5b2cEvents<=8&&p5b2cEvents*50<=(std::max)(created,1))p5b2cPhysicsVerdict="PASS_bounded";
+        else p5b2cPhysicsVerdict="FAIL_accumulating";
+        char const* poreStateWakeVerdict=terrainState==0?"PASS_idle"
+            :(terrainState<=8?"PASS_bounded":"FAIL_accumulating");
+        char const* occTopoWakeVerdict=topo==0?"PASS_idle"
+            :(topo<=8?"PASS_bounded":"FAIL_accumulating");
+        bool const p5b2cOk=std::strncmp(p5b2cPhysicsVerdict,"FAIL",4)!=0
+            &&std::strncmp(poreStateWakeVerdict,"FAIL",4)!=0
+            &&std::strncmp(occTopoWakeVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -40199,7 +40261,7 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk;
         char certPathBuf[160];
         char const* certPath=g.certStreamingSoakStageFilter==24
             ?"Docs\\provenance_p5b2c_streaming_soak_cert.txt"
@@ -40253,6 +40315,19 @@ namespace
             "wake.tree_loads=%d\n"
             "wake.collision_publications=%d\n"
             "wake.water_bodies_queried=%d\n"
+            "p5b2c.pore_transfers=%d\n"
+            "p5b2c.wet_to_dry_occupancy=%d\n"
+            "p5b2c.dry_to_wet_occupancy=%d\n"
+            "p5b2c.topology_rebuilds_16f4=%d\n"
+            "p5b2c.body_split=%d\n"
+            "p5b2c.body_merge=%d\n"
+            "p5b2c.body_grow=%d\n"
+            "p5b2c.body_shrink=%d\n"
+            "p5b2c.pore_revision_delta=%d\n"
+            "p5b2c.topology_revision_delta=%d\n"
+            "check.p5b2c_travel_physics=%s\n"
+            "check.pore_state_wakes_bounded=%s\n"
+            "check.occupancy_topology_wakes_bounded=%s\n"
             "check.zero_movement_frames_over_16_667=%s\n"
             "check.complete_required_residency=%s\n"
             "check.bounded_package_count=%s\n"
@@ -40383,6 +40458,10 @@ namespace
             run.groundFailures,run.collisionMismatches,
             waterRecon,topo,terrainState,mesh,s_traversalWake.grassLoads,s_traversalWake.treeLoads,
             collision,bodies,
+            p5b2cPoreXfer,p5b2cWetToDry,p5b2cDryToWet,p5b2cTopoRebuild,
+            p5b2cSplit,p5b2cMerge,p5b2cGrow,p5b2cShrink,
+            p5b2cPoreRev,p5b2cTopoRev,
+            p5b2cPhysicsVerdict,poreStateWakeVerdict,occTopoWakeVerdict,
             frameOk?"PASS":(informational?"INFORMATIONAL":"FAIL"),
             complete?"PASS":"FAIL",
             run.maxResidentPackages<=declared?"PASS":"FAIL",
@@ -41094,6 +41173,7 @@ namespace
                 {--run.ownershipResumeHold;return;}
                 run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;run.peakDistanceM=0.f;
                 run.wakeStart=s_traversalWake;
+                run.p5b2cStart=CaptureP5b2cSoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";

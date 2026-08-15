@@ -85,7 +85,7 @@ Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
 
-Latest play-stage receipt: `Docs/provenance_p5b2b_cardinal_replacement_cert.txt`
+Latest play-stage receipt: `Docs/provenance_p5b2c_cardinal_replacement_cert.txt`
 2A control receipt: `Docs/provenance_p5b2a_cardinal_replacement_cert.txt`
 
 ### B. Long-haul streaming soak (timed, no return)
@@ -97,13 +97,13 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2b --soak-duration-s=90 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2c --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
 
-Receipt: `Docs/provenance_p5b2a_streaming_soak_cert.txt`  
-Trace: `Docs/provenance_p5b2a_streaming_soak_trace.csv`
+Receipt: `Docs/provenance_p5b2c_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b2c_streaming_soak_trace.csv`
 
 Standing metrics (required on every receipt; do not invent green):
 
@@ -116,8 +116,10 @@ distance traveled and elapsed soak time
 resident / created / retired / pending package counts
   (max + end resident; max + end pending)
 oldest pending age, worker queue depth, min complete radius
-water-body wakes, terrain-state wakes, collision publishes,
+  water-body wakes, terrain-state wakes, collision publishes,
   representation rebuilds (derived mesh)
+  P5b.2C: pore transfers, wet→dry / dry→wet occupancy, 16F.4
+  topology rebuilds, body split/merge/grow/shrink (travel delta)
 mean / p95 / p99 / max frame time, frames > 16.667 ms
 memory high-water mark (working set + private)
 exact return/reload digest where applicable (Test A only)
@@ -494,5 +496,44 @@ Trace: `Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 P5b.2C pore occupancy / topology is **CERTIFIED** this cut. Test A digest
 changed with stage identity: 2B `2396f444f66f1234` → 2C `f743150420e22175`.
-Movement frames over 16.667 = 0 on EVERY-CUT cardinal. Test B soak receipts
-remain the P5b.2B long-haul baseline until a 2C soak is landed.
+Movement frames over 16.667 = 0 on EVERY-CUT cardinal.
+
+### Test B — P5b.2C 90 s NE free-flight (this cut) — PASS
+
+Receipt: `Docs/provenance_p5b2c_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b2c_streaming_soak_trace.csv`
+
+90 s travel, stop=0, return=0, persistent water, live 192 m / far 0.
+`--cert-streaming-soak-p5b2c`. 16.667 not relaxed. 300/900 **not run**:
+no new accumulating wake class, 0 movement frames >16.667.
+
+| Metric | 2C 90 s |
+|---|---|
+| elapsed / distance | 90.000 s / 2161.1 m |
+| created / retired | 19291 / 19291 |
+| max / end resident | 2601 / 2601 |
+| end pending / max pending | 0 / 78 |
+| min complete radius | 192.00 m |
+| frames | 86317 |
+| mean / p95 / p99 / max ms | 0.945 / 1.203 / 1.653 / **7.233** |
+| frames >16.667 (movement) | **0 PASS** |
+| water-body / topology / terrain-state wakes | 0 / 0 / 0 |
+| derived mesh / collision | 19291 / 19291 |
+| water GPU | 2 batches / 170 KB, travel growth 0 |
+| FollowStream scratch growth / CRT segment | 0 / 0 |
+| worker dual cache / CRT 8–12 | INCOMPLETE_need_12km (90 s has no 8/12 km stations; 0→2 km warmup matches 2B) |
+| p5b2c pore transfers | **0** |
+| p5b2c wet→dry / dry→wet | **0 / 0** |
+| p5b2c 16F.4 topology rebuilds | **0** |
+| p5b2c body split/merge/grow/shrink | **0 / 0 / 0 / 0** |
+| pore / topology revision delta | **0 / 0** |
+| check.p5b2c_travel_physics | PASS_idle |
+
+Travel did not execute 2C occupancy physics. Loading new packages did not
+admit pore transfers or 16F.4 rebuilds. Drain/stop still recorded 5
+`draw_submit` overruns (not movement). Memory 90 s plateau remains
+INCOMPLETE_need_5km (same class as 2B 90 s). Long-haul 300/900 stay on
+the 2B baseline `f7ae29ea` / pin `156df62d`.
+
+**P5b.3 stays CLOSED.** No 300/900 on 2C unless a later cut adds an
+accumulating wake or movement-frame FAIL.
