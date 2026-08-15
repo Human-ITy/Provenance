@@ -8,7 +8,8 @@ Contract:
 
 > Water may change how terrain matter behaves, but not how much terrain matter exists.
 
-It does not open **P5b.2B** (porous storage / infiltration), **P5b.3**
+P5b.2B is now a certified child (`P5B2B_TERRAIN_PORE_HANDOFF.md`). This
+document does not open **P5b.2C** (pore occupancy / topology), **P5b.3**
 (water-induced terrain matter movement), erosion, sediment creation, bank
 collapse, 16C remobilization, rainfall, groundwater, ecology, or a generic
 SimulationDomain extract.
@@ -23,8 +24,9 @@ frozen at `3d84eac4`.
 ```
 16F.4   dynamic hydraulic topology       CERTIFIED / FROZEN
 P5b.1   terrain → water coupling          CERTIFIED / FROZEN
-P5b.2A  reverse state coupling            CERTIFIED
-P5b.2B  porous storage / infiltration     CLOSED
+P5b.2A  reverse state coupling            CERTIFIED / FROZEN
+P5b.2B  bounded pore storage              CERTIFIED
+P5b.2C  pore occupancy / topology         CLOSED
 P5b.3   reverse matter/erosion coupling   CLOSED
 ```
 
@@ -112,13 +114,13 @@ Run `PLAY_P5B2A_TERRAIN_STATE.cmd`, or:
 Build\x64_Release\ProvenanceClient.exe --play-p5b2a-terrain-state
 ```
 
-P5b.2A is the latest stable runtime (menu closed). Press `M` for the stage
-browser. HUD shows wetness / moisture / saturation / cohesion / permeability
-flag. P5b.2B and P5b.3 stay closed.
+P5b.2A remains a playable frozen parent. Latest runtime is P5b.2B
+(`PLAY_P5B2B_TERRAIN_PORE.cmd`). Press `M` for the stage browser.
+P5b.2C and P5b.3 stay closed.
 
 ## Re-run
 
-Standing traversal matrix (does not open P5b.2B / P5b.3):
+Standing traversal matrix (does not open P5b.2C / P5b.3):
 `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`. Cardinal replacement is Test A
 (EVERY CUT) — **PASS**. Long-haul soak is Test B (`CERT_STREAMING_SOAK.cmd`)
 — **2A control: residency PASS, frame gate FAIL** (20 frames >16.667, max
@@ -142,7 +144,8 @@ Artifacts:
 
 ## Boundaries (CLOSED)
 
-- **P5b.2B** porous storage / infiltration (real water-mass transfer into terrain)
+- **P5b.2B** now certified — see `P5B2B_TERRAIN_PORE_HANDOFF.md`
+- **P5b.2C** pore storage affecting water occupancy / topology
 - **P5b.3** water→terrain mechanical / matter movement
 - water erodes terrain / flow transports sediment / bank collapse
 - rainfall as weather / groundwater

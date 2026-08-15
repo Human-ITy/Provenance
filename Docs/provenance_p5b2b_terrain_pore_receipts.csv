@@ -1,0 +1,6 @@
+TransactionId,Fixture,Kind,SourceCell,ReceiverCell,MaterialId,Requested,Admitted,ClampOccupied,ClampCapacity,BodyBefore,BodyAfter,PoreBefore,PoreAfter,ContainerBefore,ContainerAfter,TerrainBefore,TerrainAfter,OccMaskBefore,OccMaskAfter,PoreRevBefore,PoreRevAfter,CellsVisited,BodiesExamined,RefusedStale,RefusedInvalid,OccupancyUnchanged
+032bfe5707192e60,dirt_beside_lake_absorbs,infiltrate,325,69,10df5aebf51f8b90,400,400,0,0,456302579,456302179,0,400,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,0,1,2,1,0,0,1
+24fb8e1e1cfe234a,sandstone_absorbs_less,infiltrate,296,40,10df5aebf51f8b90,40,40,0,0,456302179,456302139,400,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,1,2,2,1,0,0,1
+ff8c14435dece938,impermeable_rock_zero,infiltrate,357,101,6dcaa2493a74f722,80,0,0,80,456302139,456302139,440,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,2,2,2,1,0,0,1
+3e2e2a1b792ef1ae,saturated_cell_refuses,infiltrate,325,69,10df5aebf51f8b90,80,0,0,80,456302139,456302139,440,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,2,2,2,1,0,0,1
+d38accabf7c6ab28,contact_loss_exfiltrates,exfiltrate,69,325,10df5aebf51f8b90,100,100,0,0,456302139,456302239,440,340,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,2,3,2,1,0,0,1

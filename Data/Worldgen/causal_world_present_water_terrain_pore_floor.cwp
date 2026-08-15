@@ -1,0 +1,20 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_PORE_V1
+# P5b.2B: bounded pore storage. Some water mass may transfer into
+# terrain pore storage. water_body_mass loss == terrain_pore_water gain.
+# Moisture is tied to stored water grams. Infiltration clamps so a
+# required occupied water cell cannot dry. No 16F.4 topology.
+# CLOSED: P5b.2C pore occupancy/topology, P5b.3 water-induced terrain
+# matter movement, deep groundwater, rainfall, evaporation, plant
+# uptake, erosion, sediment, bank collapse.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_pore_floor
+parent_region_key=causal_world_present_water_terrain_state_floor
+parent_authority_revision=1
+authority_revision=1
+p5b2b_event_id=a5b2000b00000001
+chronology=201
+p5b2b_enabled=1
+default_budget_transactions=48

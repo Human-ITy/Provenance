@@ -237,8 +237,9 @@ water as one coherent revision pair. Disabled P5b.1 == exact 16F.4 field
 ```
 16F.4   dynamic hydraulic topology       CERTIFIED
 P5b.1   terrain → water coupling          CERTIFIED / FROZEN @ e64a4df3
-P5b.2A  reverse state coupling            CERTIFIED
-P5b.2B  porous storage / infiltration     CLOSED
+P5b.2A  reverse state coupling            CERTIFIED / FROZEN
+P5b.2B  bounded pore storage              CERTIFIED
+P5b.2C  pore occupancy / topology         CLOSED
 P5b.3   reverse matter/erosion coupling   CLOSED
 ```
 
@@ -267,7 +268,13 @@ Enabled state digest `176ffe1c3845f721` (budget 1 == N == unbounded).
 Play: `PLAY_P5B2A_TERRAIN_STATE.cmd` / `--play-p5b2a-terrain-state`  
 Handoff: `P5B2A_TERRAIN_STATE_HANDOFF.md`
 
-**P5b.2B CLOSED** — porous storage / infiltration (water-mass transfer into terrain).  
+**P5b.2B CERTIFIED** — bounded pore storage. Handoff:
+`P5B2B_TERRAIN_PORE_HANDOFF.md`. Disabled == exact P5b.2A state
+`176ffe1c3845f721`. Enabled pore digest `224e662e5584a1ea`. Conserved
+body+pore+container `466363002`. Play: `PLAY_P5B2B_TERRAIN_PORE.cmd` /
+`--play-p5b2b-terrain-pore`. Cert: `CERT_P5B2B_TERRAIN_PORE.cmd`.
+
+**P5b.2C CLOSED** — pore storage affecting water occupancy / topology.  
 **P5b.3 CLOSED** — water→terrain mechanical / matter movement.  
 Also closed: water erosion, sediment transport, bank collapse, rainfall,
 groundwater, active 16B erosion, 16C remobilization, ecology.
@@ -280,18 +287,16 @@ Cardinal replacement ≠ soak. **Law:** Travel distance may grow; active
 residency, memory, pending work, and wake backlog must remain bounded.
 Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
-- Test A: `--cert-worldgen-cardinal-replacement-p5b2a` (EVERY CUT) — **PASS**
-  digest `f6c20f2c4774451b`, 2601, movement frames over 16.667 = 0
-- Test B: `--cert-streaming-soak-p5b2a` (first landing 90 s; milestone 300–900 s)
-  — **2A control: residency PASS, frame gate FAIL** (20 / 20079 frames
-  >16.667, max 60.687 ms). Do not relax 16.667. This FAIL is the 2B
-  comparison baseline.
+- Test A: `--cert-worldgen-cardinal-replacement-p5b2b` (EVERY CUT, latest)
+- Test B: `--cert-streaming-soak-p5b2b` (optional vs 2A control)
+- 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
+  gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
 - Standing metrics: locomotion walk/run/sprint/fly/sprint+fly; N/E/S/W +
   diagonals; distance + elapsed; 192 m / 2601; resident/created/retired/
   pending; oldest pending / worker queue / min complete radius; water-body /
   terrain-state / collision / representation wakes; mean/p95/p99/max frame +
   frames >16.667; memory high-water; exact return/reload digest (Test A).
-- P5b.2B / P5b.3 / rainfall / erosion remain CLOSED.
+- P5b.2C / P5b.3 / rainfall / erosion remain CLOSED.
 
 ```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
@@ -312,8 +317,9 @@ Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morpho
 
 **P5a FREEZE held** — `--cert-p5a` re-run unchanged **PASS 15/0**.  
 **P5b.1 FULLY DONE / FROZEN** (one-way terrain→water, including pick/shovel
-legal receipt) @ `e64a4df3`. **P5b.2A CERTIFIED** (state only).
-**P5b.2B / P5b.3 CLOSED.** Erosion / rainfall / infiltration CLOSED.
+legal receipt) @ `e64a4df3`. **P5b.2A FROZEN** (state only).
+**P5b.2B CERTIFIED** (bounded pore). **P5b.2C / P5b.3 CLOSED.**
+Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
 Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.

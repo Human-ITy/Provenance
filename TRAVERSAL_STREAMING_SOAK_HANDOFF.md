@@ -12,8 +12,8 @@ This is the standing matrix. Cardinal replacement and the long-haul soak are
 narrow a future stage to “cardinal movement passed.”
 
 P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
-`9cae0794`). P5b.2B, P5b.3, rainfall, and erosion stay **CLOSED** on this
-pin. This certificate does not open them.
+`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2B.
+P5b.2C, P5b.3, rainfall, and erosion stay **CLOSED**.
 
 ## Two tests
 
@@ -31,12 +31,13 @@ Proves **replacement correctness over a bounded route**.
 - Declared resident package bound (2601 at 192 m). Do not weaken.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2a
+Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2b
 ```
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
 
-Latest play-stage receipt: `Docs/provenance_p5b2a_cardinal_replacement_cert.txt`
+Latest play-stage receipt: `Docs/provenance_p5b2b_cardinal_replacement_cert.txt`
+2A control receipt: `Docs/provenance_p5b2a_cardinal_replacement_cert.txt`
 
 ### B. Long-haul streaming soak (timed, no return)
 
@@ -47,7 +48,7 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2a --soak-duration-s=90 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b2b --soak-duration-s=90 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
@@ -144,7 +145,7 @@ MILESTONE / RELEASE GATE
 - cold / reload cycle
 ```
 
-`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.2A).
+`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.2B).
 `CERT_STREAMING_SOAK.cmd` runs the first-landing 90 s Test B. Milestone soak
 is the same harness with `--soak-duration-s=300` or `900`.
 
@@ -228,8 +229,20 @@ The 16.667 / 2601 / exact-return gates were not relaxed. Soak FAIL is an
 honest first-landing hitch under sustained travel, not a reason to treat
 cardinal PASS as a soak.
 
+## 2B vs 2A control
+
+Test A P5b.2B cardinal PASS. Digest `2396f444f66f1234` origin==return
+(2A was `f6c20f2c4774451b` — different stage). 2601 packages. Movement
+frames over 16.667 = 0. Water / topology / terrain-state wakes = 0.
+
+Test B 90 s NE fly 24 m/s on 2B: residency PASS, frame gate FAIL
+(14 / 20904 frames >16.667, max 42.066 ms). Wake profile unchanged
+(0 / 0 / 0). Created/retired 19190/19190. Receipt:
+`Docs/provenance_p5b2b_streaming_soak_cert.txt`. Do not treat the lower
+over-budget count as a gate change.
+
 ## Closed
 
-- P5b.2B porous storage / infiltration
+- P5b.2C pore storage affecting water occupancy / topology
 - P5b.3 water→terrain mechanical / matter movement
 - rainfall, groundwater, active 16B erosion, 16C remobilization, ecology
