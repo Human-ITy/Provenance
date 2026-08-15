@@ -94,8 +94,9 @@ Test A cardinal (EVERY CUT) — PASS. Digest `2396f444f66f1234` origin==return
 return / movement frames over 16.667 = 0). Water-body / topology /
 terrain-state wakes during travel = 0. Created/retired 7803/5202 per leg.
 
-Test B 90s NE fly 24 m/s — residency PASS, **frame gate FAIL** (do not
-relax 16.667). Compared to 2A control (`6c385e2c`):
+Test B — residency PASS, memory plateau PASS, **frame gate FAIL** (do not
+relax 16.667). Latest attributed 300 s receipt includes the 90 s snapshot.
+Compared to 2A control (`6c385e2c`):
 
 | Metric | 2A control | 2B |
 |---|---|---|
@@ -107,8 +108,8 @@ relax 16.667). Compared to 2A control (`6c385e2c`):
 | max worker queue | 209 | 210 |
 | frames | 20079 | 20904 |
 | mean / p95 / p99 / max ms | 4.483 / 6.617 / 9.824 / 60.687 | 4.306 / 6.145 / 9.439 / 42.066 |
-| frames >16.667 | **20 FAIL** | **14 FAIL** |
-| working-set high water | 164 → 2338 MB | 167 → 2351 MB |
+| frames >16.667 | **20 FAIL** | **14 FAIL** (pre-attribution); attributed 90 s **6**, 300 s **4** — still FAIL |
+| working-set high water | 164 → 2338 MB | pre-cut 167 → 2351 MB; after lookahead bound 167 → 1216 MB @90 s, 1222 MB @300 s (plateau) |
 | water / topology / terrain-state wakes | 0 / 0 / 0 | 0 / 0 / 0 |
 | mesh / collision publishes | 19190 / 19190 | 19190 / 19190 |
 

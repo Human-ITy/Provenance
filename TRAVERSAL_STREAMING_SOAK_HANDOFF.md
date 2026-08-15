@@ -231,15 +231,78 @@ cardinal PASS as a soak.
 
 ## 2B vs 2A control
 
-Test A P5b.2B cardinal PASS. Digest `2396f444f66f1234` origin==return
-(2A was `f6c20f2c4774451b` — different stage). 2601 packages. Movement
-frames over 16.667 = 0. Water / topology / terrain-state wakes = 0.
+Test A P5b.2B cardinal PASS (re-run after lookahead lifecycle cut).
+Digest `2396f444f66f1234` origin==return (2A was `f6c20f2c4774451b` —
+different stage). 2601 packages. Movement frames over 16.667 = 0.
+Water / topology / terrain-state wakes = 0.
 
-Test B 90 s NE fly 24 m/s on 2B: residency PASS, frame gate FAIL
-(14 / 20904 frames >16.667, max 42.066 ms). Wake profile unchanged
-(0 / 0 / 0). Created/retired 19190/19190. Receipt:
-`Docs/provenance_p5b2b_streaming_soak_cert.txt`. Do not treat the lower
-over-budget count as a gate change.
+P5b.2B gameplay remains frozen at `8bb75265`. This cut is soak
+attribution + streaming lifecycle only. P5b.2C / P5b.3 stay CLOSED.
+
+## Soak attribution (frozen 2B world)
+
+Every movement frame >16.667 ms now writes a receipt against:
+
+```text
+package create | package retire | worker completion batch
+collision publish | mesh publish | GL create/delete
+allocator growth | glFinish | SwapBuffers | deferred retirement
+```
+
+Logical-resource ledger (beside process memory):
+
+```text
+live package / mesh / collision bytes
+live GL resources
+retirement queue bytes
+worker-result bytes
+cache entries
+private bytes / working set
+```
+
+Phases: travel → 60 s stopped → discard leftover lookahead → drain.
+Plateau snapshots at 90 s / 300 s (900 s remains a milestone).
+
+### Classified frame tail — still FAIL
+
+Do not treat a lower over-budget count as a gate change. 16.667 stays.
+
+| Run | frames >16.667 | max ms | primary classes |
+|---|---|---|---|
+| 2A control 90 s | 20 / 20079 | 60.687 | unattributed (pre-cut) |
+| 2B frozen 90 s | 14 / 20904 | 42.066 | unattributed (pre-cut) |
+| 2B attributed 90 s | **6 / 30013** | 37.646 | 5 package create, 1 allocator growth |
+| 2B attributed 300 s | **4 / 215933** | 30.908 | 2 package create, 1 allocator growth, 1 unclassified |
+
+The sparse tail is a **row-crossing publish burst** (~101 packages,
+~8–10 ms GL compile) plus a rare allocator-growth hitch (~8 MB,
+no package work). glFinish / SwapBuffers / deferred retirement were
+not the travel tail. Stop and drain frames over 16.667 = 0.
+
+### Memory — logical set bounded; process high-water plateaus
+
+The pre-cut 2 GB climb was trailing CPU lookahead retained in the
+completion deque and rescanned every frame (~21k results / 1.1 GB at
+90 s). Held results now stay inside the derive window only.
+
+| Ledger | 90 s / 2160 m | 300 s / 7188 m | after stop+drain |
+|---|---|---|---|
+| resident packages | 2601 | 2601 | 2601 |
+| live package bytes | 114 MB | 114 MB | 114 MB |
+| worker-result bytes | 22 MB | 22 MB | 22 MB |
+| completed/held results | 424 | 424 | 424 |
+| private bytes | 1393 MB | 1320 MB | 1320 MB |
+| working set | 1217 MB | 1222 MB | 1222 MB |
+
+`check.memory_plateau=PASS_plateau`. Travel distance grew 3.3×; resident
+work, pending work, worker results, and process high-water did not.
+Memory may sit at a ~1.3–1.5 GB high-water mark (CRT/GL). 900 s is the
+same harness (`--soak-duration-s=900`) and was not required to close
+the scaling defect.
+
+Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (300 s run
+includes the 90 s snapshot). Trace:
+`Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 ## Closed
 

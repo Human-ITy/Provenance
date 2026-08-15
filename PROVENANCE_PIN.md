@@ -288,15 +288,15 @@ residency, memory, pending work, and wake backlog must remain bounded.
 Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test A: `--cert-worldgen-cardinal-replacement-p5b2b` (EVERY CUT, latest)
-- Test B: `--cert-streaming-soak-p5b2b` (optional vs 2A control)
+- Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 s plateau)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- Standing metrics: locomotion walk/run/sprint/fly/sprint+fly; N/E/S/W +
-  diagonals; distance + elapsed; 192 m / 2601; resident/created/retired/
-  pending; oldest pending / worker queue / min complete radius; water-body /
-  terrain-state / collision / representation wakes; mean/p95/p99/max frame +
-  frames >16.667; memory high-water; exact return/reload digest (Test A).
-- P5b.2C / P5b.3 / rainfall / erosion remain CLOSED.
+- 2B attributed 300 s: residency PASS, memory plateau PASS, frame gate
+  FAIL (4 / 215933; 2 package create, 1 allocator growth, 1 unclassified).
+  Do not treat a lower over-budget count as a gate change.
+- Ledger + per-overrun receipts are required on every soak receipt.
+- P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /
+  erosion remain CLOSED.
 
 ```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE

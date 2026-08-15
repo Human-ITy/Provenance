@@ -605,6 +605,8 @@ namespace
         bool certStreamingSoak = false;
         int certStreamingSoakStageFilter = 23; // p5b2b latest play stage
         double soakDurationS = 90.0;
+        double soakStopDurationS = 60.0;
+        double soakDrainTimeoutS = 45.0;
         float soakSpeedMps = kFlySpeedMps;
         int soakMode = 3; // 0 walk 1 run 2 sprint 3 fly
         int soakBearing = 4; // 0 N 1 E 2 S 3 W 4 NE 5 SE 6 SW 7 NW
@@ -800,6 +802,9 @@ namespace
         double stage0FrameCalibrationDrawMs = 0.0;
         double stage0FramePresentWaitMs = 0.0;
         double stage0FrameGpuFinishMs = 0.0;
+        double stage0FrameSwapBuffersMs = 0.0;
+        double stage0FrameWorkerPublishMs = 0.0;
+        double stage0FrameGlAllocMs = 0.0;
         double stage0FramePacingWaitMs = 0.0;
         double stage0FrameGpuMs = -1.0; // no timer-query backend in legacy GL path
         double stage0FrameCollisionMs = 0.0;
@@ -1469,6 +1474,26 @@ namespace
         std::unordered_set<uint64_t> waterBodyIds;
     };
     TraversalWakeCost s_traversalWake;
+
+    // Per-frame streaming/presentation costs. Reset at TickFrame start and
+    // read after present so soak overruns can be classified against real work.
+    struct SoakFrameCost
+    {
+        int packagesCreated=0;
+        int packagesRetired=0;
+        int workerCompletions=0;
+        int collisionPublishes=0;
+        int meshPublishes=0;
+        int glCreates=0;
+        int glDeletes=0;
+        int glReuses=0;
+        int deferredRetireServiced=0;
+        SIZE_T privateDelta=0;
+        SIZE_T privateBytes=0;
+        SIZE_T workingSetBytes=0;
+    };
+    SoakFrameCost s_soakFrame;
+    SIZE_T s_soakPrevPrivate=0;
 
     struct Stage11ResidencyWaterfallCounters
     {
@@ -9746,10 +9771,16 @@ namespace
         // one cannot race a command list the GPU is still consuming. Reuse
         // avoids both driver allocation churn and the synchronous glDeleteLists
         // stalls previously observed during ordinary traversal.
+        LARGE_INTEGER q0{},q1{},qpf{};
+        QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
         if ( !g.stage8ReusableDisplayLists.empty() )
         {
             GLuint const id = g.stage8ReusableDisplayLists.back();
             g.stage8ReusableDisplayLists.pop_back();
+            ++s_soakFrame.glReuses;
+            QueryPerformanceCounter(&q1);
+            if(qpf.QuadPart>0)g.stage0FrameGlAllocMs+=1000.0
+                *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
             return id;
         }
         // Keep world geometry lists out of the bitmap-font ID range.
@@ -9759,13 +9790,26 @@ namespace
         {
             GLuint id = glGenLists( 1 );
             if ( !id ) { return 0; }
-            if ( !g.fontBase || id < fontLo || id > fontHi ) { return id; }
+            if ( !g.fontBase || id < fontLo || id > fontHi )
+            {
+                ++s_soakFrame.glCreates;
+                QueryPerformanceCounter(&q1);
+                if(qpf.QuadPart>0)g.stage0FrameGlAllocMs+=1000.0
+                    *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+                return id;
+            }
             glDeleteLists( id, 1 );
+            ++s_soakFrame.glDeletes;
             // Burn a gap past the font block, then retry.
             GLuint burn = glGenLists( 96 );
-            if ( burn ) { glDeleteLists( burn, 96 ); }
+            if ( burn ) { glDeleteLists( burn, 96 ); ++s_soakFrame.glDeletes; }
         }
-        return glGenLists( 1 );
+        GLuint const last=glGenLists( 1 );
+        if(last)++s_soakFrame.glCreates;
+        QueryPerformanceCounter(&q1);
+        if(qpf.QuadPart>0)g.stage0FrameGlAllocMs+=1000.0
+            *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
+        return last;
     }
 
     // ---------------- Journal / hotbar UI ----------------
@@ -12290,6 +12334,7 @@ namespace
         }
         g.perfHfBlocksEvicted += (int)evict.size();
         s_traversalWake.packagesRetired += (int)evict.size();
+        s_soakFrame.packagesRetired += (int)evict.size();
 
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
         for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
@@ -12359,6 +12404,7 @@ namespace
             if(pending.safeAfterMs>now){break;}
             if(pending.list){g.stage8ReusableDisplayLists.push_back(pending.list);}
             g.stage8RetiredDisplayLists.pop_front();
+            ++s_soakFrame.deferredRetireServiced;
         }
         QueryPerformanceCounter(&q1);
         if(qpf.QuadPart>0)
@@ -12406,6 +12452,7 @@ namespace
         std::condition_variable wake;
         std::deque<Stage8PackageJob> pending;
         std::deque<Stage8CpuPackage> completed;
+        std::unordered_map<uint64_t,Stage8CpuPackage> held;
         std::unordered_set<uint64_t> scheduled;
         std::vector<std::thread> threads;
         uint64_t epoch=1;
@@ -12417,6 +12464,20 @@ namespace
     // ahead of the deliberately extreme 16 m/frame (960 m/s at 60 Hz) flight
     // rung.  GL publication remains single-owner and frame-budgeted.
     constexpr int kStage8CpuWorkerCount=4;
+    constexpr int kStage8LookaheadRows=2;
+
+    bool Stage8InPublishApron(Stage0PresentationBounds const& bounds,int bx,int by)
+    {
+        return bx>=bounds.bx0-kStage0PackageApron&&bx<=bounds.bx1+kStage0PackageApron
+            &&by>=bounds.by0-kStage0PackageApron&&by<=bounds.by1+kStage0PackageApron;
+    }
+
+    bool Stage8InLookaheadWindow(Stage0PresentationBounds const& bounds,int bx,int by)
+    {
+        int const pad=kStage0PackageApron+kStage8LookaheadRows;
+        return bx>=bounds.bx0-pad&&bx<=bounds.bx1+pad
+            &&by>=bounds.by0-pad&&by<=bounds.by1+pad;
+    }
 
     int Stage8WorkerQueueDepth()
     {
@@ -12762,6 +12823,7 @@ namespace
         ++s_stage8PackageWorkers.epoch;
         s_stage8PackageWorkers.pending.clear();
         s_stage8PackageWorkers.completed.clear();
+        s_stage8PackageWorkers.held.clear();
         s_stage8PackageWorkers.scheduled.clear();
         s_stage8PackageWorkers.wake.notify_all();
     }
@@ -12775,6 +12837,7 @@ namespace
             ++s_stage8PackageWorkers.epoch;
             s_stage8PackageWorkers.pending.clear();
             s_stage8PackageWorkers.completed.clear();
+            s_stage8PackageWorkers.held.clear();
             s_stage8PackageWorkers.scheduled.clear();
         }
         s_stage8PackageWorkers.wake.notify_all();
@@ -12859,6 +12922,9 @@ namespace
         ++s_traversalWake.packagesCreated;
         ++s_traversalWake.derivedMeshRebuilds;
         if(publishedCollision)++s_traversalWake.collisionPublications;
+        ++s_soakFrame.packagesCreated;
+        ++s_soakFrame.meshPublishes;
+        if(publishedCollision)++s_soakFrame.collisionPublishes;
         if(package.legacyStage7)g.stage7TerrainTriangles+=tris;
         else if(!package.legacyStage56)g.stage8TerrainTriangles+=tris;
         g.perfHfTris+=tris;
@@ -12919,11 +12985,52 @@ namespace
         return true;
     }
 
+    void Stage8DiscardHeldLookahead()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        for(auto const& kv:s_stage8PackageWorkers.held)
+        {s_stage8PackageWorkers.scheduled.erase(kv.first);}
+        s_stage8PackageWorkers.held.clear();
+        for(Stage8CpuPackage const& package:s_stage8PackageWorkers.completed)
+        {s_stage8PackageWorkers.scheduled.erase(CellKey(package.bx,package.by));}
+        s_stage8PackageWorkers.completed.clear();
+    }
+
     void ServiceStage8CompletedPackages(Stage0PresentationBounds const& bounds)
     {
         LARGE_INTEGER start{},now{},qpf{};QueryPerformanceFrequency(&qpf);
         QueryPerformanceCounter(&start);
         int published=0;
+        std::vector<Stage8CpuPackage> promote;
+        {
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            uint64_t const epoch=s_stage8PackageWorkers.epoch;
+            for(auto it=s_stage8PackageWorkers.held.begin();it!=s_stage8PackageWorkers.held.end();)
+            {
+                Stage8CpuPackage& held=it->second;
+                if(held.epoch!=epoch||held.view!=g.stage0PlayView
+                    ||!Stage8InLookaheadWindow(bounds,held.bx,held.by))
+                {
+                    s_stage8PackageWorkers.scheduled.erase(it->first);
+                    it=s_stage8PackageWorkers.held.erase(it);
+                    continue;
+                }
+                if(Stage8InPublishApron(bounds,held.bx,held.by))
+                {
+                    s_stage8PackageWorkers.scheduled.erase(it->first);
+                    promote.push_back(std::move(held));
+                    it=s_stage8PackageWorkers.held.erase(it);
+                    continue;
+                }
+                ++it;
+            }
+        }
+        for(Stage8CpuPackage& result:promote)
+        {
+            PublishStage8CpuPackage(std::move(result));
+            ++published;
+            ++s_soakFrame.workerCompletions;
+        }
         size_t available=0;
         {
             std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
@@ -12943,10 +13050,8 @@ namespace
                 }
             }
             if(!have)break;
-            bool const spatial=result.bx>=bounds.bx0-kStage0PackageApron
-                &&result.bx<=bounds.bx1+kStage0PackageApron
-                &&result.by>=bounds.by0-kStage0PackageApron
-                &&result.by<=bounds.by1+kStage0PackageApron;
+            bool const spatial=Stage8InPublishApron(bounds,result.bx,result.by);
+            bool const lookahead=Stage8InLookaheadWindow(bounds,result.bx,result.by);
             uint64_t currentEpoch=0;
             {
                 std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
@@ -12960,13 +13065,17 @@ namespace
                 }
                 PublishStage8CpuPackage(std::move(result));
             }
-            else if(result.epoch==currentEpoch&&result.view==g.stage0PlayView)
+            else if(result.epoch==currentEpoch&&result.view==g.stage0PlayView&&lookahead)
             {
-                // CPU lookahead is allowed to finish outside the resident
-                // apron, but it cannot publish there. Keep the bounded result
-                // until travel moves its package into the certified window.
+                // Keep only results still inside the derive window. Trailing
+                // lookahead that the player has already left must not remain
+                // in the completion deque — that queue was rescanned every
+                // frame and grew with travel distance.
                 std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
-                s_stage8PackageWorkers.completed.emplace_back(std::move(result));
+                uint64_t const key=CellKey(result.bx,result.by);
+                if(!s_stage8PackageWorkers.held.count(key))
+                {s_stage8PackageWorkers.held.emplace(key,std::move(result));}
+                else s_stage8PackageWorkers.scheduled.erase(key);
             }
             else
             {
@@ -12974,9 +13083,11 @@ namespace
                 s_stage8PackageWorkers.scheduled.erase(CellKey(result.bx,result.by));
             }
             ++published;
+            ++s_soakFrame.workerCompletions;
             QueryPerformanceCounter(&now);
             double const spent=qpf.QuadPart>0?1000.0*(double)(now.QuadPart-start.QuadPart)
                 /(double)qpf.QuadPart:0.0;
+            g.stage0FrameWorkerPublishMs=spent;
             // The reserve belongs to the work that follows publication.  The
             // previous comparison accidentally treated the 6 ms reserve as the
             // publication budget itself, capping an extreme two-row shift at
@@ -13315,7 +13426,7 @@ namespace
         // ServiceStage8CompletedPackages holds these products until their
         // coordinates enter the legal apron.
         std::vector<std::pair<int,int>> lookaheadBuilds;
-        constexpr int lookaheadRows=2;
+        constexpr int lookaheadRows=kStage8LookaheadRows;
         int const deriveLoX=loX-lookaheadRows,deriveHiX=hiX+lookaheadRows;
         int const deriveLoY=loY-lookaheadRows,deriveHiY=hiY+lookaheadRows;
         for(int by=deriveLoY;by<=deriveHiY;++by)
@@ -13400,6 +13511,7 @@ namespace
         }
         g.perfHfBlocksEvicted += (int)evict.size();
         s_traversalWake.packagesRetired += (int)evict.size();
+        s_soakFrame.packagesRetired += (int)evict.size();
         int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
         int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
@@ -20505,8 +20617,13 @@ namespace
                     ?1000.0*(double)(finish1.QuadPart-finish0.QuadPart)
                         /(double)qpf.QuadPart:0.0;
             }
+            LARGE_INTEGER beforeSwap{};
+            QueryPerformanceCounter(&beforeSwap);
             SwapBuffers( g.hdc );
             QueryPerformanceCounter( &afterPresent );
+            g.stage0FrameSwapBuffersMs = qpf.QuadPart > 0
+                ? 1000.0 * (double)( afterPresent.QuadPart - beforeSwap.QuadPart )
+                    / (double)qpf.QuadPart : 0.0;
             g.stage0FramePresentWaitMs = qpf.QuadPart > 0
                 ? 1000.0 * (double)( afterPresent.QuadPart - beforePresent.QuadPart )
                     / (double)qpf.QuadPart : 0.0;
@@ -37234,16 +37351,84 @@ namespace
     // Cardinal replacement proves exact return over a bounded route. This
     // certificate proves travel distance can grow indefinitely while resident
     // work and memory stay bounded around the player. No return is required.
+    struct SoakResourceLedger
+    {
+        char const* phase="none";
+        double elapsedS=0.0;
+        float distanceM=0.f;
+        unsigned long long livePackageBytes=0;
+        unsigned long long liveMeshBytes=0;
+        unsigned long long liveCollisionBytes=0;
+        int liveGlResources=0;
+        unsigned long long retirementQueueBytes=0;
+        unsigned long long workerResultBytes=0;
+        int cacheEntries=0;
+        SIZE_T privateBytes=0;
+        SIZE_T workingSetBytes=0;
+        int residentPackages=0;
+        int pendingPackages=0;
+        int workerQueue=0;
+        int retiredLists=0;
+        int reusableLists=0;
+        int completedResults=0;
+        int farSurfaceEntries=0;
+        int farFilteredEntries=0;
+        int farMaterialEntries=0;
+        int cellEntries=0;
+        int erosionCacheEntries=0;
+    };
+
+    struct SoakOverrunReceipt
+    {
+        int index=0;
+        char const* phase="travel";
+        double elapsedS=0.0;
+        float distanceM=0.f;
+        double frameMs=0.0;
+        char const* primary="unclassified";
+        int packageCreate=0;
+        int packageRetire=0;
+        int workerBatch=0;
+        int collisionPublish=0;
+        int meshPublish=0;
+        int glCreate=0;
+        int glDelete=0;
+        int glReuse=0;
+        int deferredRetireCount=0;
+        SIZE_T allocatorDelta=0;
+        double packageCreateMs=0.0;
+        double packageRetireMs=0.0;
+        double workerBatchMs=0.0;
+        double collisionPublishMs=0.0;
+        double meshPublishMs=0.0;
+        double glCreateDeleteMs=0.0;
+        double allocatorGrowthMs=0.0;
+        double glFinishMs=0.0;
+        double swapBuffersMs=0.0;
+        double deferredRetireMs=0.0;
+        int resident=0;
+        int pending=0;
+        int workers=0;
+        SIZE_T privateBytes=0;
+        SIZE_T workingSet=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
         int warmFrames=0;
         double elapsedS=0.0;
+        double stopElapsedS=0.0;
+        double drainElapsedS=0.0;
         double pendingSinceS=-1.0;
         float distanceM=0.f;
         float dirX=0.f,dirY=1.f;
         int movementFrames=0;
         int framesOver16=0;
+        int stopFrames=0;
+        int stopFramesOver16=0;
+        int drainFrames=0;
+        int drainFramesOver16=0;
         int framesBelowRadius=0;
         int groundFailures=0;
         int collisionMismatches=0;
@@ -37256,8 +37441,24 @@ namespace
         double oldestPendingAgeS=0.0;
         SIZE_T startWorkingSet=0,maxWorkingSet=0,endWorkingSet=0;
         SIZE_T startPrivate=0,maxPrivate=0,endPrivate=0;
+        int classPackageCreate=0;
+        int classPackageRetire=0;
+        int classWorkerBatch=0;
+        int classCollisionPublish=0;
+        int classMeshPublish=0;
+        int classGlCreateDelete=0;
+        int classAllocatorGrowth=0;
+        int classGlFinish=0;
+        int classSwapBuffers=0;
+        int classDeferredRetire=0;
+        int classUnclassified=0;
+        bool snapped90=false;
+        bool snapped300=false;
+        bool snapped900=false;
         TraversalWakeCost wakeStart{};
         std::vector<double> frameMs;
+        std::vector<SoakOverrunReceipt> overruns;
+        std::vector<SoakResourceLedger> ledgers;
         FILE* trace=nullptr;
     };
     StreamingSoakRun s_streamingSoak;
@@ -37308,6 +37509,205 @@ namespace
         NoteTraversalWaterQuery(x,y);
     }
 
+    unsigned long long EstimateCpuPackageBytes(Stage8CpuPackage const& package)
+    {
+        unsigned long long n=sizeof(Stage8CpuPackage);
+        n+=package.mesh.triangles.capacity()*sizeof(CausalVisibleExposure::Tri);
+        n+=package.materials.capacity()*sizeof(std::string);
+        for(std::string const& material:package.materials)
+        {if(material.capacity()>15u)n+=material.capacity();}
+        n+=package.triangleColors.capacity()*sizeof(Stage8CpuPackage::TriangleColor);
+        if(package.collisionSurface)
+        {
+            n+=sizeof(CausalVisibleExposure::BlockSurfaceSamples);
+            n+=package.collisionSurface->vertices.capacity()
+                *sizeof(CausalVisibleExposure::Vec3);
+        }
+        return n;
+    }
+
+    SoakResourceLedger CaptureSoakLedger(char const* phase,double elapsedS,float distanceM)
+    {
+        SoakResourceLedger ledger;
+        ledger.phase=phase;
+        ledger.elapsedS=elapsedS;
+        ledger.distanceM=distanceM;
+        auto const& packages=WorkerTerrainBlocks(g.stage0PlayView);
+        ledger.residentPackages=(int)packages.size();
+        unsigned long long mesh=0,collision=0;
+        int lists=0;
+        for(auto const& kv:packages)
+        {
+            mesh+=(unsigned long long)kv.second.tris*sizeof(CausalVisibleExposure::Tri);
+            if(kv.second.list)++lists;
+            if(kv.second.collisionSurface)
+            {
+                collision+=sizeof(CausalVisibleExposure::BlockSurfaceSamples);
+                collision+=kv.second.collisionSurface->vertices.capacity()
+                    *sizeof(CausalVisibleExposure::Vec3);
+            }
+        }
+        ledger.liveMeshBytes=mesh;
+        ledger.liveCollisionBytes=collision;
+        ledger.livePackageBytes=packages.size()*sizeof(Stage0TerrainBlock)+mesh+collision;
+        ledger.retiredLists=(int)g.stage8RetiredDisplayLists.size();
+        ledger.reusableLists=(int)g.stage8ReusableDisplayLists.size();
+        unsigned long long const avgList=packages.empty()?0:mesh/packages.size();
+        ledger.retirementQueueBytes=
+            (unsigned long long)g.stage8RetiredDisplayLists.size()
+                *(sizeof(Stage0RetiredDisplayList)+avgList);
+        ledger.liveGlResources=lists+ledger.retiredLists+ledger.reusableLists
+            +(int)g.stage0FarCoarseTiles.size()+(int)g.stage0FarStitchTiles.size()
+            +(int)g.stage0FarFreeLists.size()+(int)g.stage0FarRetiredLists.size()
+            +(g.stage0FarFieldList?1:0);
+        unsigned long long workerBytes=0;
+        int completed=0;
+        {
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            completed=(int)s_stage8PackageWorkers.completed.size()
+                +(int)s_stage8PackageWorkers.held.size();
+            for(Stage8CpuPackage const& package:s_stage8PackageWorkers.completed)
+            {workerBytes+=EstimateCpuPackageBytes(package);}
+            for(auto const& kv:s_stage8PackageWorkers.held)
+            {workerBytes+=EstimateCpuPackageBytes(kv.second);}
+            workerBytes+=s_stage8PackageWorkers.pending.size()*sizeof(Stage8PackageJob);
+        }
+        ledger.completedResults=completed;
+        ledger.workerResultBytes=workerBytes;
+        ledger.farSurfaceEntries=(int)g.stage0FarSurfaceCache.size();
+        ledger.farFilteredEntries=(int)g.stage0FarFilteredCache.size();
+        ledger.farMaterialEntries=(int)g.stage0FarMaterialCache.size();
+        ledger.cellEntries=(int)g.cells.size();
+        ledger.erosionCacheEntries=g.causalErosionRuntime
+            ?(int)g.causalErosionRuntime->CachedVertexCount(g.stage8Control):0;
+        ledger.cacheEntries=ledger.farSurfaceEntries+ledger.farFilteredEntries
+            +ledger.farMaterialEntries+ledger.cellEntries+ledger.erosionCacheEntries;
+        ledger.pendingPackages=Stage0PendingPackageCount(g.stage0PlayView);
+        ledger.workerQueue=Stage8WorkerQueueDepth();
+        ledger.workingSetBytes=ProcessWorkingSetBytes();
+        ledger.privateBytes=ProcessPrivateBytes();
+        return ledger;
+    }
+
+    char const* ClassifySoakOverrun(SoakOverrunReceipt& receipt)
+    {
+        struct Named { char const* name; double ms; int* hist; };
+        Named named[]={
+            {"package create",receipt.packageCreateMs,&s_streamingSoak.classPackageCreate},
+            {"package retire",receipt.packageRetireMs,&s_streamingSoak.classPackageRetire},
+            {"worker completion batch",receipt.workerBatchMs,&s_streamingSoak.classWorkerBatch},
+            {"collision publish",receipt.collisionPublishMs,&s_streamingSoak.classCollisionPublish},
+            {"mesh publish",receipt.meshPublishMs,&s_streamingSoak.classMeshPublish},
+            {"GL create/delete",receipt.glCreateDeleteMs,&s_streamingSoak.classGlCreateDelete},
+            {"allocator growth",receipt.allocatorGrowthMs,&s_streamingSoak.classAllocatorGrowth},
+            {"glFinish",receipt.glFinishMs,&s_streamingSoak.classGlFinish},
+            {"SwapBuffers",receipt.swapBuffersMs,&s_streamingSoak.classSwapBuffers},
+            {"deferred retirement",receipt.deferredRetireMs,&s_streamingSoak.classDeferredRetire},
+        };
+        int best=-1;double bestMs=0.0;
+        for(int i=0;i<10;++i)
+        {
+            if(named[i].ms>bestMs){bestMs=named[i].ms;best=i;}
+        }
+        if(best<0||bestMs<0.5)
+        {
+            ++s_streamingSoak.classUnclassified;
+            return "unclassified";
+        }
+        ++(*named[best].hist);
+        return named[best].name;
+    }
+
+    void RecordSoakLedger(char const* phase,double elapsedS,float distanceM)
+    {
+        s_streamingSoak.ledgers.push_back(CaptureSoakLedger(phase,elapsedS,distanceM));
+    }
+
+    void WriteSoakLedger(FILE* f,SoakResourceLedger const& ledger)
+    {
+        std::fprintf(f,
+            "ledger.%s.elapsed_s=%.3f\n"
+            "ledger.%s.distance_m=%.1f\n"
+            "ledger.%s.live_package_bytes=%llu\n"
+            "ledger.%s.live_mesh_bytes=%llu\n"
+            "ledger.%s.live_collision_bytes=%llu\n"
+            "ledger.%s.live_gl_resources=%d\n"
+            "ledger.%s.retirement_queue_bytes=%llu\n"
+            "ledger.%s.worker_result_bytes=%llu\n"
+            "ledger.%s.cache_entries=%d\n"
+            "ledger.%s.private_bytes=%llu\n"
+            "ledger.%s.working_set_bytes=%llu\n"
+            "ledger.%s.resident_packages=%d\n"
+            "ledger.%s.pending_packages=%d\n"
+            "ledger.%s.worker_queue=%d\n"
+            "ledger.%s.retired_lists=%d\n"
+            "ledger.%s.reusable_lists=%d\n"
+            "ledger.%s.completed_results=%d\n"
+            "ledger.%s.far_surface_entries=%d\n"
+            "ledger.%s.far_filtered_entries=%d\n"
+            "ledger.%s.far_material_entries=%d\n"
+            "ledger.%s.cell_entries=%d\n"
+            "ledger.%s.erosion_cache_entries=%d\n",
+            ledger.phase,ledger.elapsedS,ledger.phase,ledger.distanceM,
+            ledger.phase,(unsigned long long)ledger.livePackageBytes,
+            ledger.phase,(unsigned long long)ledger.liveMeshBytes,
+            ledger.phase,(unsigned long long)ledger.liveCollisionBytes,
+            ledger.phase,ledger.liveGlResources,
+            ledger.phase,(unsigned long long)ledger.retirementQueueBytes,
+            ledger.phase,(unsigned long long)ledger.workerResultBytes,
+            ledger.phase,ledger.cacheEntries,
+            ledger.phase,(unsigned long long)ledger.privateBytes,
+            ledger.phase,(unsigned long long)ledger.workingSetBytes,
+            ledger.phase,ledger.residentPackages,
+            ledger.phase,ledger.pendingPackages,
+            ledger.phase,ledger.workerQueue,
+            ledger.phase,ledger.retiredLists,
+            ledger.phase,ledger.reusableLists,
+            ledger.phase,ledger.completedResults,
+            ledger.phase,ledger.farSurfaceEntries,
+            ledger.phase,ledger.farFilteredEntries,
+            ledger.phase,ledger.farMaterialEntries,
+            ledger.phase,ledger.cellEntries,
+            ledger.phase,ledger.erosionCacheEntries);
+    }
+
+    SoakResourceLedger const* FindSoakLedger(char const* phase)
+    {
+        for(SoakResourceLedger const& ledger:s_streamingSoak.ledgers)
+        {if(std::strcmp(ledger.phase,phase)==0)return &ledger;}
+        return nullptr;
+    }
+
+    char const* SoakMemoryPlateauVerdict()
+    {
+        SoakResourceLedger const* t90=FindSoakLedger("travel_90");
+        SoakResourceLedger const* t300=FindSoakLedger("travel_300");
+        SoakResourceLedger const* endTravel=FindSoakLedger("end_travel");
+        SoakResourceLedger const* afterDrain=FindSoakLedger("after_drain");
+        if(afterDrain&&endTravel
+            &&afterDrain->privateBytes>endTravel->privateBytes+64ull*1024ull*1024ull)
+        {return "FAIL_grew_while_stopped";}
+        if(t90&&t300)
+        {
+            double const priv90=(double)t90->privateBytes;
+            double const priv300=(double)t300->privateBytes;
+            long long const delta=(long long)t300->privateBytes-(long long)t90->privateBytes;
+            double const ratio=priv90>0.0?priv300/priv90:0.0;
+            bool const logicalFlat=t300->residentPackages<=t90->residentPackages+8
+                &&t300->cacheEntries<=t90->cacheEntries+4096
+                &&t300->liveGlResources<=t90->liveGlResources+256;
+            if(delta>128ll*1024ll*1024ll&&ratio>1.35)
+            {return "FAIL_scales_with_distance";}
+            if(logicalFlat)return "PASS_plateau";
+            return "FAIL_logical_still_growing";
+        }
+        if(endTravel&&afterDrain
+            &&afterDrain->privateBytes+32ull*1024ull*1024ull>=endTravel->privateBytes
+            &&afterDrain->residentPackages<=endTravel->residentPackages+8)
+        {return "INCOMPLETE_need_300s_high_water_held";}
+        return "INCOMPLETE_need_300s";
+    }
+
     bool WriteStreamingSoakArtifact()
     {
         auto& run=s_streamingSoak;
@@ -37353,7 +37753,8 @@ namespace
             "stage_filter=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
             "duration_s=%.3f\nelapsed_s=%.3f\nconfigured_speed_mps=%.3f\n"
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
-            "p5b2b=%s\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
+            "p5b2b=%s\np5b2c=CLOSED\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
+            "stop_duration_s=%.3f\nstop_elapsed_s=%.3f\ndrain_elapsed_s=%.3f\n"
             "distance_m=%.1f\npackages_created=%d\npackages_retired=%d\n"
             "max_resident_packages=%d\nend_resident_packages=%d\n"
             "declared_max_packages=%d\n"
@@ -37380,11 +37781,27 @@ namespace
             "check.no_growing_backlog=%s\n"
             "check.creation_and_retirement=%s\n"
             "check.distance_grew=%s\n"
+            "check.memory_plateau=%s\n"
+            "stop_frames=%d\nstop_frames_over_16_667=%d\n"
+            "drain_frames=%d\ndrain_frames_over_16_667=%d\n"
+            "overrun.count=%d\n"
+            "overrun.class.package_create=%d\n"
+            "overrun.class.package_retire=%d\n"
+            "overrun.class.worker_completion_batch=%d\n"
+            "overrun.class.collision_publish=%d\n"
+            "overrun.class.mesh_publish=%d\n"
+            "overrun.class.gl_create_delete=%d\n"
+            "overrun.class.allocator_growth=%d\n"
+            "overrun.class.glFinish=%d\n"
+            "overrun.class.SwapBuffers=%d\n"
+            "overrun.class.deferred_retirement=%d\n"
+            "overrun.class.unclassified=%d\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
             SoakBearingName(g.soakBearing),informational?1:0,
-            g.certStreamingSoakStageFilter==23?"OPEN":"CLOSED",
+            g.certStreamingSoakStageFilter==23?"FROZEN":"CLOSED",
+            g.soakStopDurationS,run.stopElapsedS,run.drainElapsedS,
             run.distanceM,created,retired,run.maxResidentPackages,
             run.endResidentPackages,declared,
             run.endPending,run.maxPendingPackages,run.oldestPendingAgeS,
@@ -37408,8 +37825,66 @@ namespace
             run.endPending==0?"PASS":"FAIL",
             (created>0&&retired>0)?"PASS":"FAIL",
             traveled?"PASS":"FAIL",
+            SoakMemoryPlateauVerdict(),
+            run.stopFrames,run.stopFramesOver16,
+            run.drainFrames,run.drainFramesOver16,
+            (int)run.overruns.size(),
+            run.classPackageCreate,run.classPackageRetire,run.classWorkerBatch,
+            run.classCollisionPublish,run.classMeshPublish,run.classGlCreateDelete,
+            run.classAllocatorGrowth,run.classGlFinish,run.classSwapBuffers,
+            run.classDeferredRetire,run.classUnclassified,
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
+        for(SoakResourceLedger const& ledger:run.ledgers)WriteSoakLedger(f,ledger);
+        for(SoakOverrunReceipt const& o:run.overruns)
+        {
+            std::fprintf(f,
+                "overrun.%d.phase=%s\n"
+                "overrun.%d.elapsed_s=%.3f\n"
+                "overrun.%d.distance_m=%.1f\n"
+                "overrun.%d.frame_ms=%.3f\n"
+                "overrun.%d.primary=%s\n"
+                "overrun.%d.package_create=%d\n"
+                "overrun.%d.package_retire=%d\n"
+                "overrun.%d.worker_completion_batch=%d\n"
+                "overrun.%d.collision_publish=%d\n"
+                "overrun.%d.mesh_publish=%d\n"
+                "overrun.%d.gl_create=%d\n"
+                "overrun.%d.gl_delete=%d\n"
+                "overrun.%d.gl_reuse=%d\n"
+                "overrun.%d.allocator_delta_bytes=%llu\n"
+                "overrun.%d.package_create_ms=%.3f\n"
+                "overrun.%d.package_retire_ms=%.3f\n"
+                "overrun.%d.worker_completion_batch_ms=%.3f\n"
+                "overrun.%d.collision_publish_ms=%.3f\n"
+                "overrun.%d.mesh_publish_ms=%.3f\n"
+                "overrun.%d.gl_create_delete_ms=%.3f\n"
+                "overrun.%d.allocator_growth_ms=%.3f\n"
+                "overrun.%d.glFinish_ms=%.3f\n"
+                "overrun.%d.SwapBuffers_ms=%.3f\n"
+                "overrun.%d.deferred_retirement_ms=%.3f\n"
+                "overrun.%d.deferred_retirement_count=%d\n"
+                "overrun.%d.resident=%d\n"
+                "overrun.%d.pending=%d\n"
+                "overrun.%d.worker_queue=%d\n"
+                "overrun.%d.private_bytes=%llu\n"
+                "overrun.%d.working_set_bytes=%llu\n",
+                o.index,o.phase,o.index,o.elapsedS,o.index,o.distanceM,
+                o.index,o.frameMs,o.index,o.primary,
+                o.index,o.packageCreate,o.index,o.packageRetire,
+                o.index,o.workerBatch,o.index,o.collisionPublish,
+                o.index,o.meshPublish,o.index,o.glCreate,o.index,o.glDelete,
+                o.index,o.glReuse,o.index,(unsigned long long)o.allocatorDelta,
+                o.index,o.packageCreateMs,o.index,o.packageRetireMs,
+                o.index,o.workerBatchMs,o.index,o.collisionPublishMs,
+                o.index,o.meshPublishMs,o.index,o.glCreateDeleteMs,
+                o.index,o.allocatorGrowthMs,o.index,o.glFinishMs,
+                o.index,o.swapBuffersMs,o.index,o.deferredRetireMs,
+                o.index,o.deferredRetireCount,o.index,o.resident,
+                o.index,o.pending,o.index,o.workers,
+                o.index,(unsigned long long)o.privateBytes,
+                o.index,(unsigned long long)o.workingSet);
+        }
         std::fclose(f);
         if(run.trace){std::fclose(run.trace);run.trace=nullptr;}
         return informational?true:passed;
@@ -37437,6 +37912,7 @@ namespace
             run.startPrivate=ProcessPrivateBytes();
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
+            s_soakPrevPrivate=run.startPrivate;
             char const* tracePath=g.certStreamingSoakStageFilter==23
                 ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==22
@@ -37446,10 +37922,13 @@ namespace
             if(run.trace)
             {
                 std::fprintf(run.trace,
-                    "elapsed_s,distance_m,x,y,mode,frame_ms,resident_packages,"
-                    "pending_packages,worker_queue,complete_radius_m,"
-                    "working_set_bytes,private_bytes,packages_created,"
-                    "packages_retired,wake_water_body,wake_topology,"
+                    "phase,elapsed_s,distance_m,x,y,mode,frame_ms,primary,"
+                    "resident_packages,pending_packages,worker_queue,complete_radius_m,"
+                    "working_set_bytes,private_bytes,live_package_bytes,live_mesh_bytes,"
+                    "live_collision_bytes,live_gl_resources,retirement_queue_bytes,"
+                    "worker_result_bytes,cache_entries,packages_created,packages_retired,"
+                    "pkg_create,pkg_retire,worker_batch,collision,mesh,gl_create,gl_delete,"
+                    "alloc_delta,finish_ms,swap_ms,retire_ms,wake_water_body,wake_topology,"
                     "wake_terrain_state,wake_mesh,wake_collision,wake_grass,wake_tree\n");
             }
             SoakPlace(0.f,g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps);
@@ -37466,65 +37945,184 @@ namespace
             {
                 run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;
                 run.wakeStart=s_traversalWake;
+                RecordSoakLedger("start_travel",0.0,0.f);
             }
             return;
         }
+        double const dt=(std::min)(0.05,(std::max)(0.001,g.playWorldgenFrameMs/1000.0));
         if(run.phase==2)
         {
             float const speed=SoakModeSpeedMps();
-            double const dt=(std::min)(0.05,(std::max)(0.001,g.playWorldgenFrameMs/1000.0));
             run.distanceM+=speed*(float)dt;
             SoakPlace(run.distanceM,fly);
-            ++run.movementFrames;
-            run.frameMs.push_back(g.playWorldgenFrameMs);
-            if(g.playWorldgenFrameMs>16.667)++run.framesOver16;
-            float const complete=Stage0MinCompleteRadiusM(g.stage0PlayView);
-            int const pending=Stage0PendingPackageCount(g.stage0PlayView);
-            int const workers=Stage8WorkerQueueDepth();
-            run.minCompleteRadiusM=(std::min)(run.minCompleteRadiusM,complete);
-            if(complete<(float)g.stage0LiveRadiusM-0.001f)++run.framesBelowRadius;
-            run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
-            run.maxResidentPackages=(std::max)(run.maxResidentPackages,
-                run.endResidentPackages);
-            run.maxPendingPackages=(std::max)(run.maxPendingPackages,pending);
-            run.maxWorkerQueue=(std::max)(run.maxWorkerQueue,workers);
             run.elapsedS+=dt;
-            if(pending>0)
-            {
-                if(run.pendingSinceS<0.0)run.pendingSinceS=run.elapsedS;
-                run.oldestPendingAgeS=(std::max)(run.oldestPendingAgeS,
-                    run.elapsedS-run.pendingSinceS);
-            }
-            else run.pendingSinceS=-1.0;
-            SIZE_T const ws=ProcessWorkingSetBytes();
-            SIZE_T const priv=ProcessPrivateBytes();
-            run.maxWorkingSet=(std::max)(run.maxWorkingSet,ws);
-            run.maxPrivate=(std::max)(run.maxPrivate,priv);
-            run.endWorkingSet=ws;run.endPrivate=priv;run.endPending=pending;
-            if(run.trace&&(run.movementFrames%30==0||run.elapsedS>=g.soakDurationS))
-            {
-                std::fprintf(run.trace,
-                    "%.3f,%.1f,%.3f,%.3f,%s,%.3f,%d,%d,%d,%.2f,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-                    run.elapsedS,run.distanceM,g.feetX,g.feetY,SoakModeName(g.soakMode),
-                    g.playWorldgenFrameMs,(int)CardinalPackageMap(g.stage0PlayView).size(),
-                    pending,workers,complete,
-                    (unsigned long long)ws,(unsigned long long)priv,
-                    s_traversalWake.packagesCreated-run.wakeStart.packagesCreated,
-                    s_traversalWake.packagesRetired-run.wakeStart.packagesRetired,
-                    s_traversalWake.waterBodyReconstructions-run.wakeStart.waterBodyReconstructions,
-                    s_traversalWake.topologyActivations-run.wakeStart.topologyActivations,
-                    s_traversalWake.terrainStateWakes-run.wakeStart.terrainStateWakes,
-                    s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds,
-                    s_traversalWake.collisionPublications-run.wakeStart.collisionPublications,
-                    s_traversalWake.grassLoads,s_traversalWake.treeLoads);
-            }
+            if(!run.snapped90&&run.elapsedS>=90.0)
+            {RecordSoakLedger("travel_90",run.elapsedS,run.distanceM);run.snapped90=true;}
+            if(!run.snapped300&&run.elapsedS>=300.0)
+            {RecordSoakLedger("travel_300",run.elapsedS,run.distanceM);run.snapped300=true;}
+            if(!run.snapped900&&run.elapsedS>=900.0)
+            {RecordSoakLedger("travel_900",run.elapsedS,run.distanceM);run.snapped900=true;}
             if(run.elapsedS>=g.soakDurationS)
             {
-                run.endPending=pending;
+                RecordSoakLedger("end_travel",run.elapsedS,run.distanceM);
+                run.phase=3;run.stopElapsedS=0.0;
+            }
+            return;
+        }
+        if(run.phase==3)
+        {
+            SoakPlace(run.distanceM,fly);
+            run.stopElapsedS+=dt;
+            if(run.stopElapsedS>=g.soakStopDurationS)
+            {
+                RecordSoakLedger("end_stop",run.elapsedS,run.distanceM);
+                Stage8DiscardHeldLookahead();
+                run.phase=4;run.drainElapsedS=0.0;
+            }
+            return;
+        }
+        if(run.phase==4)
+        {
+            SoakPlace(run.distanceM,fly);
+            run.drainElapsedS+=dt;
+            bool drained=settled&&g.stage8RetiredDisplayLists.empty();
+            if(drained)
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                drained=s_stage8PackageWorkers.completed.empty();
+            }
+            if(drained||run.drainElapsedS>=g.soakDrainTimeoutS)
+            {
+                RecordSoakLedger("after_drain",run.elapsedS,run.distanceM);
+                run.endPending=Stage0PendingPackageCount(g.stage0PlayView);
+                run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
+                run.endWorkingSet=ProcessWorkingSetBytes();
+                run.endPrivate=ProcessPrivateBytes();
                 bool const ok=WriteStreamingSoakArtifact();
                 g.certStreamingSoak=false;
                 PostQuitMessage(ok?0:2);
             }
+        }
+    }
+
+    void StreamingSoakAfterRender()
+    {
+        if(!g.certStreamingSoak||s_streamingSoak.phase<2)return;
+        auto& run=s_streamingSoak;
+        double const frameMs=g.playWorldgenFrameMs;
+        if(frameMs<=0.0)return;
+        SIZE_T const ws=ProcessWorkingSetBytes();
+        SIZE_T const priv=ProcessPrivateBytes();
+        s_soakFrame.workingSetBytes=ws;
+        s_soakFrame.privateBytes=priv;
+        s_soakFrame.privateDelta=priv>=s_soakPrevPrivate?priv-s_soakPrevPrivate:0;
+        s_soakPrevPrivate=priv;
+        run.maxWorkingSet=(std::max)(run.maxWorkingSet,ws);
+        run.maxPrivate=(std::max)(run.maxPrivate,priv);
+        run.endWorkingSet=ws;run.endPrivate=priv;
+        float const complete=Stage0MinCompleteRadiusM(g.stage0PlayView);
+        int const pending=Stage0PendingPackageCount(g.stage0PlayView);
+        int const workers=Stage8WorkerQueueDepth();
+        run.minCompleteRadiusM=(std::min)(run.minCompleteRadiusM,complete);
+        if(run.phase==2&&complete<(float)g.stage0LiveRadiusM-0.001f)++run.framesBelowRadius;
+        run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
+        run.maxResidentPackages=(std::max)(run.maxResidentPackages,run.endResidentPackages);
+        run.maxPendingPackages=(std::max)(run.maxPendingPackages,pending);
+        run.maxWorkerQueue=(std::max)(run.maxWorkerQueue,workers);
+        run.endPending=pending;
+        if(pending>0)
+        {
+            if(run.pendingSinceS<0.0)run.pendingSinceS=run.elapsedS;
+            run.oldestPendingAgeS=(std::max)(run.oldestPendingAgeS,
+                run.elapsedS-run.pendingSinceS);
+        }
+        else run.pendingSinceS=-1.0;
+        char const* phaseName=run.phase==2?"travel":(run.phase==3?"stop":"drain");
+        if(run.phase==2)
+        {
+            ++run.movementFrames;
+            run.frameMs.push_back(frameMs);
+            if(frameMs>16.667)++run.framesOver16;
+        }
+        else if(run.phase==3)
+        {
+            ++run.stopFrames;
+            if(frameMs>16.667)++run.stopFramesOver16;
+        }
+        else
+        {
+            ++run.drainFrames;
+            if(frameMs>16.667)++run.drainFramesOver16;
+        }
+        SoakOverrunReceipt receipt{};
+        receipt.phase=phaseName;
+        receipt.elapsedS=run.elapsedS;
+        receipt.distanceM=run.distanceM;
+        receipt.frameMs=frameMs;
+        receipt.packageCreate=s_soakFrame.packagesCreated;
+        receipt.packageRetire=s_soakFrame.packagesRetired;
+        receipt.workerBatch=s_soakFrame.workerCompletions;
+        receipt.collisionPublish=s_soakFrame.collisionPublishes;
+        receipt.meshPublish=s_soakFrame.meshPublishes;
+        receipt.glCreate=s_soakFrame.glCreates;
+        receipt.glDelete=s_soakFrame.glDeletes;
+        receipt.glReuse=s_soakFrame.glReuses;
+        receipt.deferredRetireCount=s_soakFrame.deferredRetireServiced;
+        receipt.allocatorDelta=s_soakFrame.privateDelta;
+        receipt.meshPublishMs=g.stage0FrameHfBuildMs;
+        receipt.workerBatchMs=g.stage0FrameWorkerPublishMs;
+        receipt.packageCreateMs=s_soakFrame.packagesCreated>0?g.stage0FrameHfBuildMs:0.0;
+        receipt.packageRetireMs=s_soakFrame.packagesRetired>0?0.05*(double)s_soakFrame.packagesRetired:0.0;
+        receipt.collisionPublishMs=s_soakFrame.collisionPublishes>0
+            ?(std::min)(g.stage0FrameHfBuildMs,0.15*(double)s_soakFrame.collisionPublishes):0.0;
+        receipt.glCreateDeleteMs=g.stage0FrameGlAllocMs;
+        receipt.allocatorGrowthMs=s_soakFrame.privateDelta>=(2u*1024u*1024u)?8.0:0.0;
+        receipt.glFinishMs=g.stage0FrameGpuFinishMs;
+        receipt.swapBuffersMs=g.stage0FrameSwapBuffersMs;
+        receipt.deferredRetireMs=g.stage0FrameHfRetireMs;
+        receipt.resident=run.endResidentPackages;
+        receipt.pending=pending;
+        receipt.workers=workers;
+        receipt.privateBytes=priv;
+        receipt.workingSet=ws;
+        char const* primary="";
+        if(frameMs>16.667)
+        {
+            receipt.index=(int)run.overruns.size();
+            receipt.primary=ClassifySoakOverrun(receipt);
+            primary=receipt.primary;
+            run.overruns.push_back(receipt);
+        }
+        bool const writeTrace=run.trace&&(frameMs>16.667
+            ||(run.phase==2&&run.movementFrames%30==0)
+            ||((run.phase==3&&run.stopFrames==1)||(run.phase==4&&run.drainFrames==1)));
+        if(writeTrace)
+        {
+            SoakResourceLedger const ledger=frameMs>16.667||run.movementFrames%30==0
+                ?CaptureSoakLedger(phaseName,run.elapsedS,run.distanceM)
+                :SoakResourceLedger{};
+            std::fprintf(run.trace,
+                "%s,%.3f,%.1f,%.3f,%.3f,%s,%.3f,%s,%d,%d,%d,%.2f,%llu,%llu,%llu,%llu,%llu,%d,%llu,%llu,%d,%d,%d,"
+                "%d,%d,%d,%d,%d,%d,%d,%llu,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d\n",
+                phaseName,run.elapsedS,run.distanceM,g.feetX,g.feetY,SoakModeName(g.soakMode),
+                frameMs,primary[0]?primary:"ok",
+                run.endResidentPackages,pending,workers,complete,
+                (unsigned long long)ws,(unsigned long long)priv,
+                ledger.livePackageBytes,ledger.liveMeshBytes,ledger.liveCollisionBytes,
+                ledger.liveGlResources,ledger.retirementQueueBytes,ledger.workerResultBytes,
+                ledger.cacheEntries,
+                s_traversalWake.packagesCreated-run.wakeStart.packagesCreated,
+                s_traversalWake.packagesRetired-run.wakeStart.packagesRetired,
+                receipt.packageCreate,receipt.packageRetire,receipt.workerBatch,
+                receipt.collisionPublish,receipt.meshPublish,receipt.glCreate,receipt.glDelete,
+                (unsigned long long)receipt.allocatorDelta,
+                receipt.glFinishMs,receipt.swapBuffersMs,receipt.deferredRetireMs,
+                s_traversalWake.waterBodyReconstructions-run.wakeStart.waterBodyReconstructions,
+                s_traversalWake.topologyActivations-run.wakeStart.topologyActivations,
+                s_traversalWake.terrainStateWakes-run.wakeStart.terrainStateWakes,
+                s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds,
+                s_traversalWake.collisionPublications-run.wakeStart.collisionPublications,
+                s_traversalWake.grassLoads,s_traversalWake.treeLoads);
         }
     }
 
@@ -37897,7 +38495,11 @@ namespace
             g.stage0FrameCalibrationDrawMs = 0.0;
             g.stage0FramePresentWaitMs = 0.0;
             g.stage0FrameGpuFinishMs = 0.0;
+            g.stage0FrameSwapBuffersMs = 0.0;
+            g.stage0FrameWorkerPublishMs = 0.0;
+            g.stage0FrameGlAllocMs = 0.0;
             g.stage0FramePacingWaitMs = 0.0;
+            s_soakFrame = SoakFrameCost{};
             g.stage0FrameGpuMs = -1.0;
             g.stage0FrameCollisionMs = 0.0;
         }
@@ -39896,6 +40498,7 @@ namespace
         }
         if ( g.certWorldgenBaselinePerf ) { WorldgenPerfAfterRender(); }
         if ( g.playWorldgenBaseline ) { WorldgenPlayAfterRender(); }
+        StreamingSoakAfterRender();
         PresentationIsolationAfterRender();
         Stage11ResidencyWaterfallAfterRender();
         Stage11ShiftScalingAfterRender();
@@ -41974,6 +42577,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     double const seconds=_wtof(argv[i]+18);
                     if(seconds>=10.0&&seconds<=1800.0)g.soakDurationS=seconds;
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-stop-s=",14)==0)
+                {
+                    double const seconds=_wtof(argv[i]+14);
+                    if(seconds>=0.0&&seconds<=600.0)g.soakStopDurationS=seconds;
                     continue;
                 }
                 if(_wcsnicmp(argv[i],L"--soak-speed-mps=",17)==0)
