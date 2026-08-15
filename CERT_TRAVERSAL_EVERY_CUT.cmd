@@ -8,11 +8,11 @@ if not exist "Build\x64_Release\ProvenanceClient.exe" (
   exit /b 1
 )
 
-REM EVERY CUT: cardinal replacement on the latest play stage (P5b.3B).
+REM EVERY CUT: cardinal replacement on the latest play stage (P5b.3B.2).
 REM Walk / sprint / fly, N/E/S/W, 192 m completeness, 0 movement frames over 16.667 ms.
 REM Do not treat this as a soak. Long-haul travel is CERT_STREAMING_SOAK.cmd.
-start /wait "" "Build\x64_Release\ProvenanceClient.exe" --cert-worldgen-cardinal-replacement-p5b3b
+start /wait "" "Build\x64_Release\ProvenanceClient.exe" --cert-worldgen-cardinal-replacement-p5b3b2
 set RESULT=%ERRORLEVEL%
-if exist "Docs\provenance_p5b3b_cardinal_replacement_cert.txt" type "Docs\provenance_p5b3b_cardinal_replacement_cert.txt"
+if exist "Docs\provenance_p5b3b2_cardinal_replacement_cert.txt" type "Docs\provenance_p5b3b2_cardinal_replacement_cert.txt"
 popd
 exit /b %RESULT%

@@ -36,7 +36,8 @@ existing loose body
 
 ```
 P5b.3C  bank/support collapse           CLOSED
-P5b.3B.2 deposition as structural terrain CLOSED
+P5b.3B.2 loose-matter settling          CERTIFIED (child; location + rest only)
+P5b.3B.3 terrain reincorporation        CLOSED
 16C remobilization                      CLOSED
 general erosion / 16B active erosion    CLOSED
 rainfall / evaporation / groundwater    CLOSED
@@ -59,7 +60,9 @@ P5b.2A  reverse state coupling            CERTIFIED / FROZEN
 P5b.2B  bounded pore storage              CERTIFIED / FROZEN
 P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
 P5b.3A  hydraulic detachment              CERTIFIED / FROZEN @ 6c467fb7
-P5b.3B  hydraulic loose-matter transport  CERTIFIED
+P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
+P5b.3B.2 loose-matter settling            CERTIFIED (child)
+P5b.3B.3 terrain reincorporation          CLOSED
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -139,5 +142,8 @@ Analytical receipt: `Docs/provenance_p5b3b_hydraulic_transport_cert.txt`
 Txn receipt: `Docs/provenance_p5b3b_hydraulic_transport_receipts.csv`  
 Soak receipt: `Docs/provenance_p5b3b_streaming_soak_cert.txt`
 
-P5b.3C / rainfall / groundwater / general erosion / 16C remobilization /
-3B.2 deposition stay CLOSED.
+Child: P5b.3B.2 loose-matter settling is CERTIFIED — see
+`P5B3B2_LOOSE_MATTER_SETTLING_HANDOFF.md`. Settling changes location + rest
+state; the parcel remains loose. **P5b.3B.3 terrain reincorporation stays
+CLOSED.** P5b.3C / rainfall / groundwater / general erosion / 16C
+remobilization stay CLOSED.
