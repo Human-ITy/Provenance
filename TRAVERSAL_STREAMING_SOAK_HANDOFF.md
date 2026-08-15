@@ -321,6 +321,8 @@ relaxed. Persistent water VBO/IBO is the live submit path.
 | 2B persistent-water 90 s | **0 / 79961** | 10.091 | first live occupied water, no stall |
 | 2B persistent-water 300 s | **0 / 283198** | 11.942 | water GPU 170 KB, travel growth 0 |
 | 2B persistent-water 900 s | **0 / 859464** | 11.505 | 16.667 PASS; process private still climbs |
+| 2B ownership 90 s | **0** | 11.314 | HeapWalk hold; recycle on; memory INCOMPLETE |
+| 2B ownership 12 km | **0 / 420668** | 14.816 | 16.667 PASS; CRT committed FAIL |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -363,54 +365,89 @@ alloc 2, travel growth 0, draw 1/frame, first_live_occupied=1.
 FollowStream scratch growth 0, CRT segment 0. P5b.2C / P5b.3 stay
 CLOSED.
 
-### Memory — logical set bounded; process private still climbs
+### Memory — logical set bounded; CRT committed pages retained
 
 250 m buckets: logical live (2601 packages / 114 MB) is flat from
 the first bucket. Water GPU stays 170 KB. Process private does **not**
-plateau on this binary (unlike the pre-backend 1.33 GB sit). Owner is
-not the water VBO. Do not invent a third water backend this cut.
+plateau. Owner is **not** the water VBO, not FollowStream scratch, not
+live packages, not deferred GL retirement.
 
-| Ledger | 90 s / 2161 m | 300 s / 7189 m | 900 s / 21600 m |
-|---|---|---|---|
-| resident packages | 2601 | 2601 | 2601 |
-| live package bytes | 114 MB | 114 MB | 114 MB |
-| water GPU live | 170 KB | 170 KB | 170 KB |
-| water GPU travel growth | 0 | 0 | 0 |
-| private bytes | 1318 MB | 2616 MB | 4190 MB |
-| working set | 1138 MB | 2380 MB | 3899 MB |
+Ownership walks (HeapWalk + VirtualQuery) run only at checkpoint
+drain, never on a travel frame. Mid-travel HeapWalk poisoned the
+resume frame (40–144 ms); a 3-frame hold after each walk restored
+16.667 = 0.
+
+Package mesh/material vectors recycle after GL compile (451078 hits /
+424 misses on the 12 km run). That did **not** stop CRT committed
+growth: per-package `SampleBlock` / descriptor temps still churn
+8–64 KB blocks that UCRT keeps committed. `HeapCompact` / `_heapmin`
+at drain did not return those pages. Deleting reusable display lists
+at drain did not drop private (GL residual plateaus after ~8 km;
+further growth is CRT).
+
+**Retained owner class: `crt_heap_committed`.**
+Logical counts flat + private still rising after the corresponding
+world has retired. Not closable this cut without a SampleBlock
+scratch arena (would touch worker sample paths; 2B physics / water
+truth stay frozen). Do not greenwash.
+
+Checkpoint drain table (500 s NE fly 24 m/s, stop/drain at each
+station, then return to origin). Logical live 114 MB / 2601 / pending 0
+/ water GPU 170 KB at every row.
+
+| Station | private | CRT committed | GL residual (private−CRT) | slope |
+|---|---|---|---|---|
+| 0 m drain | 521 MB | 138 MB | 383 MB | — |
+| 1 km drain | 906 MB | 372 MB | 533 MB | +385 MB/km |
+| 2 km drain | 1275 MB | 612 MB | 663 MB | +369 MB/km |
+| 4 km drain | 2004 MB | 1089 MB | 915 MB | +365 MB/km |
+| 8 km drain | 3166 MB | 1732 MB | 1434 MB | +291 MB/km |
+| 12 km drain | 3582 MB | 2148 MB | 1434 MB | +104 MB/km |
+| after drain | 3584 MB | 2150 MB | 1434 MB | held |
+| return origin | 4083 MB | 2646 MB | 1437 MB | return churn; CRT kept |
+
+GL residual plateaus at 8 km (~1434 MB). CRT committed keeps climbing
+(138 → 2148 MB at 12 km; 2646 MB after return). After 8 km the extra
+4 km still added +416 MB private (~104 MB/km) — not slope ~0.
+Return-to-origin did **not** release the 12 km CRT high-water; private
+rose further on the return pass. Distance-specific heap pages remain
+after that world is gone.
 
 `check.memory_plateau=FAIL_scales_with_distance`.
 `check.distance_bucket_slope=FAIL_scales_with_distance`.
-d3000 private 1528 MB → d7000 2593 MB → d15000 3880 MB → d21000 4166 MB.
+`ownership.retained_class=crt_heap_committed`.
 
-### Stationary drain + return (90 s run)
+### Stationary drain + return
 
-90 s NE fly → 60 s stop → drain: pending 0, resident 2601, private
-1383 MB, WS 1215 MB. Logical live unchanged while stopped.
+90 s NE fly → checkpoint drains at 1/2 km → 5 s stop → drain →
+return: end_distance 0, resident 2601, pending 0, movement frames
+over 16.667 = 0, max 11.314 ms. Private 521 → 1308 MB at 2.16 km →
+1753 MB after return. Same owner.
 
-Optional return-to-origin + settle: end_distance 0, resident 2601,
-pending 0, return/settle frames over 16.667 = 0. Private/WS rose to
-1812 / 1623 MB on the return churn (high-water, not a logical leak —
-live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
+12 km run: 500 s travel, drains at 1/2/4/8/12 km, return+settle.
+Movement frames over 16.667 = **0 / 420668**, max 14.816 ms.
 
-### 90 / 300 / 900 gates
+### 90 / 300 / 12 km gates
 
 ```text
-90 s   residency PASS, backlog PASS, frame PASS (0 / 79961, max 10.091),
+90 s   residency PASS, backlog PASS, frame PASS (0 frames >16.667, max 11.314),
        first live occupied water no stall, water GPU bounded / travel growth 0,
-       scratch growth 0, FollowStream CRT 0, memory INCOMPLETE_need_300s.
+       scratch growth 0, FollowStream CRT 0,
+       memory INCOMPLETE_return_high_water (need 5 km after high-water).
        soak_water_backend=persistent. water_path_warmed=1.
-300 s  frame PASS (0 / 283198, max 11.942). water GPU 170 KB, growth 0.
-       memory FAIL_scales_with_distance (private 1.32 GB → 2.62 GB).
-900 s  frame PASS (0 / 859464, max 11.505). 21600 m, 2601 resident,
-       pending 0. memory FAIL_scales_with_distance (private 4.19 GB).
+500 s  12.015 km. frame PASS (0 / 420668, max 14.816). water GPU 170 KB, growth 0.
+       2601 resident, pending 0. memory FAIL_scales_with_distance
+       (private 521 → 3582 MB at 12 km; CRT 138 → 2148 MB).
+       GL residual plateaus after 8 km. Return origin private 4083 MB.
        overall=PASS (frame/residency/water-GPU). 16.667 not relaxed.
-       P5b.2C / P5b.3 CLOSED.
+       P5b.2C / P5b.3 CLOSED. Memory owner FAIL left named.
 ```
 
-Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run
-includes 90 / 300 snapshots + 250 m buckets). Trace:
-`Docs/provenance_p5b2b_streaming_soak_trace.csv`.
+Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (500 s / 12 km
++ return, includes 90 / 300 snapshots + 250 m buckets + ownership
+checkpoints). 90 s copy:
+`Docs/provenance_p5b2b_streaming_soak_ownership_90_cert.txt`.
+Trace: `Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 ## Closed
 

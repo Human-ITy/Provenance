@@ -13022,6 +13022,78 @@ namespace
         bool stopping=false;
     };
     Stage8PackageWorkerState s_stage8PackageWorkers;
+    // Recycle mesh/material vectors after GL compile so CRT does not keep a
+    // new committed high-water for every created-then-retired package.
+    struct Stage8RecycledBuffers
+    {
+        std::vector<CausalVisibleExposure::Tri> triangles;
+        std::vector<std::string> materials;
+        std::vector<Stage8CpuPackage::TriangleColor> colors;
+    };
+    std::mutex s_stage8RecycleMutex;
+    std::vector<Stage8RecycledBuffers> s_stage8RecyclePool;
+    int s_stage8RecycleHits=0;
+    int s_stage8RecycleMisses=0;
+    int s_stage8RecycleReturns=0;
+    unsigned long long s_stage8RecycleBytes=0;
+    constexpr int kStage8RecyclePoolMax=512;
+
+    void RecycleStage8CpuPackage(Stage8CpuPackage& package)
+    {
+        Stage8RecycledBuffers buf;
+        buf.triangles=std::move(package.mesh.triangles);
+        buf.materials=std::move(package.materials);
+        buf.colors=std::move(package.triangleColors);
+        buf.triangles.clear();
+        buf.materials.clear();
+        buf.colors.clear();
+        package.collisionSurface.reset();
+        size_t const bytes=buf.triangles.capacity()*sizeof(CausalVisibleExposure::Tri)
+            +buf.materials.capacity()*sizeof(std::string)
+            +buf.colors.capacity()*sizeof(Stage8CpuPackage::TriangleColor);
+        std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
+        if((int)s_stage8RecyclePool.size()>=kStage8RecyclePoolMax)return;
+        s_stage8RecyclePool.push_back(std::move(buf));
+        ++s_stage8RecycleReturns;
+        s_stage8RecycleBytes+=bytes;
+    }
+
+    void AdoptRecycledStage8Buffers(Stage8CpuPackage& out)
+    {
+        Stage8RecycledBuffers buf;
+        bool hit=false;
+        {
+            std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
+            if(!s_stage8RecyclePool.empty())
+            {
+                buf=std::move(s_stage8RecyclePool.back());
+                s_stage8RecyclePool.pop_back();
+                hit=true;
+                ++s_stage8RecycleHits;
+            }
+            else ++s_stage8RecycleMisses;
+        }
+        if(buf.triangles.capacity()<512u)buf.triangles.reserve(512u);
+        if(buf.materials.capacity()<256u)buf.materials.reserve(256u);
+        out.mesh.triangles=std::move(buf.triangles);
+        out.materials=std::move(buf.materials);
+        out.triangleColors=std::move(buf.colors);
+        (void)hit;
+    }
+
+    unsigned long long Stage8RecyclePoolBytes()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
+        unsigned long long n=0;
+        for(Stage8RecycledBuffers const& buf:s_stage8RecyclePool)
+        {
+            n+=buf.triangles.capacity()*sizeof(CausalVisibleExposure::Tri);
+            n+=buf.materials.capacity()*sizeof(std::string);
+            n+=buf.colors.capacity()*sizeof(Stage8CpuPackage::TriangleColor);
+        }
+        return n;
+    }
+
     // Four independent immutable package jobs keep the complete 192 m window
     // ahead of the deliberately extreme 16 m/frame (960 m/s at 60 Hz) flight
     // rung.  GL publication remains single-owner and frame-budgeted.
@@ -13066,6 +13138,82 @@ namespace
             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),sizeof(pmc)))
         {return 0;}
         return pmc.PrivateUsage;
+    }
+
+    void CompactProcessHeaps()
+    {
+        _heapmin();
+        HANDLE heaps[128];
+        DWORD const n=GetProcessHeaps(128,heaps);
+        for(DWORD i=0;i<n;++i)
+        {
+            if(heaps[i])HeapCompact(heaps[i],0);
+        }
+    }
+
+    void DeleteReusableDisplayLists()
+    {
+        for(GLuint const list:g.stage8ReusableDisplayLists)
+        {
+            if(!list)continue;
+            glDeleteLists(list,1);
+            ++s_soakFrame.glDeletes;
+        }
+        g.stage8ReusableDisplayLists.clear();
+        while(!g.stage8RetiredDisplayLists.empty())
+        {
+            GLuint const list=g.stage8RetiredDisplayLists.front().list;
+            g.stage8RetiredDisplayLists.pop_front();
+            if(!list)continue;
+            glDeleteLists(list,1);
+            ++s_soakFrame.glDeletes;
+        }
+    }
+
+    void WalkCrtHeaps(unsigned long long& committed,unsigned long long& allocated,
+        unsigned long long& uncommitted,int& heapCount)
+    {
+        committed=0;allocated=0;uncommitted=0;heapCount=0;
+        HANDLE heaps[128];
+        DWORD const n=GetProcessHeaps(128,heaps);
+        heapCount=(int)n;
+        for(DWORD i=0;i<n;++i)
+        {
+            if(!heaps[i]||!HeapLock(heaps[i]))continue;
+            PROCESS_HEAP_ENTRY entry{};
+            while(HeapWalk(heaps[i],&entry))
+            {
+                if(entry.wFlags&PROCESS_HEAP_REGION)
+                {
+                    committed+=entry.Region.dwCommittedSize;
+                    uncommitted+=entry.Region.dwUnCommittedSize;
+                }
+                else if(entry.wFlags&PROCESS_HEAP_ENTRY_BUSY)
+                {allocated+=(unsigned long long)entry.cbData+entry.cbOverhead;}
+            }
+            HeapUnlock(heaps[i]);
+        }
+    }
+
+    void WalkVirtualCommitted(unsigned long long& priv,unsigned long long& image,
+        unsigned long long& mapped)
+    {
+        priv=0;image=0;mapped=0;
+        unsigned char* p=nullptr;
+        MEMORY_BASIC_INFORMATION mbi{};
+        for(;;)
+        {
+            if(VirtualQuery(p,&mbi,sizeof(mbi))==0)break;
+            if(mbi.State==MEM_COMMIT)
+            {
+                if(mbi.Type==MEM_PRIVATE)priv+=mbi.RegionSize;
+                else if(mbi.Type==MEM_IMAGE)image+=mbi.RegionSize;
+                else if(mbi.Type==MEM_MAPPED)mapped+=mbi.RegionSize;
+            }
+            unsigned char* next=static_cast<unsigned char*>(mbi.BaseAddress)+mbi.RegionSize;
+            if(next<=p)break;
+            p=next;
+        }
     }
 
     // Quiet-frame ~8.4 MB private jump at 2018.8 m is one NT/CRT heap
@@ -13280,6 +13428,7 @@ namespace
         if(IsVisibleExposureView(job.view)&&g.causalVisibleRuntime)
         {return BuildStage7CpuPackage(job);}
         Stage8CpuPackage out;
+        AdoptRecycledStage8Buffers(out);
         out.epoch=job.epoch;out.view=job.view;out.control=job.control;
         out.bx=job.bx;out.by=job.by;
         bool const integratedExact=UsesExactLocalMaterialization(job.view)
@@ -13384,7 +13533,7 @@ namespace
         QueryPerformanceCounter(&materialEnd);
 
         if(!out.integratedCutC)
-        {out.mesh=CausalVisibleExposure::EmitBlockMesh(surfaceSamples,descriptors);}
+        {CausalVisibleExposure::EmitBlockMeshInto(surfaceSamples,descriptors,out.mesh);}
         QueryPerformanceCounter(&meshEnd);
         if(!out.integratedCutC)
         {
@@ -13431,6 +13580,7 @@ namespace
                 --s_stage8PackageWorkers.active;
                 if(result.epoch==s_stage8PackageWorkers.epoch)
                 {s_stage8PackageWorkers.completed.emplace_back(std::move(result));}
+                else RecycleStage8CpuPackage(result);
             }
             s_stage8PackageWorkers.wake.notify_all();
         }
@@ -13516,7 +13666,11 @@ namespace
         uint64_t const key=CellKey(package.bx,package.by);
         auto& terrainBlocks=WorkerTerrainBlocks(package.view);
         if(package.view!=g.stage0PlayView||package.control!=g.stage8Control
-            ||terrainBlocks.count(key))return false;
+            ||terrainBlocks.count(key))
+        {
+            RecycleStage8CpuPackage(package);
+            return false;
+        }
         LARGE_INTEGER q0{},allocEnd{},compileEnd{},publishEnd{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
         GLuint const list=AllocDisplayListOutsideFonts();
@@ -13619,17 +13773,24 @@ namespace
                 s_packageBuildSamples.push_back(sample);
             }
         }
+        RecycleStage8CpuPackage(package);
         return true;
     }
 
     void Stage8DiscardHeldLookahead()
     {
         std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
-        for(auto const& kv:s_stage8PackageWorkers.held)
-        {s_stage8PackageWorkers.scheduled.erase(kv.first);}
+        for(auto& kv:s_stage8PackageWorkers.held)
+        {
+            s_stage8PackageWorkers.scheduled.erase(kv.first);
+            RecycleStage8CpuPackage(kv.second);
+        }
         s_stage8PackageWorkers.held.clear();
-        for(Stage8CpuPackage const& package:s_stage8PackageWorkers.completed)
-        {s_stage8PackageWorkers.scheduled.erase(CellKey(package.bx,package.by));}
+        for(Stage8CpuPackage& package:s_stage8PackageWorkers.completed)
+        {
+            s_stage8PackageWorkers.scheduled.erase(CellKey(package.bx,package.by));
+            RecycleStage8CpuPackage(package);
+        }
         s_stage8PackageWorkers.completed.clear();
     }
 
@@ -13661,6 +13822,7 @@ namespace
                     ||!Stage8InLookaheadWindow(bounds,held.bx,held.by))
                 {
                     s_stage8PackageWorkers.scheduled.erase(it->first);
+                    RecycleStage8CpuPackage(held);
                     it=s_stage8PackageWorkers.held.erase(it);
                     continue;
                 }
@@ -13754,13 +13916,18 @@ namespace
                 uint64_t const key=CellKey(result.bx,result.by);
                 if(!s_stage8PackageWorkers.held.count(key))
                 {s_stage8PackageWorkers.held.emplace(key,std::move(result));}
-                else s_stage8PackageWorkers.scheduled.erase(key);
+                else
+                {
+                    s_stage8PackageWorkers.scheduled.erase(key);
+                    RecycleStage8CpuPackage(result);
+                }
                 ++s_soakFrame.workerCompletions;
             }
             else
             {
                 std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
                 s_stage8PackageWorkers.scheduled.erase(CellKey(result.bx,result.by));
+                RecycleStage8CpuPackage(result);
                 ++s_soakFrame.workerCompletions;
             }
         }
@@ -38707,6 +38874,24 @@ namespace
         double frameMaxMs=0.0;
         int bucketFrames=0;
         int bucketOver16=0;
+        int ownershipWalked=0;
+        unsigned long long waterGpuBytes=0;
+        unsigned long long waterCpuStagingBytes=0;
+        unsigned long long geoQueryCacheBytes=0;
+        unsigned long long workerScratchBytes=0;
+        unsigned long long followStreamBytes=0;
+        unsigned long long recyclePoolBytes=0;
+        unsigned long long crtHeapCommitted=0;
+        unsigned long long crtHeapAllocated=0;
+        unsigned long long crtHeapUncommitted=0;
+        int crtHeaps=0;
+        unsigned long long vaPrivateCommitted=0;
+        unsigned long long vaImageCommitted=0;
+        unsigned long long vaMappedCommitted=0;
+        unsigned long long glDriverPrivate=0;
+        unsigned long long otherPersistentBytes=0;
+        unsigned long long accountedLogicalBytes=0;
+        char ownerClass[48]="unwalked";
     };
 
     struct SoakOverrunReceipt
@@ -38842,6 +39027,12 @@ namespace
         bool snapped90=false;
         bool snapped300=false;
         bool snapped900=false;
+        int nextOwnershipCheckpointM=1000;
+        int currentOwnershipCheckpointM=0;
+        bool resumeTravelAfterDrain=false;
+        bool ownershipStartWalked=false;
+        bool checkpointWalked=false;
+        int ownershipResumeHold=0;
         bool heapWarmed=false;
         SIZE_T heapPrewarmBytes=0;
         int warmSeekPhase=0;
@@ -38921,7 +39112,59 @@ namespace
         return n;
     }
 
-    SoakResourceLedger CaptureSoakLedger(char const* phase,double elapsedS,float distanceM)
+    void FillSoakOwnership(SoakResourceLedger& ledger,bool walkHeaps)
+    {
+        RecalcWaterGpuBytes();
+        ledger.waterGpuBytes=s_waterGpu.gpuBytesLive;
+        ledger.waterCpuStagingBytes=
+            (unsigned long long)s_waterSubmitVerts.capacity()*sizeof(WaterQuadVertex)
+            +(unsigned long long)s_waterSubmitIdx.capacity()*sizeof(uint32_t);
+        ledger.geoQueryCacheBytes=
+            (unsigned long long)ledger.cellEntries*sizeof(CellSample)
+            +(unsigned long long)ledger.farSurfaceEntries*(sizeof(uint64_t)+sizeof(float))
+            +(unsigned long long)ledger.farFilteredEntries*(sizeof(uint64_t)+sizeof(float))
+            +(unsigned long long)ledger.farMaterialEntries*(sizeof(uint64_t)+32u);
+        ledger.workerScratchBytes=ledger.workerResultBytes;
+        ledger.followStreamBytes=s_followStreamScratch.reservedBytes;
+        ledger.recyclePoolBytes=Stage8RecyclePoolBytes();
+        ledger.accountedLogicalBytes=ledger.livePackageBytes+ledger.waterGpuBytes
+            +ledger.waterCpuStagingBytes+ledger.geoQueryCacheBytes
+            +ledger.workerScratchBytes+ledger.retirementQueueBytes
+            +ledger.followStreamBytes+ledger.recyclePoolBytes;
+        if(!walkHeaps)
+        {
+            std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"unwalked");
+            return;
+        }
+        WalkCrtHeaps(ledger.crtHeapCommitted,ledger.crtHeapAllocated,
+            ledger.crtHeapUncommitted,ledger.crtHeaps);
+        WalkVirtualCommitted(ledger.vaPrivateCommitted,ledger.vaImageCommitted,
+            ledger.vaMappedCommitted);
+        ledger.ownershipWalked=1;
+        unsigned long long const priv=ledger.privateBytes;
+        ledger.glDriverPrivate=priv>ledger.crtHeapCommitted
+            ?priv-ledger.crtHeapCommitted:0;
+        unsigned long long const crtSlack=ledger.crtHeapCommitted>ledger.crtHeapAllocated
+            ?ledger.crtHeapCommitted-ledger.crtHeapAllocated:0;
+        if(ledger.glDriverPrivate>crtSlack
+            &&ledger.glDriverPrivate+64ull*1024ull*1024ull>ledger.crtHeapCommitted)
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"gl_driver_private");}
+        else if(crtSlack+32ull*1024ull*1024ull>ledger.crtHeapAllocated)
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"crt_heap_slack");}
+        else if(ledger.crtHeapAllocated>ledger.accountedLogicalBytes+64ull*1024ull*1024ull)
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"crt_heap_allocated");}
+        else if(ledger.geoQueryCacheBytes>16ull*1024ull*1024ull)
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"geo_query_cache");}
+        else if(ledger.retirementQueueBytes>16ull*1024ull*1024ull)
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"deferred_retirement");}
+        else
+        {std::snprintf(ledger.ownerClass,sizeof(ledger.ownerClass),"accounted_logical");}
+        ledger.otherPersistentBytes=priv>ledger.accountedLogicalBytes
+            ?priv-ledger.accountedLogicalBytes:0;
+    }
+
+    SoakResourceLedger CaptureSoakLedger(char const* phase,double elapsedS,float distanceM,
+        bool walkOwnership=false)
     {
         SoakResourceLedger ledger;
         if(phase)std::snprintf(ledger.phase,sizeof(ledger.phase),"%s",phase);
@@ -38986,6 +39229,7 @@ namespace
         ledger.workerQueue=Stage8WorkerQueueDepth();
         ledger.workingSetBytes=ProcessWorkingSetBytes();
         ledger.privateBytes=ProcessPrivateBytes();
+        FillSoakOwnership(ledger,walkOwnership);
         return ledger;
     }
 
@@ -39039,9 +39283,11 @@ namespace
         return named[best].name;
     }
 
-    void RecordSoakLedger(char const* phase,double elapsedS,float distanceM)
+    void RecordSoakLedger(char const* phase,double elapsedS,float distanceM,
+        bool walkOwnership=false)
     {
-        s_streamingSoak.ledgers.push_back(CaptureSoakLedger(phase,elapsedS,distanceM));
+        s_streamingSoak.ledgers.push_back(
+            CaptureSoakLedger(phase,elapsedS,distanceM,walkOwnership));
     }
 
     void ApplySoakBucketFrameStats(SoakResourceLedger& ledger)
@@ -39139,6 +39385,43 @@ namespace
             ledger.phase,ledger.frameMaxMs,
             ledger.phase,ledger.bucketFrames,
             ledger.phase,ledger.bucketOver16);
+        std::fprintf(f,
+            "ledger.%s.ownership_walked=%d\n"
+            "ledger.%s.water_gpu_bytes=%llu\n"
+            "ledger.%s.water_cpu_staging_bytes=%llu\n"
+            "ledger.%s.geo_query_cache_bytes=%llu\n"
+            "ledger.%s.worker_scratch_bytes=%llu\n"
+            "ledger.%s.follow_stream_bytes=%llu\n"
+            "ledger.%s.recycle_pool_bytes=%llu\n"
+            "ledger.%s.crt_heap_committed=%llu\n"
+            "ledger.%s.crt_heap_allocated=%llu\n"
+            "ledger.%s.crt_heap_uncommitted=%llu\n"
+            "ledger.%s.crt_heaps=%d\n"
+            "ledger.%s.va_private_committed=%llu\n"
+            "ledger.%s.va_image_committed=%llu\n"
+            "ledger.%s.va_mapped_committed=%llu\n"
+            "ledger.%s.gl_driver_private=%llu\n"
+            "ledger.%s.other_persistent_bytes=%llu\n"
+            "ledger.%s.accounted_logical_bytes=%llu\n"
+            "ledger.%s.owner_class=%s\n",
+            ledger.phase,ledger.ownershipWalked,
+            ledger.phase,(unsigned long long)ledger.waterGpuBytes,
+            ledger.phase,(unsigned long long)ledger.waterCpuStagingBytes,
+            ledger.phase,(unsigned long long)ledger.geoQueryCacheBytes,
+            ledger.phase,(unsigned long long)ledger.workerScratchBytes,
+            ledger.phase,(unsigned long long)ledger.followStreamBytes,
+            ledger.phase,(unsigned long long)ledger.recyclePoolBytes,
+            ledger.phase,(unsigned long long)ledger.crtHeapCommitted,
+            ledger.phase,(unsigned long long)ledger.crtHeapAllocated,
+            ledger.phase,(unsigned long long)ledger.crtHeapUncommitted,
+            ledger.phase,ledger.crtHeaps,
+            ledger.phase,(unsigned long long)ledger.vaPrivateCommitted,
+            ledger.phase,(unsigned long long)ledger.vaImageCommitted,
+            ledger.phase,(unsigned long long)ledger.vaMappedCommitted,
+            ledger.phase,(unsigned long long)ledger.glDriverPrivate,
+            ledger.phase,(unsigned long long)ledger.otherPersistentBytes,
+            ledger.phase,(unsigned long long)ledger.accountedLogicalBytes,
+            ledger.phase,ledger.ownerClass);
     }
 
     SoakResourceLedger const* FindSoakLedger(char const* phase)
@@ -39148,15 +39431,67 @@ namespace
         return nullptr;
     }
 
+    SoakResourceLedger const* FindOwnershipDrain(int metres)
+    {
+        char name[40];
+        std::snprintf(name,sizeof(name),"ckpt_%04d_drain",metres);
+        if(SoakResourceLedger const* l=FindSoakLedger(name))return l;
+        if(metres==0)return FindSoakLedger("ckpt_0000");
+        return nullptr;
+    }
+
+    char const* SoakRetainedOwnerClass()
+    {
+        SoakResourceLedger const* first=FindOwnershipDrain(0);
+        if(!first)first=FindSoakLedger("start_travel");
+        SoakResourceLedger const* last=FindSoakLedger("after_drain");
+        if(!last)last=FindSoakLedger("end_travel");
+        SoakResourceLedger const* mid=FindOwnershipDrain(4000);
+        if(!mid)mid=FindOwnershipDrain(2000);
+        if(!mid)mid=FindOwnershipDrain(1000);
+        if(!first||!last)return "INCOMPLETE";
+        long long const dPriv=(long long)last->privateBytes-(long long)first->privateBytes;
+        long long const dCrt=(long long)last->crtHeapCommitted-(long long)first->crtHeapCommitted;
+        long long const dGl=(long long)last->glDriverPrivate-(long long)first->glDriverPrivate;
+        long long const dLogical=(long long)last->accountedLogicalBytes
+            -(long long)first->accountedLogicalBytes;
+        if(dLogical>32ll*1024ll*1024ll)return last->ownerClass[0]?last->ownerClass:"logical";
+        if(dCrt>=dGl&&dCrt>64ll*1024ll*1024ll)return "crt_heap_committed";
+        if(dGl>64ll*1024ll*1024ll)return "gl_driver_private";
+        if(dPriv>64ll*1024ll*1024ll)return last->ownerClass[0]?last->ownerClass:"private_residual";
+        (void)mid;
+        return "none_after_high_water";
+    }
+
     char const* SoakMemoryPlateauVerdict()
     {
         SoakResourceLedger const* t90=FindSoakLedger("travel_90");
         SoakResourceLedger const* t300=FindSoakLedger("travel_300");
         SoakResourceLedger const* endTravel=FindSoakLedger("end_travel");
         SoakResourceLedger const* afterDrain=FindSoakLedger("after_drain");
+        SoakResourceLedger const* returned=FindSoakLedger("after_return_settle");
+        SoakResourceLedger const* hw=FindOwnershipDrain(2000);
+        if(!hw)hw=FindOwnershipDrain(1000);
+        SoakResourceLedger const* later=FindOwnershipDrain(8000);
+        if(!later)later=FindOwnershipDrain(4000);
+        if(!later)later=FindSoakLedger("travel_300");
         if(afterDrain&&endTravel
             &&afterDrain->privateBytes>endTravel->privateBytes+64ull*1024ull*1024ull)
         {return "FAIL_grew_while_stopped";}
+        if(hw&&later&&later->distanceM+1.f>=hw->distanceM+5000.f)
+        {
+            bool const logicalFlat=later->residentPackages<=hw->residentPackages+8
+                &&later->livePackageBytes<=hw->livePackageBytes+8ull*1024ull*1024ull
+                &&later->accountedLogicalBytes<=hw->accountedLogicalBytes+16ull*1024ull*1024ull;
+            long long const dPriv=(long long)later->privateBytes-(long long)hw->privateBytes;
+            double const metres=later->distanceM-hw->distanceM;
+            double const mbPerKm=metres>0.0
+                ?(double)dPriv/metres*1000.0/(1024.0*1024.0):0.0;
+            if(!logicalFlat)return "FAIL_logical_still_growing";
+            if(dPriv>96ll*1024ll*1024ll&&mbPerKm>12.0)
+            {return "FAIL_scales_with_distance";}
+            return "PASS_plateau";
+        }
         if(t90&&t300)
         {
             double const priv90=(double)t90->privateBytes;
@@ -39171,10 +39506,20 @@ namespace
             if(logicalFlat)return "PASS_plateau";
             return "FAIL_logical_still_growing";
         }
+        if(returned&&afterDrain)
+        {
+            bool const logicalFlat=returned->residentPackages<=afterDrain->residentPackages+8
+                &&returned->livePackageBytes<=afterDrain->livePackageBytes+8ull*1024ull*1024ull;
+            long long const dPriv=(long long)returned->privateBytes
+                -(long long)afterDrain->privateBytes;
+            if(!logicalFlat)return "FAIL_logical_still_growing";
+            if(dPriv>96ll*1024ll*1024ll)
+            {return "INCOMPLETE_return_high_water";}
+        }
         if(endTravel&&afterDrain
             &&afterDrain->privateBytes+32ull*1024ull*1024ull>=endTravel->privateBytes
             &&afterDrain->residentPackages<=endTravel->residentPackages+8)
-        {return "INCOMPLETE_need_300s_high_water_held";}
+        {return "INCOMPLETE_need_5km_after_high_water";}
         return "INCOMPLETE_need_300s";
     }
 
@@ -39319,6 +39664,11 @@ namespace
             "check.distance_grew=%s\n"
             "check.memory_plateau=%s\n"
             "check.distance_bucket_slope=%s\n"
+            "ownership.retained_class=%s\n"
+            "recycle.hits=%d\n"
+            "recycle.misses=%d\n"
+            "recycle.returns=%d\n"
+            "recycle.pool_bytes=%llu\n"
             "stop_frames=%d\nstop_frames_over_16_667=%d\n"
             "drain_frames=%d\ndrain_frames_over_16_667=%d\n"
             "return_frames=%d\nreturn_frames_over_16_667=%d\n"
@@ -39413,6 +39763,9 @@ namespace
             traveled?"PASS":"FAIL",
             SoakMemoryPlateauVerdict(),
             SoakDistanceBucketSlopeVerdict(),
+            SoakRetainedOwnerClass(),
+            s_stage8RecycleHits,s_stage8RecycleMisses,s_stage8RecycleReturns,
+            (unsigned long long)Stage8RecyclePoolBytes(),
             run.stopFrames,run.stopFramesOver16,
             run.drainFrames,run.drainFramesOver16,
             run.returnFrames,run.returnFramesOver16,
@@ -40021,12 +40374,21 @@ namespace
                 }
                 if(SoakSuppressWaterSubmit())s_waterPathWarmed=true;
                 if(!s_waterPathWarmed)return;
+                if(!run.ownershipStartWalked)
+                {
+                    RecordSoakLedger("start_travel",0.0,0.f,true);
+                    RecordSoakLedger("ckpt_0000",0.0,0.f,true);
+                    run.ownershipStartWalked=true;
+                    run.ownershipResumeHold=3;
+                    return;
+                }
+                if(run.ownershipResumeHold>0)
+                {--run.ownershipResumeHold;return;}
                 run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;run.peakDistanceM=0.f;
                 run.wakeStart=s_traversalWake;
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
-                RecordSoakLedger("start_travel",0.0,0.f);
             }
             return;
         }
@@ -40047,9 +40409,24 @@ namespace
             {RecordSoakLedger("travel_300",run.elapsedS,run.distanceM);run.snapped300=true;}
             if(!run.snapped900&&run.elapsedS>=900.0)
             {RecordSoakLedger("travel_900",run.elapsedS,run.distanceM);run.snapped900=true;}
+            if(run.nextOwnershipCheckpointM>0
+                &&run.distanceM>=(float)run.nextOwnershipCheckpointM)
+            {
+                char arrive[40];
+                std::snprintf(arrive,sizeof(arrive),"ckpt_%04d_arrive",
+                    run.nextOwnershipCheckpointM);
+                RecordSoakLedger(arrive,run.elapsedS,run.distanceM,false);
+                run.currentOwnershipCheckpointM=run.nextOwnershipCheckpointM;
+                run.resumeTravelAfterDrain=true;
+                run.checkpointWalked=false;
+                run.ownershipResumeHold=0;
+                Stage8DiscardHeldLookahead();
+                run.phase=4;run.drainElapsedS=0.0;
+                return;
+            }
             if(run.elapsedS>=g.soakDurationS)
             {
-                RecordSoakLedger("end_travel",run.elapsedS,run.distanceM);
+                RecordSoakLedger("end_travel",run.elapsedS,run.distanceM,true);
                 run.phase=3;run.stopElapsedS=0.0;
             }
             return;
@@ -40062,6 +40439,8 @@ namespace
             {
                 RecordSoakLedger("end_stop",run.elapsedS,run.distanceM);
                 Stage8DiscardHeldLookahead();
+                run.checkpointWalked=false;
+                run.ownershipResumeHold=0;
                 run.phase=4;run.drainElapsedS=0.0;
             }
             return;
@@ -40078,7 +40457,44 @@ namespace
             }
             if(drained||run.drainElapsedS>=g.soakDrainTimeoutS)
             {
-                RecordSoakLedger("after_drain",run.elapsedS,run.peakDistanceM);
+                if(run.resumeTravelAfterDrain)
+                {
+                    if(!run.checkpointWalked)
+                    {
+                        DeleteReusableDisplayLists();
+                        char drainName[40];
+                        std::snprintf(drainName,sizeof(drainName),"ckpt_%04d_drain",
+                            run.currentOwnershipCheckpointM);
+                        RecordSoakLedger(drainName,run.elapsedS,run.peakDistanceM,true);
+                        run.checkpointWalked=true;
+                        run.ownershipResumeHold=3;
+                        return;
+                    }
+                    if(run.ownershipResumeHold>0)
+                    {--run.ownershipResumeHold;return;}
+                    static int const kNext[]={1000,2000,4000,8000,12000,0};
+                    int nxt=0;
+                    for(int i=0;i<5;++i)
+                    {
+                        if(kNext[i]==run.currentOwnershipCheckpointM)
+                        {nxt=kNext[i+1];break;}
+                    }
+                    run.nextOwnershipCheckpointM=nxt;
+                    run.resumeTravelAfterDrain=false;
+                    run.phase=2;
+                    return;
+                }
+                if(!run.checkpointWalked)
+                {
+                    DeleteReusableDisplayLists();
+                    CompactProcessHeaps();
+                    RecordSoakLedger("after_drain",run.elapsedS,run.peakDistanceM,true);
+                    run.checkpointWalked=true;
+                    run.ownershipResumeHold=3;
+                    return;
+                }
+                if(run.ownershipResumeHold>0)
+                {--run.ownershipResumeHold;return;}
                 if(g.soakReturnToOrigin)
                 {
                     run.phase=5;run.returnElapsedS=0.0;
@@ -40104,7 +40520,7 @@ namespace
             {
                 run.distanceM=0.f;
                 SoakPlace(0.f,fly);
-                RecordSoakLedger("end_return",run.elapsedS,0.f);
+                RecordSoakLedger("end_return",run.elapsedS,0.f,true);
                 run.phase=6;run.settleElapsedS=0.0;
             }
             return;
@@ -40121,7 +40537,7 @@ namespace
             }
             if(originSettled||run.settleElapsedS>=g.soakDrainTimeoutS)
             {
-                RecordSoakLedger("after_return_settle",run.elapsedS,0.f);
+                RecordSoakLedger("after_return_settle",run.elapsedS,0.f,true);
                 run.endPending=Stage0PendingPackageCount(g.stage0PlayView);
                 run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
                 run.endWorkingSet=ProcessWorkingSetBytes();

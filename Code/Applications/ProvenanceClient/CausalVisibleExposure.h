@@ -110,13 +110,14 @@ namespace CausalVisibleExposure
                  sixVertexMean( v00.z, v10.z, v11.z, v01.z ) };
     }
 
-    inline BlockMesh EmitBlockMesh( BlockSurfaceSamples const& samples,
-        BlockSurfaceDescriptors const& descriptors )
+    inline void EmitBlockMeshInto( BlockSurfaceSamples const& samples,
+        BlockSurfaceDescriptors const& descriptors, BlockMesh& mesh )
     {
-        BlockMesh mesh;
         mesh.blockX = samples.blockX;
         mesh.blockY = samples.blockY;
-        mesh.triangles.reserve( descriptors.crossings.size() * 2u );
+        mesh.triangles.clear();
+        if ( mesh.triangles.capacity() < descriptors.crossings.size() * 2u )
+            mesh.triangles.reserve( descriptors.crossings.size() * 2u );
         for ( CrossingDescriptor const& crossing : descriptors.crossings )
         {
             Vec3 const& v00 = samples.vertices[crossing.v00];
@@ -126,6 +127,13 @@ namespace CausalVisibleExposure
             mesh.triangles.push_back( { v00, v10, v01 } );
             mesh.triangles.push_back( { v10, v11, v01 } );
         }
+    }
+
+    inline BlockMesh EmitBlockMesh( BlockSurfaceSamples const& samples,
+        BlockSurfaceDescriptors const& descriptors )
+    {
+        BlockMesh mesh;
+        EmitBlockMeshInto( samples, descriptors, mesh );
         return mesh;
     }
 

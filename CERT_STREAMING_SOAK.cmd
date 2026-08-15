@@ -8,7 +8,8 @@ if not exist "Build\x64_Release\ProvenanceClient.exe" (
   exit /b 1
 )
 
-REM First-landing soak: 90 s travel, 60 s stopped, drain, then return-to-origin settle.
+REM First-landing soak: 90 s travel, checkpoint drain at 1/2 km, stop, drain, return.
+REM Ownership / 8-12 km plateau: --soak-duration-s=500 --soak-stop-s=5 --soak-return=1
 REM Milestone / release: add --soak-duration-s=300 or --soak-duration-s=900
 REM 480 m/s certified stress: --soak-speed-mps=480
 REM 960 m/s informational only: --soak-speed-mps=960
