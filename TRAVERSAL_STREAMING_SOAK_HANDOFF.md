@@ -231,37 +231,34 @@ cardinal PASS as a soak.
 
 ## 2B vs 2A control
 
-Test A P5b.2B cardinal PASS (re-run after lookahead lifecycle cut).
+Test A P5b.2B cardinal PASS (re-run after apron-GL amortize).
 Digest `2396f444f66f1234` origin==return (2A was `f6c20f2c4774451b` —
 different stage). 2601 packages. Movement frames over 16.667 = 0.
 Water / topology / terrain-state wakes = 0.
 
 P5b.2B gameplay remains frozen at `8bb75265`. This cut is soak
-attribution + streaming lifecycle only. P5b.2C / P5b.3 stay CLOSED.
+lifecycle + diagnostics only. P5b.2C / P5b.3 stay CLOSED.
 
-## Soak attribution (frozen 2B world)
+## Soak lifecycle closure (frozen 2B world)
 
-Every movement frame >16.667 ms now writes a receipt against:
+Every movement frame >16.667 ms writes a named receipt
+(`package_build`, `collision_publish`, `mesh_publish`, `GL_create`,
+`GL_retire`, `glFinish`, `SwapBuffers`, `worker_wait`,
+`allocator_growth`, `draw_submit`). If nothing is ≥0.5 ms, the owner
+stays **unclassified** — do not hide it.
 
-```text
-package create | package retire | worker completion batch
-collision publish | mesh publish | GL create/delete
-allocator growth | glFinish | SwapBuffers | deferred retirement
-```
+Distance-bucketed resource ledger every 250 m (resident / pending,
+live mesh+collision+GL count/bytes, deferred retirement, worker
+results, cache entries, private vs working set, bucket p95/p99/max).
 
-Logical-resource ledger (beside process memory):
+Phases: travel → 60 s stopped → discard leftover lookahead → drain
+→ optional `--soak-return=1` fly-back + settle.
 
-```text
-live package / mesh / collision bytes
-live GL resources
-retirement queue bytes
-worker-result bytes
-cache entries
-private bytes / working set
-```
-
-Phases: travel → 60 s stopped → discard leftover lookahead → drain.
-Plateau snapshots at 90 s / 300 s (900 s remains a milestone).
+Lifecycle fix in this cut: collar / apron GL compile is budgeted at
+`kStage0ApronPublishBudgetMs` (2.5 ms). Live-window holes still use
+the hard 10.667 ms publication budget. A diagonal row-crossing no
+longer compiles ~101 lists on the crossing frame. 2B physics is
+untouched.
 
 ### Classified frame tail — still FAIL
 
@@ -271,37 +268,60 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 |---|---|---|---|
 | 2A control 90 s | 20 / 20079 | 60.687 | unattributed (pre-cut) |
 | 2B frozen 90 s | 14 / 20904 | 42.066 | unattributed (pre-cut) |
-| 2B attributed 90 s | **6 / 30013** | 37.646 | 5 package create, 1 allocator growth |
-| 2B attributed 300 s | **4 / 215933** | 30.908 | 2 package create, 1 allocator growth, 1 unclassified |
+| 2B attributed 90 s | 6 / 30013 | 37.646 | 5 package create, 1 allocator growth |
+| 2B attributed 300 s | 4 / 215933 | 30.908 | 2 package create, 1 allocator growth, 1 unclassified |
+| 2B lifecycle 90 s | **1 / 29903** | 34.025 | 1 allocator_growth |
+| 2B lifecycle 300 s | **1 / 216362** | 35.311 | 1 allocator_growth |
+| 2B lifecycle 900 s | **1 / 786675** | 38.301 | 1 allocator_growth |
 
-The sparse tail is a **row-crossing publish burst** (~101 packages,
-~8–10 ms GL compile) plus a rare allocator-growth hitch (~8 MB,
-no package work). glFinish / SwapBuffers / deferred retirement were
-not the travel tail. Stop and drain frames over 16.667 = 0.
+The row-crossing publish burst is closed. The remaining owner is a
+**deterministic ~8.4 MB allocator-growth hitch** at 2018.8 m / 84.118 s
+(zero package / GL / present work; draw_submit ~3.3 ms). It repeats
+at the same distance on 90 / 300 / 900. No clearer owner than the
+8 MB private commit — left classified, not greenwashed. Stop, drain,
+and return frames over 16.667 = 0.
 
 ### Memory — logical set bounded; process high-water plateaus
 
-The pre-cut 2 GB climb was trailing CPU lookahead retained in the
-completion deque and rescanned every frame (~21k results / 1.1 GB at
-90 s). Held results now stay inside the derive window only.
+250 m buckets: logical live (2601 packages / 114 MB, 22 MB worker
+results) is flat from the first bucket. Private climbs through the
+first ~3 km (CRT/GL high-water), then sits at ~1.31–1.33 GB out to
+21.6 km. Working set follows private, not travel distance.
 
-| Ledger | 90 s / 2160 m | 300 s / 7188 m | after stop+drain |
-|---|---|---|---|
-| resident packages | 2601 | 2601 | 2601 |
-| live package bytes | 114 MB | 114 MB | 114 MB |
-| worker-result bytes | 22 MB | 22 MB | 22 MB |
-| completed/held results | 424 | 424 | 424 |
-| private bytes | 1393 MB | 1320 MB | 1320 MB |
-| working set | 1217 MB | 1222 MB | 1222 MB |
+| Ledger | 90 s / 2160 m | 300 s / 7188 m | 900 s / 21597 m | after stop+drain |
+|---|---|---|---|---|
+| resident packages | 2601 | 2601 | 2601 | 2601 |
+| live package bytes | 114 MB | 114 MB | 114 MB | 114 MB |
+| worker-result bytes | 22 MB | 22 MB | 22 MB | 22 MB |
+| completed/held results | 424 | 424 | 424 | 424 |
+| private bytes | 1405 MB | 1325 MB | 1327 MB | 1327 MB |
+| working set | 1218 MB | 1214 MB | 1222 MB | 1222 MB |
 
-`check.memory_plateau=PASS_plateau`. Travel distance grew 3.3×; resident
-work, pending work, worker results, and process high-water did not.
-Memory may sit at a ~1.3–1.5 GB high-water mark (CRT/GL). 900 s is the
-same harness (`--soak-duration-s=900`) and was not required to close
-the scaling defect.
+`check.memory_plateau=PASS_plateau`.
+`check.distance_bucket_slope=PASS_plateau` (post-3 km window).
+d3000 private 1528 MB → d7000 1324 MB → d15000 1324 MB → d21000 1327 MB.
 
-Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (300 s run
-includes the 90 s snapshot). Trace:
+### Stationary drain + return (90 s run)
+
+90 s NE fly → 60 s stop → drain: pending 0, resident 2601, private
+1383 MB, WS 1215 MB. Logical live unchanged while stopped.
+
+Optional return-to-origin + settle: end_distance 0, resident 2601,
+pending 0, return/settle frames over 16.667 = 0. Private/WS rose to
+1812 / 1623 MB on the return churn (high-water, not a logical leak —
+live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
+
+### 90 / 300 / 900 gates
+
+```text
+90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 allocator_growth)
+300 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth)
+900 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth)
+       192 m complete, 2601 resident max, pending drains to 0, max pending 83
+```
+
+Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run
+includes 90 / 300 snapshots + 250 m buckets). Trace:
 `Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 ## Closed
