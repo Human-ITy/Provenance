@@ -291,13 +291,16 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 - Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 / 900 s)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- 2B draw-submit attribution 90 s: residency PASS, memory
+- 2B occupied-water warmup 90 s: residency PASS, memory
   INCOMPLETE_need_300s, FollowStream CRT segment 0, scratch growth 0.
-  Frame gate FAIL (1 / 34858; diagnostic `glFinish` 59.525 ms after
-  first `glDrawArrays/water` 30 tris at 527.7 m). Discriminator C+GPU,
-  lane water. `--soak-draw=no-water` travel is 0 over 16.667.
-  CPU `draw_submit` is now 2.0 ms (batched). 300 / 900 not run.
-  Test A still PASS. Do not relax 16.667. P5b.2C / P5b.3 CLOSED.
+  Frame gate FAIL (1 / 35305; hitch **persisted** — diagnostic
+  `glFinish` 71.975 ms after first live `glDrawArrays/water` 30 tris
+  at 525.9 m). `water_path_warmed=1`. Discriminator GPU, lane water.
+  Warmup used the exact occupied-water client-array path (in-view lake
+  quad + `glFinish`) during unmeasured soak start. Hitch did not move.
+  Backend/resource lifecycle remains. `--soak-draw=no-water` still the
+  negative control. 300 / 900 not run. Do not relax 16.667.
+  Attribution pin `e90e515c`. P5b.2C / P5b.3 CLOSED.
 - 250 m ledger + per-overrun receipts + stop/drain/optional return
   are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

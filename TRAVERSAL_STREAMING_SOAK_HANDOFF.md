@@ -276,6 +276,7 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B follow_stream 90 s | **1 / 28504** | 45.276 | 1 crt_heap_segment/follow_stream |
 | 2B scratch-owner 90 s | **1 / 32399** | 60.176 | 1 draw_submit @ 528.4 m |
 | 2B draw-attrib 90 s | **1 / 34858** | 61.920 | 1 glFinish after first `glDrawArrays/water` @ 527.7 m |
+| 2B water-warmup 90 s | **1 / 35305** | 74.206 | hitch **persisted**: glFinish after first live water @ 525.9 m |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -298,21 +299,25 @@ overflow 0, FollowStream CRT segment events 0.
 16.667 stays FAIL on this binary. Draw-submit attribution split the
 old 60 ms `draw_submit` owner:
 
-- Discriminator **C + GPU**. Presentation lane **water**.
-- Named call: diagnostic `glFinish` 59.525 ms after first live
-  `glDrawArrays/water` (30 tris / 15 quads) at 527.7 m. Previous
-  call: `glBegin/geology_lines` 0.006 ms. Terrain CallLists 0.04 ms.
+- Discriminator **GPU**. Presentation lane **water**.
+- Named call: diagnostic `glFinish` 71.975 ms after first live
+  `glDrawArrays/water` (30 tris / 15 quads) at 525.9 m. Previous
+  call: `glBegin/geology_lines` 0.007 ms. Terrain CallLists 0.04 ms.
+  CPU `draw_submit` 2.058 ms (batched).
 - `--soak-draw=no-water` (same residency): travel **0 / 28041+**
   over 16.667, max 5.612 ms. Water submit owns the stall.
-- Batching water to a client array (grass-cut pattern) moved the
-  stall out of CPU `draw_submit` (now 2.0 ms) onto the soak fence.
-  Dummy / frustum / full-kernel prewarm did not absorb the first
-  occupied-water GPU wait. Not closable without a different water
-  presentation backend.
+- Occupied-water first-use warmup (`water_path_warmed=1`): create/bind
+  the exact water client-array pipeline, submit one in-view lake quad
+  on that path, `glFinish` once, then begin timed travel. Hitch
+  **persisted** at the first live occupied-water batch (~526 m). It
+  did not move to another owner. Dummy / frustum / full-kernel and
+  this exact-path warmup all failed to absorb it. Backend / resource
+  lifecycle remains. Do not switch backend in this cut.
 
-FollowStream scratch growth 0, CRT segment 0. Stop / drain / return
-frames over 16.667 = 0. 300 / 900 not run — 90 s is not green. Do
-not relax 16.667. P5b.2C / P5b.3 stay CLOSED. Test A still PASS.
+FollowStream scratch growth 0, CRT segment 0. Stop had one 74 ms
+frame (discriminator B, GPU fence cheap — not the travel first-use).
+Drain / return over 16.667 = 0. 300 / 900 not run — 90 s is not
+green. Do not relax 16.667. P5b.2C / P5b.3 stay CLOSED.
 
 ### Memory — logical set bounded; process high-water plateaus
 
@@ -348,12 +353,13 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 
 ```text
 90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s,
-       frame FAIL (1 / 34858; glFinish 59.525 ms after first
-       glDrawArrays/water @ 527.7 m). scratch growth 0, overflow 0,
-       FollowStream CRT segment 0. draw_submit now 2.0 ms (attributed).
+       frame FAIL (1 / 35305; hitch persisted: glFinish 71.975 ms
+       after first live glDrawArrays/water 30 tris @ 525.9 m).
+       water_path_warmed=1. scratch growth 0, overflow 0,
+       FollowStream CRT segment 0.
 300 s  not run — 90 s not green
 900 s  not run — 90 s not green
-       192 m complete, 2601 resident max, pending drains to 0, max pending 82
+       192 m complete, 2601 resident max, pending drains to 0, max pending 72
 ```
 
 Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run

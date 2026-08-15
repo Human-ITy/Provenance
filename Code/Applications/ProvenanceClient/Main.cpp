@@ -20179,6 +20179,52 @@ namespace
 
     struct WaterQuadVertex { float x,y,z,r,g,b,a; };
     std::vector<WaterQuadVertex> s_waterSubmitVerts;
+    bool s_waterPathWarmed=false;
+
+    void SubmitOccupiedWaterClientArray()
+    {
+        if(s_waterSubmitVerts.empty())return;
+        GLsizei const stride=(GLsizei)sizeof(WaterQuadVertex);
+        unsigned char const* base=(unsigned char const*)s_waterSubmitVerts.data();
+        glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
+        glVertexPointer(3,GL_FLOAT,stride,base);
+        glColorPointer(4,GL_FLOAT,stride,base+offsetof(WaterQuadVertex,r));
+        glDrawArrays(GL_TRIANGLES,0,(GLsizei)s_waterSubmitVerts.size());
+        glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
+        glDisable(GL_BLEND);
+    }
+
+    void PushOccupiedWaterQuad(float x,float y,float z,float half,
+        float r,float gcol,float b,float a)
+    {
+        auto push=[&](float px,float py,float pz)
+        {s_waterSubmitVerts.push_back({px,py,pz,r,gcol,b,a});};
+        push(x-half,y-half,z);push(x+half,y-half,z);push(x+half,y+half,z);
+        push(x-half,y-half,z);push(x+half,y+half,z);push(x-half,y+half,z);
+    }
+
+    void WarmOccupiedWaterFirstUse()
+    {
+        if(s_waterPathWarmed)return;
+        if(SoakSuppressWaterSubmit())
+        {s_waterPathWarmed=true;return;}
+        if(s_waterSubmitVerts.capacity()<4096u)s_waterSubmitVerts.reserve(4096u);
+        // Origin usually has no occupied cells. The 528 m hitch is first-use of
+        // this exact blend + client-array path, not generic GL. One lake-colored
+        // occupied quad in the view forces that compile during unmeasured warmup.
+        if(s_waterSubmitVerts.empty())
+        {
+            float const cyw=std::cos(g.yaw),sy=std::sin(g.yaw);
+            float const cp=std::cos(g.pitch),sp=std::sin(g.pitch);
+            PushOccupiedWaterQuad(
+                g.camX+sy*cp*2.5f,g.camY+cyw*cp*2.5f,g.camZ+sp*2.5f,0.46f,
+                .10f,.34f,.72f,.42f);
+            SubmitOccupiedWaterClientArray();
+        }
+        glFinish();
+        s_waterPathWarmed=true;
+    }
 
     void DrawStage16DryHydrologyDiagnostics()
     {
@@ -20194,13 +20240,22 @@ namespace
         {fluvial=g.compiledFluvialRuntime.get();kernel=&fluvial->Drainage();}
         else if(IsDryHydrologyView(g.stage0PlayView)&&g.dryHydrologyRuntime)
         {kernel=g.dryHydrologyRuntime.get();}
-        if(!kernel)return;double const step=kernel->StepM();
+        if(!kernel)
+        {
+            if(g.certStreamingSoak)WarmOccupiedWaterFirstUse();
+            return;
+        }
+        double const step=kernel->StepM();
         int const radiusCells=(int)std::ceil(96.0/step);
         int const cx=(int)std::floor((g.feetX-kernel->MinX())/step);
         int const cy=(int)std::floor((g.feetY-kernel->MinY())/step);
         bool const drawOverlays=!SoakSuppressOverlaySubmit();
         bool const drawWater=water&&!g.certWorldgenCardinalReplacement&&!SoakSuppressWaterSubmit();
-        if(!drawOverlays&&!drawWater)return;
+        if(!drawOverlays&&!drawWater)
+        {
+            if(g.certStreamingSoak)WarmOccupiedWaterFirstUse();
+            return;
+        }
         // Do not glIsEnabled here: on this legacy driver a state query after
         // the first blended water submit was an implicit sync. Terrain lists
         // already bake colour; leave lighting/texture off for the overlay.
@@ -20304,18 +20359,7 @@ namespace
                 push(x+half,y+half,z,r,gcol,b,a);push(x-half,y+half,z,r,gcol,b,a);
             }
             int const waterTris=(int)s_waterSubmitVerts.size()/3;
-            if(!s_waterSubmitVerts.empty())
-            {
-                GLsizei const stride=(GLsizei)sizeof(WaterQuadVertex);
-                unsigned char const* base=(unsigned char const*)s_waterSubmitVerts.data();
-                glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-                glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
-                glVertexPointer(3,GL_FLOAT,stride,base);
-                glColorPointer(4,GL_FLOAT,stride,base+offsetof(WaterQuadVertex,r));
-                glDrawArrays(GL_TRIANGLES,0,(GLsizei)s_waterSubmitVerts.size());
-                glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
-                glDisable(GL_BLEND);
-            }
+            SubmitOccupiedWaterClientArray();
             if(SoakDrawAttribOn())
             {
                 QueryPerformanceCounter(&water1);
@@ -20326,6 +20370,7 @@ namespace
                 s_drawSubmitAttrib.water.cpuMs+=ms;
             }
         }
+        if(g.certStreamingSoak)WarmOccupiedWaterFirstUse();
         glDisable(GL_LIGHTING);glDisable(GL_TEXTURE_2D);
     }
 
@@ -38781,6 +38826,7 @@ namespace
             "overrun.class.unclassified=%d\n"
             "heap_prewarm_bytes=%llu\n"
             "heap_previsit_m=%.1f\n"
+            "water_path_warmed=%d\n"
             "scratch.required_key_max=%d\n"
             "scratch.eviction_candidate_max=%d\n"
             "scratch.geo_disk_sample_max=%d\n"
@@ -38843,7 +38889,7 @@ namespace
             run.classAllocatorGrowth,run.classGlFinish,run.classSwapBuffers,
             run.classDeferredRetire,run.classDrawSubmit,run.classWorkerWait,
             run.classUnclassified,(unsigned long long)run.heapPrewarmBytes,
-            run.heapPrevisitM,
+            run.heapPrevisitM,s_waterPathWarmed?1:0,
             kFollowStreamRequiredKeyMax,kFollowStreamEvictCandidateMax,
             kFollowStreamGeoDiskSampleMax,kFollowStreamSortWorkspaceMax,
             (unsigned long long)scratch.reservedBytes,
@@ -39032,7 +39078,7 @@ namespace
             run.bucketFrameMs.reserve(8192);
             run.ledgers.reserve(128);
             run.overruns.reserve(256);
-            run.warmFrames=0;run.phase=1;return;
+            run.warmFrames=0;run.phase=1;s_waterPathWarmed=false;return;
         }
         bool const fly=g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps;
         bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
@@ -39049,6 +39095,8 @@ namespace
                     run.heapWarmed=true;
                     return;
                 }
+                if(SoakSuppressWaterSubmit())s_waterPathWarmed=true;
+                if(!s_waterPathWarmed)return;
                 run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;run.peakDistanceM=0.f;
                 run.wakeStart=s_traversalWake;
                 s_soakPrevPrivate=ProcessPrivateBytes();
