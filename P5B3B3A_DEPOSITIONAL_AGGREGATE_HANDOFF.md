@@ -1,5 +1,8 @@
 # P5b.3B.3A — Depositional Aggregate
 
+Successor: P5b.3B.3B certified — see `P5B3B3B_COMPACTION_HANDOFF.md`.
+This file remains the 3A freeze record.
+
 P5b.3B.3A answers one question: can a **settled loose parcel** be admitted as
 a **depositional sediment body** without becoming host geology?
 

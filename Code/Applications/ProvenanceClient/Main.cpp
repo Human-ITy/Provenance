@@ -48,6 +48,7 @@
 #include "CausalPresentWaterTerrainHydraulicTransport.h"
 #include "CausalPresentWaterTerrainHydraulicSettling.h"
 #include "CausalPresentWaterTerrainHydraulicDeposition.h"
+#include "CausalPresentWaterTerrainHydraulicCompaction.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -558,7 +559,8 @@ namespace
         PresentWaterTerrainHydraulicDetachment = 29,
         PresentWaterTerrainHydraulicTransport = 30,
         PresentWaterTerrainHydraulicSettling = 31,
-        PresentWaterTerrainHydraulicDeposition = 32
+        PresentWaterTerrainHydraulicDeposition = 32,
+        PresentWaterTerrainHydraulicCompaction = 33
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -800,7 +802,7 @@ namespace
         // cardinal replacement (exact return). First landing default 90 s;
         // milestone is 300-900 s via --soak-duration-s=.
         bool certStreamingSoak = false;
-        int certStreamingSoakStageFilter = 28; // p5b3b3a latest play stage
+        int certStreamingSoakStageFilter = 29; // p5b3b3b latest play stage
         // --cert-semantic-distance: Test S. Teleport+settle absolute stations
         // across/beyond the 4096 m Stage-15 domain. Independent of Test B.
         bool certSemanticDistance = false;
@@ -914,6 +916,7 @@ namespace
         bool playP5b3bLaunch = false;
         bool playP5b3b2Launch = false;
         bool playP5b3b3aLaunch = false;
+        bool playP5b3b3bLaunch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -956,6 +959,8 @@ namespace
         int certP5b3b2VisualFrames = 0;
         bool certP5b3b3aVisual = false;
         int certP5b3b3aVisualFrames = 0;
+        bool certP5b3b3bVisual = false;
+        int certP5b3b3bVisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1082,15 +1087,18 @@ namespace
         float pickRightX = 1.f, pickRightY = 0.f, pickRightZ = 0.f;
         float pickUpX = 0.f, pickUpY = 0.f, pickUpZ = 1.f;
         float pickFwdX = 0.f, pickFwdY = 1.f, pickFwdZ = 0.f;
-        // [G] transform gizmo: click a catalog model, drag RGB axes to move,
-        // yellow ring to yaw. Poses persist in gallery_pose.txt so summoning
-        // the material palette elsewhere does not drag the characters with it.
+        // [G] transform gizmo: [E] selects the catalog model under the look
+        // reticle. With mouse look on, hold LMB to slide, RMB to yaw, wheel to
+        // raise/lower; arrows / PgUp / PgDn nudge. Poses persist in
+        // gallery_pose.txt so summoning the material palette elsewhere does
+        // not drag the characters with it.
         bool stage0Gizmo = false;
         int stage0GizmoSlot = -1;     // 1-based catalog slot, -1 = none
-        int stage0GizmoDrag = 0;      // 0 none, 1 X, 2 Y, 3 Z, 4 yaw
+        int stage0GizmoDrag = 0;      // 0 none, 1-3 RGB, 4 yaw ring, 5 plane, 6 look-slide, 7 look-yaw
         int stage0GizmoDeleteArmed = -1;
         float stage0GizmoGrab = 0.f;  // axis parameter, yaw delta, or plane grab X
         float stage0GizmoGrabY = 0.f; // ground-plane grab Y
+        bool stage0GizmoDirty = false;
         // --parent-hwnd=<handle>: run as a WS_CHILD inside the ProvRender viewport
         // instead of creating a top-level window, so the host embeds the real
         // renderer rather than a screenshot. Zero means run free-standing.
@@ -1194,6 +1202,9 @@ namespace
         bool presentWaterTerrainHydraulicDepositionAuthorityAttempted = false;
         bool presentWaterTerrainHydraulicDepositionCertified = false;
         std::string presentWaterTerrainHydraulicDepositionAuthorityReason = "not_loaded";
+        bool presentWaterTerrainHydraulicCompactionAuthorityAttempted = false;
+        bool presentWaterTerrainHydraulicCompactionCertified = false;
+        std::string presentWaterTerrainHydraulicCompactionAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -1223,6 +1234,7 @@ namespace
         std::unique_ptr<CausalPresentWaterTerrainHydraulicTransport::Kernel> presentWaterTerrainHydraulicTransportRuntime;
         std::unique_ptr<CausalPresentWaterTerrainHydraulicSettling::Kernel> presentWaterTerrainHydraulicSettlingRuntime;
         std::unique_ptr<CausalPresentWaterTerrainHydraulicDeposition::Kernel> presentWaterTerrainHydraulicDepositionRuntime;
+        std::unique_ptr<CausalPresentWaterTerrainHydraulicCompaction::Kernel> presentWaterTerrainHydraulicCompactionRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2169,6 +2181,7 @@ namespace
     void DrawStage0CandidateGallery( float ox, float oy, float ground, float sway, float breathe );
     void DrawStage0TransformGizmo();
     bool Stage0GizmoOnMouseDown();
+    bool Stage0GizmoSelectLookedAt();
     void Stage0GizmoOnMouseMove();
     void Stage0GizmoOnMouseUp();
     void Stage0ToggleGizmo();
@@ -3251,6 +3264,11 @@ namespace
         return view == Stage0PlayView::PresentWaterTerrainHydraulicDeposition;
     }
 
+    bool IsPresentWaterTerrainHydraulicCompactionView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::PresentWaterTerrainHydraulicCompaction;
+    }
+
     bool UsesPresentWaterOccupancy( Stage0PlayView view )
     {
         return IsPresentWaterView(view) || IsPresentWaterBodyView(view)
@@ -3263,11 +3281,13 @@ namespace
             || IsPresentWaterTerrainHydraulicDetachmentView(view)
             || IsPresentWaterTerrainHydraulicTransportView(view)
             || IsPresentWaterTerrainHydraulicSettlingView(view)
-            || IsPresentWaterTerrainHydraulicDepositionView(view);
+            || IsPresentWaterTerrainHydraulicDepositionView(view)
+            || IsPresentWaterTerrainHydraulicCompactionView(view);
     }
 
     CausalPresentWater::Kernel* ActivePresentWaterKernel()
     {
+        if ( g.presentWaterTerrainHydraulicCompactionRuntime ) { return &g.presentWaterTerrainHydraulicCompactionRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicDepositionRuntime ) { return &g.presentWaterTerrainHydraulicDepositionRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicSettlingRuntime ) { return &g.presentWaterTerrainHydraulicSettlingRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicTransportRuntime ) { return &g.presentWaterTerrainHydraulicTransportRuntime->Water(); }
@@ -3405,7 +3425,36 @@ namespace
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_settling_floor.cpc";
         constexpr char const* kPresentWaterTerrainHydraulicDepositionPath =
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_deposition_floor.cpc";
+        constexpr char const* kPresentWaterTerrainHydraulicCompactionPath =
+            "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_compaction_floor.cpc";
 
+        if(IsPresentWaterTerrainHydraulicCompactionView(view))
+        {
+            if(!g.presentWaterTerrainHydraulicCompactionAuthorityAttempted)
+            {
+                g.presentWaterTerrainHydraulicCompactionAuthorityAttempted=true;
+                std::string reason;g.presentWaterTerrainHydraulicCompactionRuntime=
+                    CausalPresentWaterTerrainHydraulicCompaction::LoadKernel(kGeologyPath,kExposurePath,
+                        kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,
+                        kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                        kSedimentPath,kPresentWaterPath,kPresentWaterBodyPath,
+                        kPresentWaterEquilibratePath,kPresentWaterTransferPath,
+                        kPresentWaterExternalPath,kPresentWaterTopologyPath,
+                        kPresentWaterTerrainResponsePath,kPresentWaterTerrainStatePath,
+                        kPresentWaterTerrainPorePath,kPresentWaterTerrainPoreOccupancyPath,
+                        kPresentWaterTerrainHydraulicDetachmentPath,
+                        kPresentWaterTerrainHydraulicTransportPath,
+                        kPresentWaterTerrainHydraulicSettlingPath,
+                        kPresentWaterTerrainHydraulicDepositionPath,
+                        kPresentWaterTerrainHydraulicCompactionPath,&reason);
+                g.presentWaterTerrainHydraulicCompactionCertified=
+                    g.presentWaterTerrainHydraulicCompactionRuntime!=nullptr;
+                g.presentWaterTerrainHydraulicCompactionAuthorityReason=
+                    g.presentWaterTerrainHydraulicCompactionCertified?"certified":reason;
+            }
+            return g.presentWaterTerrainHydraulicCompactionCertified
+                &&g.presentWaterTerrainHydraulicCompactionRuntime!=nullptr;
+        }
         if(IsPresentWaterTerrainHydraulicDepositionView(view))
         {
             if(!g.presentWaterTerrainHydraulicDepositionAuthorityAttempted)
@@ -14550,7 +14599,8 @@ namespace
           && !g.presentWaterTerrainHydraulicDetachmentRuntime
           && !g.presentWaterTerrainHydraulicTransportRuntime
           && !g.presentWaterTerrainHydraulicSettlingRuntime
-          && !g.presentWaterTerrainHydraulicDepositionRuntime ) { return; }
+          && !g.presentWaterTerrainHydraulicDepositionRuntime
+          && !g.presentWaterTerrainHydraulicCompactionRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -14817,7 +14867,8 @@ namespace
           && !g.presentWaterTerrainHydraulicDetachmentRuntime
           && !g.presentWaterTerrainHydraulicTransportRuntime
           && !g.presentWaterTerrainHydraulicSettlingRuntime
-          && !g.presentWaterTerrainHydraulicDepositionRuntime ) { return; }
+          && !g.presentWaterTerrainHydraulicDepositionRuntime
+          && !g.presentWaterTerrainHydraulicCompactionRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -15014,6 +15065,7 @@ namespace
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
         if ( IsPresentWaterTopologyView( view ) ) { return 21; }
+        if ( IsPresentWaterTerrainHydraulicCompactionView( view ) ) { return 30; }
         if ( IsPresentWaterTerrainHydraulicDepositionView( view ) ) { return 29; }
         if ( IsPresentWaterTerrainHydraulicSettlingView( view ) ) { return 28; }
         if ( IsPresentWaterTerrainHydraulicTransportView( view ) ) { return 27; }
@@ -15115,13 +15167,15 @@ namespace
           "HYDROLOGY.HYDRAULIC_TRANSPORT", "transported parcel comes to rest while remaining conserved loose matter", Stage0PlayView::PresentWaterTerrainHydraulicSettling },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.DEPOSITIONAL_AGGREGATE", "P5b.3B.3A - Depositional Aggregate",
           "HYDROLOGY.LOOSE_MATTER_SETTLING", "settled loose matter admitted as depositional sediment, not host weld", Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
+        { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.COMPACTION_TERRAIN_SURFACE", "P5b.3B.3B - Compaction / Stable Terrain Surface",
+          "HYDROLOGY.DEPOSITIONAL_AGGREGATE", "compacted deposit participates in terrain surface, not host weld", Stage0PlayView::PresentWaterTerrainHydraulicCompaction },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
 
     constexpr int kCertificationBrowserCount =
         (int)( sizeof( s_certificationBrowser ) / sizeof( s_certificationBrowser[0] ) );
-    constexpr int kStandingBoardClosedCount = 2;
+    constexpr int kStandingBoardClosedCount = 1;
     constexpr int kStandingBoardCount = kCertificationBrowserCount + kStandingBoardClosedCount;
 
     struct StandingBoardClosedEntry
@@ -15131,7 +15185,6 @@ namespace
     };
 
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
-        { "P5b.3B.3B compaction / terrain integration", "HYDROLOGY.COMPACTION_TERRAIN_INTEGRATION" },
         { "P5b.3C bank / support collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" }
     };
 
@@ -15231,6 +15284,8 @@ namespace
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
         { attempted = g.presentWaterEquilibrateAuthorityAttempted; certified = g.presentWaterEquilibrateCertified; }
+        else if ( IsPresentWaterTerrainHydraulicCompactionView( entry.view ) )
+        { attempted = g.presentWaterTerrainHydraulicCompactionAuthorityAttempted; certified = g.presentWaterTerrainHydraulicCompactionCertified; }
         else if ( IsPresentWaterTerrainHydraulicDepositionView( entry.view ) )
         { attempted = g.presentWaterTerrainHydraulicDepositionAuthorityAttempted; certified = g.presentWaterTerrainHydraulicDepositionCertified; }
         else if ( IsPresentWaterTerrainHydraulicSettlingView( entry.view ) )
@@ -15535,6 +15590,7 @@ namespace
             if ( IsPresentWaterTerrainPoreOccupancyView( view ) ) { reason = &g.presentWaterTerrainPoreOccupancyAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicDetachmentView( view ) ) { reason = &g.presentWaterTerrainHydraulicDetachmentAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicTransportView( view ) ) { reason = &g.presentWaterTerrainHydraulicTransportAuthorityReason; }
+            if ( IsPresentWaterTerrainHydraulicCompactionView( view ) ) { reason = &g.presentWaterTerrainHydraulicCompactionAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicDepositionView( view ) ) { reason = &g.presentWaterTerrainHydraulicDepositionAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicSettlingView( view ) ) { reason = &g.presentWaterTerrainHydraulicSettlingAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
@@ -15862,7 +15918,16 @@ namespace
             g.stage0ToolGeologyCutaway=false;g.walkMode=true;
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
-            g.statusLine="P5b.3B.3A - depositional aggregate; P5b.3C / 3B.3B closed";
+            g.statusLine="P5b.3B.3A - depositional aggregate; P5b.3C closed";
+        }
+        if(g.playWorldgenInitialized&&IsPresentWaterTerrainHydraulicCompactionView(view)&&oldView!=view)
+        {
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="P5b.3B.3B - compaction / stable terrain surface; P5b.3C closed";
         }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
@@ -15926,6 +15991,7 @@ namespace
             case Stage0PlayView::PresentWaterTerrainHydraulicTransport: return "CERTIFIED HYDRAULIC TRANSPORT";
             case Stage0PlayView::PresentWaterTerrainHydraulicSettling: return "CERTIFIED LOOSE-MATTER SETTLING";
             case Stage0PlayView::PresentWaterTerrainHydraulicDeposition: return "CERTIFIED DEPOSITIONAL AGGREGATE";
+            case Stage0PlayView::PresentWaterTerrainHydraulicCompaction: return "CERTIFIED COMPACTION / STABLE TERRAIN SURFACE";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -19829,6 +19895,16 @@ namespace
         if ( len > 1e-6f ) { dx /= len; dy /= len; dz /= len; }
     }
 
+    void Stage0LookRay( float& ox, float& oy, float& oz, float& dx, float& dy, float& dz )
+    {
+        // Same aim vector as UpdateAim / the dig reticle: camera origin along
+        // yaw/pitch, not the free-cursor screen ray.
+        float const cp = std::cos( g.pitch ), sp = std::sin( g.pitch );
+        float const cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        ox = g.camX; oy = g.camY; oz = g.camZ;
+        dx = sy * cp; dy = cy * cp; dz = sp;
+    }
+
     bool Stage0RayHitsAabb( float ox, float oy, float oz, float dx, float dy, float dz,
         float x0, float y0, float z0, float x1, float y1, float z1, float& tHit )
     {
@@ -19929,6 +20005,99 @@ namespace
         ground = GradeToZ( g.gradeDatum );
     }
 
+    int Stage0PickCandidateAlongRay( float ox, float oy, float oz, float dx, float dy, float dz )
+    {
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
+        ApplyGalleryHudVisibility( gallery );
+        float lineupX, lineupY, ground;
+        Stage0PickRayAndGalleryOrigin( lineupX, lineupY, ground );
+        int bestSlot = -1;
+        float bestT = 80.f;
+        float const pad = 0.20f;
+        int shown = 0;
+        for ( Stage0VisualHullMesh const& cand : gallery )
+        {
+            if ( !cand.renderOn ) { continue; }
+            float x, y, z, yaw;
+            Stage0CandidatePlacement( cand, shown, lineupX, lineupY, ground, x, y, z, yaw );
+            float const c = std::cos( -yaw ), s = std::sin( -yaw );
+            float const rx = ox - x, ry = oy - y;
+            float const lx = c * rx - s * ry, ly = s * rx + c * ry, lz = oz - z;
+            float const rdx = c * dx - s * dy, rdy = s * dx + c * dy;
+            float tHit = 0.f;
+            if ( Stage0RayHitsAabb( lx, ly, lz, rdx, rdy, dz,
+                    cand.minX - pad, cand.minY - pad, cand.minZ - pad,
+                    cand.maxX + pad, cand.maxY + pad, cand.maxZ + pad, tHit )
+                && tHit < bestT )
+            {
+                bestT = tHit;
+                bestSlot = cand.slotIndex + 1;
+            }
+            float const hx = (std::max)( std::fabs( cand.minX ), std::fabs( cand.maxX ) ) + pad;
+            float const hy = (std::max)( std::fabs( cand.minY ), std::fabs( cand.maxY ) ) + pad;
+            if ( Stage0RayHitsAabb( ox, oy, oz, dx, dy, dz,
+                    x - hx, y - hy, z + cand.minZ - pad,
+                    x + hx, y + hy, z + cand.maxZ + pad, tHit )
+                && tHit < bestT )
+            {
+                bestT = tHit;
+                bestSlot = cand.slotIndex + 1;
+            }
+            ++shown;
+        }
+        return bestSlot;
+    }
+
+    bool Stage0GizmoApplySelection( int slot, bool startBodyDrag )
+    {
+        g.stage0GizmoDrag = 0;
+        g.stage0GizmoDeleteArmed = -1;
+        g.stage0GizmoSlot = slot;
+        if ( slot < 1 ) { return false; }
+        Stage0VisualHullMesh* mesh = nullptr;
+        float x, y, z, yaw;
+        if ( Stage0FindCandidatePose( slot, x, y, z, yaw, &mesh ) && mesh )
+        {
+            if ( !mesh->posed )
+            {
+                mesh->posed = true;
+                mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
+            }
+            if ( startBodyDrag )
+            {
+                g.stage0GizmoDrag = 5;
+                float ox, oy, oz, dx, dy, dz;
+                Stage0PickRay( ox, oy, oz, dx, dy, dz );
+                if ( std::fabs( dz ) > 1e-5f )
+                {
+                    float const t = ( mesh->poseZ - oz ) / dz;
+                    g.stage0GizmoGrab = mesh->poseX - ( ox + dx * t );
+                    g.stage0GizmoGrabY = mesh->poseY - ( oy + dy * t );
+                }
+            }
+        }
+        char note[128];
+        std::snprintf( note, sizeof( note ),
+            "Gizmo: character %03d  hold LMB slide  RMB yaw  wheel height  arrows nudge",
+            slot );
+        g.statusLine = note;
+        return true;
+    }
+
+    bool Stage0GizmoSelectLookedAt()
+    {
+        if ( !g.stage0Gizmo ) { return false; }
+        float ox, oy, oz, dx, dy, dz;
+        Stage0LookRay( ox, oy, oz, dx, dy, dz );
+        int const slot = Stage0PickCandidateAlongRay( ox, oy, oz, dx, dy, dz );
+        if ( slot < 1 )
+        {
+            g.statusLine = "Gizmo: look at a catalog model, press [E]";
+            return false;
+        }
+        return Stage0GizmoApplySelection( slot, false );
+    }
+
     void DrawStage0TransformGizmo()
     {
         if ( !g.stage0Gizmo || g.stage0GizmoSlot < 1 ) { return; }
@@ -19980,10 +20149,6 @@ namespace
     bool Stage0GizmoOnMouseDown()
     {
         if ( !g.stage0Gizmo ) { return false; }
-        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
-        ApplyGalleryHudVisibility( gallery );
-        float lineupX, lineupY, ground;
-        Stage0PickRayAndGalleryOrigin( lineupX, lineupY, ground );
         float ox, oy, oz, dx, dy, dz;
         Stage0PickRay( ox, oy, oz, dx, dy, dz );
 
@@ -20023,59 +20188,9 @@ namespace
             }
         }
 
-        int bestSlot = -1;
-        float bestT = 80.f;
-        int shown = 0;
-        for ( Stage0VisualHullMesh const& cand : gallery )
-        {
-            if ( !cand.renderOn ) { continue; }
-            float x, y, z, yaw;
-            Stage0CandidatePlacement( cand, shown, lineupX, lineupY, ground, x, y, z, yaw );
-            float const c = std::cos( -yaw ), s = std::sin( -yaw );
-            float const rx = ox - x, ry = oy - y;
-            float const lx = c * rx - s * ry, ly = s * rx + c * ry, lz = oz - z;
-            float const rdx = c * dx - s * dy, rdy = s * dx + c * dy;
-            float tHit = 0.f;
-            if ( Stage0RayHitsAabb( lx, ly, lz, rdx, rdy, dz,
-                    cand.minX, cand.minY, cand.minZ,
-                    cand.maxX, cand.maxY, cand.maxZ, tHit ) && tHit < bestT )
-            {
-                bestT = tHit;
-                bestSlot = cand.slotIndex + 1;
-            }
-            ++shown;
-        }
-        g.stage0GizmoDrag = 0;
-        g.stage0GizmoDeleteArmed = -1;
-        g.stage0GizmoSlot = bestSlot;
-        if ( bestSlot > 0 )
-        {
-            Stage0VisualHullMesh* mesh = nullptr;
-            float x, y, z, yaw;
-            if ( Stage0FindCandidatePose( bestSlot, x, y, z, yaw, &mesh ) && mesh )
-            {
-                if ( !mesh->posed )
-                {
-                    mesh->posed = true;
-                    mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
-                }
-                g.stage0GizmoDrag = 5;
-                float ox2, oy2, oz2, dx2, dy2, dz2;
-                Stage0PickRay( ox2, oy2, oz2, dx2, dy2, dz2 );
-                if ( std::fabs( dz2 ) > 1e-5f )
-                {
-                    float const t = ( mesh->poseZ - oz2 ) / dz2;
-                    g.stage0GizmoGrab = mesh->poseX - ( ox2 + dx2 * t );
-                    g.stage0GizmoGrabY = mesh->poseY - ( oy2 + dy2 * t );
-                }
-            }
-            char note[96];
-            std::snprintf( note, sizeof( note ),
-                "Gizmo: character %03d  drag to move, RGB axes, yellow ring yaw, [Del] delete", bestSlot );
-            g.statusLine = note;
-            return true;
-        }
-        g.statusLine = "Gizmo: click a catalog model";
+        int const bestSlot = Stage0PickCandidateAlongRay( ox, oy, oz, dx, dy, dz );
+        if ( Stage0GizmoApplySelection( bestSlot, true ) ) { return true; }
+        g.statusLine = "Gizmo: [E] select what you look at, or click a catalog model";
         return true;
     }
 
@@ -20127,12 +20242,57 @@ namespace
 
     void Stage0GizmoOnMouseUp()
     {
-        if ( g.stage0GizmoDrag > 0 )
+        if ( g.stage0GizmoDrag > 0 || g.stage0GizmoDirty )
         {
             SaveStage0GalleryPoses();
+            g.stage0GizmoDirty = false;
             g.statusLine = "Gizmo: pose saved";
         }
         g.stage0GizmoDrag = 0;
+    }
+
+    bool Stage0GizmoLockMesh( Stage0VisualHullMesh*& mesh )
+    {
+        if ( !g.stage0Gizmo || g.stage0GizmoSlot < 1 ) { return false; }
+        float x, y, z, yaw;
+        if ( !Stage0FindCandidatePose( g.stage0GizmoSlot, x, y, z, yaw, &mesh ) || !mesh )
+        { return false; }
+        if ( !mesh->posed )
+        {
+            mesh->posed = true;
+            mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
+        }
+        return true;
+    }
+
+    void Stage0GizmoNudgeLook( float rightM, float forwardM, float upM, float yawRad )
+    {
+        Stage0VisualHullMesh* mesh = nullptr;
+        if ( !Stage0GizmoLockMesh( mesh ) ) { return; }
+        float const cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float const fx = sy, fy = cy;
+        float const rx = cy, ry = -sy;
+        mesh->poseX += rx * rightM + fx * forwardM;
+        mesh->poseY += ry * rightM + fy * forwardM;
+        mesh->poseZ += upM;
+        mesh->poseYaw += yawRad;
+        g.stage0GizmoDirty = true;
+    }
+
+    void Stage0GizmoBeginLookDrag( int mode )
+    {
+        Stage0VisualHullMesh* mesh = nullptr;
+        if ( !Stage0GizmoLockMesh( mesh ) ) { return; }
+        g.stage0GizmoDrag = mode;
+        g.stage0GizmoDeleteArmed = -1;
+    }
+
+    void Stage0GizmoOnLookDelta( int dx, int dy )
+    {
+        if ( g.stage0GizmoDrag == 6 )
+        { Stage0GizmoNudgeLook( (float)dx * 0.012f, (float)( -dy ) * 0.012f, 0.f, 0.f ); }
+        else if ( g.stage0GizmoDrag == 7 )
+        { Stage0GizmoNudgeLook( 0.f, 0.f, 0.f, (float)dx * 0.008f ); }
     }
 
     void Stage0ToggleGizmo()
@@ -20140,9 +20300,10 @@ namespace
         g.stage0Gizmo = !g.stage0Gizmo;
         g.stage0GizmoDrag = 0;
         g.stage0GizmoDeleteArmed = -1;
+        g.stage0GizmoDirty = false;
         if ( !g.stage0Gizmo ) { g.stage0GizmoSlot = -1; }
         g.statusLine = g.stage0Gizmo
-            ? "Gizmo ON - Tab to free the mouse, click a model, drag axes / yellow ring"
+            ? "Gizmo ON — [E] select, hold LMB to slide, RMB to yaw, wheel height"
             : "Gizmo OFF";
     }
 
@@ -23744,7 +23905,7 @@ namespace
         else
         {
             DrawHudText( 16, 10, g.stage0Gizmo
-                ? "[G] gizmo ON  click model  RGB move  yellow ring yaw  [Del] delete  [Tab] mouse"
+                ? "[G] gizmo ON  [E] select  hold LMB slide  RMB yaw  wheel height  arrows nudge"
                 : "[F1] readout   [G] gizmo   [Tab] mouse" );
         }
 
@@ -33947,12 +34108,12 @@ namespace
           &&!g.playStage16F1Launch&&!g.playStage16F2Launch&&!g.playStage16F3Launch
           &&!g.playStage16F4Launch&&!g.playP5b1Launch          &&!g.playP5b2aLaunch
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
-          &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch
+          &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch&&!g.playP5b3b3bLaunch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicDeposition);
+            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicCompaction);
         }
         if ( g.playStage11Launch )
         {
@@ -34248,6 +34409,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playP5b3b3bLaunch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicCompaction);
+            if(g.certP5b3b3bVisual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playStage16DLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34357,14 +34533,16 @@ namespace
         {g.statusLine="P5b.3B.2 - LOOSE-MATTER SETTLING  [M] stages";}
         if(g.playP5b3b3aLaunch)
         {g.statusLine="P5b.3B.3A - DEPOSITIONAL AGGREGATE  [M] stages";}
+        if(g.playP5b3b3bLaunch)
+        {g.statusLine="P5b.3B.3B - COMPACTION / STABLE TERRAIN SURFACE  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
             bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
-            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterTerrainHydraulicDeposition;
+            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterTerrainHydraulicCompaction;
             bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
             bool const selection=g.stage0BrowserSelection==
-                BrowserIndexForView(Stage0PlayView::PresentWaterTerrainHydraulicDeposition)
+                BrowserIndexForView(Stage0PlayView::PresentWaterTerrainHydraulicCompaction)
                 &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
                     g.stage0BrowserSelection);
             int const savedSelection=g.stage0BrowserSelection;
@@ -34410,7 +34588,8 @@ namespace
                 &&g.presentWaterTerrainHydraulicDetachmentCertified&&g.presentWaterTerrainHydraulicDetachmentRuntime
                 &&g.presentWaterTerrainHydraulicTransportCertified&&g.presentWaterTerrainHydraulicTransportRuntime
                 &&g.presentWaterTerrainHydraulicSettlingCertified&&g.presentWaterTerrainHydraulicSettlingRuntime
-                &&g.presentWaterTerrainHydraulicDepositionCertified&&g.presentWaterTerrainHydraulicDepositionRuntime;
+                &&g.presentWaterTerrainHydraulicDepositionCertified&&g.presentWaterTerrainHydraulicDepositionRuntime
+                &&g.presentWaterTerrainHydraulicCompactionCertified&&g.presentWaterTerrainHydraulicCompactionRuntime;
             bool const restored=SelectCertificationBrowserEntry(savedSelection)
                 &&g.stage0PlayView==Stage0PlayView::PresentWater;
             bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
@@ -34420,7 +34599,7 @@ namespace
             {
                 std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
                     "menu_open=%d\ntool_drawer_open=%d\n"
-                    "runtime=%s\nlatest_certified_stage=P5b.3B.3A\n"
+                    "runtime=%s\nlatest_certified_stage=P5b.3B.3B\n"
                     "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
                     "browser_selection=%d\nbrowser_category=%s\n"
                     "category_stage_navigation=%s\n"
@@ -34665,6 +34844,8 @@ namespace
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
         else if(IsDryHydrologyView(g.stage0PlayView))
         {row("fixture=dry_hydrology  authority=CERTIFIED  terrain=STAGE15  water=OFF");}
+        else if(IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))
+        {row("fixture=compaction_terrain_surface  authority=CERTIFIED  source=P5B3B3A  coupling=COMPACT_DEPOSIT");}
         else if(IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))
         {row("fixture=depositional_aggregate  authority=CERTIFIED  source=P5B3B2  coupling=DEPOSIT_AGGREGATE");}
         else if(IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))
@@ -34719,30 +34900,54 @@ namespace
                 std::snprintf(line,sizeof(line),"depth=%.3fm  surface=%.3fm  terrain=%.3fm  units=%lld",
                     q.depthM,q.waterSurfaceZ,q.terrainZ,(long long)q.water.occupancyUnits);
                 row(line,.20f,.58f,.88f);
-                std::snprintf(line,sizeof(line),"flow=OFF  fluid_solve=0  p5b.1=ONE_WAY  p5b.2A=STATE  p5b.2B=%s  p5b.2C=%s  p5b.3A=%s  p5b.3B=%s  p5b.3B.2=%s  p5b.3B.3A=%s",
+                std::snprintf(line,sizeof(line),"flow=OFF  fluid_solve=0  p5b.1=ONE_WAY  p5b.2A=STATE  p5b.2B=%s  p5b.2C=%s  p5b.3A=%s  p5b.3B=%s  p5b.3B.2=%s  p5b.3B.3A=%s  p5b.3B.3B=%s",
                     (IsPresentWaterTerrainPoreView(g.stage0PlayView)
                         ||IsPresentWaterTerrainPoreOccupancyView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"PORE":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"PORE":"CLOSED",
                     (IsPresentWaterTerrainPoreOccupancyView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"OCC":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"OCC":"CLOSED",
                     (IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"DETACH":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"DETACH":"CLOSED",
                     (IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"MOVE":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"MOVE":"CLOSED",
                     (IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"SETTLE":"CLOSED",
-                    IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)?"DEPOSIT":"CLOSED");
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"SETTLE":"CLOSED",
+                    (IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView))?"DEPOSIT":"CLOSED",
+                    IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView)?"COMPACT":"CLOSED");
                 row(line,.82f,.92f,.72f);
-                if(IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicDepositionRuntime)
+                if(IsPresentWaterTerrainHydraulicCompactionView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicCompactionRuntime)
+                {
+                    auto const st=g.presentWaterTerrainHydraulicCompactionRuntime->QueryTerrainStateAt(g.feetX,g.feetY);
+                    auto const pore=g.presentWaterTerrainHydraulicCompactionRuntime->QueryPoreAt(g.feetX,g.feetY);
+                    std::snprintf(line,sizeof(line),"wet=%.2f  moist=%.2f  sat=%.2f  pore=%lld/%lld",
+                        (double)st.SurfaceWetness/1000.0,(double)st.MoistureContent/1000.0,
+                        (double)st.Saturation/1000.0,
+                        (long long)pore.StoredWaterGrams,(long long)pore.PoreCapacityGrams);
+                    row(line,.45f,.78f,.95f);
+                    std::snprintf(line,sizeof(line),"tRev=%u  loose=%lld  deposit=%lld  solids=%lld  compacts=%zu  p5b3b3a=FROZEN  p5b3b3b=OPEN  p5b3c=CLOSED",
+                        g.presentWaterTerrainHydraulicCompactionRuntime->TerrainRevision(),
+                        (long long)g.presentWaterTerrainHydraulicCompactionRuntime->LooseMass(),
+                        (long long)g.presentWaterTerrainHydraulicCompactionRuntime->DepositionalMass(),
+                        (long long)g.presentWaterTerrainHydraulicCompactionRuntime->TerrainSolids(),
+                        g.presentWaterTerrainHydraulicCompactionRuntime->Stats().compacts);
+                    row(line,.35f,.70f,.90f);
+                }
+                else if(IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicDepositionRuntime)
                 {
                     auto const st=g.presentWaterTerrainHydraulicDepositionRuntime->QueryTerrainStateAt(g.feetX,g.feetY);
                     auto const pore=g.presentWaterTerrainHydraulicDepositionRuntime->QueryPoreAt(g.feetX,g.feetY);
@@ -37255,6 +37460,10 @@ namespace
         { "p5b3b2_to_p5b3b3a", Stage0PlayView::PresentWaterTerrainHydraulicSettling, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
         { "p5b3b3a_to_p5b3b2", Stage0PlayView::PresentWaterTerrainHydraulicDeposition, Stage0PlayView::PresentWaterTerrainHydraulicSettling },
         { "p5b3b3a_to_p5b3b3a", Stage0PlayView::PresentWaterTerrainHydraulicDeposition, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
+        { "cold_clean_to_p5b3b3b", Stage0PlayView::Clean, Stage0PlayView::PresentWaterTerrainHydraulicCompaction },
+        { "p5b3b3a_to_p5b3b3b", Stage0PlayView::PresentWaterTerrainHydraulicDeposition, Stage0PlayView::PresentWaterTerrainHydraulicCompaction },
+        { "p5b3b3b_to_p5b3b3a", Stage0PlayView::PresentWaterTerrainHydraulicCompaction, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
+        { "p5b3b3b_to_p5b3b3b", Stage0PlayView::PresentWaterTerrainHydraulicCompaction, Stage0PlayView::PresentWaterTerrainHydraulicCompaction },
     };
 
     struct RuntimeIndependenceReceipt
@@ -37344,9 +37553,10 @@ namespace
         Stage0PlayView::PresentWaterTerrainHydraulicTransport,
         Stage0PlayView::PresentWaterTerrainHydraulicSettling,
         Stage0PlayView::PresentWaterTerrainHydraulicDeposition,
+        Stage0PlayView::PresentWaterTerrainHydraulicCompaction,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -38735,7 +38945,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==28)
+        if(g.certWorldgenCardinalStageFilter==29)
+            certPath="Docs\\provenance_p5b3b3b_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==28)
             certPath="Docs\\provenance_p5b3b3a_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==27)
             certPath="Docs\\provenance_p5b3b2_cardinal_replacement_cert.txt";
@@ -38907,7 +39119,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==28)
+            if(g.certWorldgenCardinalStageFilter==29)
+                tracePath="Docs\\provenance_p5b3b3b_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==28)
                 tracePath="Docs\\provenance_p5b3b3a_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==27)
                 tracePath="Docs\\provenance_p5b3b2_cardinal_replacement_trace.csv";
@@ -40544,6 +40758,17 @@ namespace
         int64_t depositionalMass=0;
     };
 
+    struct P5b3b3bSoakTelemetry
+    {
+        int compacts=0;
+        int compactWakes=0;
+        int remobilizes=0;
+        int staleRefuse=0;
+        uint32_t compactionRevision=0;
+        int64_t looseMass=0;
+        int64_t depositionalMass=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -40615,6 +40840,7 @@ namespace
         P5b3bSoakTelemetry p5b3bStart{};
         P5b3b2SoakTelemetry p5b3b2Start{};
         P5b3b3aSoakTelemetry p5b3b3aStart{};
+        P5b3b3bSoakTelemetry p5b3b3bStart{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -40697,6 +40923,21 @@ namespace
         t.depositionRevision=g.presentWaterTerrainHydraulicDepositionRuntime->DepositionRevision();
         t.looseMass=g.presentWaterTerrainHydraulicDepositionRuntime->LooseMass();
         t.depositionalMass=g.presentWaterTerrainHydraulicDepositionRuntime->DepositionalMass();
+        return t;
+    }
+
+    P5b3b3bSoakTelemetry CaptureP5b3b3bSoakTelemetry()
+    {
+        P5b3b3bSoakTelemetry t;
+        if(!g.presentWaterTerrainHydraulicCompactionRuntime)return t;
+        auto const& st=g.presentWaterTerrainHydraulicCompactionRuntime->Stats();
+        t.compacts=(int)st.compacts;
+        t.compactWakes=(int)st.compactWakes;
+        t.remobilizes=(int)st.remobilizes;
+        t.staleRefuse=(int)st.staleRefuse;
+        t.compactionRevision=g.presentWaterTerrainHydraulicCompactionRuntime->CompactionRevision();
+        t.looseMass=g.presentWaterTerrainHydraulicCompactionRuntime->LooseMass();
+        t.depositionalMass=g.presentWaterTerrainHydraulicCompactionRuntime->DepositionalMass();
         return t;
     }
 
@@ -41324,6 +41565,7 @@ namespace
         P5b3bSoakTelemetry const p5b3bNow=CaptureP5b3bSoakTelemetry();
         P5b3b2SoakTelemetry const p5b3b2Now=CaptureP5b3b2SoakTelemetry();
         P5b3b3aSoakTelemetry const p5b3b3aNow=CaptureP5b3b3aSoakTelemetry();
+        P5b3b3bSoakTelemetry const p5b3b3bNow=CaptureP5b3b3bSoakTelemetry();
         int const p5b2cPoreXfer=SoakDeltaNonneg(p5b2cNow.poreTransfers,run.p5b2cStart.poreTransfers);
         int const p5b2cWetToDry=SoakDeltaNonneg(p5b2cNow.wetToDry,run.p5b2cStart.wetToDry);
         int const p5b2cDryToWet=SoakDeltaNonneg(p5b2cNow.dryToWet,run.p5b2cStart.dryToWet);
@@ -41365,6 +41607,13 @@ namespace
         int const p5b3b3aDRev=SoakDeltaNonneg((int)p5b3b3aNow.depositionRevision,(int)run.p5b3b3aStart.depositionRevision);
         int const p5b3b3aLoose=SoakDeltaNonneg((int)p5b3b3aNow.looseMass,(int)run.p5b3b3aStart.looseMass);
         int const p5b3b3aDepMass=SoakDeltaNonneg((int)p5b3b3aNow.depositionalMass,(int)run.p5b3b3aStart.depositionalMass);
+        int const p5b3b3bCompact=SoakDeltaNonneg(p5b3b3bNow.compacts,run.p5b3b3bStart.compacts);
+        int const p5b3b3bWake=SoakDeltaNonneg(p5b3b3bNow.compactWakes,run.p5b3b3bStart.compactWakes);
+        int const p5b3b3bRemob=SoakDeltaNonneg(p5b3b3bNow.remobilizes,run.p5b3b3bStart.remobilizes);
+        int const p5b3b3bStale=SoakDeltaNonneg(p5b3b3bNow.staleRefuse,run.p5b3b3bStart.staleRefuse);
+        int const p5b3b3bCRev=SoakDeltaNonneg((int)p5b3b3bNow.compactionRevision,(int)run.p5b3b3bStart.compactionRevision);
+        int const p5b3b3bLoose=SoakDeltaNonneg((int)p5b3b3bNow.looseMass,(int)run.p5b3b3bStart.looseMass);
+        int const p5b3b3bDepMass=SoakDeltaNonneg((int)p5b3b3bNow.depositionalMass,(int)run.p5b3b3bStart.depositionalMass);
         char const* p5b2cPhysicsVerdict="PASS_idle";
         if(p5b2cEvents==0)p5b2cPhysicsVerdict="PASS_idle";
         else if(p5b2cEvents<=8&&p5b2cEvents*50<=(std::max)(created,1))p5b2cPhysicsVerdict="PASS_bounded";
@@ -41396,6 +41645,11 @@ namespace
           &&p5b3b3aDRev==0&&p5b3b3aLoose==0&&p5b3b3aDepMass==0)p5b3b3aPhysicsVerdict="PASS_idle";
         else p5b3b3aPhysicsVerdict="FAIL_accumulating";
         bool const p5b3b3aOk=std::strncmp(p5b3b3aPhysicsVerdict,"FAIL",4)!=0;
+        char const* p5b3b3bPhysicsVerdict="PASS_idle";
+        if(p5b3b3bCompact==0&&p5b3b3bWake==0&&p5b3b3bRemob==0&&p5b3b3bStale==0
+          &&p5b3b3bCRev==0&&p5b3b3bLoose==0&&p5b3b3bDepMass==0)p5b3b3bPhysicsVerdict="PASS_idle";
+        else p5b3b3bPhysicsVerdict="FAIL_accumulating";
+        bool const p5b3b3bOk=std::strncmp(p5b3b3bPhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -41437,9 +41691,11 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk;
         char certPathBuf[160];
-        char const* certPath=g.certStreamingSoakStageFilter==28
+        char const* certPath=g.certStreamingSoakStageFilter==29
+            ?"Docs\\provenance_p5b3b3b_streaming_soak_cert.txt"
+            :(g.certStreamingSoakStageFilter==28
             ?"Docs\\provenance_p5b3b3a_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==27
             ?"Docs\\provenance_p5b3b2_streaming_soak_cert.txt"
@@ -41453,7 +41709,7 @@ namespace
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
             ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
-            :"Docs\\provenance_streaming_soak_cert.txt"))))));
+            :"Docs\\provenance_streaming_soak_cert.txt")))))));
         if(g.soakDrawLane!=0)
         {
             std::snprintf(certPathBuf,sizeof(certPathBuf),
@@ -41476,7 +41732,7 @@ namespace
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
             "soak_draw=%s\n"
             "soak_water_backend=%s\n"
-            "p5b2b=%s\np5b2c=%s\np5b3a=%s\np5b3b=%s\np5b3b2=%s\np5b3b3a=%s\np5b3b3b=CLOSED\np5b3c=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
+            "p5b2b=%s\np5b2c=%s\np5b3a=%s\np5b3b=%s\np5b3b2=%s\np5b3b3a=%s\np5b3b3b=%s\np5b3c=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
             "stop_duration_s=%.3f\nstop_elapsed_s=%.3f\ndrain_elapsed_s=%.3f\n"
             "return_to_origin=%d\nreturn_elapsed_s=%.3f\nsettle_elapsed_s=%.3f\n"
             "distance_m=%.1f\nend_distance_m=%.1f\npackages_created=%d\npackages_retired=%d\n"
@@ -41541,6 +41797,14 @@ namespace
             "p5b3b3a.loose_mass_delta=%d\n"
             "p5b3b3a.depositional_mass_delta=%d\n"
             "check.p5b3b3a_travel_physics=%s\n"
+            "p5b3b3b.compacts=%d\n"
+            "p5b3b3b.compact_wakes=%d\n"
+            "p5b3b3b.remobilizes=%d\n"
+            "p5b3b3b.stale_refuse=%d\n"
+            "p5b3b3b.compaction_revision_delta=%d\n"
+            "p5b3b3b.loose_mass_delta=%d\n"
+            "p5b3b3b.depositional_mass_delta=%d\n"
+            "check.p5b3b3b_travel_physics=%s\n"
             "check.pore_state_wakes_bounded=%s\n"
             "check.occupancy_topology_wakes_bounded=%s\n"
             "check.zero_movement_frames_over_16_667=%s\n"
@@ -41657,7 +41921,8 @@ namespace
             g.certStreamingSoakStageFilter>=25?(g.certStreamingSoakStageFilter==25?"OPEN":"FROZEN"):"CLOSED",
             g.certStreamingSoakStageFilter>=26?(g.certStreamingSoakStageFilter==26?"OPEN":"FROZEN"):"CLOSED",
             g.certStreamingSoakStageFilter>=27?(g.certStreamingSoakStageFilter==27?"OPEN":"FROZEN"):"CLOSED",
-            g.certStreamingSoakStageFilter==28?"OPEN":"CLOSED",
+            g.certStreamingSoakStageFilter>=28?(g.certStreamingSoakStageFilter==28?"OPEN":"FROZEN"):"CLOSED",
+            g.certStreamingSoakStageFilter==29?"OPEN":"CLOSED",
             g.soakStopDurationS,run.stopElapsedS,run.drainElapsedS,
             g.soakReturnToOrigin?1:0,run.returnElapsedS,run.settleElapsedS,
             run.peakDistanceM,run.distanceM,created,retired,run.maxResidentPackages,
@@ -41690,6 +41955,8 @@ namespace
             p5b3b2PhysicsVerdict,
             p5b3b3aDeposit,p5b3b3aWake,p5b3b3aRemob,p5b3b3aStale,p5b3b3aDRev,p5b3b3aLoose,p5b3b3aDepMass,
             p5b3b3aPhysicsVerdict,
+            p5b3b3bCompact,p5b3b3bWake,p5b3b3bRemob,p5b3b3bStale,p5b3b3bCRev,p5b3b3bLoose,p5b3b3bDepMass,
+            p5b3b3bPhysicsVerdict,
             poreStateWakeVerdict,occTopoWakeVerdict,
             frameOk?"PASS":(informational?"INFORMATIONAL":"FAIL"),
             complete?"PASS":"FAIL",
@@ -42340,7 +42607,9 @@ namespace
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
-            char const* tracePath=g.certStreamingSoakStageFilter==28
+            char const* tracePath=g.certStreamingSoakStageFilter==29
+                ?"Docs\\provenance_p5b3b3b_streaming_soak_trace.csv"
+                :(g.certStreamingSoakStageFilter==28
                 ?"Docs\\provenance_p5b3b3a_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==27
                 ?"Docs\\provenance_p5b3b2_streaming_soak_trace.csv"
@@ -42354,7 +42623,7 @@ namespace
                 ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==22
                 ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
-                :"Docs\\provenance_streaming_soak_trace.csv"))))));
+                :"Docs\\provenance_streaming_soak_trace.csv")))))));
             fopen_s(&run.trace,tracePath,"wb");
             if(run.trace)
             {
@@ -42415,6 +42684,7 @@ namespace
                 run.p5b3bStart=CaptureP5b3bSoakTelemetry();
                 run.p5b3b2Start=CaptureP5b3b2SoakTelemetry();
                 run.p5b3b3aStart=CaptureP5b3b3aSoakTelemetry();
+                run.p5b3b3bStart=CaptureP5b3b3bSoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -43198,6 +43468,8 @@ namespace
         else if ( g.playWorldgenBaseline )
         {
             WorldgenPlayInitialize();
+            if(g.presentWaterTerrainHydraulicCompactionRuntime&&!g.presentWaterTerrainHydraulicCompactionRuntime->Complete())
+            {++s_traversalWake.topologyActivations;g.presentWaterTerrainHydraulicCompactionRuntime->Tick(48);}
             if(g.presentWaterTerrainHydraulicDepositionRuntime&&!g.presentWaterTerrainHydraulicDepositionRuntime->Complete())
             {++s_traversalWake.topologyActivations;g.presentWaterTerrainHydraulicDepositionRuntime->Tick(48);}
             if(g.presentWaterTerrainHydraulicSettlingRuntime&&!g.presentWaterTerrainHydraulicSettlingRuntime->Complete())
@@ -45051,6 +45323,120 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certP5b3b3bVisual)
+        {
+            static ULONGLONG visualStartMsP5b3b3b=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::PresentWaterTerrainHydraulicCompaction);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::PresentWaterTerrainHydraulicCompaction);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f
+                &&g.presentWaterTerrainHydraulicCompactionRuntime&&g.presentWaterTerrainHydraulicCompactionRuntime->Complete();
+            if(!g.presentWaterTerrainHydraulicCompactionRuntime)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_p5b3b3b_compaction_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"P5B3B3B_COMPACTION_PLAYER_VISUAL FAIL\n"
+                        "reason=authority_load_failed\nload=%s\nview=%s\n",
+                        g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str(),
+                        Stage0PlayViewName(g.stage0PlayView));
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            else if(!settled&&GetTickCount64()-visualStartMsP5b3b3b>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_p5b3b3b_compaction_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"P5B3B3B_COMPACTION_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n"
+                        "view=%s\nload=%s\nruntime=%d\ncomplete=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0,
+                        Stage0PlayViewName(g.stage0PlayView),
+                        g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str(),
+                        g.presentWaterTerrainHydraulicCompactionRuntime?1:0,
+                        (g.presentWaterTerrainHydraulicCompactionRuntime
+                            &&g.presentWaterTerrainHydraulicCompactionRuntime->Complete())?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certP5b3b3bVisualFrames;
+            if(g.certP5b3b3bVisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_p5b3b3b_compaction_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const* water=ActivePresentWaterKernel();
+                auto const q=water?water->QueryAt(g.feetX,g.feetY):CausalPresentWater::Query{};
+                bool nearbyWater=false,nearbyChannel=false;
+                if(water)
+                {
+                    double const step=water->Drainage().StepM();
+                    for(int y=-8;y<=8;++y)for(int x=-8;x<=8;++x)
+                    {auto const n=water->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyWater=nearbyWater||(n.found&&n.occupied);
+                        nearbyChannel=nearbyChannel||(n.found&&n.sediment.erosion.drainage.found
+                            &&n.sediment.erosion.drainage.cell.channel);}
+                }
+                bool const pairCoherent=g.presentWaterTerrainHydraulicCompactionRuntime
+                    &&g.presentWaterTerrainHydraulicCompactionRuntime->PublishedTerrainRevision()
+                        ==g.presentWaterTerrainHydraulicCompactionRuntime->TerrainRevision()
+                    &&g.presentWaterTerrainHydraulicCompactionRuntime->PublishedWaterTopologyRevision()
+                        ==g.presentWaterTerrainHydraulicCompactionRuntime->WaterTopologyRevision();
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_p5b3b3b_compaction_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&nearbyWater&&nearbyChannel
+                    &&g.presentWaterTerrainHydraulicCompactionCertified
+                    &&g.presentWaterTerrainHydraulicCompactionRuntime
+                    &&g.presentWaterTerrainHydraulicCompactionRuntime->Complete()&&pairCoherent
+                    &&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601;
+                if(opened)
+                {
+                    std::fprintf(file,"P5B3B3B_COMPACTION_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_p5b3b3b_compaction_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "local_depth_m=%.6f\nlocal_kind=%s\nnearby_water=%d\nnearby_channel=%d\n"
+                        "terrain_source=P5B3B3B_COMPACTION\n"
+                        "present_water_occupancy=1\nbody_local_equilibration=1\n"
+                        "graph_authorized_transfer=1\nexternal_conserved_transfer=1\n"
+                        "dynamic_occupancy=1\nhydraulic_topology=1\n"
+                        "terrain_to_water=1\nwater_to_terrain_state=1\nwater_to_terrain_pore=1\n"
+                        "pore_occupancy_topology=1\nhydraulic_detachment=1\n"
+                        "hydraulic_transport=1\nloose_matter_settling=1\ndepositional_aggregate=1\n"
+                        "compaction=1\nwater_to_terrain_matter=1\nchoice_a_local_loose=1\n"
+                        "host_formation_weld=0\nterrain_reincorporation=0\n"
+                        "published_pair_coherent=%d\nloose_mass=%lld\ndepositional_mass=%lld\ncompacts=%zu\n"
+                        "water_rendering=1\nfluid_solve=0\nflow_simulation=0\n"
+                        "runtime_erosion=0\nlive_ecology=0\np5b1=frozen\np5b2a=frozen\n"
+                        "p5b2b=frozen\np5b2c=frozen\np5b3a=frozen\np5b3b=frozen\n"
+                        "p5b3b2=frozen\np5b3b3a=frozen\np5b3b3b=open\np5b3c=closed\n"
+                        "rainfall=closed\ndeep_groundwater=closed\nbank_collapse=closed\n"
+                        "16c_remobilization=closed\n",
+                        passed?"PASS":"FAIL",g.certP5b3b3bVisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,q.depthM,
+                        CausalPresentWater::BodyKindName(q.water.kind),
+                        nearbyWater?1:0,nearbyChannel?1:0,pairCoherent?1:0,
+                        (long long)(g.presentWaterTerrainHydraulicCompactionRuntime
+                            ?g.presentWaterTerrainHydraulicCompactionRuntime->LooseMass():0),
+                        (long long)(g.presentWaterTerrainHydraulicCompactionRuntime
+                            ?g.presentWaterTerrainHydraulicCompactionRuntime->DepositionalMass():0),
+                        g.presentWaterTerrainHydraulicCompactionRuntime
+                            ?g.presentWaterTerrainHydraulicCompactionRuntime->Stats().compacts:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.certStage16DVisual)
         {
             static ULONGLONG visualStartMs16d=GetTickCount64();
@@ -46093,12 +46479,13 @@ namespace
                 {
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 )
                     {
-                        // The workbench has both the Stage-0 tool props and the
-                        // Phase-4 ore gallery within reach of the same key. Offer
-                        // the sample under the reticle first; only if nothing was
-                        // picked up or put down does E fall through to the tools.
+                        // Gizmo ON: E selects the catalog model under the look
+                        // reticle. Misses still fall through to ore pickup / tools.
                         bool handled = false;
-                        if ( g.provRenderWorkbench ) { handled = TryPickupGallerySample(); }
+                        if ( g.provRenderWorkbench && g.stage0Gizmo )
+                        { handled = Stage0GizmoSelectLookedAt(); }
+                        if ( !handled && g.provRenderWorkbench )
+                        { handled = TryPickupGallerySample(); }
                         if ( !handled ) { TryStage0PickaxeInteraction(); }
                     }
                     // E is also free-fly rise in the main client. Always consume it here
@@ -46195,7 +46582,6 @@ namespace
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 )
                     {
                         Stage0ToggleGizmo();
-                        if ( g.stage0Gizmo && g.mouseLook ) { SetMouseLook( hwnd, false ); }
                     }
                     g.keys['G'] = g.keys['g'] = false;
                     return 0;
@@ -46203,6 +46589,22 @@ namespace
                 else if ( wParam == VK_DELETE && g.stage0Gizmo )
                 {
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 ) { Stage0DeleteSelectedCandidate(); }
+                    return 0;
+                }
+                else if ( g.stage0Gizmo && g.stage0GizmoSlot > 0
+                  && !g.journalOpen && !g.stage0StageMenuOpen && !g.stage0ToolDrawerOpen
+                  && ( wParam == VK_LEFT || wParam == VK_RIGHT
+                    || wParam == VK_UP || wParam == VK_DOWN
+                    || wParam == VK_PRIOR || wParam == VK_NEXT ) )
+                {
+                    float right = 0.f, fwd = 0.f, up = 0.f, yaw = 0.f;
+                    if ( wParam == VK_LEFT ) { yaw = 0.087266f; }
+                    if ( wParam == VK_RIGHT ) { yaw = -0.087266f; }
+                    if ( wParam == VK_UP ) { fwd = 0.08f; }
+                    if ( wParam == VK_DOWN ) { fwd = -0.08f; }
+                    if ( wParam == VK_PRIOR ) { up = 0.05f; }
+                    if ( wParam == VK_NEXT ) { up = -0.05f; }
+                    Stage0GizmoNudgeLook( right, fwd, up, yaw );
                     return 0;
                 }
                 else if ( wParam == 'C' || wParam == 'c' )
@@ -46254,7 +46656,8 @@ namespace
                 }
                 else if ( wParam == 'E' || wParam == 'e' )
                 {
-                    if ( TryPickupGallerySample() )
+                    if ( ( g.stage0Gizmo && Stage0GizmoSelectLookedAt() )
+                      || TryPickupGallerySample() )
                     {
                         // Consume E so free-fly doesn't also rise on the same press.
                         g.keys['E'] = false;
@@ -46327,6 +46730,15 @@ namespace
                 return 0;
             case WM_KEYUP:
                 if ( wParam < 256 ) { g.keys[wParam] = false; }
+                if ( g.stage0GizmoDirty
+                  && ( wParam == VK_LEFT || wParam == VK_RIGHT
+                    || wParam == VK_UP || wParam == VK_DOWN
+                    || wParam == VK_PRIOR || wParam == VK_NEXT ) )
+                {
+                    SaveStage0GalleryPoses();
+                    g.stage0GizmoDirty = false;
+                    g.statusLine = "Gizmo: pose saved";
+                }
                 return 0;
             case WM_MOUSEWHEEL:
                 if ( g.playWorldgenBaseline
@@ -46358,6 +46770,16 @@ namespace
                         g.stage0GeologyInspectorDepthM=(std::clamp)(
                             g.stage0GeologyInspectorDepthM+notches*1.f,1.5f,60.96f);
                     }
+                    return 0;
+                }
+                if ( g.stage0Gizmo && g.stage0GizmoSlot > 0
+                  && !g.journalOpen && !g.stage0StageMenuOpen && !g.stage0ToolDrawerOpen )
+                {
+                    short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
+                    float const notches = delta / (float)WHEEL_DELTA;
+                    Stage0GizmoNudgeLook( 0.f, 0.f, notches * 0.05f, 0.f );
+                    SaveStage0GalleryPoses();
+                    g.stage0GizmoDirty = false;
                     return 0;
                 }
                 if ( g.playWorldgenBaseline && g.stage0HeldTool != Stage0ToolKind::None )
@@ -46393,10 +46815,19 @@ namespace
                 g.uiWinW = (std::max)( 1, (int)rc.right );
                 g.uiWinH = (std::max)( 1, (int)rc.bottom );
                 UpdateUiMouseFromWin( mx, my );
-                if ( g.stage0Gizmo && !g.mouseLook && !g.journalOpen
+                if ( g.stage0Gizmo && !g.journalOpen
                   && !g.stage0StageMenuOpen && !g.stage0ToolDrawerOpen )
                 {
-                    if ( Stage0GizmoOnMouseDown() ) { return 0; }
+                    if ( g.stage0GizmoSlot > 0 )
+                    {
+                        EnterViewportInput( hwnd );
+                        Stage0GizmoBeginLookDrag( 6 );
+                        return 0;
+                    }
+                    if ( !g.mouseLook && Stage0GizmoOnMouseDown() ) { return 0; }
+                    EnterViewportInput( hwnd );
+                    g.statusLine = "Gizmo: look at a model, press [E]";
+                    return 0;
                 }
                 if ( g.playWorldgenBaseline )
                 {
@@ -46424,6 +46855,13 @@ namespace
                 return 0;
             case WM_RBUTTONDOWN:
             {
+                if ( g.stage0Gizmo && g.stage0GizmoSlot > 0
+                  && !g.journalOpen && !g.stage0StageMenuOpen && !g.stage0ToolDrawerOpen )
+                {
+                    EnterViewportInput( hwnd );
+                    Stage0GizmoBeginLookDrag( 7 );
+                    return 0;
+                }
                 if ( g.playWorldgenBaseline )
                 {
                     EnterViewportInput( hwnd );
@@ -46446,6 +46884,7 @@ namespace
                 return 0;
             }
             case WM_RBUTTONUP:
+                Stage0GizmoOnMouseUp();
                 return 0;
             case WM_MOUSEMOVE:
             {
@@ -46471,10 +46910,15 @@ namespace
                     int dy = my - cy;
                     if ( dx != 0 || dy != 0 )
                     {
-                        g.yaw += dx * 0.005f;
-                        g.pitch -= dy * 0.005f;
-                        if ( g.pitch < -1.4f ) { g.pitch = -1.4f; }
-                        if ( g.pitch > 1.4f ) { g.pitch = 1.4f; }
+                        if ( g.stage0Gizmo && ( g.stage0GizmoDrag == 6 || g.stage0GizmoDrag == 7 ) )
+                        { Stage0GizmoOnLookDelta( dx, dy ); }
+                        else
+                        {
+                            g.yaw += dx * 0.005f;
+                            g.pitch -= dy * 0.005f;
+                            if ( g.pitch < -1.4f ) { g.pitch = -1.4f; }
+                            if ( g.pitch > 1.4f ) { g.pitch = 1.4f; }
+                        }
                         POINT pt = { cx, cy };
                         ClientToScreen( hwnd, &pt );
                         SetCursorPos( pt.x, pt.y );
@@ -46561,6 +47005,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runPresentWaterTerrainHydraulicTransportCert = false;
         bool runPresentWaterTerrainHydraulicSettlingCert = false;
         bool runPresentWaterTerrainHydraulicDepositionCert = false;
+        bool runPresentWaterTerrainHydraulicCompactionCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -46600,6 +47045,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_settling_floor.cpc";
         char presentWaterTerrainHydraulicDepositionPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_deposition_floor.cpc";
+        char presentWaterTerrainHydraulicCompactionPath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_compaction_floor.cpc";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -46726,6 +47173,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-p5b3b3a")==0
                   ||_wcsicmp(certArgv[i],L"--cert-depositional-aggregate")==0)
                 {runPresentWaterTerrainHydraulicDepositionCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-p5b3b3b-compaction")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-p5b3b3b")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-compaction")==0)
+                {runPresentWaterTerrainHydraulicCompactionCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -46943,6 +47394,24 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 presentWaterTerrainHydraulicDepositionPath);
             CausalPresentWaterTerrainHydraulicDeposition::WriteCertArtifact(result,
                 "Docs\\provenance_p5b3b3a_depositional_aggregate_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runPresentWaterTerrainHydraulicCompactionCert)
+        {
+            auto const result=CausalPresentWaterTerrainHydraulicCompaction::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                presentWaterPath,presentWaterBodyPath,presentWaterEquilibratePath,
+                presentWaterTransferPath,presentWaterExternalPath,presentWaterTopologyPath,
+                presentWaterTerrainResponsePath,presentWaterTerrainStatePath,
+                presentWaterTerrainPorePath,presentWaterTerrainPoreOccupancyPath,
+                presentWaterTerrainHydraulicDetachmentPath,
+                presentWaterTerrainHydraulicTransportPath,
+                presentWaterTerrainHydraulicSettlingPath,
+                presentWaterTerrainHydraulicDepositionPath,
+                presentWaterTerrainHydraulicCompactionPath);
+            CausalPresentWaterTerrainHydraulicCompaction::WriteCertArtifact(result,
+                "Docs\\provenance_p5b3b3b_compaction_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -47925,6 +48394,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-p5b3b3b")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage-p5b3b3b")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=29;
+                    g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -47936,8 +48414,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
                 if(_wcsicmp(argv[i],L"--cert-streaming-soak")==0
-                  ||_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3a")==0
+                  ||_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3b")==0
                   ||_wcsicmp(argv[i],L"--cert-worldgen-streaming-soak")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=29;
+                    g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3a")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=28;
@@ -48159,6 +48645,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-p5b3b3b-compaction")==0
+                  ||_wcsicmp(argv[i],L"--play-p5b3b3b")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-stage16f2-water-transfer-visual")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
@@ -48241,6 +48734,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playP5b3b3aLaunch=true;g.certP5b3b3aVisual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-p5b3b3b-compaction-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-p5b3b3b-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;g.certP5b3b3bVisual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

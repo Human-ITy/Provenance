@@ -43,7 +43,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P4.3** Terrain residency / invalidation | Terrain wakes only on terrain-relevant affect; `--cert-residency` | See `PROVENANCE_PIN.md` |
 | **P4.4** Upstream body id wire | Production `terrain_mutate` emits body/agg ids; `--cert-p4` vs committed bridge | See `PROVENANCE_PIN.md` |
 | **P4.5** Gameplay-scale stress floor | History must not scale recurring frame cost; `--cert-stress` | See `PROVENANCE_PIN.md` |
-| **P5** Water | P5a ledger freeze; **P5b.1 FROZEN** one-way; **P5b.2A FROZEN** state-only; **P5b.2B FROZEN** bounded pore; **P5b.2C FROZEN** occupancy. **P5b.3A FROZEN** hydraulic detachment (choice A local loose). **P5b.3B FROZEN** hydraulic transport. **P5b.3B.2 FROZEN** loose-matter settling. **P5b.3B.3A CERTIFIED** depositional aggregate (not host weld). **P5b.3B.3B CLOSED** compaction / terrain integration. **P5b.3C CLOSED** | See `PROVENANCE_PIN.md` / `P5B3B3A_DEPOSITIONAL_AGGREGATE_HANDOFF.md` |
+| **P5** Water | P5a ledger freeze; **P5b.1 FROZEN** one-way; **P5b.2A FROZEN** state-only; **P5b.2B FROZEN** bounded pore; **P5b.2C FROZEN** occupancy. **P5b.3A FROZEN** hydraulic detachment (choice A local loose). **P5b.3B FROZEN** hydraulic transport. **P5b.3B.2 FROZEN** loose-matter settling. **P5b.3B.3A FROZEN** depositional aggregate (not host weld). **P5b.3B.3B CERTIFIED** compaction / stable terrain surface (not host weld). **P5b.3C CLOSED** | See `PROVENANCE_PIN.md` / `P5B3B3B_COMPACTION_HANDOFF.md` |
 | **Traversal** | Standing matrix: Test A cardinal ≠ Test B soak. 2A control: Test A PASS; Test B residency PASS / frame FAIL (do not relax 16.667) | `TRAVERSAL_STREAMING_SOAK_HANDOFF.md` |
 
 ### The voxel-form gate (user law)

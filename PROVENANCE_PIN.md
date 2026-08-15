@@ -243,8 +243,8 @@ P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
 P5b.3A  hydraulic detachment              CERTIFIED / FROZEN
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
 P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
-P5b.3B.3A depositional aggregate          CERTIFIED
-P5b.3B.3B compaction / terrain integration CLOSED
+P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
+P5b.3B.3B compaction / terrain surface    CERTIFIED
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -313,7 +313,7 @@ unchanged (80 → 80 Settled). Handoff: `P5B3B2_LOOSE_MATTER_SETTLING_HANDOFF.md
 Play: `PLAY_P5B3B2_LOOSE_MATTER_SETTLING.cmd` / `--play-p5b3b2-loose-matter-settling`.
 Cert: `CERT_P5B3B2_LOOSE_MATTER_SETTLING.cmd`.
 
-**P5b.3B.3A CERTIFIED** — settled loose matter may be admitted as a depositional
+**P5b.3B.3A CERTIFIED / FROZEN** @ `160a0842` — settled loose matter may be admitted as a depositional
 sediment body. Same material ID ≠ host formation. Terrain host solids unchanged.
 Disabled == exact 3B.2 settling `ab46ebdbe3aa6778`. Enabled deposition digest
 `694388e61fa37503` (budget 1 == N == unbounded). Loose 80 → 0, depositional
@@ -321,10 +321,19 @@ Disabled == exact 3B.2 settling `ab46ebdbe3aa6778`. Enabled deposition digest
 Play: `PLAY_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd` / `--play-p5b3b3a-depositional-aggregate`.
 Cert: `CERT_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd`. In-client stages table: **M**.
 
-**P5b.3C CLOSED** — bank/support collapse.  
-**P5b.3B.3B CLOSED** — compaction / terrain integration (host weld, lithify).  
-Also closed: general erosion, rainfall, groundwater, active 16B erosion,
-16C remobilization, ecology.
+**P5b.3B.3B CERTIFIED** — a deposited aggregate may compact under admissible
+load and participate in terrain surface + collision/support while remaining
+the same depositional body. Compaction is state, not a mass transfer.
+Disabled == exact 3B.3A deposition `694388e61fa37503`. Enabled compaction
+digest `ef1ae252489e741a` (budget 1 == N == unbounded). Depositional 80 → 80.
+Host solids unchanged. Handoff: `P5B3B3B_COMPACTION_HANDOFF.md`.
+Play: `PLAY_P5B3B3B_COMPACTION.cmd` / `--play-p5b3b3b-compaction`.
+Cert: `CERT_P5B3B3B_COMPACTION.cmd`.
+
+**P5b.3C CLOSED** — bank/support collapse.
+Also closed: cement/lithify, formation-ID merge, general soil mechanics,
+general erosion, rainfall, groundwater, active 16B erosion, 16C remobilization,
+ecology.
 
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
@@ -336,14 +345,14 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
   Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
-- Test A: `--cert-worldgen-cardinal-replacement-p5b3b3a` (EVERY CUT, latest).
-  Digest `9ffe2cb954206be1` (3B.2 was `0ace5164520e5da0`; stage identity
+- Test A: `--cert-worldgen-cardinal-replacement-p5b3b3b` (EVERY CUT, latest).
+  Digest `1d1dd0776f69f322` (3B.3A was `9ffe2cb954206be1`; stage identity
   changed). Movement frames over 16.667 = 0 on N/E/S/W.
-- Test B: `--cert-streaming-soak-p5b3b3a` (90 s NE fly **PASS** this cut:
-  0 / 86580 movement frames >16.667, max 7.231 ms, 2601, pending 0.
-  P5b.3B.3A travel physics **idle**: deposits / deposit wakes / remobilizes /
-  stale / revision / loose / depositional mass all 0. 3B.2/3B/3A/2C also idle.
-  300/900 not run. Long-haul 300/900 remain the 2B baseline receipts.)
+- Test B: `--cert-streaming-soak-p5b3b3b` (90 s NE fly **PASS** this cut:
+  0 / 86525 movement frames >16.667, max 9.277 ms, 2601, pending 0.
+  P5b.3B.3B travel physics **idle**: compacts / compact wakes / remobilizes /
+  stale / revision / loose / depositional mass all 0. 3B.3A/3B.2/3B/3A/2C
+  also idle. 300/900 not run. Long-haul 300/900 remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
 - Test S `--cert-semantic-distance` PASS (8/8 stations) at `6b14d8fd`.
@@ -365,12 +374,12 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   CRT 8→12 km **+1.5 MB** (197 → 199 MB), `PASS_plateau`. Return CRT 208 MB.
   `erosion_cache_entries` now reads the four worker kernels. Golden:
   cache enabled == forced-cold recompute. 16.667 not relaxed.
-  P5b.3B.2 90 s Test B **PASS** (idle 3B.2 settle count = 0). **P5b.3C /
-  3B.3 / 16C stay CLOSED.**
+  P5b.3B.3B 90 s Test B **PASS** (idle 3B.3B compact count = 0). **P5b.3C /
+  16C stay CLOSED.**
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
-- P5b.2B gameplay frozen at `8bb75265`. **P5b.3C** / **3B.3** / rainfall /
-  erosion remain CLOSED.
+- P5b.2B gameplay frozen at `8bb75265`. **P5b.3C** / rainfall / erosion
+  remain CLOSED.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -408,9 +417,9 @@ legal receipt) @ `e64a4df3`. **P5b.2A FROZEN** (state only).
 topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B FROZEN** (hydraulic transport of already-detached loose matter).
 **P5b.3B.2 CERTIFIED / FROZEN** (loose-matter settling: location + rest, not identity).
-**P5b.3B.3A CERTIFIED** (depositional aggregate: settled loose → sediment body, not host weld).
-**P5b.3B.3B CLOSED** (compaction / terrain integration). **P5b.3C CLOSED.**
-Erosion / rainfall / deep groundwater CLOSED.
+**P5b.3B.3A CERTIFIED / FROZEN** (depositional aggregate: settled loose → sediment body, not host weld).
+**P5b.3B.3B CERTIFIED** (compaction: deposited body → stable deposited ground, not host weld).
+**P5b.3C CLOSED.** Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
 Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.

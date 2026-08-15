@@ -12,8 +12,8 @@ This is the standing matrix. Cardinal replacement and the long-haul soak are
 narrow a future stage to “cardinal movement passed.”
 
 P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
-`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.3B.3A.
-**P5b.3C**, **P5b.3B.3B**, rainfall, and erosion stay **CLOSED**.
+`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.3B.3B.
+**P5b.3C**, rainfall, and erosion stay **CLOSED**.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -80,12 +80,13 @@ Proves **replacement correctness over a bounded route**.
 - Declared resident package bound (2601 at 192 m). Do not weaken.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b3b3a
+Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b3b3b
 ```
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
 
-Latest play-stage receipt: `Docs/provenance_p5b3b3a_cardinal_replacement_cert.txt`
+Latest play-stage receipt: `Docs/provenance_p5b3b3b_cardinal_replacement_cert.txt`
+3B.3A receipt: `Docs/provenance_p5b3b3a_cardinal_replacement_cert.txt`
 3B.2 receipt: `Docs/provenance_p5b3b2_cardinal_replacement_cert.txt`
 3A receipt: `Docs/provenance_p5b3a_cardinal_replacement_cert.txt`
 2C receipt: `Docs/provenance_p5b2c_cardinal_replacement_cert.txt`
@@ -100,13 +101,14 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b3b3a --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b3b3b --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
 
-Receipt: `Docs/provenance_p5b3b3a_streaming_soak_cert.txt`  
-Trace: `Docs/provenance_p5b3b3a_streaming_soak_trace.csv`
+Receipt: `Docs/provenance_p5b3b3b_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3b3b_streaming_soak_trace.csv`
+3B.3A control: `Docs/provenance_p5b3b3a_streaming_soak_cert.txt`
 3B.2 control: `Docs/provenance_p5b3b2_streaming_soak_cert.txt`
 
 Standing metrics (required on every receipt; do not invent green):
@@ -132,6 +134,8 @@ oldest pending age, worker queue depth, min complete radius
   settling revision, loose mass (travel delta; settle count must stay 0 on ordinary fly)
   P5b.3B.3A: deposits, deposit wakes, remobilizes, stale refuse,
   deposition revision, loose / depositional mass (travel delta; deposit count must stay 0 on ordinary fly)
+  P5b.3B.3B: compacts, compact wakes, remobilizes, stale refuse,
+  compaction revision, loose / depositional mass (travel delta; compact count must stay 0 on ordinary fly)
 mean / p95 / p99 / max frame time, frames > 16.667 ms
 memory high-water mark (working set + private)
 exact return/reload digest where applicable (Test A only)
@@ -208,7 +212,7 @@ MILESTONE / RELEASE GATE
 - cold / reload cycle
 ```
 
-`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.3B.3A).
+`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.3B.3B).
 `CERT_STREAMING_SOAK.cmd` runs the first-landing 90 s Test B. Milestone soak
 is the same harness with `--soak-duration-s=300` or `900`.
 
@@ -686,4 +690,39 @@ ordinary traversal deposit count = 0, deposit wake = 0.
 | p5b3b2 / p5b3b / p5b3a / p5b2c travel physics | PASS_idle |
 
 Ordinary traversal did not fire 3B.3A. Mutation/wake-only. **P5b.3C /
-3B.3B / 16C stay CLOSED.** No 300/900 unless travel fires deposition.
+16C stay CLOSED.** No 300/900 unless travel fires deposition.
+
+P5b.3B.3B compaction / stable terrain surface is **CERTIFIED** this cut.
+Test A digest changed with stage identity: 3B.3A `9ffe2cb954206be1` →
+3B.3B `1d1dd0776f69f322`. Movement frames over 16.667 = 0 on EVERY-CUT
+cardinal.
+
+### Test B — P5b.3B.3B 90 s NE free-flight (this cut) — PASS
+
+Receipt: `Docs/provenance_p5b3b3b_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3b3b_streaming_soak_trace.csv`
+
+90 s travel, stop=0, return=0, persistent water, live 192 m / far 0.
+`--cert-streaming-soak-p5b3b3b`. 16.667 not relaxed. 300/900 **not run**:
+ordinary traversal compact count = 0, compact wake = 0.
+
+| Metric | 3B.3B 90 s |
+|---|---|
+| elapsed / distance | 90.000 s / 2161.1 m |
+| created / retired | 19291 / 19291 |
+| max / end resident | 2601 / 2601 |
+| end pending / max pending | 0 / 77 |
+| min complete radius | 192.00 m |
+| frames | 86525 |
+| mean / p95 / p99 / max ms | 0.942 / 1.179 / 1.500 / **9.277** |
+| frames >16.667 (movement) | **0 PASS** |
+| water-body / topology / terrain-state wakes | 0 / 0 / 0 |
+| derived mesh / collision | 19291 / 19291 |
+| p5b3b3b compacts / compact wakes | **0 / 0** |
+| p5b3b3b remobilizes / stale refuse | **0 / 0** |
+| p5b3b3b compaction revision / loose / depositional mass | **0 / 0 / 0** |
+| check.p5b3b3b_travel_physics | PASS_idle |
+| p5b3b3a / p5b3b2 / p5b3b / p5b3a / p5b2c travel physics | PASS_idle |
+
+Ordinary traversal did not fire 3B.3B. Mutation/wake-only. **P5b.3C /
+16C stay CLOSED.** No 300/900 unless travel fires compaction.

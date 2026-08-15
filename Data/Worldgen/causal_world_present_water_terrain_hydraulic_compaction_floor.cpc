@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_HYDRAULIC_COMPACTION_V1
+# P5b.3B.3B: a settled depositional aggregate may compact under admissible
+# load and participate in terrain surface + collision/support. Same
+# DepositionalBodyId. Grams stay on the depositional ledger. Same material
+# ID is not the same structural body — never host-formation weld, never
+# terrain host solids += grams.
+# CLOSED: P5b.3C bank/support collapse, cement/lithify, formation-ID merge,
+# 16C remobilization, general soil mechanics, rainfall, evaporation,
+# groundwater, plant uptake, ecology, full WorldOperationScheduler.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_hydraulic_compaction_floor
+parent_region_key=causal_world_present_water_terrain_hydraulic_deposition_floor
+parent_authority_revision=1
+authority_revision=1
+p5b3b3b_event_id=a5b3300b00000001
+chronology=207
+p5b3b3b_enabled=1
+default_budget_transactions=48
