@@ -275,6 +275,7 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B lifecycle 900 s | **1 / 786675** | 38.301 | 1 allocator_growth |
 | 2B follow_stream 90 s | **1 / 28504** | 45.276 | 1 crt_heap_segment/follow_stream |
 | 2B scratch-owner 90 s | **1 / 32399** | 60.176 | 1 draw_submit @ 528.4 m |
+| 2B draw-attrib 90 s | **1 / 34858** | 61.920 | 1 glFinish after first `glDrawArrays/water` @ 527.7 m |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -294,10 +295,24 @@ max 3249 (hw 101), geo-disk max 16384 (hw 12853), sort max 3249
 (hw 3025), reserved 13047328 B, observed 13047328 B, growth 0,
 overflow 0, FollowStream CRT segment events 0.
 
-16.667 stays FAIL on this binary: one `draw_submit` 60.176 ms at
-528.4 m / 22.019 s (allocator delta 0; not FollowStream). Stop /
-drain / return frames over 16.667 = 0. 300 / 900 not run — 90 s is
-not green. Do not relax 16.667.
+16.667 stays FAIL on this binary. Draw-submit attribution split the
+old 60 ms `draw_submit` owner:
+
+- Discriminator **C + GPU**. Presentation lane **water**.
+- Named call: diagnostic `glFinish` 59.525 ms after first live
+  `glDrawArrays/water` (30 tris / 15 quads) at 527.7 m. Previous
+  call: `glBegin/geology_lines` 0.006 ms. Terrain CallLists 0.04 ms.
+- `--soak-draw=no-water` (same residency): travel **0 / 28041+**
+  over 16.667, max 5.612 ms. Water submit owns the stall.
+- Batching water to a client array (grass-cut pattern) moved the
+  stall out of CPU `draw_submit` (now 2.0 ms) onto the soak fence.
+  Dummy / frustum / full-kernel prewarm did not absorb the first
+  occupied-water GPU wait. Not closable without a different water
+  presentation backend.
+
+FollowStream scratch growth 0, CRT segment 0. Stop / drain / return
+frames over 16.667 = 0. 300 / 900 not run — 90 s is not green. Do
+not relax 16.667. P5b.2C / P5b.3 stay CLOSED. Test A still PASS.
 
 ### Memory — logical set bounded; process high-water plateaus
 
@@ -332,8 +347,10 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 ### 90 / 300 / 900 gates
 
 ```text
-90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 draw_submit @ 528.4 m)
-       scratch growth 0, overflow 0, FollowStream CRT segment 0
+90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s,
+       frame FAIL (1 / 34858; glFinish 59.525 ms after first
+       glDrawArrays/water @ 527.7 m). scratch growth 0, overflow 0,
+       FollowStream CRT segment 0. draw_submit now 2.0 ms (attributed).
 300 s  not run — 90 s not green
 900 s  not run — 90 s not green
        192 m complete, 2601 resident max, pending drains to 0, max pending 82

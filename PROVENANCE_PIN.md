@@ -291,12 +291,13 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 - Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 / 900 s)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- 2B scratch-owner 90 s: residency PASS, memory INCOMPLETE_need_300s,
-  FollowStream CRT segment 0, scratch growth 0. Frame gate FAIL
-  (1 / 32399; `draw_submit` 60.176 ms at 528.4 m — not FollowStream).
-  The 2018.8 m `crt_heap_segment/follow_stream` owner is closed by
-  reserved `FollowStreamScratch` + package-Z/`QueryMaterial` cell
-  create. 300 / 900 not run (90 s not green). Do not relax 16.667.
+- 2B draw-submit attribution 90 s: residency PASS, memory
+  INCOMPLETE_need_300s, FollowStream CRT segment 0, scratch growth 0.
+  Frame gate FAIL (1 / 34858; diagnostic `glFinish` 59.525 ms after
+  first `glDrawArrays/water` 30 tris at 527.7 m). Discriminator C+GPU,
+  lane water. `--soak-draw=no-water` travel is 0 over 16.667.
+  CPU `draw_submit` is now 2.0 ms (batched). 300 / 900 not run.
+  Test A still PASS. Do not relax 16.667. P5b.2C / P5b.3 CLOSED.
 - 250 m ledger + per-overrun receipts + stop/drain/optional return
   are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

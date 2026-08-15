@@ -57,6 +57,7 @@
 #include <cmath>
 #include <climits>
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -300,6 +301,9 @@ namespace
         // field from which the render triangles were emitted.  A null field is
         // valid for legacy/Stage-7 blocks that still use analytic collision.
         std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const> collisionSurface;
+        // First glCallList after compile/reuse. Soak attribution uses this to
+        // separate deferred first-use from an already-warmed list.
+        bool warmed = false;
     };
     struct Stage0FarFieldTile
     {
@@ -795,6 +799,10 @@ namespace
         int soakMode = 3; // 0 walk 1 run 2 sprint 3 fly
         int soakBearing = 4; // 0 N 1 E 2 S 3 W 4 NE 5 SE 6 SW 7 NW
         bool soakInformationalOnly = false; // 960 m/s is not a product gate
+        // Soak draw-submit isolation. Simulation / residency stay identical;
+        // only what is submitted to GL changes. 0=full 1=terrain 2=no-terrain
+        // 3=no-water 4=no-overlays 5=no-derived (water+grass+overlays).
+        int soakDrawLane = 0;
         bool certStage11ResidencyWaterfall = false;
         // Capture-free traversal bearing for the waterfall route.
         // 0=north(+Y) 1=east(+X) 2=south(-Y) 3=west(-X), matching the cardinal
@@ -1680,6 +1688,206 @@ namespace
     SIZE_T s_soakPrevPrivate=0;
     SIZE_T s_soakProbePrivate=0;
     char const* s_soakAllocSite="";
+
+    struct DrawSubmitClass
+    {
+        int draws=0;
+        int triangles=0;
+        double cpuMs=0.0;
+    };
+    struct DrawSubmitAttrib
+    {
+        DrawSubmitClass terrain;
+        DrawSubmitClass geology;
+        DrawSubmitClass water;
+        DrawSubmitClass grass;
+        DrawSubmitClass props;
+        DrawSubmitClass debugCert;
+        DrawSubmitClass xray;
+        DrawSubmitClass other;
+        int packagesSubmitted=0;
+        int listsBound=0;
+        int stateChanges=0;
+        int materialSwitches=0;
+        int newlyVisible=0;
+        int retired=0;
+        int firstUseCalls=0;
+        double firstUseMs=0.0;
+        double terrainSetupMs=0.0;
+        char longestName[48]="";
+        double longestMs=0.0;
+        unsigned longestList=0;
+        int longestBx=0;
+        int longestBy=0;
+        int longestTris=0;
+        int longestFirstUse=0;
+        char prevName[48]="";
+        double prevMs=0.0;
+        unsigned prevList=0;
+        int prevBx=0;
+        int prevBy=0;
+        char lastName[48]="";
+        double lastMs=0.0;
+        unsigned lastList=0;
+        int lastBx=0;
+        int lastBy=0;
+        char discriminator[8]="";
+        char ownerLane[32]="";
+        LARGE_INTEGER qpf{};
+    };
+    DrawSubmitAttrib s_drawSubmitAttrib;
+    std::unordered_set<uint64_t> s_drawPrevPackages;
+    std::unordered_set<uint64_t> s_drawCurPackages;
+
+    bool SoakDrawAttribOn()
+    {return g.certStreamingSoak;}
+
+    char const* SoakDrawLaneName(int lane)
+    {
+        switch(lane)
+        {
+            case 1:return "terrain";
+            case 2:return "no-terrain";
+            case 3:return "no-water";
+            case 4:return "no-overlays";
+            case 5:return "no-derived";
+            default:return "full";
+        }
+    }
+
+    bool SoakSuppressTerrainSubmit()
+    {return g.certStreamingSoak&&g.soakDrawLane==2;}
+    bool SoakTerrainOnlySubmit()
+    {return g.certStreamingSoak&&g.soakDrawLane==1;}
+    bool SoakSuppressWaterSubmit()
+    {return g.certStreamingSoak&&(g.soakDrawLane==1||g.soakDrawLane==3||g.soakDrawLane==5);}
+    bool SoakSuppressOverlaySubmit()
+    {return g.certStreamingSoak&&(g.soakDrawLane==1||g.soakDrawLane==4||g.soakDrawLane==5);}
+    bool SoakSuppressGrassSubmit()
+    {return g.certStreamingSoak&&(g.soakDrawLane==1||g.soakDrawLane==5);}
+    bool SoakSuppressPropsHud()
+    {return g.certStreamingSoak&&g.soakDrawLane==1;}
+
+    void ResetDrawSubmitAttrib()
+    {
+        s_drawSubmitAttrib=DrawSubmitAttrib{};
+        QueryPerformanceFrequency(&s_drawSubmitAttrib.qpf);
+        s_drawCurPackages.clear();
+    }
+
+    double DrawAttribMs(LARGE_INTEGER t0,LARGE_INTEGER t1)
+    {
+        LONGLONG const freq=s_drawSubmitAttrib.qpf.QuadPart;
+        return freq>0?1000.0*(double)(t1.QuadPart-t0.QuadPart)/(double)freq:0.0;
+    }
+
+    void NoteGlSubmit(char const* name,GLuint list,int bx,int by,int tris,double ms,bool firstUse)
+    {
+        if(!SoakDrawAttribOn())return;
+        DrawSubmitAttrib& a=s_drawSubmitAttrib;
+        if(ms>a.longestMs)
+        {
+            std::snprintf(a.prevName,sizeof(a.prevName),"%s",a.lastName);
+            a.prevMs=a.lastMs;
+            a.prevList=a.lastList;
+            a.prevBx=a.lastBx;
+            a.prevBy=a.lastBy;
+            std::snprintf(a.longestName,sizeof(a.longestName),"%s",name?name:"");
+            a.longestMs=ms;
+            a.longestList=list;
+            a.longestBx=bx;
+            a.longestBy=by;
+            a.longestTris=tris;
+            a.longestFirstUse=firstUse?1:0;
+        }
+        std::snprintf(a.lastName,sizeof(a.lastName),"%s",name?name:"");
+        a.lastMs=ms;
+        a.lastList=list;
+        a.lastBx=bx;
+        a.lastBy=by;
+        if(firstUse)
+        {
+            ++a.firstUseCalls;
+            a.firstUseMs+=ms;
+        }
+    }
+
+    void FinishDrawSubmitAttrib()
+    {
+        if(!SoakDrawAttribOn())return;
+        DrawSubmitAttrib& a=s_drawSubmitAttrib;
+        a.newlyVisible=0;
+        for(uint64_t const key:s_drawCurPackages)
+        {
+            if(s_drawPrevPackages.find(key)==s_drawPrevPackages.end())++a.newlyVisible;
+        }
+        s_drawPrevPackages.swap(s_drawCurPackages);
+        s_drawCurPackages.clear();
+        a.retired=s_soakFrame.packagesRetired;
+
+        struct Lane { char const* name; double ms; };
+        Lane lanes[]={
+            {"terrain",a.terrain.cpuMs},
+            {"geology",a.geology.cpuMs},
+            {"water",a.water.cpuMs},
+            {"grass",a.grass.cpuMs},
+            {"props",a.props.cpuMs},
+            {"debug_cert",a.debugCert.cpuMs},
+            {"xray_ruler",a.xray.cpuMs},
+            {"other",a.other.cpuMs+a.terrainSetupMs},
+        };
+        int best=0;
+        for(int i=1;i<8;++i)if(lanes[i].ms>lanes[best].ms)best=i;
+        std::snprintf(a.ownerLane,sizeof(a.ownerLane),"%s",lanes[best].name);
+
+        double const submit=g.stage0FrameDrawSubmitMs;
+        double const gpu=g.stage0FrameGpuFinishMs;
+        bool const oneCall=a.longestMs>=8.0&&a.longestMs>=0.45*submit;
+        bool const firstUseBurst=a.firstUseMs>=8.0&&(a.longestFirstUse||a.firstUseCalls>=4);
+        if(gpu>=16.0&&submit<8.0)
+        {std::snprintf(a.discriminator,sizeof(a.discriminator),"GPU");}
+        else if(oneCall&&a.longestFirstUse)
+        {std::snprintf(a.discriminator,sizeof(a.discriminator),"C");}
+        else if(firstUseBurst&&!oneCall)
+        {std::snprintf(a.discriminator,sizeof(a.discriminator),"C");}
+        else if(oneCall&&!a.longestFirstUse)
+        {
+            if(std::strstr(a.longestName,"glFinish")||std::strstr(a.longestName,"glGet")
+                ||std::strstr(a.longestName,"glMap")||std::strstr(a.longestName,"glFlush"))
+            {std::snprintf(a.discriminator,sizeof(a.discriminator),"D");}
+            else
+            {std::snprintf(a.discriminator,sizeof(a.discriminator),"A");}
+        }
+        else
+        {std::snprintf(a.discriminator,sizeof(a.discriminator),"B");}
+    }
+
+    void SubmitTerrainDisplayList(GLuint list,int bx,int by,int tris,bool& warmed,uint64_t key)
+    {
+        if(!list)return;
+        if(SoakDrawAttribOn())
+        {
+            LARGE_INTEGER t0{},t1{};
+            QueryPerformanceCounter(&t0);
+            glCallList(list);
+            QueryPerformanceCounter(&t1);
+            double const ms=DrawAttribMs(t0,t1);
+            bool const first=!warmed;
+            warmed=true;
+            NoteGlSubmit("glCallList/terrain",list,bx,by,tris,ms,first);
+            ++s_drawSubmitAttrib.terrain.draws;
+            s_drawSubmitAttrib.terrain.triangles+=tris;
+            s_drawSubmitAttrib.terrain.cpuMs+=ms;
+            ++s_drawSubmitAttrib.packagesSubmitted;
+            ++s_drawSubmitAttrib.listsBound;
+            s_drawCurPackages.insert(key);
+        }
+        else
+        {
+            glCallList(list);
+            warmed=true;
+        }
+    }
 
     struct Stage11ResidencyWaterfallCounters
     {
@@ -3010,8 +3218,9 @@ namespace
     }
 
     bool PresentationSuppressesTerrainSubmission()
-    {return g.certPresentationIsolation
-        &&(g.presentationIsolationMode==3||g.presentationIsolationMode==4);}
+    {return (g.certPresentationIsolation
+        &&(g.presentationIsolationMode==3||g.presentationIsolationMode==4))
+        ||SoakSuppressTerrainSubmit();}
 
     bool PresentationUsesMinimalTerrainSubmission()
     {return g.certPresentationIsolation&&g.presentationIsolationMode==6;}
@@ -12525,13 +12734,17 @@ namespace
         {
             if ( !g.stage0TerrainBlocks.count( CellKey( bx, by ) ) )
             { RebuildStage0TerrainBlock( bx, by ); }
-            auto const it = g.stage0TerrainBlocks.find( CellKey( bx, by ) );
+            auto it = g.stage0TerrainBlocks.find( CellKey( bx, by ) );
             if ( it != g.stage0TerrainBlocks.end() && it->second.list )
             {
                 bool const submit=!PresentationSuppressesTerrainSubmission()
                     &&(!PresentationUsesMinimalTerrainSubmission()
                         ||(bx==playerBx&&by==playerBy));
-                if(submit){glCallList( it->second.list );}
+                if(submit)
+                {
+                    SubmitTerrainDisplayList(it->second.list,bx,by,it->second.tris,
+                        it->second.warmed,CellKey(bx,by));
+                }
             }
         }
         // Stage 5/6 color each immutable package from causal authority. Keep the
@@ -12668,9 +12881,12 @@ namespace
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
         for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
         {
-            auto const it = g.stage7TerrainBlocks.find( CellKey( bx, by ) );
+            auto it = g.stage7TerrainBlocks.find( CellKey( bx, by ) );
             if ( it != g.stage7TerrainBlocks.end() && it->second.list )
-            { glCallList( it->second.list ); }
+            {
+                SubmitTerrainDisplayList(it->second.list,bx,by,it->second.tris,
+                    it->second.warmed,CellKey(bx,by));
+            }
         }
     }
 
@@ -13820,6 +14036,8 @@ namespace
         // authority sampling so a fast flight cannot force either phase into a
         // monolithic frame-thread burst.
         ServiceStage8CompletedPackages(bounds);
+        LARGE_INTEGER setup0{};
+        if(SoakDrawAttribOn())QueryPerformanceCounter(&setup0);
         EnsureFollowStreamScratch();
         Stage8CopyScheduledIntoScratch();
         FollowStreamScratch& scratch=s_followStreamScratch;
@@ -13966,16 +14184,26 @@ namespace
         s_soakFrame.packagesRetired += (int)scratch.evictKeys.size();
         int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
         int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
+        if(SoakDrawAttribOn())
+        {
+            LARGE_INTEGER setup1{};
+            QueryPerformanceCounter(&setup1);
+            s_drawSubmitAttrib.terrainSetupMs+=DrawAttribMs(setup0,setup1);
+        }
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
         for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
         {
-            auto const it = terrainBlocks.find( CellKey( bx, by ) );
+            auto it = terrainBlocks.find( CellKey( bx, by ) );
             if ( it != terrainBlocks.end() && it->second.list )
             {
                 bool const submit=!PresentationSuppressesTerrainSubmission()
                     &&(!PresentationUsesMinimalTerrainSubmission()
                         ||(bx==playerBx&&by==playerBy));
-                if(submit){glCallList( it->second.list );}
+                if(submit)
+                {
+                    SubmitTerrainDisplayList(it->second.list,bx,by,it->second.tris,
+                        it->second.warmed,CellKey(bx,by));
+                }
             }
         }
     }
@@ -15413,8 +15641,22 @@ namespace
                 }
             }
         }
-        for(auto const& kv:g.stage0FarCoarseTiles)if(kv.second.list)glCallList(kv.second.list);
-        for(auto const& kv:g.stage0FarStitchTiles)if(kv.second.list)glCallList(kv.second.list);
+        LARGE_INTEGER far0{},far1{};
+        if(SoakDrawAttribOn())QueryPerformanceCounter(&far0);
+        int farLists=0,farTris=0;
+        for(auto const& kv:g.stage0FarCoarseTiles)if(kv.second.list)
+        {glCallList(kv.second.list);++farLists;farTris+=kv.second.tris;}
+        for(auto const& kv:g.stage0FarStitchTiles)if(kv.second.list)
+        {glCallList(kv.second.list);++farLists;farTris+=kv.second.tris;}
+        if(SoakDrawAttribOn())
+        {
+            QueryPerformanceCounter(&far1);
+            double const ms=DrawAttribMs(far0,far1);
+            NoteGlSubmit("glCallList/far_field",0,0,0,farTris,ms,false);
+            s_drawSubmitAttrib.other.draws+=farLists;
+            s_drawSubmitAttrib.other.triangles+=farTris;
+            s_drawSubmitAttrib.other.cpuMs+=ms;
+        }
     }
 
     void Stage0CalibrationSurfaceNormal( float anchorX, float anchorY, float out[3] )
@@ -19096,7 +19338,7 @@ namespace
         g.livingWorldPropFrameMs=0.0;g.livingWorldPropActive=0;g.livingWorldPropCulled=0;
         g.livingWorldAnimalFrameMs=0.0;g.livingWorldAnimalActive=0;g.livingWorldAnimalCulled=0;
         g.livingWorldNpcFrameMs=0.0;g.livingWorldNpcActive=0;g.livingWorldNpcCulled=0;
-        if(!g.certLivingWorldLoad)return;
+        if(!g.certLivingWorldLoad||SoakSuppressGrassSubmit())return;
 
         LARGE_INTEGER q0{},q1{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
@@ -19345,6 +19587,14 @@ namespace
         QueryPerformanceCounter(&q1);
         g.livingWorldGrassFrameMs=qpf.QuadPart>0?1000.0
             *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart:0.0;
+        if(SoakDrawAttribOn()&&g.livingWorldGrassSubmittedTriangles>0)
+        {
+            NoteGlSubmit("glDrawArrays/grass",0,0,0,g.livingWorldGrassSubmittedTriangles,
+                g.livingWorldGrassFrameMs,false);
+            ++s_drawSubmitAttrib.grass.draws;
+            s_drawSubmitAttrib.grass.triangles+=g.livingWorldGrassSubmittedTriangles;
+            s_drawSubmitAttrib.grass.cpuMs+=g.livingWorldGrassFrameMs;
+        }
     }
 
     void DrawStage14DetachedMatterBody()
@@ -19367,6 +19617,7 @@ namespace
 
     void DrawStage0CalibrationPresentation()
     {
+        if(SoakSuppressPropsHud())return;
         LARGE_INTEGER q0{}, q1{}, qpf{};
         QueryPerformanceFrequency( &qpf );
         QueryPerformanceCounter( &q0 );
@@ -19428,6 +19679,13 @@ namespace
         QueryPerformanceCounter( &q1 );
         g.stage0FrameCalibrationDrawMs = qpf.QuadPart > 0
             ? 1000.0 * (double)( q1.QuadPart - q0.QuadPart ) / (double)qpf.QuadPart : 0.0;
+        if(SoakDrawAttribOn())
+        {
+            NoteGlSubmit("calibration/props_xray",0,0,0,0,g.stage0FrameCalibrationDrawMs,false);
+            ++s_drawSubmitAttrib.xray.draws;
+            s_drawSubmitAttrib.xray.cpuMs+=g.stage0FrameCalibrationDrawMs;
+            s_drawSubmitAttrib.props.cpuMs+=g.stage0FrameCalibrationDrawMs;
+        }
     }
 
     void RebuildTerrainMesh()
@@ -19919,6 +20177,9 @@ namespace
         glEnd();glEnable(GL_CULL_FACE);
     }
 
+    struct WaterQuadVertex { float x,y,z,r,g,b,a; };
+    std::vector<WaterQuadVertex> s_waterSubmitVerts;
+
     void DrawStage16DryHydrologyDiagnostics()
     {
         CausalDryHydrology::Kernel const* kernel=nullptr;
@@ -19937,9 +20198,18 @@ namespace
         int const radiusCells=(int)std::ceil(96.0/step);
         int const cx=(int)std::floor((g.feetX-kernel->MinX())/step);
         int const cy=(int)std::floor((g.feetY-kernel->MinY())/step);
-        GLboolean const lightingWasEnabled=glIsEnabled(GL_LIGHTING);
-        GLboolean const textureWasEnabled=glIsEnabled(GL_TEXTURE_2D);
+        bool const drawOverlays=!SoakSuppressOverlaySubmit();
+        bool const drawWater=water&&!g.certWorldgenCardinalReplacement&&!SoakSuppressWaterSubmit();
+        if(!drawOverlays&&!drawWater)return;
+        // Do not glIsEnabled here: on this legacy driver a state query after
+        // the first blended water submit was an implicit sync. Terrain lists
+        // already bake colour; leave lighting/texture off for the overlay.
         glDisable(GL_LIGHTING);glDisable(GL_TEXTURE_2D);glLineWidth(2.0f);
+        LARGE_INTEGER overlay0{},overlay1{};
+        int overlaySegs=0;
+        if(drawOverlays)
+        {
+        if(SoakDrawAttribOn())QueryPerformanceCounter(&overlay0);
         glBegin(GL_LINES);
         for(int oy=-radiusCells;oy<=radiusCells;++oy)
         for(int ox=-radiusCells;ox<=radiusCells;++ox)
@@ -19975,6 +20245,7 @@ namespace
             glVertex3f((float)q.cell.x,(float)q.cell.y,z);
             glVertex3f((float)(q.cell.x+.72*(r.x-q.cell.x)),
                 (float)(q.cell.y+.72*(r.y-q.cell.y)),(float)(z+.72*(rz-z)));
+            overlaySegs+=1;
             // Two short arrow wings make direction readable without rendering
             // a river ribbon or implying present water.
             double const ax=q.cell.x+.72*(r.x-q.cell.x),ay=q.cell.y+.72*(r.y-q.cell.y);
@@ -19993,34 +20264,69 @@ namespace
             }
         }
         glEnd();glLineWidth(1.0f);
-        if(water&&!g.certWorldgenCardinalReplacement)
+        if(SoakDrawAttribOn()&&drawOverlays)
         {
-            // Static present-water surface quads (blue/cyan — never green).
-            // Skip during cardinal replacement so 16D presentation cost cannot
-            // burn the movement-frame floor.
-            glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-            glBegin(GL_QUADS);
+            QueryPerformanceCounter(&overlay1);
+            double const ms=DrawAttribMs(overlay0,overlay1);
+            NoteGlSubmit("glBegin/geology_lines",0,0,0,overlaySegs,ms,false);
+            ++s_drawSubmitAttrib.geology.draws;
+            s_drawSubmitAttrib.geology.triangles+=overlaySegs;
+            s_drawSubmitAttrib.geology.cpuMs+=ms;
+        }
+        }
+        if(drawWater)
+        {
+            // One client-array batch. Immediate glBegin/GL_QUADS + first
+            // GL_BLEND use on this driver produced the 60 ms draw_submit
+            // stall at ~528 m (same class as the grass-cut 60-95 ms hitch).
+            // Cardinal replacement still skips water so Test A stays isolated.
+            LARGE_INTEGER water0{},water1{};
+            if(SoakDrawAttribOn())QueryPerformanceCounter(&water0);
+            if(s_waterSubmitVerts.capacity()<4096u)s_waterSubmitVerts.reserve(4096u);
+            s_waterSubmitVerts.clear();
             float const half=(float)(step*.46);
+            auto push=[&](float x,float y,float z,float r,float g,float b,float a)
+            {s_waterSubmitVerts.push_back({x,y,z,r,g,b,a});};
             for(int oy=-radiusCells;oy<=radiusCells;++oy)
             for(int ox=-radiusCells;ox<=radiusCells;++ox)
             {
                 double const qx=kernel->MinX()+(cx+ox+.5)*step;
                 double const qy=kernel->MinY()+(cy+oy+.5)*step;
                 auto const q=water->QueryAt(qx,qy);if(!q.found||!q.occupied)continue;
-                float a=.42f;
-                if(q.water.kind==CausalPresentWater::BodyKind::Lake)glColor4f(.10f,.34f,.72f,a);
-                else if(q.water.kind==CausalPresentWater::BodyKind::River)glColor4f(.08f,.48f,.78f,a);
-                else if(q.water.kind==CausalPresentWater::BodyKind::Wetland)glColor4f(.18f,.52f,.58f,a);
-                else glColor4f(.12f,.40f,.70f,a);
+                float a=.42f,r=.12f,gcol=.40f,b=.70f;
+                if(q.water.kind==CausalPresentWater::BodyKind::Lake){r=.10f;gcol=.34f;b=.72f;}
+                else if(q.water.kind==CausalPresentWater::BodyKind::River){r=.08f;gcol=.48f;b=.78f;}
+                else if(q.water.kind==CausalPresentWater::BodyKind::Wetland){r=.18f;gcol=.52f;b=.58f;}
                 float const z=(float)q.waterSurfaceZ+.04f;
                 float const x=(float)q.water.x,y=(float)q.water.y;
-                glVertex3f(x-half,y-half,z);glVertex3f(x+half,y-half,z);
-                glVertex3f(x+half,y+half,z);glVertex3f(x-half,y+half,z);
+                push(x-half,y-half,z,r,gcol,b,a);push(x+half,y-half,z,r,gcol,b,a);
+                push(x+half,y+half,z,r,gcol,b,a);push(x-half,y-half,z,r,gcol,b,a);
+                push(x+half,y+half,z,r,gcol,b,a);push(x-half,y+half,z,r,gcol,b,a);
             }
-            glEnd();glDisable(GL_BLEND);
+            int const waterTris=(int)s_waterSubmitVerts.size()/3;
+            if(!s_waterSubmitVerts.empty())
+            {
+                GLsizei const stride=(GLsizei)sizeof(WaterQuadVertex);
+                unsigned char const* base=(unsigned char const*)s_waterSubmitVerts.data();
+                glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+                glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
+                glVertexPointer(3,GL_FLOAT,stride,base);
+                glColorPointer(4,GL_FLOAT,stride,base+offsetof(WaterQuadVertex,r));
+                glDrawArrays(GL_TRIANGLES,0,(GLsizei)s_waterSubmitVerts.size());
+                glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
+                glDisable(GL_BLEND);
+            }
+            if(SoakDrawAttribOn())
+            {
+                QueryPerformanceCounter(&water1);
+                double const ms=DrawAttribMs(water0,water1);
+                NoteGlSubmit("glDrawArrays/water",0,0,0,waterTris,ms,false);
+                ++s_drawSubmitAttrib.water.draws;
+                s_drawSubmitAttrib.water.triangles+=waterTris;
+                s_drawSubmitAttrib.water.cpuMs+=ms;
+            }
         }
-        if(lightingWasEnabled)glEnable(GL_LIGHTING);else glDisable(GL_LIGHTING);
-        if(textureWasEnabled)glEnable(GL_TEXTURE_2D);else glDisable(GL_TEXTURE_2D);
+        glDisable(GL_LIGHTING);glDisable(GL_TEXTURE_2D);
     }
 
     void DrawHeightfield()
@@ -21056,6 +21362,7 @@ namespace
             QueryPerformanceFrequency( &qpf );
             QueryPerformanceCounter( &render0 );
         }
+        if(SoakDrawAttribOn())ResetDrawSubmitAttrib();
         auto stage0Present = [&]()
         {
             LARGE_INTEGER beforePresent{}, afterPresent{};
@@ -21075,6 +21382,7 @@ namespace
                     ?1000.0*(double)(finish1.QuadPart-finish0.QuadPart)
                         /(double)qpf.QuadPart:0.0;
             }
+            FinishDrawSubmitAttrib();
             LARGE_INTEGER beforeSwap{};
             QueryPerformanceCounter(&beforeSwap);
             SwapBuffers( g.hdc );
@@ -21176,6 +21484,8 @@ namespace
         // Prior ground quad was glColor(0.70,0.80,0.55)=RGB(178,204,140); dig mesh gaps
         // peeked that color and were misread as grass or "lime void." Peek = sky void only.
         glDisable( GL_DEPTH_TEST );
+        LARGE_INTEGER sky0{},sky1{};
+        if(SoakDrawAttribOn())QueryPerformanceCounter(&sky0);
         glBegin( GL_QUADS );
         glColor3f( 0.45f, 0.62f, 0.88f ); // == glClearColor
         float sky = 400.f;
@@ -21208,6 +21518,15 @@ namespace
             glEnd();
         }
         glEnable( GL_DEPTH_TEST );
+        if(SoakDrawAttribOn())
+        {
+            QueryPerformanceCounter(&sky1);
+            double const ms=DrawAttribMs(sky0,sky1);
+            NoteGlSubmit("glBegin/sky_quads",0,0,0,2,ms,false);
+            ++s_drawSubmitAttrib.other.draws;
+            s_drawSubmitAttrib.other.triangles+=2;
+            s_drawSubmitAttrib.other.cpuMs+=ms;
+        }
 
         DrawHeightfield();
         DrawLivingWorldLoadPresentation();
@@ -37889,6 +38208,41 @@ namespace
         SIZE_T allocatorHeapBytes=0;
         int allocatorHeaps=0;
         char allocatorOwner[48]="allocator_growth";
+        double terrainSubmitMs=0.0;
+        double geologySubmitMs=0.0;
+        double waterSubmitMs=0.0;
+        double grassSubmitMs=0.0;
+        double propsSubmitMs=0.0;
+        double debugSubmitMs=0.0;
+        double xraySubmitMs=0.0;
+        double otherSubmitMs=0.0;
+        double terrainSetupMs=0.0;
+        int terrainDraws=0;
+        int terrainTris=0;
+        int geologyDraws=0;
+        int geologyTris=0;
+        int waterDraws=0;
+        int waterTris=0;
+        int packagesSubmitted=0;
+        int listsBound=0;
+        int stateChanges=0;
+        int materialSwitches=0;
+        int newlyVisible=0;
+        int retiredPackages=0;
+        int firstUseCalls=0;
+        double firstUseMs=0.0;
+        char longestCall[48]="";
+        double longestCallMs=0.0;
+        unsigned longestList=0;
+        int longestBx=0;
+        int longestBy=0;
+        int longestTris=0;
+        int longestFirstUse=0;
+        char prevCall[48]="";
+        double prevCallMs=0.0;
+        unsigned prevList=0;
+        char discriminator[8]="";
+        char ownerLane[32]="";
     };
 
     struct StreamingSoakRun
@@ -38353,11 +38707,19 @@ namespace
         bool const followStreamCrtOk=run.classFollowStreamCrt==0;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk;
+        char certPathBuf[160];
         char const* certPath=g.certStreamingSoakStageFilter==23
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
             ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
             :"Docs\\provenance_streaming_soak_cert.txt");
+        if(g.soakDrawLane!=0)
+        {
+            std::snprintf(certPathBuf,sizeof(certPathBuf),
+                "Docs\\provenance_p5b2b_streaming_soak_%s_cert.txt",
+                SoakDrawLaneName(g.soakDrawLane));
+            certPath=certPathBuf;
+        }
         FILE* f=nullptr;
         if(fopen_s(&f,certPath,"wb")!=0||!f)return false;
         std::fprintf(f,
@@ -38367,6 +38729,7 @@ namespace
             "stage_filter=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
             "duration_s=%.3f\nelapsed_s=%.3f\nconfigured_speed_mps=%.3f\n"
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
+            "soak_draw=%s\n"
             "p5b2b=%s\np5b2c=CLOSED\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
             "stop_duration_s=%.3f\nstop_elapsed_s=%.3f\ndrain_elapsed_s=%.3f\n"
             "return_to_origin=%d\nreturn_elapsed_s=%.3f\nsettle_elapsed_s=%.3f\n"
@@ -38441,6 +38804,7 @@ namespace
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
             SoakBearingName(g.soakBearing),informational?1:0,
+            SoakDrawLaneName(g.soakDrawLane),
             g.certStreamingSoakStageFilter==23?"FROZEN":"CLOSED",
             g.soakStopDurationS,run.stopElapsedS,run.drainElapsedS,
             g.soakReturnToOrigin?1:0,run.returnElapsedS,run.settleElapsedS,
@@ -38540,7 +38904,42 @@ namespace
                 "overrun.%d.live_collision_count=%d\n"
                 "overrun.%d.live_gl_resources=%d\n"
                 "overrun.%d.private_bytes=%llu\n"
-                "overrun.%d.working_set_bytes=%llu\n",
+                "overrun.%d.working_set_bytes=%llu\n"
+                "overrun.%d.draw.terrain_ms=%.3f\n"
+                "overrun.%d.draw.geology_ms=%.3f\n"
+                "overrun.%d.draw.water_ms=%.3f\n"
+                "overrun.%d.draw.grass_ms=%.3f\n"
+                "overrun.%d.draw.props_ms=%.3f\n"
+                "overrun.%d.draw.debug_ms=%.3f\n"
+                "overrun.%d.draw.xray_ms=%.3f\n"
+                "overrun.%d.draw.other_ms=%.3f\n"
+                "overrun.%d.draw.terrain_setup_ms=%.3f\n"
+                "overrun.%d.draw.terrain_draws=%d\n"
+                "overrun.%d.draw.terrain_tris=%d\n"
+                "overrun.%d.draw.geology_draws=%d\n"
+                "overrun.%d.draw.geology_tris=%d\n"
+                "overrun.%d.draw.water_draws=%d\n"
+                "overrun.%d.draw.water_tris=%d\n"
+                "overrun.%d.draw.packages_submitted=%d\n"
+                "overrun.%d.draw.lists_bound=%d\n"
+                "overrun.%d.draw.state_changes=%d\n"
+                "overrun.%d.draw.material_switches=%d\n"
+                "overrun.%d.draw.newly_visible=%d\n"
+                "overrun.%d.draw.retired=%d\n"
+                "overrun.%d.draw.first_use_calls=%d\n"
+                "overrun.%d.draw.first_use_ms=%.3f\n"
+                "overrun.%d.draw.longest_call=%s\n"
+                "overrun.%d.draw.longest_ms=%.3f\n"
+                "overrun.%d.draw.longest_list=%u\n"
+                "overrun.%d.draw.longest_bx=%d\n"
+                "overrun.%d.draw.longest_by=%d\n"
+                "overrun.%d.draw.longest_tris=%d\n"
+                "overrun.%d.draw.longest_first_use=%d\n"
+                "overrun.%d.draw.prev_call=%s\n"
+                "overrun.%d.draw.prev_ms=%.3f\n"
+                "overrun.%d.draw.prev_list=%u\n"
+                "overrun.%d.draw.discriminator=%s\n"
+                "overrun.%d.draw.owner_lane=%s\n",
                 o.index,o.phase,o.index,o.elapsedS,o.index,o.distanceM,
                 o.index,o.frameMs,o.index,o.primary,
                 o.index,o.packageCreate,o.index,o.packageRetire,
@@ -38561,7 +38960,25 @@ namespace
                 o.index,o.liveMeshCount,o.index,o.liveCollisionCount,
                 o.index,o.liveGlResources,
                 o.index,(unsigned long long)o.privateBytes,
-                o.index,(unsigned long long)o.workingSet);
+                o.index,(unsigned long long)o.workingSet,
+                o.index,o.terrainSubmitMs,o.index,o.geologySubmitMs,
+                o.index,o.waterSubmitMs,o.index,o.grassSubmitMs,
+                o.index,o.propsSubmitMs,o.index,o.debugSubmitMs,
+                o.index,o.xraySubmitMs,o.index,o.otherSubmitMs,
+                o.index,o.terrainSetupMs,
+                o.index,o.terrainDraws,o.index,o.terrainTris,
+                o.index,o.geologyDraws,o.index,o.geologyTris,
+                o.index,o.waterDraws,o.index,o.waterTris,
+                o.index,o.packagesSubmitted,o.index,o.listsBound,
+                o.index,o.stateChanges,o.index,o.materialSwitches,
+                o.index,o.newlyVisible,o.index,o.retiredPackages,
+                o.index,o.firstUseCalls,o.index,o.firstUseMs,
+                o.index,o.longestCall,o.index,o.longestCallMs,
+                o.index,o.longestList,o.index,o.longestBx,
+                o.index,o.longestBy,o.index,o.longestTris,
+                o.index,o.longestFirstUse,
+                o.index,o.prevCall,o.index,o.prevCallMs,o.index,o.prevList,
+                o.index,o.discriminator,o.index,o.ownerLane);
         }
         std::fclose(f);
         if(run.trace){std::fclose(run.trace);run.trace=nullptr;}
@@ -38852,6 +39269,44 @@ namespace
         receipt.workerWaitMs=0.0;
         receipt.drawSubmitMs=g.stage0FrameDrawSubmitMs;
         receipt.presentWaitMs=g.stage0FramePresentWaitMs;
+        {
+            DrawSubmitAttrib const& a=s_drawSubmitAttrib;
+            receipt.terrainSubmitMs=a.terrain.cpuMs;
+            receipt.geologySubmitMs=a.geology.cpuMs;
+            receipt.waterSubmitMs=a.water.cpuMs;
+            receipt.grassSubmitMs=a.grass.cpuMs;
+            receipt.propsSubmitMs=a.props.cpuMs;
+            receipt.debugSubmitMs=a.debugCert.cpuMs;
+            receipt.xraySubmitMs=a.xray.cpuMs;
+            receipt.otherSubmitMs=a.other.cpuMs;
+            receipt.terrainSetupMs=a.terrainSetupMs;
+            receipt.terrainDraws=a.terrain.draws;
+            receipt.terrainTris=a.terrain.triangles;
+            receipt.geologyDraws=a.geology.draws;
+            receipt.geologyTris=a.geology.triangles;
+            receipt.waterDraws=a.water.draws;
+            receipt.waterTris=a.water.triangles;
+            receipt.packagesSubmitted=a.packagesSubmitted;
+            receipt.listsBound=a.listsBound;
+            receipt.stateChanges=a.stateChanges;
+            receipt.materialSwitches=a.materialSwitches;
+            receipt.newlyVisible=a.newlyVisible;
+            receipt.retiredPackages=a.retired;
+            receipt.firstUseCalls=a.firstUseCalls;
+            receipt.firstUseMs=a.firstUseMs;
+            std::snprintf(receipt.longestCall,sizeof(receipt.longestCall),"%s",a.longestName);
+            receipt.longestCallMs=a.longestMs;
+            receipt.longestList=a.longestList;
+            receipt.longestBx=a.longestBx;
+            receipt.longestBy=a.longestBy;
+            receipt.longestTris=a.longestTris;
+            receipt.longestFirstUse=a.longestFirstUse;
+            std::snprintf(receipt.prevCall,sizeof(receipt.prevCall),"%s",a.prevName);
+            receipt.prevCallMs=a.prevMs;
+            receipt.prevList=a.prevList;
+            std::snprintf(receipt.discriminator,sizeof(receipt.discriminator),"%s",a.discriminator);
+            std::snprintf(receipt.ownerLane,sizeof(receipt.ownerLane),"%s",a.ownerLane);
+        }
         receipt.resident=run.endResidentPackages;
         receipt.pending=pending;
         receipt.workers=workers;
@@ -43411,6 +43866,22 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     else if(_wcsicmp(b,L"southeast")==0||_wcsicmp(b,L"se")==0)g.soakBearing=5;
                     else if(_wcsicmp(b,L"southwest")==0||_wcsicmp(b,L"sw")==0)g.soakBearing=6;
                     else if(_wcsicmp(b,L"northwest")==0||_wcsicmp(b,L"nw")==0)g.soakBearing=7;
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-draw=",12)==0)
+                {
+                    wchar_t const* lane=argv[i]+12;
+                    if(_wcsicmp(lane,L"full")==0||_wcsicmp(lane,L"scene")==0)g.soakDrawLane=0;
+                    else if(_wcsicmp(lane,L"terrain")==0||_wcsicmp(lane,L"terrain-only")==0)
+                    {g.soakDrawLane=1;}
+                    else if(_wcsicmp(lane,L"no-terrain")==0||_wcsicmp(lane,L"noterrain")==0)
+                    {g.soakDrawLane=2;}
+                    else if(_wcsicmp(lane,L"no-water")==0||_wcsicmp(lane,L"nowater")==0)
+                    {g.soakDrawLane=3;}
+                    else if(_wcsicmp(lane,L"no-overlays")==0||_wcsicmp(lane,L"nooverlays")==0)
+                    {g.soakDrawLane=4;}
+                    else if(_wcsicmp(lane,L"no-derived")==0||_wcsicmp(lane,L"noderived")==0)
+                    {g.soakDrawLane=5;}
                     continue;
                 }
                 if(_wcsicmp(argv[i],L"--play-stage16f2-water-transfer")==0
