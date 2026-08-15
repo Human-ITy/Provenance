@@ -273,13 +273,26 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B lifecycle 90 s | **1 / 29903** | 34.025 | 1 allocator_growth |
 | 2B lifecycle 300 s | **1 / 216362** | 35.311 | 1 allocator_growth |
 | 2B lifecycle 900 s | **1 / 786675** | 38.301 | 1 allocator_growth |
+| 2B follow_stream 90 s | **1 / 28504** | 45.276 | 1 crt_heap_segment/follow_stream |
 
 The row-crossing publish burst is closed. The remaining owner is a
-**deterministic ~8.4 MB allocator-growth hitch** at 2018.8 m / 84.118 s
-(zero package / GL / present work; draw_submit ~3.3 ms). It repeats
-at the same distance on 90 / 300 / 900. No clearer owner than the
-8 MB private commit — left classified, not greenwashed. Stop, drain,
-and return frames over 16.667 = 0.
+**deterministic ~8.4 MB CRT heap segment** at 2018.8 m / 84.117 s
+during `FollowStreamCenter` (`EnsureGeoDisk` / `EvictStage0Residency`
+on a 1 m cell cross). Package / GL / worker / present = 0;
+draw_submit ~4.2 ms; private delta 8404992. Not a named game cache
+(atlas / far-ring / collision / package). 192 MB of 8 KB committed
+CRT slack does not absorb it (new 8 MB VirtualAlloc, not small-block
+reuse). A 2120 m unmeasured pre-visit only **moved** the hitch
+(1823.6 m) — high-water first-commit, not a sticky location object.
+HeapWalk/VirtualQuery was taken off the frame path (it poisoned the
+next frame to 150 ms). 16.667 stays FAIL; owner is now
+`crt_heap_segment/follow_stream`, not generic `allocator_growth`.
+Stop and drain frames over 16.667 = 0.
+
+300 / 900 were not re-run on this binary: the 90 s hitch is the same
+deterministic FollowStreamCenter commit that 300 / 900 already
+showed once. Residency / backlog / memory plateau from the lifecycle
+900 s still stand.
 
 ### Memory — logical set bounded; process high-water plateaus
 
@@ -314,9 +327,9 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 ### 90 / 300 / 900 gates
 
 ```text
-90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 allocator_growth)
-300 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth)
-900 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth)
+90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s, frame FAIL (1 crt_heap_segment/follow_stream)
+300 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth) — lifecycle binary; not re-run
+900 s  residency PASS, backlog PASS, memory PASS_plateau,         frame FAIL (1 allocator_growth) — lifecycle binary; not re-run
        192 m complete, 2601 resident max, pending drains to 0, max pending 83
 ```
 

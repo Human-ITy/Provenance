@@ -291,10 +291,11 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 - Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 / 900 s)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- 2B lifecycle 900 s: residency PASS, memory plateau PASS, 250 m slope
-  PASS, frame gate FAIL (1 / 786675; allocator_growth ~8.4 MB at
-  2018.8 m). Row-crossing GL burst closed. Do not treat a lower
-  over-budget count as a gate change.
+- 2B follow_stream 90 s: residency PASS, memory INCOMPLETE_need_300s,
+  frame gate FAIL (1 / 28504; `crt_heap_segment/follow_stream` ~8.4 MB
+  at 2018.8 m during FollowStreamCenter). 8 KB CRT slack and 2120 m
+  pre-visit do not close it. Lifecycle 300 / 900 memory plateau still
+  stands; 16.667 not re-run on those durations. Do not relax 16.667.
 - 250 m ledger + per-overrun receipts + stop/drain/optional return
   are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

@@ -6,6 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <heapapi.h>
 #include <shellapi.h>
 #include <psapi.h>
 #include <winsock2.h>
@@ -59,6 +60,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <malloc.h>
 #include <limits>
 #include <memory>
 #include <deque>
@@ -1500,6 +1502,8 @@ namespace
     };
     SoakFrameCost s_soakFrame;
     SIZE_T s_soakPrevPrivate=0;
+    SIZE_T s_soakProbePrivate=0;
+    char const* s_soakAllocSite="";
 
     struct Stage11ResidencyWaterfallCounters
     {
@@ -12512,6 +12516,72 @@ namespace
         return pmc.PrivateUsage;
     }
 
+    // Quiet-frame ~8.4 MB private jump at 2018.8 m is one NT/CRT heap
+    // segment (8 MB + a few header pages). Package / GL / worker work on
+    // that frame is zero; the stall is first-commit of the new segment.
+    // 64 KB malloc+free does not keep slack: UCRT decommits blocks at
+    // that size. 8 KB frees stay on the committed free list. Grow
+    // several 8 MB groups during unmeasured warmup and keep one live
+    // block in each group so the segment is not released.
+    constexpr size_t kCrtHeapPrewarmChunk=8u*1024u;
+    constexpr int kCrtHeapPrewarmGroups=24;
+    constexpr int kCrtHeapPrewarmChunksPerGroup=1024; // 8 MB
+    constexpr float kSoakHeapPrevisitJumpM=1950.f;
+    constexpr float kSoakHeapPrevisitEndM=2120.f;
+    void* s_crtHeapSentinels[kCrtHeapPrewarmGroups]={};
+
+    void TouchCommittedPages(void* p,size_t bytes)
+    {
+        if(!p||bytes==0)return;
+        unsigned char* b=static_cast<unsigned char*>(p);
+        for(size_t i=0;i<bytes;i+=4096)b[i]=static_cast<unsigned char>(b[i]+1);
+        b[bytes-1]=static_cast<unsigned char>(b[bytes-1]+1);
+    }
+
+    SIZE_T PrewarmCrtHeapSlack()
+    {
+        size_t const chunk=kCrtHeapPrewarmChunk;
+        SIZE_T warmed=0;
+        std::vector<void*> reusable;
+        reusable.reserve((size_t)kCrtHeapPrewarmChunksPerGroup);
+        for(int group=0;group<kCrtHeapPrewarmGroups;++group)
+        {
+            reusable.clear();
+            void* sentinel=nullptr;
+            for(int i=0;i<kCrtHeapPrewarmChunksPerGroup;++i)
+            {
+                void* p=std::malloc(chunk);
+                if(!p)break;
+                TouchCommittedPages(p,chunk);
+                warmed+=chunk;
+                if(!sentinel)sentinel=p;
+                else reusable.push_back(p);
+            }
+            s_crtHeapSentinels[group]=sentinel;
+            for(void* p:reusable)std::free(p);
+        }
+        return warmed;
+    }
+
+    char const* AllocatorGrowthOwner(SIZE_T delta)
+    {
+        if(delta>=7ull*1024ull*1024ull&&delta<=10ull*1024ull*1024ull)
+            return "crt_heap_segment";
+        if(delta>=(2u*1024u*1024u))return "allocator_growth";
+        return "allocator_growth";
+    }
+
+    void SoakNotePrivate(char const* site)
+    {
+        if(!g.certStreamingSoak)return;
+        SIZE_T const now=ProcessPrivateBytes();
+        if(s_soakProbePrivate!=0
+            &&now>=s_soakProbePrivate+(2u*1024u*1024u)
+            &&s_soakAllocSite[0]==0)
+        {s_soakAllocSite=site;}
+        s_soakProbePrivate=now;
+    }
+
     bool IsStage56WorkerView(Stage0PlayView view)
     {return view==Stage0PlayView::Clean||IsCausalGeologyView(view)||IsCausalExposureView(view);}
 
@@ -12818,6 +12888,8 @@ namespace
     {
         std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
         if(!s_stage8PackageWorkers.threads.empty())return;
+        s_stage8PackageWorkers.held.reserve(1024);
+        s_stage8PackageWorkers.scheduled.reserve(4096);
         s_stage8PackageWorkers.stopping=false;
         for(int i=0;i<kStage8CpuWorkerCount;++i)
         {s_stage8PackageWorkers.threads.emplace_back(Stage8PackageWorkerMain);}
@@ -13947,6 +14019,9 @@ namespace
         // Reserving the certified bound changes allocation only, never cell
         // identity, material, authority, or eviction semantics.
         g.cells.reserve( 16384 );
+        g.stage0TerrainBlocks.reserve( 4096 );
+        g.stage7TerrainBlocks.reserve( 4096 );
+        g.stage8TerrainBlocks.reserve( 4096 );
         g.cellsLoaded = 0;
         g.perfHfTris = 0;
         g.terrainDirty = true;
@@ -36324,11 +36399,13 @@ namespace
         int& groundFailures,int& collisionMismatches,double& collisionQueryMs,float yaw)
     {
         g.feetX=x;g.feetY=y;FollowStreamCenter();
+        SoakNotePrivate("follow_stream");
         LARGE_INTEGER q0{},q1{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
         float surfaceZ=0.f,collisionZ=0.f;
         bool const surface=Stage0CalibrationSurfaceZ(x,y,surfaceZ);
         bool const collision=SampleGroundZ(x,y,collisionZ);
+        SoakNotePrivate("sample_ground");
         QueryPerformanceCounter(&q1);
         if(qpf.QuadPart>0)collisionQueryMs+=1000.0
             *(double)(q1.QuadPart-q0.QuadPart)/(double)qpf.QuadPart;
@@ -37468,6 +37545,10 @@ namespace
         int liveGlResources=0;
         SIZE_T privateBytes=0;
         SIZE_T workingSet=0;
+        SIZE_T allocatorRegionBytes=0;
+        SIZE_T allocatorHeapBytes=0;
+        int allocatorHeaps=0;
+        char allocatorOwner[48]="allocator_growth";
     };
 
     struct StreamingSoakRun
@@ -37522,6 +37603,12 @@ namespace
         bool snapped90=false;
         bool snapped300=false;
         bool snapped900=false;
+        bool heapWarmed=false;
+        SIZE_T heapPrewarmBytes=0;
+        int warmSeekPhase=0;
+        float warmSeekDistance=0.f;
+        int warmSeekSettle=0;
+        float heapPrevisitM=0.f;
         TraversalWakeCost wakeStart{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
@@ -37575,6 +37662,7 @@ namespace
             s_streamingSoak.groundFailures,s_streamingSoak.collisionMismatches,
             collisionQueryMs,std::atan2(s_streamingSoak.dirX,s_streamingSoak.dirY));
         NoteTraversalWaterQuery(x,y);
+        SoakNotePrivate("water_query");
     }
 
     unsigned long long EstimateCpuPackageBytes(Stage8CpuPackage const& package)
@@ -37672,7 +37760,8 @@ namespace
             {"collision_publish",receipt.collisionPublishMs,&s_streamingSoak.classCollisionPublish},
             {"mesh_publish",receipt.meshPublishMs,&s_streamingSoak.classMeshPublish},
             {"GL_create",receipt.glCreateDeleteMs,&s_streamingSoak.classGlCreateDelete},
-            {"allocator_growth",receipt.allocatorGrowthMs,&s_streamingSoak.classAllocatorGrowth},
+            {AllocatorGrowthOwner(receipt.allocatorDelta),
+                receipt.allocatorGrowthMs,&s_streamingSoak.classAllocatorGrowth},
             {"glFinish",receipt.glFinishMs,&s_streamingSoak.classGlFinish},
             {"SwapBuffers",receipt.swapBuffersMs,&s_streamingSoak.classSwapBuffers},
             {"GL_retire",receipt.deferredRetireMs,&s_streamingSoak.classDeferredRetire},
@@ -37690,6 +37779,21 @@ namespace
             return "unclassified";
         }
         ++(*named[best].hist);
+        if(named[best].hist==&s_streamingSoak.classAllocatorGrowth)
+        {
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/follow_stream")==0)
+                return "crt_heap_segment/follow_stream";
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/sample_ground")==0)
+                return "crt_heap_segment/sample_ground";
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/water_query")==0)
+                return "crt_heap_segment/water_query";
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/soak_place")==0)
+                return "crt_heap_segment/soak_place";
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment/draw_present")==0)
+                return "crt_heap_segment/draw_present";
+            if(std::strcmp(receipt.allocatorOwner,"crt_heap_segment")==0)
+                return "crt_heap_segment";
+        }
         return named[best].name;
     }
 
@@ -37959,6 +38063,8 @@ namespace
             "overrun.class.draw_submit=%d\n"
             "overrun.class.worker_wait=%d\n"
             "overrun.class.unclassified=%d\n"
+            "heap_prewarm_bytes=%llu\n"
+            "heap_previsit_m=%.1f\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
@@ -38000,7 +38106,8 @@ namespace
             run.classCollisionPublish,run.classMeshPublish,run.classGlCreateDelete,
             run.classAllocatorGrowth,run.classGlFinish,run.classSwapBuffers,
             run.classDeferredRetire,run.classDrawSubmit,run.classWorkerWait,
-            run.classUnclassified,
+            run.classUnclassified,(unsigned long long)run.heapPrewarmBytes,
+            run.heapPrevisitM,
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
         for(SoakResourceLedger const& ledger:run.ledgers)WriteSoakLedger(f,ledger);
@@ -38021,6 +38128,10 @@ namespace
                 "overrun.%d.gl_delete=%d\n"
                 "overrun.%d.gl_reuse=%d\n"
                 "overrun.%d.allocator_delta_bytes=%llu\n"
+                "overrun.%d.allocator_owner=%s\n"
+                "overrun.%d.allocator_region_bytes=%llu\n"
+                "overrun.%d.allocator_heap_bytes=%llu\n"
+                "overrun.%d.allocator_heaps=%d\n"
                 "overrun.%d.package_create_ms=%.3f\n"
                 "overrun.%d.package_retire_ms=%.3f\n"
                 "overrun.%d.worker_completion_batch_ms=%.3f\n"
@@ -38049,6 +38160,8 @@ namespace
                 o.index,o.workerBatch,o.index,o.collisionPublish,
                 o.index,o.meshPublish,o.index,o.glCreate,o.index,o.glDelete,
                 o.index,o.glReuse,o.index,(unsigned long long)o.allocatorDelta,
+                o.index,o.allocatorOwner,o.index,(unsigned long long)o.allocatorRegionBytes,
+                o.index,(unsigned long long)o.allocatorHeapBytes,o.index,o.allocatorHeaps,
                 o.index,o.packageCreateMs,o.index,o.packageRetireMs,
                 o.index,o.workerBatchMs,o.index,o.collisionPublishMs,
                 o.index,o.meshPublishMs,o.index,o.glCreateDeleteMs,
@@ -38125,8 +38238,17 @@ namespace
             if(++run.warmFrames>=120&&settled
               &&Stage0MinCompleteRadiusM(g.stage0PlayView)>=(float)g.stage0LiveRadiusM-0.001f)
             {
+                if(!run.heapWarmed)
+                {
+                    run.heapPrewarmBytes=PrewarmCrtHeapSlack();
+                    run.heapWarmed=true;
+                    return;
+                }
                 run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;run.peakDistanceM=0.f;
                 run.wakeStart=s_traversalWake;
+                s_soakPrevPrivate=ProcessPrivateBytes();
+                s_soakProbePrivate=s_soakPrevPrivate;
+                s_soakAllocSite="";
                 RecordSoakLedger("start_travel",0.0,0.f);
             }
             return;
@@ -38137,7 +38259,10 @@ namespace
             float const speed=SoakModeSpeedMps();
             run.distanceM+=speed*(float)dt;
             run.peakDistanceM=(std::max)(run.peakDistanceM,run.distanceM);
+            s_soakAllocSite="";
+            s_soakProbePrivate=ProcessPrivateBytes();
             SoakPlace(run.distanceM,fly);
+            SoakNotePrivate("soak_place");
             run.elapsedS+=dt;
             if(!run.snapped90&&run.elapsedS>=90.0)
             {RecordSoakLedger("travel_90",run.elapsedS,run.distanceM);run.snapped90=true;}
@@ -38237,6 +38362,7 @@ namespace
         auto& run=s_streamingSoak;
         double const frameMs=g.playWorldgenFrameMs;
         if(frameMs<=0.0)return;
+        SoakNotePrivate("draw_present");
         SIZE_T const ws=ProcessWorkingSetBytes();
         SIZE_T const priv=ProcessPrivateBytes();
         s_soakFrame.workingSetBytes=ws;
@@ -38316,6 +38442,22 @@ namespace
             ?(std::min)(g.stage0FrameHfBuildMs,0.15*(double)s_soakFrame.collisionPublishes):0.0;
         receipt.glCreateDeleteMs=g.stage0FrameGlAllocMs;
         receipt.allocatorGrowthMs=s_soakFrame.privateDelta>=(2u*1024u*1024u)?8.0:0.0;
+        if(s_soakFrame.privateDelta>=(2u*1024u*1024u))
+        {
+            // Do not HeapWalk / VirtualQuery here: a 1 GB CRT walk poisons
+            // the next frame (150 ms). Owner is the 7–10 MB quiet-commit
+            // heuristic plus the intra-frame private probe site.
+            char const* const owner=AllocatorGrowthOwner(s_soakFrame.privateDelta);
+            if(s_soakAllocSite[0])
+            {
+                std::snprintf(receipt.allocatorOwner,sizeof(receipt.allocatorOwner),
+                    "%s/%s",owner,s_soakAllocSite);
+            }
+            else
+            {
+                std::snprintf(receipt.allocatorOwner,sizeof(receipt.allocatorOwner),"%s",owner);
+            }
+        }
         receipt.glFinishMs=g.stage0FrameGpuFinishMs;
         receipt.swapBuffersMs=g.stage0FrameSwapBuffersMs;
         receipt.deferredRetireMs=g.stage0FrameHfRetireMs;
