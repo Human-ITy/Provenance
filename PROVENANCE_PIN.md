@@ -319,6 +319,18 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   erosion remain CLOSED.
 
 ```
+LONG-HAUL INFRASTRUCTURE BASELINE
+SHA: f7ae29ea8e8e689196e829fbac6cb098e0cda05b
+PARENT: 800cfaef
+```
+
+**Pin:** Stage-12 worker dual-cache lifetime is the long-haul infrastructure
+baseline. Cache-lifetime correction, not worldgen. Stage-12 digest
+`d2f1c29c2fcaad9d`. Test S green. Test A `2396f444f66f1234`. Forced-cold ==
+cache-enabled; eviction/recompute identical. 900 s 0 frames >16.667. CRT
+8→12 km ~+1.5 MB. Gameplay remains P5b.2B `8bb75265`; P5b.2C / P5b.3 CLOSED.
+
+```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
 SHA: fa73dd240214ce48659937fa5df757d05d10c15f
 ```

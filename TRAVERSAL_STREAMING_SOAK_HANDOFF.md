@@ -15,6 +15,17 @@ P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
 `9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2B.
 P5b.2C, P5b.3, rainfall, and erosion stay **CLOSED**.
 
+```
+LONG-HAUL INFRASTRUCTURE BASELINE
+SHA: f7ae29ea8e8e689196e829fbac6cb098e0cda05b
+PARENT: 800cfaef
+```
+
+**Pin:** Stage-12 worker dual-cache lifetime. Cache-lifetime correction, not
+worldgen. Stage-12 digest `d2f1c29c2fcaad9d`. Test S green. Test A
+`2396f444f66f1234`. Forced-cold == cache-enabled; eviction/recompute
+identical. 900 s 0 frames >16.667. CRT 8→12 km ~+1.5 MB.
+
 ## Three tests
 
 ### S. Semantic-distance cert (short, independent of Test B)
