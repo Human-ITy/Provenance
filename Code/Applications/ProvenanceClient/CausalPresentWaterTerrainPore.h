@@ -463,6 +463,8 @@ namespace CausalPresentWaterTerrainPore
         Program const& GetProgram() const{return m_program;}
         std::vector<FPoreTransferReceipt> const& Transactions() const{return m_txns;}
         std::vector<FTerrainPoreWaterState> const& Pores() const{return m_pores;}
+        std::vector<FTerrainPoreWaterState>& PoresMutable(){return m_pores;}
+        void BumpPoreRevision(){++m_poreRevision;}
         SolveStats const& Stats() const{return m_stats;}
         int64_t ContainerMass() const{return m_parent->ContainerMass();}
         int64_t HeldMatter() const{return m_parent->HeldMatter();}

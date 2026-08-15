@@ -24,7 +24,7 @@ Parent: P5b.2A land `570c7be2` / pin `eae7db9f`. 2A soak control pin
 P5b.1   terrain → water coupling          CERTIFIED / FROZEN
 P5b.2A  reverse state coupling            CERTIFIED / FROZEN
 P5b.2B  bounded pore storage              CERTIFIED
-P5b.2C  pore occupancy / topology         CLOSED
+P5b.2C  pore occupancy / topology         CERTIFIED
 P5b.3   reverse matter/erosion coupling   CLOSED
 ```
 
@@ -81,7 +81,7 @@ This floor's 2A lake-edge bank compiles as sandstone. The high-capacity
 - Geometry unchanged. Occupancy mask / 16F.4 topology unchanged.
 - Fixtures 5/5 admitted. Locality: max 2 cells, max 1 body.
 - Cold == reload == unbounded. Partition-invariant. Stale pore revision refuses.
-- P5b.2C / P5b.3 / rainfall / groundwater / erosion stay CLOSED.
+- P5b.2C now CERTIFIED (successor). P5b.3 / rainfall / groundwater / erosion stay CLOSED.
 
 ## Player / traversal (measured)
 

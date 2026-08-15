@@ -12,8 +12,8 @@ This is the standing matrix. Cardinal replacement and the long-haul soak are
 narrow a future stage to “cardinal movement passed.”
 
 P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
-`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2B.
-P5b.2C, P5b.3, rainfall, and erosion stay **CLOSED**.
+`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2C.
+P5b.3, rainfall, and erosion stay **CLOSED**.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -80,7 +80,7 @@ Proves **replacement correctness over a bounded route**.
 - Declared resident package bound (2601 at 192 m). Do not weaken.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2b
+Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b2c
 ```
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
@@ -194,7 +194,7 @@ MILESTONE / RELEASE GATE
 - cold / reload cycle
 ```
 
-`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.2B).
+`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.2C).
 `CERT_STREAMING_SOAK.cmd` runs the first-landing 90 s Test B. Milestone soak
 is the same harness with `--soak-duration-s=300` or `900`.
 
@@ -489,6 +489,10 @@ Trace: `Docs/provenance_p5b2b_streaming_soak_trace.csv`.
 
 ## Closed
 
-- P5b.2C pore storage affecting water occupancy / topology
 - P5b.3 water→terrain mechanical / matter movement
 - rainfall, groundwater, active 16B erosion, 16C remobilization, ecology
+
+P5b.2C pore occupancy / topology is **CERTIFIED** this cut. Test A digest
+changed with stage identity: 2B `2396f444f66f1234` → 2C `f743150420e22175`.
+Movement frames over 16.667 = 0 on EVERY-CUT cardinal. Test B soak receipts
+remain the P5b.2B long-haul baseline until a 2C soak is landed.

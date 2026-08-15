@@ -1,0 +1,18 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_PORE_OCCUPANCY_V1
+# P5b.2C: pore transfer may change surface-water occupancy / topology
+# via 16F.4, then 16F.1 / 16F.2. Terrain solid grams unchanged.
+# Water mass conserved: body + pore + container.
+# CLOSED: P5b.3 water-induced terrain matter movement, erosion,
+# sediment remobilization, rainfall, groundwater, ecology.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_pore_occupancy_floor
+parent_region_key=causal_world_present_water_terrain_pore_floor
+parent_authority_revision=1
+authority_revision=1
+p5b2c_event_id=a5b2000c00000001
+chronology=202
+p5b2c_enabled=1
+default_budget_transactions=48

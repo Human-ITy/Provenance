@@ -1,0 +1,6 @@
+TransactionId,Fixture,Kind,Topology,SourceCell,ReceiverCell,Requested,Admitted,BodyBefore,BodyAfter,PoreBefore,PoreAfter,ContainerBefore,ContainerAfter,TerrainBefore,TerrainAfter,OccMaskBefore,OccMaskAfter,PoreRevBefore,PoreRevAfter,TopoRevBefore,TopoRevAfter,CellsVisited,BodiesExamined,OccupancyChanged,RefusedStale,RefusedInvalid,LineageDeterministic
+8f31f2ffd69b106b,saturated_refuses_more,infiltrate,none,325,69,80,0,456302139,456302139,440,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,4,4,8,8,2,1,0,0,0,1
+9ebef9e53f6336f9,impermeable_rock_zero,infiltrate,none,357,101,80,0,456302139,456302139,440,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,4,4,8,8,2,1,0,0,0,1
+ca7f7cf74852245c,far_from_water_no_change,infiltrate,none,-1,0,80,0,456302139,456302139,440,440,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7d3a0c2bdd1560c0,4,4,8,8,2,0,0,0,0,1
+31b94c1eddb1d199,pore_exfiltrate_wets_dry,exfiltrate,grow,40,296,40,40,456302139,456302179,440,400,10060423,10060423,353566960429,353566960429,7d3a0c2bdd1560c0,7036e93864e85561,4,5,8,9,5,1,1,0,0,1
+2e8f054674ff30a1,thin_cell_infiltrate_dries,infiltrate,shrink,289,33,26,26,456302179,456302153,400,426,10060423,10060423,353566960429,353566960429,7036e93864e85561,7102e45c92f6545d,5,6,9,10,2,1,1,0,0,1
