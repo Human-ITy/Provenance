@@ -791,6 +791,9 @@ namespace
         // milestone is 300-900 s via --soak-duration-s=.
         bool certStreamingSoak = false;
         int certStreamingSoakStageFilter = 23; // p5b2b latest play stage
+        // --cert-semantic-distance: Test S. Teleport+settle absolute stations
+        // across/beyond the 4096 m Stage-15 domain. Independent of Test B.
+        bool certSemanticDistance = false;
         double soakDurationS = 90.0;
         double soakStopDurationS = 60.0;
         double soakDrainTimeoutS = 45.0;
@@ -39031,6 +39034,377 @@ namespace
         return informational?true:passed;
     }
 
+    struct SemanticDistanceStation
+    {
+        char const* id;
+        float x;
+        float y;
+        char const* note;
+    };
+
+    constexpr SemanticDistanceStation kSemanticDistanceStations[] = {
+        {"origin",0.f,0.f,"inside_control"},
+        {"inside_east",1856.f,0.f,"192m_window_inside_domain"},
+        {"boundary_east",2048.f,0.f,"regional_edge_east"},
+        {"outside_east",2240.f,0.f,"straddle_east_of_2048"},
+        {"boundary_north",0.f,2048.f,"regional_edge_north"},
+        {"boundary_west",-2048.f,0.f,"regional_edge_west"},
+        {"far_east_8km",8000.f,0.f,"beyond_domain_8km"},
+        {"far_ne_12km",8485.281f,8485.281f,"beyond_domain_12km_diagonal"},
+    };
+
+    struct SemanticDistanceReceipt
+    {
+        char id[48]{};
+        char note[64]{};
+        char generatorId[80]{};
+        char worldIdentity[24]{};
+        char stageName[64]{};
+        float x=0,y=0,groundZ=0;
+        int packages=0,pending=0;
+        float completeRadiusM=0;
+        bool settled=false,imageWritten=false;
+        int skyPixels=0,sampledPixels=0;
+        int meshSamples=0;
+        double meshMinZ=0,meshMaxZ=0,meshMeanZ=0,meshRelief=0,meshMaxSlope=0;
+        int materialKinds=0,landformKinds=0;
+        int fieldSamples=0,geoFound=0,landformFound=0;
+        int drainFound=0,erosionFound=0,sedimentFound=0,waterFound=0,waterOccupied=0;
+        double drainAccumMax=0,incisionMax=0,depositMax=0,waterDepthMax=0;
+        char materials[256]{};
+        char landforms[256]{};
+        char failReason[160]{};
+        bool passed=false;
+        char imagePath[160]{};
+    };
+
+    struct SemanticDistanceHarness
+    {
+        int phase=0;
+        int station=0;
+        int settleFrames=0;
+        int waitFrames=0;
+        bool capturePending=false;
+        bool captureComplete=false;
+        bool initialized=false;
+        std::vector<SemanticDistanceReceipt> receipts;
+    };
+    static SemanticDistanceHarness s_semanticDistance;
+
+    void SemanticDistanceSetCamera(float x,float y)
+    {
+        float groundZ=0.f;
+        Stage0CalibrationSurfaceZ(x,y,groundZ);
+        g.feetX=x;g.feetY=y;
+        g.walkMode=false;g.grounded=false;
+        g.camX=x;g.camY=y;g.camZ=groundZ+24.f;
+        g.feetZ=g.camZ-kEyeHeightM;
+        g.pitch=-0.55f;
+        g.yaw=0.f;
+    }
+
+    void SemanticDistanceAppendUnique(char* dst,size_t cap,int& kinds,char const* name)
+    {
+        if(!name||!name[0]||cap<8)return;
+        if(std::strstr(dst,name))return;
+        size_t const used=std::strlen(dst);
+        size_t const need=std::strlen(name)+(used?1:0);
+        if(used+need+1>=cap)return;
+        if(used){dst[used]=',';std::memcpy(dst+used+1,name,need);}
+        else std::memcpy(dst,name,need+1);
+        ++kinds;
+    }
+
+    void SemanticDistanceMeasure(SemanticDistanceReceipt& r)
+    {
+        r.packages=(int)CardinalPackageMap(g.stage0PlayView).size();
+        r.pending=Stage0PendingPackageCount(g.stage0PlayView);
+        r.completeRadiusM=Stage0MinCompleteRadiusM(g.stage0PlayView);
+        r.settled=r.pending==0&&Stage8PackageJobsIdle()
+            &&r.completeRadiusM>=(float)g.stage0LiveRadiusM-0.001f;
+        std::snprintf(r.generatorId,sizeof(r.generatorId),"%s",g.generatorId.c_str());
+        std::snprintf(r.worldIdentity,sizeof(r.worldIdentity),"%s",g.worldIdentityHash.c_str());
+        std::snprintf(r.stageName,sizeof(r.stageName),"%s",Stage0PlayViewName(g.stage0PlayView));
+        Stage0CalibrationSurfaceZ(r.x,r.y,r.groundZ);
+
+        double zSum=0.0;r.meshMinZ=1e30;r.meshMaxZ=-1e30;r.meshMaxSlope=0.0;
+        auto const& packages=g.stage8TerrainBlocks;
+        for(auto const& kv:packages)
+        {
+            if(!kv.second.collisionSurface)continue;
+            auto const& verts=kv.second.collisionSurface->vertices;
+            int const span=CausalVisibleExposure::kBlockSampleSpan;
+            if((int)verts.size()<span*span)continue;
+            for(int j=0;j<span;++j)for(int i=0;i<span;++i)
+            {
+                auto const& v=verts[(size_t)j*span+(size_t)i];
+                if(std::hypot(v.x-r.x,v.y-r.y)>(double)g.stage0LiveRadiusM+0.5)continue;
+                if(!std::isfinite(v.z))continue;
+                ++r.meshSamples;zSum+=v.z;
+                r.meshMinZ=(std::min)(r.meshMinZ,v.z);
+                r.meshMaxZ=(std::max)(r.meshMaxZ,v.z);
+                if(i+1<span)
+                {
+                    auto const& n=verts[(size_t)j*span+(size_t)(i+1)];
+                    double const dx=n.x-v.x,dz=n.z-v.z;
+                    if(std::fabs(dx)>1e-6)
+                        r.meshMaxSlope=(std::max)(r.meshMaxSlope,std::fabs(dz/dx));
+                }
+                if(j+1<span)
+                {
+                    auto const& n=verts[(size_t)(j+1)*span+(size_t)i];
+                    double const dy=n.y-v.y,dz=n.z-v.z;
+                    if(std::fabs(dy)>1e-6)
+                        r.meshMaxSlope=(std::max)(r.meshMaxSlope,std::fabs(dz/dy));
+                }
+            }
+        }
+        if(r.meshSamples>0)
+        {
+            r.meshMeanZ=zSum/(double)r.meshSamples;
+            r.meshRelief=r.meshMaxZ-r.meshMinZ;
+        }
+        else{r.meshMinZ=0;r.meshMaxZ=0;}
+
+        auto const* geography=ActiveBareEarthKernel(g.stage0PlayView);
+        auto const* water=ActivePresentWaterKernel();
+        constexpr float kStep=16.f;
+        float const live=(float)g.stage0LiveRadiusM;
+        for(float dy=-live;dy<=live+0.001f;dy+=kStep)
+        for(float dx=-live;dx<=live+0.001f;dx+=kStep)
+        {
+            if(dx*dx+dy*dy>live*live)continue;
+            double const wx=r.x+dx,wy=r.y+dy;
+            ++r.fieldSamples;
+            if(geography)
+            {
+                auto const surface=geography->QuerySurface(wx,wy);
+                if(surface.found)
+                {
+                    ++r.geoFound;++r.landformFound;
+                    SemanticDistanceAppendUnique(r.landforms,sizeof(r.landforms),
+                        r.landformKinds,CausalBareEarthGeography::LandformName(surface.landform));
+                    if(surface.geology.found&&!surface.geology.material.empty())
+                        SemanticDistanceAppendUnique(r.materials,sizeof(r.materials),
+                            r.materialKinds,surface.geology.material.c_str());
+                }
+            }
+            if(water)
+            {
+                auto const drain=water->Drainage().QueryAt(wx,wy);
+                if(drain.found)
+                {
+                    ++r.drainFound;
+                    r.drainAccumMax=(std::max)(r.drainAccumMax,drain.cell.accumulationM2);
+                }
+                auto const erosion=water->Erosion().QueryAt(wx,wy);
+                if(erosion.found)
+                {
+                    ++r.erosionFound;
+                    r.incisionMax=(std::max)(r.incisionMax,erosion.incisionM);
+                }
+                auto const sediment=water->Sediment().QueryAt(wx,wy);
+                if(sediment.found)
+                {
+                    ++r.sedimentFound;
+                    r.depositMax=(std::max)(r.depositMax,sediment.depositDepthM);
+                }
+                auto const present=water->QueryAt(wx,wy);
+                if(present.found)
+                {
+                    ++r.waterFound;
+                    r.waterDepthMax=(std::max)(r.waterDepthMax,present.depthM);
+                    if(present.occupied)++r.waterOccupied;
+                }
+            }
+        }
+
+        auto fail=[&](char const* why)
+        {
+            if(!r.failReason[0])
+                std::snprintf(r.failReason,sizeof(r.failReason),"%s",why);
+        };
+        if(!r.settled)fail("window_not_settled");
+        if(r.completeRadiusM<(float)g.stage0LiveRadiusM-0.001f)fail("incomplete_192m");
+        if(r.meshSamples<64)fail("missing_resident_mesh");
+        if(r.meshRelief<1.0)fail("flat_or_default_heightfield");
+        if(r.fieldSamples<=0)fail("no_field_samples");
+        else
+        {
+            if((double)r.geoFound/(double)r.fieldSamples<0.85)fail("missing_stage15_geology");
+            if((double)r.landformFound/(double)r.fieldSamples<0.85)fail("missing_stage15_landforms");
+            if((double)r.drainFound/(double)r.fieldSamples<0.85)fail("missing_16a_drainage");
+            if((double)r.erosionFound/(double)r.fieldSamples<0.85)fail("missing_16b_erosion");
+            if((double)r.sedimentFound/(double)r.fieldSamples<0.85)fail("missing_16c_sediment");
+            if((double)r.waterFound/(double)r.fieldSamples<0.85)fail("missing_16d_present_water");
+        }
+        if(r.materialKinds<1)fail("no_material_diversity");
+        if(r.landformKinds<1)fail("no_landform_presence");
+        if(!r.generatorId[0]||std::strstr(r.generatorId,"baseline"))fail("wrong_generator_identity");
+        if(!r.imageWritten)fail("visual_receipt_missing");
+        if(r.sampledPixels>0&&r.skyPixels*4>r.sampledPixels*3)fail("visual_does_not_match_generator");
+        r.passed=r.failReason[0]==0;
+    }
+
+    bool WriteSemanticDistanceArtifact()
+    {
+        bool passed=!s_semanticDistance.receipts.empty();
+        FILE* file=nullptr;
+        if(fopen_s(&file,"Docs\\provenance_semantic_distance_cert.txt","wb")!=0||!file)
+            return false;
+        std::fprintf(file,
+            "SEMANTIC_DISTANCE_RECEIPT\n"
+            "test=S\n"
+            "independent_of=Test_B_streaming_soak\n"
+            "stage=p5b2b\n"
+            "live_radius_m=%d\nfar_extent_m=%d\n"
+            "domain_m=4096\ndomain_half_m=2048\n"
+            "camera_recipe=inspection_24m_pitch-0.55_yaw0_look_+Y\n"
+            "stations=%d\n",
+            g.stage0LiveRadiusM,g.stage0FarExtentM,
+            (int)s_semanticDistance.receipts.size());
+        for(SemanticDistanceReceipt const& r:s_semanticDistance.receipts)
+        {
+            passed=passed&&r.passed;
+            std::fprintf(file,
+                "station.%s=%s x=%.3f y=%.3f note=%s "
+                "stage=%s generator=%s world_identity=%s "
+                "settled=%d packages=%d pending=%d complete_radius_m=%.2f "
+                "mesh_samples=%d relief_m=%.3f slope_max=%.3f "
+                "z_min=%.3f z_mean=%.3f z_max=%.3f ground_z=%.3f "
+                "materials=%d[%s] landforms=%d[%s] "
+                "field_samples=%d geo=%d landform=%d "
+                "16a_drain=%d 16b_erosion=%d 16c_sediment=%d 16d_water=%d "
+                "water_occupied=%d drain_accum_max=%.1f incision_max=%.3f "
+                "deposit_max=%.3f water_depth_max=%.3f "
+                "image=%s sky_pixels=%d sampled_pixels=%d fail=%s\n",
+                r.id,r.passed?"PASS":"FAIL",r.x,r.y,r.note,
+                r.stageName,r.generatorId,r.worldIdentity,
+                r.settled?1:0,r.packages,r.pending,r.completeRadiusM,
+                r.meshSamples,r.meshRelief,r.meshMaxSlope,
+                r.meshMinZ,r.meshMeanZ,r.meshMaxZ,r.groundZ,
+                r.materialKinds,r.materials,r.landformKinds,r.landforms,
+                r.fieldSamples,r.geoFound,r.landformFound,
+                r.drainFound,r.erosionFound,r.sedimentFound,r.waterFound,
+                r.waterOccupied,r.drainAccumMax,r.incisionMax,
+                r.depositMax,r.waterDepthMax,
+                r.imagePath,r.skyPixels,r.sampledPixels,
+                r.failReason[0]?r.failReason:"none");
+        }
+        std::fprintf(file,
+            "SEMANTIC_DISTANCE %s\n"
+            "check.not_flat_fallback=%s\n"
+            "check.stage15_landforms=%s\n"
+            "check.16a_16d_fields=%s\n"
+            "check.visual_matches_generator=%s\n"
+            "p5b2c=CLOSED\np5b3=CLOSED\n",
+            passed?"PASS":"FAIL",
+            passed?"PASS":"FAIL",passed?"PASS":"FAIL",
+            passed?"PASS":"FAIL",passed?"PASS":"FAIL");
+        std::fclose(file);
+        return passed;
+    }
+
+    void SemanticDistanceTick()
+    {
+        if(!g.certSemanticDistance||!g.playWorldgenInitialized)return;
+        auto& h=s_semanticDistance;
+        constexpr int stationCount=(int)(sizeof(kSemanticDistanceStations)
+            /sizeof(kSemanticDistanceStations[0]));
+        if(h.phase==0)
+        {
+            g.stage0ToolGeologyCutaway=false;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainPore);
+            h.initialized=true;h.phase=1;h.station=0;h.settleFrames=0;h.waitFrames=0;
+            return;
+        }
+        if(h.station>=stationCount)
+        {
+            bool const passed=WriteSemanticDistanceArtifact();
+            g.certSemanticDistance=false;
+            PostQuitMessage(passed?0:2);
+            return;
+        }
+        SemanticDistanceStation const& st=kSemanticDistanceStations[h.station];
+        if(h.phase==1)
+        {
+            SemanticDistanceSetCamera(st.x,st.y);
+            g.playerX=INT_MIN;g.playerY=INT_MIN;
+            RebuildStage0PlayableRuntime();
+            SemanticDistanceSetCamera(st.x,st.y);
+            FollowStreamCenter();
+            h.settleFrames=0;h.waitFrames=0;h.phase=2;
+            return;
+        }
+        SemanticDistanceSetCamera(st.x,st.y);
+        FollowStreamCenter();
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage0PendingPackageCount(g.stage0PlayView)==0
+            &&Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(g.stage0PlayView)>=(float)g.stage0LiveRadiusM-0.001f;
+        if(h.phase==2)
+        {
+            ++h.waitFrames;
+            if(settled)++h.settleFrames;
+            else h.settleFrames=0;
+            if((h.waitFrames%300)==0)
+            {
+                FILE* progress=nullptr;
+                if(fopen_s(&progress,"Docs\\provenance_semantic_distance_progress.txt","wb")==0
+                  &&progress)
+                {
+                    std::fprintf(progress,"station=%s\nframes=%d\nsettled_frames=%d\n"
+                        "packages=%zu\npending=%d\ncomplete_radius_m=%.3f\n",
+                        st.id,h.waitFrames,h.settleFrames,g.stage8TerrainBlocks.size(),
+                        Stage0PendingPackageCount(g.stage0PlayView),
+                        Stage0MinCompleteRadiusM(g.stage0PlayView));
+                    std::fclose(progress);
+                }
+            }
+            if(h.settleFrames>=30||h.waitFrames>=9000)
+            {
+                h.capturePending=true;h.captureComplete=false;h.phase=3;
+            }
+            return;
+        }
+        if(h.phase==3&&h.captureComplete)
+        {
+            h.captureComplete=false;h.capturePending=false;
+            ++h.station;h.phase=1;h.settleFrames=0;h.waitFrames=0;
+        }
+    }
+
+    void SemanticDistanceAfterRender()
+    {
+        if(!g.certSemanticDistance||!s_semanticDistance.capturePending)return;
+        auto& h=s_semanticDistance;
+        if(h.station>=(int)(sizeof(kSemanticDistanceStations)
+            /sizeof(kSemanticDistanceStations[0])))return;
+        SemanticDistanceStation const& st=kSemanticDistanceStations[h.station];
+        SemanticDistanceReceipt r;
+        std::snprintf(r.id,sizeof(r.id),"%s",st.id);
+        std::snprintf(r.note,sizeof(r.note),"%s",st.note);
+        r.x=st.x;r.y=st.y;
+        std::snprintf(r.imagePath,sizeof(r.imagePath),
+            "Docs/provenance_semantic_distance_%s.ppm",st.id);
+        char diskPath[MAX_PATH];
+        std::snprintf(diskPath,sizeof(diskPath),
+            "Docs\\provenance_semantic_distance_%s.ppm",st.id);
+        glFinish();
+        r.imageWritten=DumpFramePpm(diskPath);
+        if(r.imageWritten)
+        {
+            CountLowerPpmDarkPixels(diskPath,&r.sampledPixels);
+            r.skyPixels=CountLowerPpmSkyPixels(diskPath);
+        }
+        SemanticDistanceMeasure(r);
+        h.receipts.push_back(r);
+        h.capturePending=false;h.captureComplete=true;
+    }
+
     void StreamingSoakTick()
     {
         if(!g.certStreamingSoak||!g.playWorldgenInitialized)return;
@@ -39845,6 +40219,7 @@ namespace
             {++s_traversalWake.waterBodyReconstructions;g.presentWaterEquilibrateRuntime->Tick(48);}
             RuntimeIndependenceTick();
             WorldgenCardinalReplacementTick();
+            SemanticDistanceTick();
             StreamingSoakTick();
             Stage11ResidencyWaterfallTick();
             Stage11ShiftScalingTick();
@@ -40176,6 +40551,8 @@ namespace
         }
         if ( g.certWorldgenCardinalReplacement )
         { WorldgenCardinalReplacementAfterRender(); }
+        if ( g.certSemanticDistance )
+        { SemanticDistanceAfterRender(); }
         if ( g.certCutCVisual )
         {
             ++g.certCutCVisualFrames;
@@ -43832,6 +44209,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=23;
+                    g.playWorldgenBaseline=true;g.playP5b2bLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
+                  ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certSemanticDistance=true;
                     g.playWorldgenBaseline=true;g.playP5b2bLaunch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;

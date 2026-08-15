@@ -15,7 +15,38 @@ P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
 `9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.2B.
 P5b.2C, P5b.3, rainfall, and erosion stay **CLOSED**.
 
-## Two tests
+## Three tests
+
+### S. Semantic-distance cert (short, independent of Test B)
+
+Proves **newly generated terrain still derives from the latest Stage 15/16
+causal pipeline** at absolute world positions across and beyond the compiled
+4.096 km Stage-15 domain. Teleport + settle only — not a soak.
+
+- Settle the normal 192 m live window at each station.
+- Measure resident-mesh relief/slope, geology/material diversity, Stage-15
+  landforms, and 16A–16D fields (drainage, erosion, sediment, present-water).
+- Fixed-camera visual receipt per station (same recipe: 24 m inspection,
+  pitch −0.55, yaw 0).
+- Do not rely on metadata alone. Flat/default heightfield, missing landforms,
+  missing 16A–16D, or a visual that does not match the claimed generator is FAIL.
+
+```text
+Build\x64_Release\ProvenanceClient.exe --cert-semantic-distance --live-radius=192 --far-extent=0
+```
+
+or `CERT_SEMANTIC_DISTANCE.cmd`.
+
+Receipt: `Docs/provenance_semantic_distance_cert.txt`  
+Visuals: `Docs/provenance_semantic_distance_<station>.ppm`
+
+Stations: origin, inside-east (1856), boundary E/N/W (±2048), just outside
+east (2240), far east 8 km, far NE 12 km diagonal.
+
+Latest receipt: `SEMANTIC_DISTANCE PASS` (8/8). Generator
+`provenance_causal_world` / `36d381f2ab7bb953` at every station. 2601
+packages, 192.00 m complete, 16A–16D 441/441, sky pixels 0. Origin relief
+55.5 m; far-east 8 km 51.7 m; far-NE 12 km 52.8 m. Not a flat fallback.
 
 ### A. Cardinal replacement cert (short, every stage)
 
@@ -179,6 +210,7 @@ collision publications should track package create/retire.
 | Stage 11 freefly / waterfall | High-speed 192 m capture-free | Bounded route, Stage 11 only. |
 | Presentation isolation | 40 s walk/sprint/fly | Backend isolation, not soak. |
 | **`--cert-streaming-soak`** | **New Test B** | Timed outward travel, diagonals, speed ladder, memory/backlog, wake cost. |
+| **`--cert-semantic-distance`** | **Test S** | Teleport+settle across/beyond 4.096 km Stage-15 domain; mesh/16A–16D/visual. Independent of Test B. |
 
 Run is a first-class speed-ladder rung (`--soak-mode=run`). Cardinal Test A
 keeps its historical walk/sprint/fly split and must not be weakened.
@@ -277,6 +309,7 @@ Do not treat a lower over-budget count as a gate change. 16.667 stays.
 | 2B scratch-owner 90 s | **1 / 32399** | 60.176 | 1 draw_submit @ 528.4 m |
 | 2B draw-attrib 90 s | **1 / 34858** | 61.920 | 1 glFinish after first `glDrawArrays/water` @ 527.7 m |
 | 2B water-warmup 90 s | **1 / 35305** | 74.206 | hitch **persisted**: glFinish after first live water @ 525.9 m |
+| 2B after Test S 90 s | **1 / 32372** | 99.430 | hitch **persisted**: glFinish 95.925 ms after first live `glDrawArrays/water` 36 tris @ 509.6 m |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -353,13 +386,14 @@ live packages/mesh/collision/worker bytes stayed 114 / 22 MB).
 
 ```text
 90 s   residency PASS, backlog PASS, memory INCOMPLETE_need_300s,
-       frame FAIL (1 / 35305; hitch persisted: glFinish 71.975 ms
-       after first live glDrawArrays/water 30 tris @ 525.9 m).
-       water_path_warmed=1. scratch growth 0, overflow 0,
-       FollowStream CRT segment 0.
+       frame FAIL (1 / 32372; hitch persisted: glFinish 95.925 ms
+       after first live glDrawArrays/water 36 tris @ 509.6 m).
+       water_path_warmed=1. discriminator GPU, lane water.
+       scratch growth 0, overflow 0, FollowStream CRT segment 0.
+       Test S PASS first; 90 s still FAIL. No backend cut in this turn.
 300 s  not run — 90 s not green
 900 s  not run — 90 s not green
-       192 m complete, 2601 resident max, pending drains to 0, max pending 72
+       192 m complete, 2601 resident max, pending drains to 0, max pending 74
 ```
 
 Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (900 s run

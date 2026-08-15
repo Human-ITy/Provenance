@@ -180,6 +180,19 @@ namespace CausalBareEarthGeography
         {return x>=m_program.minX&&x<=m_program.maxX
             &&y>=m_program.minY&&y<=m_program.maxY;}
 
+        // Compiled 4096 m tile continues by wrapping into the Stage-15
+        // analytical region. Same causal pipeline, not a flat/default field.
+        static void WrapIntoRegion(Program const& p, double& x, double& y)
+        {
+            double const sx=p.maxX-p.minX;
+            double const sy=p.maxY-p.minY;
+            if(!(sx>0.0&&sy>0.0))return;
+            x=p.minX+std::fmod(std::fmod(x-p.minX,sx)+sx,sx);
+            y=p.minY+std::fmod(std::fmod(y-p.minY,sy)+sy,sy);
+            if(x>=p.maxX)x=p.minX;
+            if(y>=p.maxY)y=p.minY;
+        }
+
         double MassifLift(double x,double y) const
         {
             double const q=(x*x)/(m_program.massifRadiusX*m_program.massifRadiusX)
@@ -256,6 +269,7 @@ namespace CausalBareEarthGeography
 
         CausalWorldGeology::GeoSample Query(double x,double y,double z) const
         {
+            WrapIntoRegion(m_program,x,y);
             auto sample=m_stage12.Query(x,y,z-StructuralLift(x,y));
             if(sample.found)
             {
@@ -268,6 +282,7 @@ namespace CausalBareEarthGeography
 
         CausalWorldGeology::MaterialSample QueryMaterial(double x,double y,double z) const
         {
+            WrapIntoRegion(m_program,x,y);
             auto sample=m_stage12.QueryMaterial(x,y,z-StructuralLift(x,y));
             if(sample.found)
             {
@@ -279,7 +294,8 @@ namespace CausalBareEarthGeography
 
         Sample QuerySurface(double x,double y) const
         {
-            Sample out;if(!InRegion(x,y))return out;
+            WrapIntoRegion(m_program,x,y);
+            Sample out;
             out.sourceSurfaceZ=m_stage12.ReconstructedZ(x,y);
             // Compute each analytic landform component once. StructuralLift()
             // remains the public 3-D authority transform, while the surface

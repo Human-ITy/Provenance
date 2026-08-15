@@ -287,20 +287,23 @@ Cardinal replacement ≠ soak. **Law:** Travel distance may grow; active
 residency, memory, pending work, and wake backlog must remain bounded.
 Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
+- Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
+  Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
 - Test A: `--cert-worldgen-cardinal-replacement-p5b2b` (EVERY CUT, latest)
 - Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 / 900 s)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- 2B occupied-water warmup 90 s: residency PASS, memory
-  INCOMPLETE_need_300s, FollowStream CRT segment 0, scratch growth 0.
-  Frame gate FAIL (1 / 35305; hitch **persisted** — diagnostic
-  `glFinish` 71.975 ms after first live `glDrawArrays/water` 30 tris
-  at 525.9 m). `water_path_warmed=1`. Discriminator GPU, lane water.
-  Warmup used the exact occupied-water client-array path (in-view lake
-  quad + `glFinish`) during unmeasured soak start. Hitch did not move.
-  Backend/resource lifecycle remains. `--soak-draw=no-water` still the
-  negative control. 300 / 900 not run. Do not relax 16.667.
-  Attribution pin `e90e515c`. P5b.2C / P5b.3 CLOSED.
+- Test S `--cert-semantic-distance` PASS (8/8 stations). Origin through
+  ±2048 m boundary and out to 8 km / 12 km NE. Same generator
+  `provenance_causal_world` / `36d381f2ab7bb953`. Resident-mesh relief
+  13–56 m (not flat). 16A–16D 441/441. Visual sky 0. Compiled 4096 m
+  tile wraps so far stations stay on Stage 15/16.
+- 2B after Test S 90 s: residency PASS, memory INCOMPLETE_need_300s,
+  FollowStream CRT segment 0, scratch growth 0. Frame gate FAIL
+  (1 / 32372; hitch **persisted** — diagnostic `glFinish` 95.925 ms
+  after first live `glDrawArrays/water` 36 tris at 509.6 m).
+  `water_path_warmed=1`. Discriminator GPU, lane water. 300 / 900 not
+  run. Do not relax 16.667. No water-backend cut. P5b.2C / P5b.3 CLOSED.
 - 250 m ledger + per-overrun receipts + stop/drain/optional return
   are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. P5b.2C / P5b.3 / rainfall /

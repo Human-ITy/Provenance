@@ -137,7 +137,10 @@ namespace CausalDryHydrology
 
         Query QueryAt(double x,double y) const
         {
-            Query q;int const ix=(int)std::floor((x-m_minX)/m_program.gridStepM);
+            Query q;
+            CausalBareEarthGeography::Kernel::WrapIntoRegion(
+                m_geography->GetProgram(),x,y);
+            int const ix=(int)std::floor((x-m_minX)/m_program.gridStepM);
             int const iy=(int)std::floor((y-m_minY)/m_program.gridStepM);
             if(ix<0||iy<0||ix>=m_width||iy>=m_height)return q;
             q.index=Index(ix,iy);q.cell=m_cells[(size_t)q.index];q.found=true;
