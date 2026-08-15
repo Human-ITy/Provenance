@@ -276,13 +276,21 @@ groundwater, active 16B erosion, 16C remobilization, ecology.
 TRAVERSAL + STREAMING SOAK (standing matrix)
 ```
 
-Cardinal replacement ≠ soak. A stage is certified only if the player can keep
-moving through newly generated world indefinitely, within bounded residency
-and frame-time limits. Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
+Cardinal replacement ≠ soak. **Law:** Travel distance may grow; active
+residency, memory, pending work, and wake backlog must remain bounded.
+Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
-- Test A: `--cert-worldgen-cardinal-replacement-p5b2a` (EVERY CUT)
+- Test A: `--cert-worldgen-cardinal-replacement-p5b2a` (EVERY CUT) — **PASS**
+  digest `f6c20f2c4774451b`, 2601, movement frames over 16.667 = 0
 - Test B: `--cert-streaming-soak-p5b2a` (first landing 90 s; milestone 300–900 s)
-- Do not weaken 16.667 / 2601 / exact-return gates.
+  — **2A control: residency PASS, frame gate FAIL** (20 / 20079 frames
+  >16.667, max 60.687 ms). Do not relax 16.667. This FAIL is the 2B
+  comparison baseline.
+- Standing metrics: locomotion walk/run/sprint/fly/sprint+fly; N/E/S/W +
+  diagonals; distance + elapsed; 192 m / 2601; resident/created/retired/
+  pending; oldest pending / worker queue / min complete radius; water-body /
+  terrain-state / collision / representation wakes; mean/p95/p99/max frame +
+  frames >16.667; memory high-water; exact return/reload digest (Test A).
 - P5b.2B / P5b.3 / rainfall / erosion remain CLOSED.
 
 ```

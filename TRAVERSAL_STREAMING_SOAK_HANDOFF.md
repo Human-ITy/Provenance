@@ -4,15 +4,16 @@ A worldgen stage is not certified just because its math is correct. It is
 certified only if the player can keep moving through newly generated world
 indefinitely, within bounded residency and frame-time limits.
 
-Travel distance must grow indefinitely while resident work and memory remain
-bounded around the player.
+**Law:** Travel distance may grow; active residency, memory, pending work,
+and wake backlog must remain bounded.
 
 This is the standing matrix. Cardinal replacement and the long-haul soak are
 **two different tests**. Passing one never substitutes for the other. Do not
 narrow a future stage to “cardinal movement passed.”
 
-P5b.2B, P5b.3, rainfall, and erosion stay **CLOSED**. This certificate does
-not open them.
+P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
+`9cae0794`). P5b.2B, P5b.3, rainfall, and erosion stay **CLOSED** on this
+pin. This certificate does not open them.
 
 ## Two tests
 
@@ -54,20 +55,22 @@ or `CERT_STREAMING_SOAK.cmd`.
 Receipt: `Docs/provenance_p5b2a_streaming_soak_cert.txt`  
 Trace: `Docs/provenance_p5b2a_streaming_soak_trace.csv`
 
-Soak capture (required):
+Standing metrics (required on every receipt; do not invent green):
 
 ```text
-distance traveled
-packages created
-packages retired
-resident package count
-pending package count
-oldest pending age
-minimum complete radius
-worker queue depth
-memory usage (working set + private)
-mean / p95 / p99 / max frame time
-frames > 16.667 ms
+locomotion: walk / run / sprint / fly / sprint+fly
+  sprint+fly = --soak-mode=fly (highest normal traversal, 24 m/s)
+direction: N/E/S/W + diagonals (NE SE SW NW)
+distance traveled and elapsed soak time
+192 m completeness / 2601 package target
+resident / created / retired / pending package counts
+  (max + end resident; max + end pending)
+oldest pending age, worker queue depth, min complete radius
+water-body wakes, terrain-state wakes, collision publishes,
+  representation rebuilds (derived mesh)
+mean / p95 / p99 / max frame time, frames > 16.667 ms
+memory high-water mark (working set + private)
+exact return/reload digest where applicable (Test A only)
 ```
 
 Product gates (walk through 480 m/s): 0 movement frames over 16.667 ms,
@@ -83,7 +86,7 @@ Traversal modes:
 - run           8 m/s   grounded
 - sprint       11 m/s   grounded
 - free-flight  24 m/s
-- sprint + free-flight / highest normal traversal speed
+- sprint+fly   24 m/s   highest normal traversal (`--soak-mode=fly`)
 Directions:
 - N E S W
 - diagonals (NE SE SW NW) — streamer window is a square; both axes
@@ -116,7 +119,7 @@ fast free-flight            24 m/s     product
 960 m/s informational      960 m/s     not a product gate
 ```
 
-`--soak-mode=walk|run|sprint|fly`  
+`--soak-mode=walk|run|sprint|fly|sprint+fly`  
 `--soak-speed-mps=` overrides speed. `960` sets informational-only.  
 `--soak-bearing=north|east|south|west|northeast|southeast|southwest|northwest`
 
@@ -179,25 +182,47 @@ collision publications should track package create/retire.
 Run is a first-class speed-ladder rung (`--soak-mode=run`). Cardinal Test A
 keeps its historical walk/sprint/fly split and must not be weakened.
 
-## First landing (P5b.2A tip)
+## 2A control (do not relax)
 
-Parent pin `eae7db9f` / land `570c7be2`. Duration **90 s** (same metrics as the
-5–15 min milestone; milestone still uses `--soak-duration-s=300` or `900`).
+Parent pin `eae7db9f` / land `570c7be2` / harness `9cae0794`. Duration **90 s**
+(same metrics as the 5–15 min milestone; milestone still uses
+`--soak-duration-s=300` or `900`). This FAIL is the **2A control
+measurement**. Compare 2B against these numbers. Do **not** relax 16.667.
 
-### Test A — P5b.2A cardinal (EVERY CUT)
+### Test A — P5b.2A cardinal (EVERY CUT) — PASS
 
 `WORLDGEN_CARDINAL_REPLACEMENT PASS`. Digest `f6c20f2c4774451b` origin==return.
 2601 packages. Movement frames over 16.667 ms = 0. Wake counters recorded;
-water-body / topology ticks during travel = 0.
+water-body / topology / terrain-state ticks during travel = 0.
 
-### Test B — 90 s NE free-flight soak at 24 m/s
+### Test B — 90 s NE free-flight soak at 24 m/s — residency PASS, frame FAIL
 
-Residency, backlog, and distance **PASS**. Frame gate **FAIL** (20 / 20079
-frames over 16.667 ms, worst 60.687 ms). Distance 2160.1 m. Created == retired
-19190. Max resident 2601. End pending 0. Oldest pending age 0.018 s. Min
-complete radius 192 m. Water-body / topology ticks 0; 15 water bodies queried.
-Working set grew 164 MB → 2.3 GB while the resident package count stayed
-bounded — recorded, not used to weaken the frame gate.
+Receipt: `Docs/provenance_p5b2a_streaming_soak_cert.txt`
+
+| Metric | 2A control |
+|---|---|
+| elapsed | 90.000 s |
+| distance | 2160.1 m |
+| created / retired | 19190 / 19190 |
+| max resident / declared | 2601 / 2601 |
+| end pending / max pending | 0 / 101 |
+| oldest pending age | 0.018 s |
+| min complete radius | 192.00 m |
+| max worker queue | 209 |
+| frames | 20079 |
+| mean / p95 / p99 / max ms | 4.483 / 6.617 / 9.824 / 60.687 |
+| frames > 16.667 ms | **20 FAIL** |
+| working-set high water | 164 MB → 2338 MB |
+| water-body / topology / terrain-state wakes | 0 / 0 / 0 |
+| derived mesh / collision publishes | 19190 / 19190 |
+| water bodies queried | 15 |
+
+Working set grew while the resident package count stayed bounded — recorded,
+not used to weaken the frame gate. Terrain-state wakes were not a separate
+line on the first-landing receipt; travel water-body / topology = 0 and 2A
+Tick after cold compile is a no-op, so the control value is 0. The harness
+now prints `elapsed_s`, `end_resident_packages`, and
+`wake.terrain_state_wakes` for 2B comparison.
 
 The 16.667 / 2601 / exact-return gates were not relaxed. Soak FAIL is an
 honest first-landing hitch under sustained travel, not a reason to treat

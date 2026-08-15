@@ -120,8 +120,9 @@ flag. P5b.2B and P5b.3 stay closed.
 
 Standing traversal matrix (does not open P5b.2B / P5b.3):
 `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`. Cardinal replacement is Test A
-(EVERY CUT). Long-haul soak is Test B (`CERT_STREAMING_SOAK.cmd`). Passing
-cardinal movement is not a soak.
+(EVERY CUT) — **PASS**. Long-haul soak is Test B (`CERT_STREAMING_SOAK.cmd`)
+— **2A control: residency PASS, frame gate FAIL** (20 frames >16.667, max
+60.687 ms). Do not relax 16.667. Passing cardinal movement is not a soak.
 
 Run `CERT_P5B2A_TERRAIN_STATE.cmd`. It executes analytical authority,
 settled player-scale visual coverage, and 192 m cardinal replacement.

@@ -1453,6 +1453,7 @@ namespace
         int collisionPublications=0;
         int waterBodyReconstructions=0;
         int topologyActivations=0;
+        int terrainStateWakes=0;
         int grassLoads=0;
         int treeLoads=0;
         int waterBodiesQueried=0;
@@ -35005,6 +35006,7 @@ namespace
         int movementFramesOver16 = 0;
         int wakeWaterBodyReconstructions = 0;
         int wakeTopologyActivations = 0;
+        int wakeTerrainStateWakes = 0;
         int wakeDerivedMeshRebuilds = 0;
         int wakeGrassLoads = 0;
         int wakeTreeLoads = 0;
@@ -35407,6 +35409,8 @@ namespace
             s_traversalWake.waterBodyReconstructions - receipt.wakeStart.waterBodyReconstructions;
         receipt.wakeTopologyActivations =
             s_traversalWake.topologyActivations - receipt.wakeStart.topologyActivations;
+        receipt.wakeTerrainStateWakes =
+            s_traversalWake.terrainStateWakes - receipt.wakeStart.terrainStateWakes;
         receipt.wakeDerivedMeshRebuilds =
             s_traversalWake.derivedMeshRebuilds - receipt.wakeStart.derivedMeshRebuilds;
         receipt.wakeGrassLoads = s_traversalWake.grassLoads;
@@ -35648,7 +35652,8 @@ namespace
                 "movement_worst_frame_ms=%.3f movement_frames_over_16_667=%d "
                 "packages_created=%d packages_retired=%d max_pending_packages=%d "
                 "max_worker_queue=%d wake_water_body_reconstructions=%d "
-                "wake_topology_activations=%d wake_derived_mesh_rebuilds=%d "
+                "wake_topology_activations=%d wake_terrain_state_wakes=%d "
+                "wake_derived_mesh_rebuilds=%d "
                 "wake_grass_loads=%d wake_tree_loads=%d "
                 "wake_collision_publications=%d wake_water_bodies_queried=%d\n",
                 r.stage, r.bearing, rowPassed ? "PASS" : "FAIL",
@@ -35674,7 +35679,8 @@ namespace
                 r.movementWorstFrameMs,r.movementFramesOver16,
                 r.packagesCreated, r.packagesRetired, r.maxPendingPackages,
                 r.maxWorkerQueue, r.wakeWaterBodyReconstructions,
-                r.wakeTopologyActivations, r.wakeDerivedMeshRebuilds,
+                r.wakeTopologyActivations, r.wakeTerrainStateWakes,
+                r.wakeDerivedMeshRebuilds,
                 r.wakeGrassLoads, r.wakeTreeLoads,
                 r.wakeCollisionPublications,
                 s_traversalWake.waterBodiesQueried - r.wakeStart.waterBodiesQueried );
@@ -37141,6 +37147,7 @@ namespace
         int groundFailures=0;
         int collisionMismatches=0;
         int maxResidentPackages=0;
+        int endResidentPackages=0;
         int maxPendingPackages=0;
         int maxWorkerQueue=0;
         int endPending=0;
@@ -37212,6 +37219,7 @@ namespace
         int const waterRecon=s_traversalWake.waterBodyReconstructions
             -run.wakeStart.waterBodyReconstructions;
         int const topo=s_traversalWake.topologyActivations-run.wakeStart.topologyActivations;
+        int const terrainState=s_traversalWake.terrainStateWakes-run.wakeStart.terrainStateWakes;
         int const mesh=s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds;
         int const collision=s_traversalWake.collisionPublications
             -run.wakeStart.collisionPublications;
@@ -37237,14 +37245,15 @@ namespace
         if(fopen_s(&f,certPath,"wb")!=0||!f)return false;
         std::fprintf(f,
             "TRAVERSAL_STREAMING_SOAK\n"
-            "law=travel_distance_grows_indefinitely_while_residency_and_memory_stay_bounded\n"
+            "law=travel_distance_may_grow_active_residency_memory_pending_work_and_wake_backlog_stay_bounded\n"
             "distinct_from=cardinal_replacement_exact_return\n"
             "stage_filter=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
-            "duration_s=%.3f\nconfigured_speed_mps=%.3f\n"
+            "duration_s=%.3f\nelapsed_s=%.3f\nconfigured_speed_mps=%.3f\n"
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
             "p5b2b=CLOSED\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
             "distance_m=%.1f\npackages_created=%d\npackages_retired=%d\n"
-            "max_resident_packages=%d\ndeclared_max_packages=%d\n"
+            "max_resident_packages=%d\nend_resident_packages=%d\n"
+            "declared_max_packages=%d\n"
             "end_pending_packages=%d\nmax_pending_packages=%d\n"
             "oldest_pending_age_s=%.3f\nmin_complete_radius_m=%.2f\n"
             "frames_below_192m=%d\nmax_worker_queue=%d\n"
@@ -37256,6 +37265,7 @@ namespace
             "ground_failures=%d\ncollision_mismatches=%d\n"
             "wake.water_body_reconstructions=%d\n"
             "wake.hydraulic_topology_activations=%d\n"
+            "wake.terrain_state_wakes=%d\n"
             "wake.derived_mesh_rebuilds=%d\n"
             "wake.grass_loads=%d\n"
             "wake.tree_loads=%d\n"
@@ -37269,9 +37279,10 @@ namespace
             "check.distance_grew=%s\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
-            g.soakDurationS,(double)speed,SoakModeName(g.soakMode),
+            g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
             SoakBearingName(g.soakBearing),informational?1:0,
-            run.distanceM,created,retired,run.maxResidentPackages,declared,
+            run.distanceM,created,retired,run.maxResidentPackages,
+            run.endResidentPackages,declared,
             run.endPending,run.maxPendingPackages,run.oldestPendingAgeS,
             run.minCompleteRadiusM==1e9f?0.f:run.minCompleteRadiusM,
             run.framesBelowRadius,run.maxWorkerQueue,
@@ -37285,7 +37296,7 @@ namespace
             Stage11WaterfallPercentile(run.frameMs,.95),
             Stage11WaterfallPercentile(run.frameMs,.99),worst,run.framesOver16,
             run.groundFailures,run.collisionMismatches,
-            waterRecon,topo,mesh,s_traversalWake.grassLoads,s_traversalWake.treeLoads,
+            waterRecon,topo,terrainState,mesh,s_traversalWake.grassLoads,s_traversalWake.treeLoads,
             collision,bodies,
             frameOk?"PASS":(informational?"INFORMATIONAL":"FAIL"),
             complete?"PASS":"FAIL",
@@ -37333,7 +37344,7 @@ namespace
                     "pending_packages,worker_queue,complete_radius_m,"
                     "working_set_bytes,private_bytes,packages_created,"
                     "packages_retired,wake_water_body,wake_topology,"
-                    "wake_mesh,wake_collision,wake_grass,wake_tree\n");
+                    "wake_terrain_state,wake_mesh,wake_collision,wake_grass,wake_tree\n");
             }
             SoakPlace(0.f,g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps);
             run.warmFrames=0;run.phase=1;return;
@@ -37366,8 +37377,9 @@ namespace
             int const workers=Stage8WorkerQueueDepth();
             run.minCompleteRadiusM=(std::min)(run.minCompleteRadiusM,complete);
             if(complete<(float)g.stage0LiveRadiusM-0.001f)++run.framesBelowRadius;
+            run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
             run.maxResidentPackages=(std::max)(run.maxResidentPackages,
-                (int)CardinalPackageMap(g.stage0PlayView).size());
+                run.endResidentPackages);
             run.maxPendingPackages=(std::max)(run.maxPendingPackages,pending);
             run.maxWorkerQueue=(std::max)(run.maxWorkerQueue,workers);
             run.elapsedS+=dt;
@@ -37386,7 +37398,7 @@ namespace
             if(run.trace&&(run.movementFrames%30==0||run.elapsedS>=g.soakDurationS))
             {
                 std::fprintf(run.trace,
-                    "%.3f,%.1f,%.3f,%.3f,%s,%.3f,%d,%d,%d,%.2f,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                    "%.3f,%.1f,%.3f,%.3f,%s,%.3f,%d,%d,%d,%.2f,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                     run.elapsedS,run.distanceM,g.feetX,g.feetY,SoakModeName(g.soakMode),
                     g.playWorldgenFrameMs,(int)CardinalPackageMap(g.stage0PlayView).size(),
                     pending,workers,complete,
@@ -37395,6 +37407,7 @@ namespace
                     s_traversalWake.packagesRetired-run.wakeStart.packagesRetired,
                     s_traversalWake.waterBodyReconstructions-run.wakeStart.waterBodyReconstructions,
                     s_traversalWake.topologyActivations-run.wakeStart.topologyActivations,
+                    s_traversalWake.terrainStateWakes-run.wakeStart.terrainStateWakes,
                     s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds,
                     s_traversalWake.collisionPublications-run.wakeStart.collisionPublications,
                     s_traversalWake.grassLoads,s_traversalWake.treeLoads);
@@ -37828,7 +37841,7 @@ namespace
         {
             WorldgenPlayInitialize();
             if(g.presentWaterTerrainStateRuntime&&!g.presentWaterTerrainStateRuntime->Complete())
-            {++s_traversalWake.waterBodyReconstructions;g.presentWaterTerrainStateRuntime->Tick(48);}
+            {++s_traversalWake.terrainStateWakes;g.presentWaterTerrainStateRuntime->Tick(48);}
             if(g.presentWaterTerrainResponseRuntime&&!g.presentWaterTerrainResponseRuntime->Complete())
             {++s_traversalWake.waterBodyReconstructions;g.presentWaterTerrainResponseRuntime->Tick(48);}
             if(g.presentWaterTopologyRuntime&&!g.presentWaterTopologyRuntime->Complete())
@@ -41749,7 +41762,11 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     else if(_wcsicmp(mode,L"run")==0){g.soakMode=1;g.soakSpeedMps=kRunSpeedMps;}
                     else if(_wcsicmp(mode,L"sprint")==0){g.soakMode=2;g.soakSpeedMps=kSprintSpeedMps;}
                     else if(_wcsicmp(mode,L"fly")==0||_wcsicmp(mode,L"free-flight")==0
-                      ||_wcsicmp(mode,L"freefly")==0){g.soakMode=3;g.soakSpeedMps=kFlySpeedMps;}
+                      ||_wcsicmp(mode,L"freefly")==0
+                      ||_wcsicmp(mode,L"sprint+fly")==0
+                      ||_wcsicmp(mode,L"sprint-fly")==0
+                      ||_wcsicmp(mode,L"sprintfly")==0)
+                    {g.soakMode=3;g.soakSpeedMps=kFlySpeedMps;}
                     continue;
                 }
                 if(_wcsnicmp(argv[i],L"--soak-bearing=",15)==0)

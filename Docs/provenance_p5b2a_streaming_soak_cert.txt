@@ -1,10 +1,12 @@
 TRAVERSAL_STREAMING_SOAK
-law=travel_distance_grows_indefinitely_while_residency_and_memory_stay_bounded
+law=travel_distance_may_grow_active_residency_memory_pending_work_and_wake_backlog_stay_bounded
+control=p5b2a_first_landing
 distinct_from=cardinal_replacement_exact_return
 stage_filter=22
 live_radius_m=192
 far_extent_m=0
 duration_s=90.000
+elapsed_s=90.000
 configured_speed_mps=24.000
 mode=fly
 bearing=northeast
@@ -40,6 +42,7 @@ ground_failures=0
 collision_mismatches=0
 wake.water_body_reconstructions=0
 wake.hydraulic_topology_activations=0
+wake.terrain_state_wakes=0
 wake.derived_mesh_rebuilds=19190
 wake.grass_loads=0
 wake.tree_loads=0
