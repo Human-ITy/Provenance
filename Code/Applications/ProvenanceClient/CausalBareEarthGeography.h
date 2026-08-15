@@ -182,6 +182,9 @@ namespace CausalBareEarthGeography
 
         // Compiled 4096 m tile continues by wrapping into the Stage-15
         // analytical region. Same causal pipeline, not a flat/default field.
+        // Caution: this is repeated macro geography — a production shortcut
+        // that solves "flat fallback." It does not yet solve indefinitely
+        // novel macro geography.
         static void WrapIntoRegion(Program const& p, double& x, double& y)
         {
             double const sx=p.maxX-p.minX;

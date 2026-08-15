@@ -43,10 +43,17 @@ Visuals: `Docs/provenance_semantic_distance_<station>.ppm`
 Stations: origin, inside-east (1856), boundary E/N/W (±2048), just outside
 east (2240), far east 8 km, far NE 12 km diagonal.
 
-Latest receipt: `SEMANTIC_DISTANCE PASS` (8/8). Generator
+Latest receipt: `SEMANTIC_DISTANCE PASS` (8/8) at `6b14d8fd`. Generator
 `provenance_causal_world` / `36d381f2ab7bb953` at every station. 2601
 packages, 192.00 m complete, 16A–16D 441/441, sky pixels 0. Origin relief
 55.5 m; far-east 8 km 51.7 m; far-NE 12 km 52.8 m. Not a flat fallback.
+
+**Caution (do not hide):** wrapping the 4096 m Stage-15 tile is a valid
+continuity fix only if we explicitly accept **repeated macro geography**
+as the current production shortcut. It solves “flat fallback.” It does
+**not** yet solve “indefinitely novel macro geography.” Far stations
+stay on the Stage 15/16 causal pipeline by tiling the compiled domain;
+they are not new continents.
 
 ### A. Cardinal replacement cert (short, every stage)
 

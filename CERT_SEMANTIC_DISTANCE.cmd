@@ -9,6 +9,10 @@ if not exist "Build\x64_Release\ProvenanceClient.exe" (
 )
 
 REM Test S: teleport+settle semantic-distance. Independent of Test B soak.
+REM Wrapping the 4096 m Stage-15 tile is a valid continuity fix only if we
+REM explicitly accept repeated macro geography as the current production
+REM shortcut. It solves flat fallback. It does not yet solve indefinitely
+REM novel macro geography.
 REM Does not run 90/300/900. P5b.2C / P5b.3 stay CLOSED.
 "Build\x64_Release\ProvenanceClient.exe" --cert-semantic-distance --live-radius=192 --far-extent=0
 set RESULT=%ERRORLEVEL%

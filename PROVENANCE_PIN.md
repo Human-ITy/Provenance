@@ -293,11 +293,14 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 - Test B: `--cert-streaming-soak-p5b2b` (90 s first landing; 300 / 900 s)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
-- Test S `--cert-semantic-distance` PASS (8/8 stations). Origin through
-  ±2048 m boundary and out to 8 km / 12 km NE. Same generator
-  `provenance_causal_world` / `36d381f2ab7bb953`. Resident-mesh relief
-  13–56 m (not flat). 16A–16D 441/441. Visual sky 0. Compiled 4096 m
-  tile wraps so far stations stay on Stage 15/16.
+- Test S `--cert-semantic-distance` PASS (8/8 stations) at `6b14d8fd`.
+  Origin through ±2048 m boundary and out to 8 km / 12 km NE. Same
+  generator `provenance_causal_world` / `36d381f2ab7bb953`. Resident-mesh
+  relief 13–56 m (not flat). 16A–16D 441/441. Visual sky 0.
+  **Caution:** wrapping the 4096 m Stage-15 tile is a valid continuity
+  fix only if we explicitly accept **repeated macro geography** as the
+  current production shortcut. It solves “flat fallback.” It does **not**
+  yet solve “indefinitely novel macro geography.”
 - 2B after Test S 90 s: residency PASS, memory INCOMPLETE_need_300s,
   FollowStream CRT segment 0, scratch growth 0. Frame gate FAIL
   (1 / 32372; hitch **persisted** — diagnostic `glFinish` 95.925 ms
