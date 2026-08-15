@@ -12,8 +12,8 @@ This is the standing matrix. Cardinal replacement and the long-haul soak are
 narrow a future stage to “cardinal movement passed.”
 
 P5b.2A is the **2A control** (land `570c7be2`, pin `eae7db9f`, harness
-`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.3A.
-**P5b.3B / P5b.3C**, rainfall, and erosion stay **CLOSED**.
+`9cae0794`, control pin `6c385e2c`). Latest play stage is P5b.3B.
+**P5b.3C**, rainfall, and erosion stay **CLOSED**.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -80,12 +80,13 @@ Proves **replacement correctness over a bounded route**.
 - Declared resident package bound (2601 at 192 m). Do not weaken.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b3a
+Build\x64_Release\ProvenanceClient.exe --cert-worldgen-cardinal-replacement-p5b3b
 ```
 
 or `CERT_WORLDGEN_CARDINAL_REPLACEMENT.cmd` for the full stage ladder.
 
-Latest play-stage receipt: `Docs/provenance_p5b3a_cardinal_replacement_cert.txt`
+Latest play-stage receipt: `Docs/provenance_p5b3b_cardinal_replacement_cert.txt`
+3A receipt: `Docs/provenance_p5b3a_cardinal_replacement_cert.txt`
 2C receipt: `Docs/provenance_p5b2c_cardinal_replacement_cert.txt`
 2A control receipt: `Docs/provenance_p5b2a_cardinal_replacement_cert.txt`
 
@@ -98,13 +99,13 @@ Default first landing: **90 s** wall-clock (same metrics as the 5–15 min
 milestone). Milestone / release: `--soak-duration-s=300` or `900`.
 
 ```text
-Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b3a --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
+Build\x64_Release\ProvenanceClient.exe --cert-streaming-soak-p5b3b --soak-duration-s=90 --soak-stop-s=0 --soak-return=0 --soak-mode=fly --soak-bearing=northeast --soak-speed-mps=24 --live-radius=192 --far-extent=0 --soak-water-backend=persistent
 ```
 
 or `CERT_STREAMING_SOAK.cmd`.
 
-Receipt: `Docs/provenance_p5b3a_streaming_soak_cert.txt`  
-Trace: `Docs/provenance_p5b3a_streaming_soak_trace.csv`
+Receipt: `Docs/provenance_p5b3b_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3b_streaming_soak_trace.csv`
 
 Standing metrics (required on every receipt; do not invent green):
 
@@ -123,6 +124,8 @@ oldest pending age, worker queue depth, min complete radius
   topology rebuilds, body split/merge/grow/shrink (travel delta)
   P5b.3A: detachments, admitted mass, stale refuse, water responses,
   topology rebuilds, terrain/water revision, loose mass (travel delta)
+  P5b.3B: transfers, transport wakes, pending retained, stale refuse,
+  transport revision, loose mass (travel delta; must stay 0 on ordinary fly)
 mean / p95 / p99 / max frame time, frames > 16.667 ms
 memory high-water mark (working set + private)
 exact return/reload digest where applicable (Test A only)
@@ -199,7 +202,7 @@ MILESTONE / RELEASE GATE
 - cold / reload cycle
 ```
 
-`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.3A).
+`CERT_TRAVERSAL_EVERY_CUT.cmd` runs Test A on the latest play stage (P5b.3B).
 `CERT_STREAMING_SOAK.cmd` runs the first-landing 90 s Test B. Milestone soak
 is the same harness with `--soak-duration-s=300` or `900`.
 
@@ -574,3 +577,38 @@ no new accumulating wake class, 0 movement frames >16.667.
 Ordinary traversal did not fire 3A. Mutation/wake-only. **P5b.3B and
 P5b.3C stay CLOSED.** No 300/900 unless travel fires 3A or a later cut
 adds an accumulating wake.
+
+P5b.3B hydraulic transport is **CERTIFIED** this cut. Test A digest
+changed with stage identity: 3A `8b0f3cca9ccb1bb6` → 3B `59a2725b6b89fd77`.
+Movement frames over 16.667 = 0 on EVERY-CUT cardinal.
+
+### Test B — P5b.3B 90 s NE free-flight (this cut) — PASS
+
+Receipt: `Docs/provenance_p5b3b_streaming_soak_cert.txt`  
+Trace: `Docs/provenance_p5b3b_streaming_soak_trace.csv`
+
+90 s travel, stop=0, return=0, persistent water, live 192 m / far 0.
+`--cert-streaming-soak-p5b3b`. 16.667 not relaxed. 300/900 **not run**:
+ordinary traversal transfer count = 0, loose-matter transport wake = 0.
+
+| Metric | 3B 90 s |
+|---|---|
+| elapsed / distance | 90.001 s / 2161.0 m |
+| created / retired | 19291 / 19291 |
+| max / end resident | 2601 / 2601 |
+| end pending / max pending | 0 / 78 |
+| min complete radius | 192.00 m |
+| frames | 85720 |
+| mean / p95 / p99 / max ms | 0.947 / 1.215 / 1.676 / **6.881** |
+| frames >16.667 (movement) | **0 PASS** |
+| water-body / topology / terrain-state wakes | 0 / 0 / 0 |
+| derived mesh / collision | 19291 / 19291 |
+| p5b3b transfers / transport wakes | **0 / 0** |
+| p5b3b pending / stale refuse | **0 / 0** |
+| p5b3b transport revision / loose mass delta | **0 / 0** |
+| check.p5b3b_travel_physics | PASS_idle |
+| p5b3a / p5b2c travel physics | PASS_idle / PASS_idle |
+
+Ordinary traversal did not fire 3B. Mutation/wake-only. **P5b.3C stays
+CLOSED.** No 300/900 unless travel fires 3B or a later cut adds persistent
+long-haul work.

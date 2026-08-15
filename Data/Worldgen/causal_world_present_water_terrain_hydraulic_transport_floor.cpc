@@ -1,0 +1,18 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_HYDRAULIC_TRANSPORT_V1
+# P5b.3B: water may move an already-detached loose parcel one bounded hop.
+# Transport changes location, not identity. Destination stays loose matter.
+# CLOSED: P5b.3C bank/support collapse, 3B.2 deposition, 16C remobilization,
+# general erosion, rainfall, evaporation, groundwater, plant uptake, ecology,
+# full WorldOperationScheduler.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_hydraulic_transport_floor
+parent_region_key=causal_world_present_water_terrain_hydraulic_detachment_floor
+parent_authority_revision=1
+authority_revision=1
+p5b3b_event_id=a5b3000b00000001
+chronology=204
+p5b3b_enabled=1
+default_budget_transactions=48

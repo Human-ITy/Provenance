@@ -240,8 +240,8 @@ P5b.1   terrain → water coupling          CERTIFIED / FROZEN @ e64a4df3
 P5b.2A  reverse state coupling            CERTIFIED / FROZEN
 P5b.2B  bounded pore storage              CERTIFIED
 P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
-P5b.3A  hydraulic detachment              CERTIFIED
-P5b.3B  detached sediment transport       CLOSED
+P5b.3A  hydraulic detachment              CERTIFIED / FROZEN
+P5b.3B  hydraulic loose-matter transport  CERTIFIED
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -286,19 +286,24 @@ Play: `PLAY_P5B2C_TERRAIN_PORE_OCCUPANCY.cmd` /
 Parent freeze: long-haul infrastructure `f7ae29ea` / pin `156df62d`.
 Gameplay 2B `8bb75265` otherwise frozen.
 
-**P5b.3A CERTIFIED** — one bounded parcel of susceptible terrain may detach
-under certified hydraulic conditions. Choice A: local loose body/aggregate
-(not 16C). Law: terrain solid loss == new loose matter. Water mass unchanged.
-Disabled == exact 2C occupancy `7102e45c92f6545d`. Enabled detachment digest
-`e3ba9b3af77265cb` (budget 1 == N == unbounded). Solids −80 / loose +80.
-Handoff: `P5B3A_HYDRAULIC_DETACHMENT_HANDOFF.md`. Play:
-`PLAY_P5B3A_HYDRAULIC_DETACHMENT.cmd` / `--play-p5b3a-hydraulic-detachment`.
-Cert: `CERT_P5B3A_HYDRAULIC_DETACHMENT.cmd`.
+**P5b.3A CERTIFIED / FROZEN** @ `6c467fb7` — one bounded parcel of susceptible
+terrain may detach under certified hydraulic conditions. Choice A: local
+loose body/aggregate (not 16C). Law: terrain solid loss == new loose matter.
+Water mass unchanged. Disabled == exact 2C occupancy `7102e45c92f6545d`.
+Enabled detachment digest `e3ba9b3af77265cb` (budget 1 == N == unbounded).
+Solids −80 / loose +80. Handoff: `P5B3A_HYDRAULIC_DETACHMENT_HANDOFF.md`.
 
-**P5b.3B CLOSED** — detached sediment transport.  
+**P5b.3B CERTIFIED** — water may move an already-detached loose parcel one
+bounded hop without changing identity. Destination stays loose matter.
+Disabled == exact 3A detachment `e3ba9b3af77265cb`. Enabled transport digest
+`876ac027936dce35` (budget 1 == N == unbounded). Solids unchanged, loose 80
+at dest. Handoff: `P5B3B_HYDRAULIC_TRANSPORT_HANDOFF.md`. Play:
+`PLAY_P5B3B_HYDRAULIC_TRANSPORT.cmd` / `--play-p5b3b-hydraulic-transport`.
+Cert: `CERT_P5B3B_HYDRAULIC_TRANSPORT.cmd`.
+
 **P5b.3C CLOSED** — bank/support collapse.  
-Also closed: general erosion, rainfall, groundwater, active 16B erosion,
-16C remobilization, ecology.
+Also closed: 3B.2 deposition as terrain, general erosion, rainfall,
+groundwater, active 16B erosion, 16C remobilization, ecology.
 
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
@@ -310,13 +315,13 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
   Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
-- Test A: `--cert-worldgen-cardinal-replacement-p5b3a` (EVERY CUT, latest).
-  Digest `8b0f3cca9ccb1bb6` (2C was `f743150420e22175`; stage identity
+- Test A: `--cert-worldgen-cardinal-replacement-p5b3b` (EVERY CUT, latest).
+  Digest `59a2725b6b89fd77` (3A was `8b0f3cca9ccb1bb6`; stage identity
   changed). Movement frames over 16.667 = 0 on N/E/S/W.
-- Test B: `--cert-streaming-soak-p5b3a` (90 s NE fly **PASS** this cut:
-  0 / 86035 movement frames >16.667, max 6.965 ms, 2601, pending 0.
-  P5b.3A travel physics **idle**: detachments / admitted mass / water
-  responses / revisions / loose mass all 0. 2C travel physics also idle.
+- Test B: `--cert-streaming-soak-p5b3b` (90 s NE fly **PASS** this cut:
+  0 / 85720 movement frames >16.667, max 6.881 ms, 2601, pending 0.
+  P5b.3B travel physics **idle**: transfers / transport wakes / pending /
+  revisions / loose mass all 0. 3A/2C travel physics also idle.
   300/900 not run. Long-haul 300/900 remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
@@ -339,10 +344,10 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   CRT 8→12 km **+1.5 MB** (197 → 199 MB), `PASS_plateau`. Return CRT 208 MB.
   `erosion_cache_entries` now reads the four worker kernels. Golden:
   cache enabled == forced-cold recompute. 16.667 not relaxed.
-  P5b.3A 90 s Test B **PASS** (idle 3A physics). **P5b.3B / P5b.3C stay CLOSED.**
+  P5b.3B 90 s Test B **PASS** (idle 3B physics). **P5b.3C stays CLOSED.**
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
-- P5b.2B gameplay frozen at `8bb75265`. **P5b.3B / P5b.3C** / rainfall / erosion remain CLOSED.
+- P5b.2B gameplay frozen at `8bb75265`. **P5b.3C** / rainfall / erosion remain CLOSED.
 
 ```
 LONG-HAUL INFRASTRUCTURE BASELINE
@@ -377,8 +382,9 @@ Cert summary: `contact_frame_orthonormal`, `radius_separation`, `material_morpho
 **P5b.1 FULLY DONE / FROZEN** (one-way terrain→water, including pick/shovel
 legal receipt) @ `e64a4df3`. **P5b.2A FROZEN** (state only).
 **P5b.2B CERTIFIED** (bounded pore). **P5b.2C FROZEN** (pore occupancy /
-topology). **P5b.3A CERTIFIED** (hydraulic detachment, choice A local loose).
-**P5b.3B / P5b.3C CLOSED.**
+topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
+**P5b.3B CERTIFIED** (hydraulic transport of already-detached loose matter).
+**P5b.3C CLOSED.**
 Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
