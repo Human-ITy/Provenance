@@ -323,6 +323,8 @@ relaxed. Persistent water VBO/IBO is the live submit path.
 | 2B persistent-water 900 s | **0 / 859464** | 11.505 | 16.667 PASS; process private still climbs |
 | 2B ownership 90 s | **0** | 11.314 | HeapWalk hold; recycle on; memory INCOMPLETE |
 | 2B ownership 12 km | **0 / 420668** | 14.816 | 16.667 PASS; CRT committed FAIL |
+| 2B package-scratch 90 s | **0 / 84138** | 8.688 | scratch fallback 0; FollowStream CRT 0 |
+| 2B package-scratch 12 km | **0 / 476790** | 7.277 | scratch fallback 0; CRT 8→12 still +415 MB |
 
 The FollowStream CRT segment is closed. Capacity instrumentation
 showed the 8.4 MB first-commit was **not** a retained package: per-call
@@ -377,19 +379,40 @@ drain, never on a travel frame. Mid-travel HeapWalk poisoned the
 resume frame (40–144 ms); a 3-frame hold after each walk restored
 16.667 = 0.
 
-Package mesh/material vectors recycle after GL compile (451078 hits /
-424 misses on the 12 km run). That did **not** stop CRT committed
-growth: per-package `SampleBlock` / descriptor temps still churn
-8–64 KB blocks that UCRT keeps committed. `HeapCompact` / `_heapmin`
-at drain did not return those pages. Deleting reusable display lists
-at drain did not drop private (GL residual plateaus after ~8 km;
-further growth is CRT).
+Package mesh/material recycle (452024 hits / 424 misses) plus a
+dedicated collision-surface pool (449423 hits / 3025 misses = live
+window + lookahead) reuse finished objects. Worker-owned package
+scratch is reserved once per worker:
+
+```text
+4 workers × 12562 B = 50248 B
+sampled cells 289 Vec3
+crossing descriptors 256
+GeoSample event/chronology slots (certified 32; observed high-water 0)
+overflow 0 / fallback CRT 0 / growth 0
+```
+
+Worker SampleBlock / DescribeBlock write into that scratch and reset.
+`ReconstructedZ` / incision use `QueryMaterial` (found-only); full
+provenance `Query` event/chronology vectors are not copied on the
+package worker path. 2B physics / water truth / package output
+unchanged. Persistent mesh/material/collision stay outside scratch.
+
+That closed the named SampleBlock / descriptor / GeoSample temps.
+It did **not** flatten CRT. 8 km → 12 km is still ~+415 MB, same
+slope class as the pre-scratch table. Do not greenwash.
+
+**Remaining CRT site:** per-worker Stage-12/erosion dual-surface
+vertex maps (`CausalDifferentialErosion::m_differentialDualCache`)
+inside `ThreadBareEarthKernel`. Unique dual vertices grow with
+kilometers traveled; the soak ledger's `erosion_cache_entries` reads
+the shared runtime (0 on this view), not the four worker kernels.
+Not bounded by worker count. Next cut: bound or spatially retire
+that cache without changing compiled Z.
 
 **Retained owner class: `crt_heap_committed`.**
 Logical counts flat + private still rising after the corresponding
-world has retired. Not closable this cut without a SampleBlock
-scratch arena (would touch worker sample paths; 2B physics / water
-truth stay frozen). Do not greenwash.
+world has retired.
 
 Checkpoint drain table (500 s NE fly 24 m/s, stop/drain at each
 station, then return to origin). Logical live 114 MB / 2601 / pending 0
@@ -397,25 +420,26 @@ station, then return to origin). Logical live 114 MB / 2601 / pending 0
 
 | Station | private | CRT committed | GL residual (private−CRT) | slope |
 |---|---|---|---|---|
-| 0 m drain | 521 MB | 138 MB | 383 MB | — |
-| 1 km drain | 906 MB | 372 MB | 533 MB | +385 MB/km |
-| 2 km drain | 1275 MB | 612 MB | 663 MB | +369 MB/km |
-| 4 km drain | 2004 MB | 1089 MB | 915 MB | +365 MB/km |
-| 8 km drain | 3166 MB | 1732 MB | 1434 MB | +291 MB/km |
-| 12 km drain | 3582 MB | 2148 MB | 1434 MB | +104 MB/km |
-| after drain | 3584 MB | 2150 MB | 1434 MB | held |
-| return origin | 4083 MB | 2646 MB | 1437 MB | return churn; CRT kept |
+| 0 m drain | 517 MB | 136 MB | 381 MB | — |
+| 1 km drain | 903 MB | 368 MB | 535 MB | +367 MB/km |
+| 2 km drain | 1270 MB | 607 MB | 663 MB | +239 MB/km |
+| 4 km drain | 2003 MB | 1084 MB | 919 MB | +239 MB/km |
+| 8 km drain | 3171 MB | 1733 MB | 1438 MB | +162 MB/km |
+| 12 km drain | 3586 MB | 2149 MB | 1437 MB | +104 MB/km |
+| after drain | 3590 MB | 2152 MB | 1438 MB | held |
+| return origin | 4081 MB | 2643 MB | 1438 MB | return churn; CRT kept |
 
-GL residual plateaus at 8 km (~1434 MB). CRT committed keeps climbing
-(138 → 2148 MB at 12 km; 2646 MB after return). After 8 km the extra
-4 km still added +416 MB private (~104 MB/km) — not slope ~0.
+GL residual plateaus at 8 km (~1438 MB). CRT committed keeps climbing
+(136 → 2149 MB at 12 km; 2643 MB after return). After 8 km the extra
+4 km still added +415 MB CRT (~104 MB/km) — not slope ~0.
 Return-to-origin did **not** release the 12 km CRT high-water; private
-rose further on the return pass. Distance-specific heap pages remain
-after that world is gone.
+rose further on the return pass.
 
 `check.memory_plateau=FAIL_scales_with_distance`.
 `check.distance_bucket_slope=FAIL_scales_with_distance`.
 `ownership.retained_class=crt_heap_committed`.
+`package_scratch.fallback_crt_allocs=0` (PASS). Slope after warmup
+is **not** ≈ 0. Named remaining site above.
 
 ### Stationary drain + return
 
@@ -425,22 +449,26 @@ over 16.667 = 0, max 11.314 ms. Private 521 → 1308 MB at 2.16 km →
 1753 MB after return. Same owner.
 
 12 km run: 500 s travel, drains at 1/2/4/8/12 km, return+settle.
-Movement frames over 16.667 = **0 / 420668**, max 14.816 ms.
+Movement frames over 16.667 = **0 / 476790**, max 7.277 ms.
 
 ### 90 / 300 / 12 km gates
 
 ```text
-90 s   residency PASS, backlog PASS, frame PASS (0 frames >16.667, max 11.314),
+90 s   residency PASS, backlog PASS, frame PASS (0 / 84138 >16.667, max 8.688),
        first live occupied water no stall, water GPU bounded / travel growth 0,
-       scratch growth 0, FollowStream CRT 0,
+       FollowStream scratch growth 0, CRT segment 0,
+       package scratch 4×12562 B, fallback 0, overflow 0,
        memory INCOMPLETE_return_high_water (need 5 km after high-water).
        soak_water_backend=persistent. water_path_warmed=1.
-500 s  12.015 km. frame PASS (0 / 420668, max 14.816). water GPU 170 KB, growth 0.
-       2601 resident, pending 0. memory FAIL_scales_with_distance
-       (private 521 → 3582 MB at 12 km; CRT 138 → 2148 MB).
-       GL residual plateaus after 8 km. Return origin private 4083 MB.
-       overall=PASS (frame/residency/water-GPU). 16.667 not relaxed.
-       P5b.2C / P5b.3 CLOSED. Memory owner FAIL left named.
+500 s  12.040 km. frame PASS (0 / 476790, max 7.277). water GPU 170 KB, growth 0.
+       2601 resident, pending 0. package scratch fallback 0.
+       memory FAIL_scales_with_distance
+       (private 517 → 3586 MB at 12 km; CRT 136 → 2149 MB).
+       8→12 km CRT +415 MB (not near noise). Return origin CRT 2643 MB.
+       GL residual plateaus after 8 km (~1438 MB).
+       remaining CRT site: worker dual-surface vertex cache.
+       overall=PASS (frame/residency/water-GPU/package-scratch).
+       16.667 not relaxed. P5b.2C / P5b.3 CLOSED.
 ```
 
 Receipt: `Docs/provenance_p5b2b_streaming_soak_cert.txt` (500 s / 12 km

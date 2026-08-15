@@ -51,6 +51,8 @@ namespace CausalVisibleExposure
     // authority pass fills samples once; later stages consume indices into that
     // immutable field and must not re-enter the authority while emitting mesh.
     constexpr int kBlockSampleSpan = kBlockCells + 1;
+    constexpr int kBlockVertexCount = kBlockSampleSpan * kBlockSampleSpan;
+    constexpr int kBlockCrossingCount = kBlockCells * kBlockCells;
     struct BlockSurfaceSamples
     {
         int blockX = 0;
@@ -73,12 +75,12 @@ namespace CausalVisibleExposure
         std::vector<CrossingDescriptor> crossings;
     };
 
-    inline BlockSurfaceDescriptors DescribeBlock( BlockSurfaceSamples const& samples )
+    inline void DescribeBlockInto( BlockSurfaceSamples const& samples,
+        BlockSurfaceDescriptors& out )
     {
-        BlockSurfaceDescriptors out;
         out.blockX = samples.blockX;
         out.blockY = samples.blockY;
-        out.crossings.reserve( (size_t)kBlockCells * kBlockCells );
+        out.crossings.clear();
         for ( int y = 0; y < kBlockCells; ++y )
         for ( int x = 0; x < kBlockCells; ++x )
         {
@@ -88,7 +90,41 @@ namespace CausalVisibleExposure
             uint16_t const v11 = (uint16_t)( v01 + 1 );
             out.crossings.push_back( { v00, v10, v11, v01 } );
         }
+    }
+
+    inline BlockSurfaceDescriptors DescribeBlock( BlockSurfaceSamples const& samples )
+    {
+        BlockSurfaceDescriptors out;
+        out.crossings.reserve( (size_t)kBlockCrossingCount );
+        DescribeBlockInto( samples, out );
         return out;
+    }
+
+    template<typename ZAt>
+    inline void SampleBlockGridInto( int blockX, int blockY,
+        BlockSurfaceSamples& samples, ZAt&& zAt )
+    {
+        samples.blockX = blockX;
+        samples.blockY = blockY;
+        samples.vertices.clear();
+        int const baseX = blockX * kBlockCells - 1;
+        int const baseY = blockY * kBlockCells - 1;
+        for ( int y = 0; y < kBlockSampleSpan; ++y )
+        for ( int x = 0; x < kBlockSampleSpan; ++x )
+        {
+            double const wx = ( (double)( baseX + x ) + 0.5 ) * kDualStepM;
+            double const wy = ( (double)( baseY + y ) + 0.5 ) * kDualStepM;
+            samples.vertices.push_back( { wx, wy, zAt( wx, wy ) } );
+        }
+    }
+
+    inline void CopyBlockSamplesInto( BlockSurfaceSamples const& src,
+        BlockSurfaceSamples& dst )
+    {
+        dst.blockX = src.blockX;
+        dst.blockY = src.blockY;
+        dst.vertices.clear();
+        dst.vertices.insert( dst.vertices.end(), src.vertices.begin(), src.vertices.end() );
     }
 
     inline Vec3 PresentationSamplePoint( BlockSurfaceSamples const& samples,
@@ -217,17 +253,23 @@ namespace CausalVisibleExposure
             triangles.push_back( { v10, v11, v01 } );
         }
 
-        BlockSurfaceSamples SampleBlock( int blockX, int blockY ) const
+        void SampleBlockInto( int blockX, int blockY, BlockSurfaceSamples& samples ) const
         {
-            BlockSurfaceSamples samples;
             samples.blockX = blockX;
             samples.blockY = blockY;
-            samples.vertices.reserve( (size_t)kBlockSampleSpan * kBlockSampleSpan );
+            samples.vertices.clear();
             int const baseX = blockX * kBlockCells - 1;
             int const baseY = blockY * kBlockCells - 1;
             for ( int y = 0; y < kBlockSampleSpan; ++y )
             for ( int x = 0; x < kBlockSampleSpan; ++x )
             { samples.vertices.push_back( DualVertex( baseX + x, baseY + y ) ); }
+        }
+
+        BlockSurfaceSamples SampleBlock( int blockX, int blockY ) const
+        {
+            BlockSurfaceSamples samples;
+            samples.vertices.reserve( (size_t)kBlockVertexCount );
+            SampleBlockInto( blockX, blockY, samples );
             return samples;
         }
 

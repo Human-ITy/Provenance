@@ -179,12 +179,12 @@ namespace CausalCompiledFluvialErosion
             // `surface` is already the fully reconstructed Stage-15 answer.
             // Query that coordinate directly instead of recomputing the whole
             // Stage-15 surface merely to ask whether its material exists.
-            if(!geography.Query(x,y,surface-.001).found)return 0;
+            if(!geography.QueryMaterial(x,y,surface-.001).found)return 0;
             double const proposed=Bilinear(x,y,control==Control::EqualResistance);
-            if(proposed<=0||geography.Query(x,y,surface-proposed-.001).found)return proposed;
+            if(proposed<=0||geography.QueryMaterial(x,y,surface-proposed-.001).found)return proposed;
             double lo=0,hi=proposed;
             for(int pass=0;pass<20;++pass)
-            {double const mid=.5*(lo+hi);if(geography.Query(x,y,surface-mid-.001).found)lo=mid;else hi=mid;}
+            {double const mid=.5*(lo+hi);if(geography.QueryMaterial(x,y,surface-mid-.001).found)lo=mid;else hi=mid;}
             return (std::max)(0.0,lo-.01);
         }
 

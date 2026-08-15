@@ -410,14 +410,29 @@ namespace CausalWorldGeology
             return { true, formation->material.c_str(), formation->youngestChronology };
         }
 
-        GeoSample Query( double x, double y, double z ) const
+        void ClearQuerySample( GeoSample& sample ) const
         {
-            GeoSample sample;
+            sample.found = false;
+            sample.regionId = 0;
+            sample.featureId = 0;
+            sample.formationId.clear();
+            sample.material.clear();
+            sample.structuralNormal = { 0.0, 0.0, 1.0 };
+            sample.bodyLocalPosition = { 0.0, 0.0, 0.0 };
+            sample.eventIds.clear();
+            sample.chronology.clear();
+            sample.boundary = BoundaryState::Interior;
+            sample.descriptorRevision = 0;
+        }
+
+        void QueryInto( double x, double y, double z, GeoSample& sample ) const
+        {
+            ClearQuerySample( sample );
             double constexpr kPi = 3.14159265358979323846;
             ColumnContext const column = PrepareColumn( x, y );
             double const localZ = z - column.foldedDatum;
             Formation const* found = FormationAt( column, z );
-            if ( !found ) { return sample; }
+            if ( !found ) { return; }
 
             double const slope = m_descriptor.foldAmplitudeM
                 * ( 2.0 * kPi / m_descriptor.foldWavelengthM ) * std::cos( column.wave );
@@ -446,6 +461,12 @@ namespace CausalWorldGeology
                 sample.eventIds.push_back( event.stableId );
                 sample.chronology.push_back( event.chronology );
             }
+        }
+
+        GeoSample Query( double x, double y, double z ) const
+        {
+            GeoSample sample;
+            QueryInto( x, y, z, sample );
             return sample;
         }
 

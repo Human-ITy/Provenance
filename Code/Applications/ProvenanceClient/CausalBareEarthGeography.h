@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -261,13 +262,64 @@ namespace CausalBareEarthGeography
             return std::exp(-.5*std::pow((q-.83)/.07,2.0));
         }
 
-        double Resistance(std::string const& material) const
+        double Resistance(char const* material) const
         {
-            if(material=="granite")return 2.8;
-            if(material=="sandstone")return 2.0;
-            if(material=="quartz")return 3.2;
-            if(material=="shale")return .72;
+            if(!material)return 1.0;
+            if(std::strcmp(material,"granite")==0)return 2.8;
+            if(std::strcmp(material,"sandstone")==0)return 2.0;
+            if(std::strcmp(material,"quartz")==0)return 3.2;
+            if(std::strcmp(material,"shale")==0)return .72;
             return 1.0;
+        }
+
+        double Resistance(std::string const& material) const
+        {return Resistance(material.c_str());}
+
+        struct SurfaceCompile
+        {
+            double sourceSurfaceZ=0,foldReliefM=0,faultScarpM=0,structuralLiftM=0;
+            double valleyCutM=0,ravineCutM=0,basinCutM=0,receivingZone=0;
+            double erosionDepthM=0,surfaceZ=0;
+        };
+
+        // Worker SampleBlock only needs Z. Full provenance Query copies
+        // event/chronology vectors; QueryMaterial.found matches Query.found
+        // because both use FormationAt, so the not-found clamp stays identical.
+        SurfaceCompile CompileSurfaceAt(double x,double y) const
+        {
+            SurfaceCompile out;
+            out.sourceSurfaceZ=m_stage12.ReconstructedZ(x,y);
+            double const massifLift=MassifLift(x,y);
+            out.foldReliefM=FoldRelief(x,y);out.faultScarpM=FaultScarp(x,y);
+            out.structuralLiftM=massifLift+out.foldReliefM+out.faultScarpM
+                -SaddleNotch(x,y);
+            out.valleyCutM=ValleyCut(x,y);
+            out.ravineCutM=RavineCut(x,y);out.basinCutM=BasinCut(x,y);
+            out.receivingZone=ReceivingZone(x,y);
+            double z=out.sourceSurfaceZ;
+            for(int pass=0;pass<3;++pass)
+            {
+                auto const geology=m_stage12.QueryMaterial(x,y,z-.001);
+                double const resistance=geology.found?Resistance(geology.material):1.0;
+                double const baseWork=5.0+out.valleyCutM+out.ravineCutM+out.basinCutM;
+                double const shelter=1.0-.42*out.receivingZone;
+                out.erosionDepthM=(std::min)(14.0,baseWork*shelter/resistance);
+                z=out.sourceSurfaceZ-out.erosionDepthM;
+            }
+            if(!m_stage12.QueryMaterial(x,y,z-.001).found)
+            {
+                double lo=0.0,hi=out.erosionDepthM;
+                for(int i=0;i<20;++i)
+                {
+                    double const mid=.5*(lo+hi);
+                    if(m_stage12.QueryMaterial(x,y,out.sourceSurfaceZ-mid-.001).found)
+                        lo=mid;
+                    else hi=mid;
+                }
+                out.erosionDepthM=lo;z=out.sourceSurfaceZ-lo;
+            }
+            out.surfaceZ=z+out.structuralLiftM;
+            return out;
         }
 
         CausalWorldGeology::GeoSample Query(double x,double y,double z) const
@@ -298,40 +350,19 @@ namespace CausalBareEarthGeography
         Sample QuerySurface(double x,double y) const
         {
             WrapIntoRegion(m_program,x,y);
+            SurfaceCompile const compiled=CompileSurfaceAt(x,y);
             Sample out;
-            out.sourceSurfaceZ=m_stage12.ReconstructedZ(x,y);
-            // Compute each analytic landform component once. StructuralLift()
-            // remains the public 3-D authority transform, while the surface
-            // compiler avoids repeating its trigonometric/exponential work.
-            double const massifLift=MassifLift(x,y);
-            out.foldReliefM=FoldRelief(x,y);out.faultScarpM=FaultScarp(x,y);
-            out.structuralLiftM=massifLift+out.foldReliefM+out.faultScarpM
-                -SaddleNotch(x,y);
-            out.valleyCutM=ValleyCut(x,y);
-            out.ravineCutM=RavineCut(x,y);out.basinCutM=BasinCut(x,y);
-            out.receivingZone=ReceivingZone(x,y);
-            double z=out.sourceSurfaceZ;
-            for(int pass=0;pass<3;++pass)
-            {
-                // Convergence needs only material resistance. Avoid allocating
-                // full ancestry/event vectors three times per surface sample;
-                // the final accepted surface still receives one complete
-                // provenance query below.
-                auto const geology=m_stage12.QueryMaterial(x,y,z-.001);
-                double const resistance=geology.found?Resistance(geology.material):1.0;
-                // A receiving footslope is identified here but remains bedrock:
-                // reduced removal, never deposited or minted sediment.
-                double const baseWork=5.0+out.valleyCutM+out.ravineCutM+out.basinCutM;
-                double const shelter=1.0-.42*out.receivingZone;
-                out.erosionDepthM=(std::min)(14.0,baseWork*shelter/resistance);
-                z=out.sourceSurfaceZ-out.erosionDepthM;
-            }
+            out.sourceSurfaceZ=compiled.sourceSurfaceZ;
+            out.foldReliefM=compiled.foldReliefM;out.faultScarpM=compiled.faultScarpM;
+            out.structuralLiftM=compiled.structuralLiftM;
+            out.valleyCutM=compiled.valleyCutM;out.ravineCutM=compiled.ravineCutM;
+            out.basinCutM=compiled.basinCutM;out.receivingZone=compiled.receivingZone;
+            out.erosionDepthM=compiled.erosionDepthM;
+            out.surfaceZ=compiled.surfaceZ;
+            double const z=compiled.surfaceZ-compiled.structuralLiftM;
             out.geology=m_stage12.Query(x,y,z-.001);
             if(!out.geology.found)
             {
-                // Compiled removal cannot cut beneath the descriptor's defined
-                // material column. Retain the deepest authoritative sample;
-                // absence is never reinterpreted as air or a new material.
                 double lo=0.0,hi=out.erosionDepthM;
                 CausalWorldGeology::GeoSample deepest=m_stage12.Query(
                     x,y,out.sourceSurfaceZ-.001);
@@ -341,9 +372,11 @@ namespace CausalBareEarthGeography
                         x,y,out.sourceSurfaceZ-mid-.001);
                     if(candidate.found){lo=mid;deepest=candidate;}else hi=mid;
                 }
-                out.erosionDepthM=lo;z=out.sourceSurfaceZ-lo;out.geology=deepest;
+                out.erosionDepthM=lo;
+                out.surfaceZ=out.sourceSurfaceZ-lo+out.structuralLiftM;
+                out.geology=deepest;
             }
-            out.surfaceZ=z+out.structuralLiftM;out.found=out.geology.found;
+            out.found=out.geology.found;
             double const faultDistance=std::fabs(out.faultScarpM);
             if(out.geology.material=="granite"&&MassifLift(x,y)>20)out.landform=Landform::GraniteShoulder;
             else if(faultDistance>1.4&&std::hypot(x,y)<300)out.landform=Landform::FaultScarp;
@@ -358,24 +391,26 @@ namespace CausalBareEarthGeography
             return out;
         }
 
-        double ReconstructedZ(double x,double y) const{return QuerySurface(x,y).surfaceZ;}
+        double ReconstructedZ(double x,double y) const
+        {
+            WrapIntoRegion(m_program,x,y);
+            return CompileSurfaceAt(x,y).surfaceZ;
+        }
         CausalWorldGeology::GeoSample SurfaceGeology(double x,double y) const
         {auto const s=QuerySurface(x,y);return s.geology;}
 
+        void SampleBlockInto(int bx,int by,
+            CausalVisibleExposure::BlockSurfaceSamples& samples) const
+        {
+            CausalVisibleExposure::SampleBlockGridInto(bx,by,samples,
+                [this](double wx,double wy){return ReconstructedZ(wx,wy);});
+        }
+
         CausalVisibleExposure::BlockSurfaceSamples SampleBlock(int bx,int by) const
         {
-            CausalVisibleExposure::BlockSurfaceSamples samples;samples.blockX=bx;samples.blockY=by;
-            samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockSampleSpan
-                *CausalVisibleExposure::kBlockSampleSpan);
-            int const baseX=bx*CausalVisibleExposure::kBlockCells-1;
-            int const baseY=by*CausalVisibleExposure::kBlockCells-1;
-            for(int y=0;y<CausalVisibleExposure::kBlockSampleSpan;++y)
-            for(int x=0;x<CausalVisibleExposure::kBlockSampleSpan;++x)
-            {
-                double const wx=(baseX+x+.5)*CausalVisibleExposure::kDualStepM;
-                double const wy=(baseY+y+.5)*CausalVisibleExposure::kDualStepM;
-                samples.vertices.push_back({wx,wy,ReconstructedZ(wx,wy)});
-            }
+            CausalVisibleExposure::BlockSurfaceSamples samples;
+            samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockVertexCount);
+            SampleBlockInto(bx,by,samples);
             return samples;
         }
 

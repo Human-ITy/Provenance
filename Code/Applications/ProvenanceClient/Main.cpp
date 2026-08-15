@@ -1995,6 +1995,9 @@ namespace
     void UpdateStreamHud();
     void MarkStage0TerrainVertexDirty( int cx, int cy );
     void RetireTerrainDisplayList( GLuint list );
+    void RecycleCollisionSurface(
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const>& surface,
+        struct Stage8RecycledBuffers* into=nullptr);
     void ServiceRetiredTerrainDisplayLists();
     void DrawStage0TerrainBlocks();
     void DrawStage7TerrainBlocks();
@@ -3956,46 +3959,49 @@ namespace
         return kernel.get();
     }
 
+    void SampleCompiledFluvialWorkerBlockInto(
+        CausalBareEarthGeography::Kernel const& geography,
+        CausalCompiledFluvialErosion::Kernel const& erosion,int bx,int by,
+        CausalVisibleExposure::BlockSurfaceSamples& samples)
+    {
+        CausalVisibleExposure::SampleBlockGridInto(bx,by,samples,
+            [&](double wx,double wy)
+            {
+                double const stage15Z=geography.ReconstructedZ(wx,wy);
+                return stage15Z-erosion.AuthorizedIncisionDepth(geography,wx,wy,stage15Z);
+            });
+    }
     CausalVisibleExposure::BlockSurfaceSamples SampleCompiledFluvialWorkerBlock(
         CausalBareEarthGeography::Kernel const& geography,
         CausalCompiledFluvialErosion::Kernel const& erosion,int bx,int by)
     {
-        CausalVisibleExposure::BlockSurfaceSamples samples;samples.blockX=bx;samples.blockY=by;
-        samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockSampleSpan
-            *CausalVisibleExposure::kBlockSampleSpan);
-        int const baseX=bx*CausalVisibleExposure::kBlockCells-1;
-        int const baseY=by*CausalVisibleExposure::kBlockCells-1;
-        for(int y=0;y<CausalVisibleExposure::kBlockSampleSpan;++y)
-        for(int x=0;x<CausalVisibleExposure::kBlockSampleSpan;++x)
-        {
-            double const wx=(baseX+x+.5)*CausalVisibleExposure::kDualStepM;
-            double const wy=(baseY+y+.5)*CausalVisibleExposure::kDualStepM;
-            double const stage15Z=geography.ReconstructedZ(wx,wy);
-            samples.vertices.push_back({wx,wy,stage15Z
-                -erosion.AuthorizedIncisionDepth(geography,wx,wy,stage15Z)});
-        }
+        CausalVisibleExposure::BlockSurfaceSamples samples;
+        samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockVertexCount);
+        SampleCompiledFluvialWorkerBlockInto(geography,erosion,bx,by,samples);
         return samples;
     }
 
+    void SampleCompiledSedimentWorkerBlockInto(
+        CausalBareEarthGeography::Kernel const& geography,
+        CausalCompiledSediment::Kernel const& sediment,int bx,int by,
+        CausalVisibleExposure::BlockSurfaceSamples& samples)
+    {
+        CausalVisibleExposure::SampleBlockGridInto(bx,by,samples,
+            [&](double wx,double wy)
+            {
+                double const stage15Z=geography.ReconstructedZ(wx,wy);
+                double const stage16bZ=stage15Z-sediment.Erosion().AuthorizedIncisionDepth(
+                    geography,wx,wy,stage15Z);
+                return stage16bZ+sediment.DepositDepth(wx,wy);
+            });
+    }
     CausalVisibleExposure::BlockSurfaceSamples SampleCompiledSedimentWorkerBlock(
         CausalBareEarthGeography::Kernel const& geography,
         CausalCompiledSediment::Kernel const& sediment,int bx,int by)
     {
-        CausalVisibleExposure::BlockSurfaceSamples samples;samples.blockX=bx;samples.blockY=by;
-        samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockSampleSpan
-            *CausalVisibleExposure::kBlockSampleSpan);
-        int const baseX=bx*CausalVisibleExposure::kBlockCells-1;
-        int const baseY=by*CausalVisibleExposure::kBlockCells-1;
-        for(int y=0;y<CausalVisibleExposure::kBlockSampleSpan;++y)
-        for(int x=0;x<CausalVisibleExposure::kBlockSampleSpan;++x)
-        {
-            double const wx=(baseX+x+.5)*CausalVisibleExposure::kDualStepM;
-            double const wy=(baseY+y+.5)*CausalVisibleExposure::kDualStepM;
-            double const stage15Z=geography.ReconstructedZ(wx,wy);
-            double const stage16bZ=stage15Z-sediment.Erosion().AuthorizedIncisionDepth(
-                geography,wx,wy,stage15Z);
-            samples.vertices.push_back({wx,wy,stage16bZ+sediment.DepositDepth(wx,wy)});
-        }
+        CausalVisibleExposure::BlockSurfaceSamples samples;
+        samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockVertexCount);
+        SampleCompiledSedimentWorkerBlockInto(geography,sediment,bx,by,samples);
         return samples;
     }
 
@@ -4711,6 +4717,7 @@ namespace
             auto const it = g.stage0TerrainBlocks.find( key );
             if ( it == g.stage0TerrainBlocks.end() ) { continue; }
             RetireTerrainDisplayList( it->second.list );
+            RecycleCollisionSurface( it->second.collisionSurface );
             g.perfHfTris -= it->second.tris;
             g.stage0TerrainBlocks.erase( it );
             g.stage0DirtyTerrainBlocks.erase( key );
@@ -12887,6 +12894,7 @@ namespace
             auto const it = g.stage7TerrainBlocks.find( key );
             if ( it == g.stage7TerrainBlocks.end() ) { continue; }
             RetireTerrainDisplayList( it->second.list );
+            RecycleCollisionSurface( it->second.collisionSurface );
             g.stage7TerrainTriangles -= it->second.tris;
             g.perfHfTris -= it->second.tris;
             g.stage7TerrainBlocks.erase( it );
@@ -13029,6 +13037,7 @@ namespace
         std::vector<CausalVisibleExposure::Tri> triangles;
         std::vector<std::string> materials;
         std::vector<Stage8CpuPackage::TriangleColor> colors;
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples> collision;
     };
     std::mutex s_stage8RecycleMutex;
     std::vector<Stage8RecycledBuffers> s_stage8RecyclePool;
@@ -13037,6 +13046,210 @@ namespace
     int s_stage8RecycleReturns=0;
     unsigned long long s_stage8RecycleBytes=0;
     constexpr int kStage8RecyclePoolMax=512;
+    constexpr int kStage8CollisionPoolMax=1024;
+    std::vector<std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples>> s_stage8CollisionPool;
+    int s_stage8CollisionHits=0;
+    int s_stage8CollisionMisses=0;
+
+    constexpr int kPackageWorkerEventIdMax=32;
+    constexpr int kPackageWorkerScratchSlots=8;
+    struct PackageWorkerScratch
+    {
+        CausalVisibleExposure::BlockSurfaceSamples samples;
+        CausalVisibleExposure::BlockSurfaceDescriptors descriptors;
+        CausalWorldGeology::GeoSample geo;
+        CausalWorldGeology::GeoSample geoDeepest;
+        CausalWorldGeology::GeoSample geoCandidate;
+        std::vector<char const*> materialTemps;
+        size_t reservedBytes=0;
+        size_t observedHighWater=0;
+        size_t eventIdHighWater=0;
+        size_t chronologyHighWater=0;
+        int overflowEvents=0;
+        int fallbackCrtAllocs=0;
+        int growthEvents=0;
+        bool reserved=false;
+    };
+    PackageWorkerScratch* s_packageWorkerScratchSlots[kPackageWorkerScratchSlots]={};
+    std::atomic<int> s_packageWorkerScratchCount{0};
+
+    size_t PackageWorkerScratchCapacityBytes(PackageWorkerScratch const& s)
+    {
+        auto geoBytes=[](CausalWorldGeology::GeoSample const& g)->size_t
+        {
+            return g.eventIds.capacity()*sizeof(uint64_t)
+                +g.chronology.capacity()*sizeof(uint32_t)
+                +g.formationId.capacity()+g.material.capacity();
+        };
+        return s.samples.vertices.capacity()*sizeof(CausalVisibleExposure::Vec3)
+            +s.descriptors.crossings.capacity()
+                *sizeof(CausalVisibleExposure::CrossingDescriptor)
+            +geoBytes(s.geo)+geoBytes(s.geoDeepest)+geoBytes(s.geoCandidate)
+            +s.materialTemps.capacity()*sizeof(char const*);
+    }
+
+    size_t PackageWorkerScratchUsedBytes(PackageWorkerScratch const& s)
+    {
+        auto geoUsed=[](CausalWorldGeology::GeoSample const& g)->size_t
+        {
+            return g.eventIds.size()*sizeof(uint64_t)
+                +g.chronology.size()*sizeof(uint32_t);
+        };
+        return s.samples.vertices.size()*sizeof(CausalVisibleExposure::Vec3)
+            +s.descriptors.crossings.size()
+                *sizeof(CausalVisibleExposure::CrossingDescriptor)
+            +geoUsed(s.geo)+geoUsed(s.geoDeepest)+geoUsed(s.geoCandidate)
+            +s.materialTemps.size()*sizeof(char const*);
+    }
+
+    void NotePackageWorkerGeoHighWater(PackageWorkerScratch& s)
+    {
+        auto note=[&](CausalWorldGeology::GeoSample const& g)
+        {
+            if(g.eventIds.size()>s.eventIdHighWater)s.eventIdHighWater=g.eventIds.size();
+            if(g.chronology.size()>s.chronologyHighWater)
+                s.chronologyHighWater=g.chronology.size();
+        };
+        note(s.geo);note(s.geoDeepest);note(s.geoCandidate);
+    }
+
+    void RegisterPackageWorkerScratch(PackageWorkerScratch& scratch)
+    {
+        int const i=s_packageWorkerScratchCount.fetch_add(1);
+        if(i>=0&&i<kPackageWorkerScratchSlots)
+            s_packageWorkerScratchSlots[i]=&scratch;
+    }
+
+    PackageWorkerScratch& TlsPackageWorkerScratch()
+    {
+        thread_local PackageWorkerScratch scratch;
+        thread_local bool registered=false;
+        if(!registered){RegisterPackageWorkerScratch(scratch);registered=true;}
+        return scratch;
+    }
+
+    void ReservePackageWorkerGeo(CausalWorldGeology::GeoSample& g)
+    {
+        g.eventIds.reserve((size_t)kPackageWorkerEventIdMax);
+        g.chronology.reserve((size_t)kPackageWorkerEventIdMax);
+        g.formationId.reserve(64u);
+        g.material.reserve(32u);
+    }
+
+    void EnsurePackageWorkerScratch(PackageWorkerScratch& s)
+    {
+        if(s.reserved)return;
+        s.samples.vertices.reserve((size_t)CausalVisibleExposure::kBlockVertexCount);
+        s.descriptors.crossings.reserve((size_t)CausalVisibleExposure::kBlockCrossingCount);
+        s.materialTemps.reserve((size_t)CausalVisibleExposure::kBlockCrossingCount);
+        ReservePackageWorkerGeo(s.geo);
+        ReservePackageWorkerGeo(s.geoDeepest);
+        ReservePackageWorkerGeo(s.geoCandidate);
+        s.reservedBytes=PackageWorkerScratchCapacityBytes(s);
+        s.observedHighWater=s.reservedBytes;
+        s.reserved=true;
+    }
+
+    template<typename T>
+    void PackageWorkerPush(PackageWorkerScratch& s,std::vector<T>& v,T const& value)
+    {
+        if(v.size()>=v.capacity())
+        {
+            ++s.overflowEvents;
+            ++s.fallbackCrtAllocs;
+            ++s.growthEvents;
+        }
+        v.push_back(value);
+    }
+
+    void NotePackageWorkerScratchGrowth(PackageWorkerScratch& s,
+        size_t verticesCap,size_t crossingsCap)
+    {
+        if(s.samples.vertices.capacity()>verticesCap
+            ||s.descriptors.crossings.capacity()>crossingsCap)
+        {
+            ++s.growthEvents;
+            ++s.fallbackCrtAllocs;
+            s.reservedBytes=PackageWorkerScratchCapacityBytes(s);
+        }
+        size_t const used=PackageWorkerScratchUsedBytes(s);
+        if(used>s.observedHighWater)s.observedHighWater=used;
+        if(s.reservedBytes>s.observedHighWater)s.observedHighWater=s.reservedBytes;
+        NotePackageWorkerGeoHighWater(s);
+    }
+
+    void ResetPackageWorkerScratch(PackageWorkerScratch& s)
+    {
+        size_t const used=PackageWorkerScratchUsedBytes(s);
+        if(used>s.observedHighWater)s.observedHighWater=used;
+        if(s.reservedBytes>s.observedHighWater)s.observedHighWater=s.reservedBytes;
+        NotePackageWorkerGeoHighWater(s);
+        s.samples.vertices.clear();
+        s.descriptors.crossings.clear();
+        s.materialTemps.clear();
+        s.geo.eventIds.clear();s.geo.chronology.clear();
+        s.geo.formationId.clear();s.geo.material.clear();
+        s.geoDeepest.eventIds.clear();s.geoDeepest.chronology.clear();
+        s.geoDeepest.formationId.clear();s.geoDeepest.material.clear();
+        s.geoCandidate.eventIds.clear();s.geoCandidate.chronology.clear();
+        s.geoCandidate.formationId.clear();s.geoCandidate.material.clear();
+    }
+
+    struct PackageWorkerScratchReceipt
+    {
+        int workers=0;
+        size_t reservedBytesPerWorker=0;
+        size_t reservedBytesTotal=0;
+        size_t observedHighWater=0;
+        size_t eventIdHighWater=0;
+        size_t chronologyHighWater=0;
+        int overflowEvents=0;
+        int fallbackCrtAllocs=0;
+        int growthEvents=0;
+    };
+
+    PackageWorkerScratchReceipt CapturePackageWorkerScratchReceipt()
+    {
+        PackageWorkerScratchReceipt r;
+        int const n=s_packageWorkerScratchCount.load();
+        int const slots=(std::min)(n,kPackageWorkerScratchSlots);
+        for(int i=0;i<slots;++i)
+        {
+            PackageWorkerScratch const* s=s_packageWorkerScratchSlots[i];
+            if(!s||!s->reserved)continue;
+            ++r.workers;
+            if(s->reservedBytes>r.reservedBytesPerWorker)
+                r.reservedBytesPerWorker=s->reservedBytes;
+            r.reservedBytesTotal+=s->reservedBytes;
+            if(s->observedHighWater>r.observedHighWater)
+                r.observedHighWater=s->observedHighWater;
+            if(s->eventIdHighWater>r.eventIdHighWater)
+                r.eventIdHighWater=s->eventIdHighWater;
+            if(s->chronologyHighWater>r.chronologyHighWater)
+                r.chronologyHighWater=s->chronologyHighWater;
+            r.overflowEvents+=s->overflowEvents;
+            r.fallbackCrtAllocs+=s->fallbackCrtAllocs;
+            r.growthEvents+=s->growthEvents;
+        }
+        return r;
+    }
+
+    void RecycleCollisionSurface(
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const>& surface,
+        Stage8RecycledBuffers* into)
+    {
+        (void)into;
+        if(!surface)return;
+        if(surface.use_count()!=1){surface.reset();return;}
+        auto mut=std::const_pointer_cast<CausalVisibleExposure::BlockSurfaceSamples>(surface);
+        mut->vertices.clear();
+        {
+            std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
+            if((int)s_stage8CollisionPool.size()<kStage8CollisionPoolMax)
+                s_stage8CollisionPool.push_back(std::move(mut));
+        }
+        surface.reset();
+    }
 
     void RecycleStage8CpuPackage(Stage8CpuPackage& package)
     {
@@ -13047,7 +13260,7 @@ namespace
         buf.triangles.clear();
         buf.materials.clear();
         buf.colors.clear();
-        package.collisionSurface.reset();
+        RecycleCollisionSurface(package.collisionSurface,nullptr);
         size_t const bytes=buf.triangles.capacity()*sizeof(CausalVisibleExposure::Tri)
             +buf.materials.capacity()*sizeof(std::string)
             +buf.colors.capacity()*sizeof(Stage8CpuPackage::TriangleColor);
@@ -13081,6 +13294,35 @@ namespace
         (void)hit;
     }
 
+    std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const>
+    AdoptScratchCollision(PackageWorkerScratch& scratch,
+        CausalVisibleExposure::BlockSurfaceSamples const& src,
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples const> recycled)
+    {
+        std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples> dst=
+            recycled?std::const_pointer_cast<CausalVisibleExposure::BlockSurfaceSamples>(recycled)
+            :std::shared_ptr<CausalVisibleExposure::BlockSurfaceSamples>{};
+        if(!dst)
+        {
+            std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
+            if(!s_stage8CollisionPool.empty())
+            {
+                dst=std::move(s_stage8CollisionPool.back());
+                s_stage8CollisionPool.pop_back();
+                ++s_stage8CollisionHits;
+            }
+            else ++s_stage8CollisionMisses;
+        }
+        if(!dst)
+        {
+            dst=std::make_shared<CausalVisibleExposure::BlockSurfaceSamples>();
+            dst->vertices.reserve((size_t)CausalVisibleExposure::kBlockVertexCount);
+        }
+        CausalVisibleExposure::CopyBlockSamplesInto(src,*dst);
+        (void)scratch;
+        return dst;
+    }
+
     unsigned long long Stage8RecyclePoolBytes()
     {
         std::lock_guard<std::mutex> lock(s_stage8RecycleMutex);
@@ -13090,6 +13332,12 @@ namespace
             n+=buf.triangles.capacity()*sizeof(CausalVisibleExposure::Tri);
             n+=buf.materials.capacity()*sizeof(std::string);
             n+=buf.colors.capacity()*sizeof(Stage8CpuPackage::TriangleColor);
+        }
+        for(auto const& collision:s_stage8CollisionPool)
+        {
+            if(!collision)continue;
+            n+=sizeof(CausalVisibleExposure::BlockSurfaceSamples);
+            n+=collision->vertices.capacity()*sizeof(CausalVisibleExposure::Vec3);
         }
         return n;
     }
@@ -13296,15 +13544,18 @@ namespace
     Stage8CpuPackage BuildStage7CpuPackage(Stage8PackageJob const& job)
     {
         Stage8CpuPackage out;
+        AdoptRecycledStage8Buffers(out);
         out.epoch=job.epoch;out.view=job.view;out.control=job.control;
         out.bx=job.bx;out.by=job.by;out.legacyStage7=true;
+        PackageWorkerScratch& scratch=TlsPackageWorkerScratch();
+        EnsurePackageWorkerScratch(scratch);
         LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},meshEnd{},materialEnd{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
-        auto surfaceSamples=g.causalVisibleRuntime->SampleBlock(job.bx,job.by);
+        g.causalVisibleRuntime->SampleBlockInto(job.bx,job.by,scratch.samples);
         QueryPerformanceCounter(&sampleEnd);
-        auto descriptors=CausalVisibleExposure::DescribeBlock(surfaceSamples);
+        CausalVisibleExposure::DescribeBlockInto(scratch.samples,scratch.descriptors);
         QueryPerformanceCounter(&descriptorEnd);
-        out.mesh=CausalVisibleExposure::EmitBlockMesh(surfaceSamples,descriptors);
+        CausalVisibleExposure::EmitBlockMeshInto(scratch.samples,scratch.descriptors,out.mesh);
         QueryPerformanceCounter(&meshEnd);
         out.materials.reserve(out.mesh.triangles.size());
         for(auto const& tri:out.mesh.triangles)
@@ -13316,8 +13567,9 @@ namespace
             else{out.materials.emplace_back(authority.geology.material);}
         }
         QueryPerformanceCounter(&materialEnd);
-        out.collisionSurface=std::make_shared<
-            CausalVisibleExposure::BlockSurfaceSamples const>(std::move(surfaceSamples));
+        out.collisionSurface=AdoptScratchCollision(scratch,scratch.samples,
+            std::move(out.collisionSurface));
+        ResetPackageWorkerScratch(scratch);
         auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
         {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
             /(double)qpf.QuadPart:0.0;};
@@ -13435,8 +13687,12 @@ namespace
             &&g.exactLocalRuntime&&g.causalBreachRuntime;
         out.integratedCutC=integratedExact||(IsCutCOccupancyView(job.view)
             &&g.cutCOccupancyRuntime&&g.causalMineralizationRuntime);
-        CausalVisibleExposure::BlockSurfaceSamples surfaceSamples;
-        CausalVisibleExposure::BlockSurfaceDescriptors descriptors;
+        PackageWorkerScratch& scratch=TlsPackageWorkerScratch();
+        EnsurePackageWorkerScratch(scratch);
+        size_t const vertexCap=scratch.samples.vertices.capacity();
+        size_t const crossingCap=scratch.descriptors.crossings.capacity();
+        auto& surfaceSamples=scratch.samples;
+        auto& descriptors=scratch.descriptors;
         LARGE_INTEGER q0{},sampleEnd{},descriptorEnd{},materialEnd{},meshEnd{},
             collisionEnd{},qpf{};
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
@@ -13455,30 +13711,38 @@ namespace
                     *g.causalMineralizationRuntime,job.bx,job.by);
         }
         else if(IsSurfaceBreachView(job.view)&&g.causalBreachRuntime)
-        {surfaceSamples=g.causalBreachRuntime->SampleBlock(job.bx,job.by);}
+        {CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+            [&](double wx,double wy){return g.causalBreachRuntime->ReconstructedZ(wx,wy);});}
         else if(UsesPresentWaterOccupancy(job.view)&&workerGeography&&ActivePresentWaterKernel())
-        {surfaceSamples=SampleCompiledSedimentWorkerBlock(*workerGeography,
-            ActivePresentWaterKernel()->Sediment(),job.bx,job.by);}
+        {SampleCompiledSedimentWorkerBlockInto(*workerGeography,
+            ActivePresentWaterKernel()->Sediment(),job.bx,job.by,surfaceSamples);}
         else if(IsCompiledSedimentView(job.view)&&workerGeography&&g.compiledSedimentRuntime)
-        {surfaceSamples=SampleCompiledSedimentWorkerBlock(*workerGeography,
-            *g.compiledSedimentRuntime,job.bx,job.by);}
+        {SampleCompiledSedimentWorkerBlockInto(*workerGeography,
+            *g.compiledSedimentRuntime,job.bx,job.by,surfaceSamples);}
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
-        {surfaceSamples=SampleCompiledFluvialWorkerBlock(*workerGeography,
-            *g.compiledFluvialRuntime,job.bx,job.by);}
+        {SampleCompiledFluvialWorkerBlockInto(*workerGeography,
+            *g.compiledFluvialRuntime,job.bx,job.by,surfaceSamples);}
         else if(UsesBareEarthTerrain(job.view)&&workerGeography)
-        {surfaceSamples=workerGeography->SampleBlock(job.bx,job.by);}
+        {workerGeography->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(IsFaultDisplacementView(job.view)&&g.causalFaultRuntime)
-        {surfaceSamples=g.causalFaultRuntime->SampleBlock(job.bx,job.by);}
+        {CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+            [&](double wx,double wy){return g.causalFaultRuntime->ReconstructedZ(wx,wy);});}
         else if(IsContactMineralizationView(job.view)&&g.causalMineralizationRuntime)
-        {surfaceSamples=g.causalMineralizationRuntime->SampleBlock(job.bx,job.by);}
+        {CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+            [&](double wx,double wy){return g.causalMineralizationRuntime->ReconstructedZ(wx,wy);});}
         else if(IsGraniteIntrusionView(job.view)&&g.causalIntrusionRuntime)
-        {surfaceSamples=g.causalIntrusionRuntime->SampleBlock(job.bx,job.by);}
+        {CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+            [&](double wx,double wy){return g.causalIntrusionRuntime->ReconstructedZ(wx,wy);});}
         else if(g.causalErosionRuntime)
-        {surfaceSamples=g.causalErosionRuntime->SampleBlock(job.control,job.bx,job.by);}
+        {CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+            [&](double wx,double wy){return g.causalErosionRuntime->ReconstructedZ(
+                job.control,wx,wy);});}
+        NotePackageWorkerScratchGrowth(scratch,vertexCap,crossingCap);
         QueryPerformanceCounter(&sampleEnd);
 
         if(!out.integratedCutC)
-        {descriptors=CausalVisibleExposure::DescribeBlock(surfaceSamples);}
+        {CausalVisibleExposure::DescribeBlockInto(surfaceSamples,descriptors);}
+        NotePackageWorkerScratchGrowth(scratch,vertexCap,crossingCap);
         QueryPerformanceCounter(&descriptorEnd);
 
         size_t const quadCount=out.integratedCutC?(out.mesh.triangles.size()+1u)/2u
@@ -13537,10 +13801,10 @@ namespace
         QueryPerformanceCounter(&meshEnd);
         if(!out.integratedCutC)
         {
-            out.collisionSurface=
-                std::make_shared<CausalVisibleExposure::BlockSurfaceSamples const>(
-                    std::move(surfaceSamples));
+            out.collisionSurface=AdoptScratchCollision(scratch,surfaceSamples,
+                std::move(out.collisionSurface));
         }
+        ResetPackageWorkerScratch(scratch);
         QueryPerformanceCounter(&collisionEnd);
         auto ms=[&](LARGE_INTEGER a,LARGE_INTEGER b)
         {return qpf.QuadPart>0?1000.0*(double)(b.QuadPart-a.QuadPart)
@@ -13561,6 +13825,7 @@ namespace
         // 192 m window; completeness is certified independently, so lowering
         // worker priority cannot disguise missing residency as smooth play.
         SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+        EnsurePackageWorkerScratch(TlsPackageWorkerScratch());
         for(;;)
         {
             Stage8PackageJob job;
@@ -14182,7 +14447,9 @@ namespace
         auto it=g.stage8TerrainBlocks.find(key);
         if(it!=g.stage8TerrainBlocks.end())
         {
-            RetireTerrainDisplayList(it->second.list);g.stage8TerrainTriangles-=it->second.tris;
+            RetireTerrainDisplayList(it->second.list);
+            RecycleCollisionSurface(it->second.collisionSurface);
+            g.stage8TerrainTriangles-=it->second.tris;
             g.perfHfTris-=it->second.tris;g.stage8TerrainBlocks.erase(it);
         }
         RebuildStage8TerrainBlock(CausalExactLocalMaterialization::kMinBlockX,
@@ -14358,6 +14625,7 @@ namespace
             auto const it = terrainBlocks.find( key );
             if ( it == terrainBlocks.end() ) { continue; }
             RetireTerrainDisplayList(it->second.list);
+            RecycleCollisionSurface(it->second.collisionSurface);
             if(stage7)g.stage7TerrainTriangles-=it->second.tris;
             else if(!stage56)g.stage8TerrainTriangles -= it->second.tris;
             g.perfHfTris -= it->second.tris;
@@ -14724,12 +14992,14 @@ namespace
         for ( auto& kv : g.stage0TerrainBlocks )
         {
             RetireTerrainDisplayList( kv.second.list );
+            RecycleCollisionSurface( kv.second.collisionSurface );
         }
         g.stage0TerrainBlocks.clear();
         g.stage0DirtyTerrainBlocks.clear();
         for ( auto& kv : g.stage7TerrainBlocks )
         {
             RetireTerrainDisplayList( kv.second.list );
+            RecycleCollisionSurface( kv.second.collisionSurface );
         }
         g.stage7TerrainBlocks.clear();
         g.stage7TerrainTriangles = 0;
@@ -14737,6 +15007,7 @@ namespace
         for ( auto& kv : g.stage8TerrainBlocks )
         {
             RetireTerrainDisplayList( kv.second.list );
+            RecycleCollisionSurface( kv.second.collisionSurface );
         }
         g.stage8TerrainBlocks.clear();
         g.stage8TerrainTriangles = 0;
@@ -39124,7 +39395,7 @@ namespace
             +(unsigned long long)ledger.farSurfaceEntries*(sizeof(uint64_t)+sizeof(float))
             +(unsigned long long)ledger.farFilteredEntries*(sizeof(uint64_t)+sizeof(float))
             +(unsigned long long)ledger.farMaterialEntries*(sizeof(uint64_t)+32u);
-        ledger.workerScratchBytes=ledger.workerResultBytes;
+        ledger.workerScratchBytes=CapturePackageWorkerScratchReceipt().reservedBytesTotal;
         ledger.followStreamBytes=s_followStreamScratch.reservedBytes;
         ledger.recyclePoolBytes=Stage8RecyclePoolBytes();
         ledger.accountedLogicalBytes=ledger.livePackageBytes+ledger.waterGpuBytes
@@ -39594,6 +39865,10 @@ namespace
             ?100.0*(1.0-(double)scratch.observedMaxBytes/(double)scratch.reservedBytes):0.0;
         bool const scratchOk=scratchGrowth==0&&scratchOverflow==0;
         bool const followStreamCrtOk=run.classFollowStreamCrt==0;
+        PackageWorkerScratchReceipt const packageScratch=CapturePackageWorkerScratchReceipt();
+        bool const packageScratchOk=packageScratch.fallbackCrtAllocs==0
+            &&packageScratch.overflowEvents==0
+            &&packageScratch.growthEvents==0;
         RecalcWaterGpuBytes();
         bool const waterGpuReady=g.soakWaterBackend==0||s_waterGpu.procsReady;
         bool const waterGpuBounded=g.soakWaterBackend==0
@@ -39604,7 +39879,7 @@ namespace
             ||s_waterGpu.growthEventsTravel==0;
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
-            &&scratchOk&&followStreamCrtOk&&waterGpuOk;
+            &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk;
         char certPathBuf[160];
         char const* certPath=g.certStreamingSoakStageFilter==23
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
@@ -39669,6 +39944,8 @@ namespace
             "recycle.misses=%d\n"
             "recycle.returns=%d\n"
             "recycle.pool_bytes=%llu\n"
+            "recycle.collision_hits=%d\n"
+            "recycle.collision_misses=%d\n"
             "stop_frames=%d\nstop_frames_over_16_667=%d\n"
             "drain_frames=%d\ndrain_frames_over_16_667=%d\n"
             "return_frames=%d\nreturn_frames_over_16_667=%d\n"
@@ -39729,6 +40006,18 @@ namespace
             "check.scratch_growth_events=%s\n"
             "check.scratch_overflow=%s\n"
             "check.follow_stream_crt_segment=%s\n"
+            "package_scratch.workers=%d\n"
+            "package_scratch.reserved_bytes_per_worker=%llu\n"
+            "package_scratch.reserved_bytes_total=%llu\n"
+            "package_scratch.observed_high_water=%llu\n"
+            "package_scratch.event_id_high_water=%llu\n"
+            "package_scratch.chronology_high_water=%llu\n"
+            "package_scratch.overflow_events=%d\n"
+            "package_scratch.fallback_crt_allocs=%d\n"
+            "package_scratch.growth_events=%d\n"
+            "check.package_scratch_fallback_crt=%s\n"
+            "check.package_scratch_overflow=%s\n"
+            "check.package_scratch_growth=%s\n"
             "overall=%s\n",
             g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
             g.soakDurationS,run.elapsedS,(double)speed,SoakModeName(g.soakMode),
@@ -39766,6 +40055,7 @@ namespace
             SoakRetainedOwnerClass(),
             s_stage8RecycleHits,s_stage8RecycleMisses,s_stage8RecycleReturns,
             (unsigned long long)Stage8RecyclePoolBytes(),
+            s_stage8CollisionHits,s_stage8CollisionMisses,
             run.stopFrames,run.stopFramesOver16,
             run.drainFrames,run.drainFramesOver16,
             run.returnFrames,run.returnFramesOver16,
@@ -39805,6 +40095,18 @@ namespace
             scratchGrowth==0?"PASS":"FAIL",
             scratchOverflow==0?"PASS":"FAIL",
             followStreamCrtOk?"PASS":"FAIL",
+            packageScratch.workers,
+            (unsigned long long)packageScratch.reservedBytesPerWorker,
+            (unsigned long long)packageScratch.reservedBytesTotal,
+            (unsigned long long)packageScratch.observedHighWater,
+            (unsigned long long)packageScratch.eventIdHighWater,
+            (unsigned long long)packageScratch.chronologyHighWater,
+            packageScratch.overflowEvents,
+            packageScratch.fallbackCrtAllocs,
+            packageScratch.growthEvents,
+            packageScratch.fallbackCrtAllocs==0?"PASS":"FAIL",
+            packageScratch.overflowEvents==0?"PASS":"FAIL",
+            packageScratch.growthEvents==0?"PASS":"FAIL",
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
         for(SoakResourceLedger const& ledger:run.ledgers)WriteSoakLedger(f,ledger);
