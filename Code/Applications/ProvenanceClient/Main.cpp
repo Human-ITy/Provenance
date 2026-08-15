@@ -47,6 +47,7 @@
 #include "CausalPresentWaterTerrainHydraulicDetachment.h"
 #include "CausalPresentWaterTerrainHydraulicTransport.h"
 #include "CausalPresentWaterTerrainHydraulicSettling.h"
+#include "CausalPresentWaterTerrainHydraulicDeposition.h"
 #include "CausalGeologyAuthorityBridge.h"
 #include "CutCOccupancy.h"
 #include "VisualMaterial.h"
@@ -556,7 +557,8 @@ namespace
         PresentWaterTerrainPoreOccupancy = 28,
         PresentWaterTerrainHydraulicDetachment = 29,
         PresentWaterTerrainHydraulicTransport = 30,
-        PresentWaterTerrainHydraulicSettling = 31
+        PresentWaterTerrainHydraulicSettling = 31,
+        PresentWaterTerrainHydraulicDeposition = 32
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -798,7 +800,7 @@ namespace
         // cardinal replacement (exact return). First landing default 90 s;
         // milestone is 300-900 s via --soak-duration-s=.
         bool certStreamingSoak = false;
-        int certStreamingSoakStageFilter = 27; // p5b3b2 latest play stage
+        int certStreamingSoakStageFilter = 28; // p5b3b3a latest play stage
         // --cert-semantic-distance: Test S. Teleport+settle absolute stations
         // across/beyond the 4096 m Stage-15 domain. Independent of Test B.
         bool certSemanticDistance = false;
@@ -911,6 +913,7 @@ namespace
         bool playP5b3aLaunch = false;
         bool playP5b3bLaunch = false;
         bool playP5b3b2Launch = false;
+        bool playP5b3b3aLaunch = false;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -951,6 +954,8 @@ namespace
         int certP5b3bVisualFrames = 0;
         bool certP5b3b2Visual = false;
         int certP5b3b2VisualFrames = 0;
+        bool certP5b3b3aVisual = false;
+        int certP5b3b3aVisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1033,6 +1038,7 @@ namespace
         bool stage0ToolDrawerOpen = false;
         int stage0BrowserSelection = 0;
         int stage0BrowserCategory = 0;
+        int stage0BoardSelection = 0;
         int stage0ToolSelection = 0;
         bool stage0ToolRuler = false;
         bool stage0ToolPalette = false;
@@ -1072,6 +1078,19 @@ namespace
         float renderedProjM00 = 0.f;
         float renderedProjM11 = 0.f;
         float renderedFovYDeg = 0.f;
+        // Cached camera axes for picking (gizmo / model click). World metres.
+        float pickRightX = 1.f, pickRightY = 0.f, pickRightZ = 0.f;
+        float pickUpX = 0.f, pickUpY = 0.f, pickUpZ = 1.f;
+        float pickFwdX = 0.f, pickFwdY = 1.f, pickFwdZ = 0.f;
+        // [G] transform gizmo: click a catalog model, drag RGB axes to move,
+        // yellow ring to yaw. Poses persist in gallery_pose.txt so summoning
+        // the material palette elsewhere does not drag the characters with it.
+        bool stage0Gizmo = false;
+        int stage0GizmoSlot = -1;     // 1-based catalog slot, -1 = none
+        int stage0GizmoDrag = 0;      // 0 none, 1 X, 2 Y, 3 Z, 4 yaw
+        int stage0GizmoDeleteArmed = -1;
+        float stage0GizmoGrab = 0.f;  // axis parameter, yaw delta, or plane grab X
+        float stage0GizmoGrabY = 0.f; // ground-plane grab Y
         // --parent-hwnd=<handle>: run as a WS_CHILD inside the ProvRender viewport
         // instead of creating a top-level window, so the host embeds the real
         // renderer rather than a screenshot. Zero means run free-standing.
@@ -1172,6 +1191,9 @@ namespace
         bool presentWaterTerrainHydraulicSettlingAuthorityAttempted = false;
         bool presentWaterTerrainHydraulicSettlingCertified = false;
         std::string presentWaterTerrainHydraulicSettlingAuthorityReason = "not_loaded";
+        bool presentWaterTerrainHydraulicDepositionAuthorityAttempted = false;
+        bool presentWaterTerrainHydraulicDepositionCertified = false;
+        std::string presentWaterTerrainHydraulicDepositionAuthorityReason = "not_loaded";
         std::string cutCOccupancyAuthorityReason = "not_loaded";
         std::unique_ptr<CausalWorldGeology::Kernel> causalGeologyRuntime;
         std::unique_ptr<CausalWorldExposure::Kernel> causalExposureRuntime;
@@ -1200,6 +1222,7 @@ namespace
         std::unique_ptr<CausalPresentWaterTerrainHydraulicDetachment::Kernel> presentWaterTerrainHydraulicDetachmentRuntime;
         std::unique_ptr<CausalPresentWaterTerrainHydraulicTransport::Kernel> presentWaterTerrainHydraulicTransportRuntime;
         std::unique_ptr<CausalPresentWaterTerrainHydraulicSettling::Kernel> presentWaterTerrainHydraulicSettlingRuntime;
+        std::unique_ptr<CausalPresentWaterTerrainHydraulicDeposition::Kernel> presentWaterTerrainHydraulicDepositionRuntime;
         std::unique_ptr<CutCOccupancy::Fixture> cutCOccupancyRuntime;
         CausalDifferentialErosion::Control stage8Control =
             CausalDifferentialErosion::Control::DifferentialResistance;
@@ -2141,8 +2164,17 @@ namespace
     }
     struct Stage0VisualHullMesh;
     void EmitStage0CandidateBody( float ox, float oy, float ground, float sway, float breathe,
-                                  int filter = 0, Stage0VisualHullMesh const* meshPtr = nullptr );
+                                  int filter = 0, Stage0VisualHullMesh const* meshPtr = nullptr,
+                                  float yaw = 0.f );
     void DrawStage0CandidateGallery( float ox, float oy, float ground, float sway, float breathe );
+    void DrawStage0TransformGizmo();
+    bool Stage0GizmoOnMouseDown();
+    void Stage0GizmoOnMouseMove();
+    void Stage0GizmoOnMouseUp();
+    void Stage0ToggleGizmo();
+    bool Stage0DeleteSelectedCandidate();
+    void LoadStage0GalleryPoses( std::vector<Stage0VisualHullMesh>& gallery );
+    void SaveStage0GalleryPoses();
 
     uint64_t CellKey( int x, int y )
     {
@@ -3214,6 +3246,11 @@ namespace
         return view == Stage0PlayView::PresentWaterTerrainHydraulicSettling;
     }
 
+    bool IsPresentWaterTerrainHydraulicDepositionView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::PresentWaterTerrainHydraulicDeposition;
+    }
+
     bool UsesPresentWaterOccupancy( Stage0PlayView view )
     {
         return IsPresentWaterView(view) || IsPresentWaterBodyView(view)
@@ -3225,11 +3262,13 @@ namespace
             || IsPresentWaterTerrainPoreOccupancyView(view)
             || IsPresentWaterTerrainHydraulicDetachmentView(view)
             || IsPresentWaterTerrainHydraulicTransportView(view)
-            || IsPresentWaterTerrainHydraulicSettlingView(view);
+            || IsPresentWaterTerrainHydraulicSettlingView(view)
+            || IsPresentWaterTerrainHydraulicDepositionView(view);
     }
 
     CausalPresentWater::Kernel* ActivePresentWaterKernel()
     {
+        if ( g.presentWaterTerrainHydraulicDepositionRuntime ) { return &g.presentWaterTerrainHydraulicDepositionRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicSettlingRuntime ) { return &g.presentWaterTerrainHydraulicSettlingRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicTransportRuntime ) { return &g.presentWaterTerrainHydraulicTransportRuntime->Water(); }
         if ( g.presentWaterTerrainHydraulicDetachmentRuntime ) { return &g.presentWaterTerrainHydraulicDetachmentRuntime->Water(); }
@@ -3364,7 +3403,35 @@ namespace
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_transport_floor.cpc";
         constexpr char const* kPresentWaterTerrainHydraulicSettlingPath =
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_settling_floor.cpc";
+        constexpr char const* kPresentWaterTerrainHydraulicDepositionPath =
+            "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_deposition_floor.cpc";
 
+        if(IsPresentWaterTerrainHydraulicDepositionView(view))
+        {
+            if(!g.presentWaterTerrainHydraulicDepositionAuthorityAttempted)
+            {
+                g.presentWaterTerrainHydraulicDepositionAuthorityAttempted=true;
+                std::string reason;g.presentWaterTerrainHydraulicDepositionRuntime=
+                    CausalPresentWaterTerrainHydraulicDeposition::LoadKernel(kGeologyPath,kExposurePath,
+                        kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,
+                        kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                        kSedimentPath,kPresentWaterPath,kPresentWaterBodyPath,
+                        kPresentWaterEquilibratePath,kPresentWaterTransferPath,
+                        kPresentWaterExternalPath,kPresentWaterTopologyPath,
+                        kPresentWaterTerrainResponsePath,kPresentWaterTerrainStatePath,
+                        kPresentWaterTerrainPorePath,kPresentWaterTerrainPoreOccupancyPath,
+                        kPresentWaterTerrainHydraulicDetachmentPath,
+                        kPresentWaterTerrainHydraulicTransportPath,
+                        kPresentWaterTerrainHydraulicSettlingPath,
+                        kPresentWaterTerrainHydraulicDepositionPath,&reason);
+                g.presentWaterTerrainHydraulicDepositionCertified=
+                    g.presentWaterTerrainHydraulicDepositionRuntime!=nullptr;
+                g.presentWaterTerrainHydraulicDepositionAuthorityReason=
+                    g.presentWaterTerrainHydraulicDepositionCertified?"certified":reason;
+            }
+            return g.presentWaterTerrainHydraulicDepositionCertified
+                &&g.presentWaterTerrainHydraulicDepositionRuntime!=nullptr;
+        }
         if(IsPresentWaterTerrainHydraulicSettlingView(view))
         {
             if(!g.presentWaterTerrainHydraulicSettlingAuthorityAttempted)
@@ -14482,7 +14549,8 @@ namespace
           && !g.presentWaterTerrainPoreOccupancyRuntime
           && !g.presentWaterTerrainHydraulicDetachmentRuntime
           && !g.presentWaterTerrainHydraulicTransportRuntime
-          && !g.presentWaterTerrainHydraulicSettlingRuntime ) { return; }
+          && !g.presentWaterTerrainHydraulicSettlingRuntime
+          && !g.presentWaterTerrainHydraulicDepositionRuntime ) { return; }
         uint64_t const key = CellKey( bx, by );
         if ( g.stage8TerrainBlocks.count( key ) ) { return; }
         LARGE_INTEGER q0{}, q1{}, qpf{};
@@ -14748,7 +14816,8 @@ namespace
           && !g.presentWaterTerrainPoreOccupancyRuntime
           && !g.presentWaterTerrainHydraulicDetachmentRuntime
           && !g.presentWaterTerrainHydraulicTransportRuntime
-          && !g.presentWaterTerrainHydraulicSettlingRuntime ) { return; }
+          && !g.presentWaterTerrainHydraulicSettlingRuntime
+          && !g.presentWaterTerrainHydraulicDepositionRuntime ) { return; }
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
@@ -14945,6 +15014,7 @@ namespace
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
         if ( IsPresentWaterTopologyView( view ) ) { return 21; }
+        if ( IsPresentWaterTerrainHydraulicDepositionView( view ) ) { return 29; }
         if ( IsPresentWaterTerrainHydraulicSettlingView( view ) ) { return 28; }
         if ( IsPresentWaterTerrainHydraulicTransportView( view ) ) { return 27; }
         if ( IsPresentWaterTerrainHydraulicDetachmentView( view ) ) { return 26; }
@@ -15043,12 +15113,27 @@ namespace
           "HYDROLOGY.HYDRAULIC_DETACHMENT", "water moves already-detached loose matter one hop without changing identity", Stage0PlayView::PresentWaterTerrainHydraulicTransport },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.LOOSE_MATTER_SETTLING", "P5b.3B.2 - Loose-Matter Settling",
           "HYDROLOGY.HYDRAULIC_TRANSPORT", "transported parcel comes to rest while remaining conserved loose matter", Stage0PlayView::PresentWaterTerrainHydraulicSettling },
+        { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.DEPOSITIONAL_AGGREGATE", "P5b.3B.3A - Depositional Aggregate",
+          "HYDROLOGY.LOOSE_MATTER_SETTLING", "settled loose matter admitted as depositional sediment, not host weld", Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
         { "INTEGRATION", "CUT.C.OCCUPANCY_PARITY", "Cut C - FableScript Occupancy Parity",
           "GEO.CONTACT_MINERALIZATION + Cut B", "FableScript matter drives render, collision, and x-ray", Stage0PlayView::CutCOccupancyParity },
     };
 
     constexpr int kCertificationBrowserCount =
         (int)( sizeof( s_certificationBrowser ) / sizeof( s_certificationBrowser[0] ) );
+    constexpr int kStandingBoardClosedCount = 2;
+    constexpr int kStandingBoardCount = kCertificationBrowserCount + kStandingBoardClosedCount;
+
+    struct StandingBoardClosedEntry
+    {
+        char const* name;
+        char const* id;
+    };
+
+    static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
+        { "P5b.3B.3B compaction / terrain integration", "HYDROLOGY.COMPACTION_TERRAIN_INTEGRATION" },
+        { "P5b.3C bank / support collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" }
+    };
 
     constexpr int kCertificationBrowserCategoryCount = 3;
 
@@ -15146,6 +15231,8 @@ namespace
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
         { attempted = g.presentWaterEquilibrateAuthorityAttempted; certified = g.presentWaterEquilibrateCertified; }
+        else if ( IsPresentWaterTerrainHydraulicDepositionView( entry.view ) )
+        { attempted = g.presentWaterTerrainHydraulicDepositionAuthorityAttempted; certified = g.presentWaterTerrainHydraulicDepositionCertified; }
         else if ( IsPresentWaterTerrainHydraulicSettlingView( entry.view ) )
         { attempted = g.presentWaterTerrainHydraulicSettlingAuthorityAttempted; certified = g.presentWaterTerrainHydraulicSettlingCertified; }
         else if ( IsPresentWaterTerrainHydraulicTransportView( entry.view ) )
@@ -15173,6 +15260,68 @@ namespace
         return certified ? "CERTIFIED" : ( attempted ? "FAILED" : "AVAILABLE" );
     }
 
+    bool StandingBoardLaunchable( int boardIndex )
+    {
+        return boardIndex>=0&&boardIndex<kCertificationBrowserCount;
+    }
+
+    char const* StandingBoardName( int boardIndex )
+    {
+        if(boardIndex>=0&&boardIndex<kCertificationBrowserCount)
+            return s_certificationBrowser[boardIndex].label;
+        int const closed=boardIndex-kCertificationBrowserCount;
+        if(closed>=0&&closed<kStandingBoardClosedCount)
+            return s_standingBoardClosed[closed].name;
+        return "unknown";
+    }
+
+    char const* StandingBoardStatus( int boardIndex )
+    {
+        if(boardIndex<0||boardIndex>=kCertificationBrowserCount)return "CLOSED";
+        CertificationBrowserEntry const& entry=s_certificationBrowser[boardIndex];
+        char const* runtime=CertificationRuntimeStatus(entry);
+        if(entry.view==g.stage0PlayView)return "PLAYABLE";
+        if(std::strcmp(runtime,"CERTIFIED")==0||std::strcmp(runtime,"CURRENT")==0)
+            return "CERTIFIED";
+        if(std::strcmp(runtime,"FAILED")==0)return "CLOSED";
+        return "PLAYABLE";
+    }
+
+    int StandingBoardIndexForView( Stage0PlayView view )
+    {
+        return BrowserIndexForView(view);
+    }
+
+    void SyncStandingBoardToBrowser()
+    {
+        if(g.stage0BoardSelection<0||g.stage0BoardSelection>=kStandingBoardCount)
+            g.stage0BoardSelection=StandingBoardIndexForView(g.stage0PlayView);
+        if(StandingBoardLaunchable(g.stage0BoardSelection))
+            g.stage0BrowserSelection=g.stage0BoardSelection;
+    }
+
+    void MoveStandingBoard( int step )
+    {
+        if(kStandingBoardCount<=0)return;
+        g.stage0BoardSelection=(g.stage0BoardSelection+step+kStandingBoardCount)%kStandingBoardCount;
+        SyncStandingBoardToBrowser();
+        SyncCertificationBrowserCategoryToSelection();
+    }
+
+    bool SelectCertificationBrowserEntry( int index );
+
+    bool SelectStandingBoardEntry( int boardIndex )
+    {
+        g.stage0BoardSelection=boardIndex;
+        SyncStandingBoardToBrowser();
+        if(!StandingBoardLaunchable(boardIndex))
+        {
+            g.statusLine="CLOSED - not playable this cut";
+            return false;
+        }
+        return SelectCertificationBrowserEntry(boardIndex);
+    }
+
     bool SelectCertificationBrowserEntry( int index )
     {
         if ( index < 0 || index >= kCertificationBrowserCount ) { return false; }
@@ -15188,6 +15337,7 @@ namespace
         if ( selected && ( entry.view == Stage0PlayView::Combined
           || entry.view == Stage0PlayView::TerrainPalette ) )
         { SummonStage0Palette(); }
+        if ( selected ) { g.stage0BoardSelection = index; }
         return selected;
     }
 
@@ -15385,6 +15535,7 @@ namespace
             if ( IsPresentWaterTerrainPoreOccupancyView( view ) ) { reason = &g.presentWaterTerrainPoreOccupancyAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicDetachmentView( view ) ) { reason = &g.presentWaterTerrainHydraulicDetachmentAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicTransportView( view ) ) { reason = &g.presentWaterTerrainHydraulicTransportAuthorityReason; }
+            if ( IsPresentWaterTerrainHydraulicDepositionView( view ) ) { reason = &g.presentWaterTerrainHydraulicDepositionAuthorityReason; }
             if ( IsPresentWaterTerrainHydraulicSettlingView( view ) ) { reason = &g.presentWaterTerrainHydraulicSettlingAuthorityReason; }
             g.statusLine = "CAUSAL WORLD REFUSED - " + *reason;
             return false;
@@ -15702,7 +15853,16 @@ namespace
             g.stage0ToolGeologyCutaway=false;g.walkMode=true;
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
-            g.statusLine="P5b.3B.2 - loose-matter settling; P5b.3C / 3B.3 closed";
+            g.statusLine="P5b.3B.2 - loose-matter settling; P5b.3C / 3B.3B closed";
+        }
+        if(g.playWorldgenInitialized&&IsPresentWaterTerrainHydraulicDepositionView(view)&&oldView!=view)
+        {
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="P5b.3B.3A - depositional aggregate; P5b.3C / 3B.3B closed";
         }
         if ( g.playWorldgenInitialized && IsCutCOccupancyView( view ) && oldView != view )
         {
@@ -15765,6 +15925,7 @@ namespace
             case Stage0PlayView::PresentWaterTerrainHydraulicDetachment: return "CERTIFIED HYDRAULIC DETACHMENT";
             case Stage0PlayView::PresentWaterTerrainHydraulicTransport: return "CERTIFIED HYDRAULIC TRANSPORT";
             case Stage0PlayView::PresentWaterTerrainHydraulicSettling: return "CERTIFIED LOOSE-MATTER SETTLING";
+            case Stage0PlayView::PresentWaterTerrainHydraulicDeposition: return "CERTIFIED DEPOSITIONAL AGGREGATE";
             default: return "CLEAN PERFORMANCE FLOOR";
         }
     }
@@ -19122,6 +19283,8 @@ namespace
         bool attempted=false,fileExists=false,loaded=false;
         bool renderOn=true;             // per-instance draw toggle, for FPS testing
         int slotIndex=0;                // 0-based position in the gallery
+        bool posed=false;               // true once the user parked this model
+        float poseX=0.f,poseY=0.f,poseZ=0.f,poseYaw=0.f; // world metres, yaw radians
         std::string path,error;
         float minX=0.f,maxX=0.f,minY=0.f,maxY=0.f,minZ=0.f,maxZ=0.f;
         int components=0,boundaryEdges=0,nonManifoldEdges=0;
@@ -19512,6 +19675,7 @@ namespace
                 gallery.push_back(std::move(mesh));
             }
         }
+        LoadStage0GalleryPoses(gallery);
         return gallery;
     }
 
@@ -19544,19 +19708,497 @@ namespace
         fclose( file );
     }
 
+    void Stage0GalleryGeneratedDirs( std::vector<std::string>& dirs )
+    {
+        ResolveAssetsRoot();
+        dirs.push_back( JoinPath( g.assetsRoot, "Characters\\Generated" ) );
+        char mod[MAX_PATH] = {};
+        GetModuleFileNameA( nullptr, mod, MAX_PATH );
+        std::string dir( mod );
+        size_t slash = dir.find_last_of( "\\/" );
+        if ( slash == std::string::npos ) { return; }
+        dir.resize( slash );
+        slash = dir.find_last_of( "\\/" );
+        if ( slash == std::string::npos ) { return; }
+        std::string gen = dir.substr( 0, slash ) + "\\Assets\\Characters\\Generated";
+        DWORD const attr = GetFileAttributesA( gen.c_str() );
+        if ( attr == INVALID_FILE_ATTRIBUTES || !( attr & FILE_ATTRIBUTE_DIRECTORY ) ) { return; }
+        if ( gen != dirs.front() ) { dirs.push_back( gen ); }
+    }
+
+    constexpr float kCharacterSpacingM = 1.524f;
+
+    void Stage0CandidatePlacement( Stage0VisualHullMesh const& cand, int shown,
+        float ox, float oy, float ground, float& x, float& y, float& z, float& yaw )
+    {
+        if ( cand.posed )
+        {
+            x = cand.poseX; y = cand.poseY; z = cand.poseZ; yaw = cand.poseYaw;
+            return;
+        }
+        x = ox;
+        y = oy + (float)shown * kCharacterSpacingM;
+        z = ground;
+        yaw = 0.f;
+    }
+
+    void LoadStage0GalleryPoses( std::vector<Stage0VisualHullMesh>& gallery )
+    {
+        std::vector<std::string> dirs;
+        Stage0GalleryGeneratedDirs( dirs );
+        FILE* file = nullptr;
+        for ( std::string const& dir : dirs )
+        {
+            std::string const path = JoinPath( dir, "gallery_pose.txt" );
+            if ( fopen_s( &file, path.c_str(), "rb" ) == 0 && file ) { break; }
+            file = nullptr;
+        }
+        if ( !file ) { return; }
+        char line[256];
+        while ( fgets( line, (int)sizeof( line ), file ) )
+        {
+            if ( line[0] == '#' || line[0] == '\n' || line[0] == '\r' ) { continue; }
+            int slot = 0;
+            float x = 0.f, y = 0.f, z = 0.f, yawDeg = 0.f;
+            if ( sscanf_s( line, "%d %f %f %f %f", &slot, &x, &y, &z, &yawDeg ) != 5 ) { continue; }
+            if ( slot < 1 ) { continue; }
+            for ( Stage0VisualHullMesh& cand : gallery )
+            {
+                if ( cand.slotIndex + 1 != slot ) { continue; }
+                cand.posed = true;
+                cand.poseX = x; cand.poseY = y; cand.poseZ = z;
+                cand.poseYaw = yawDeg * ( 3.14159265f / 180.f );
+            }
+        }
+        fclose( file );
+    }
+
+    void SaveStage0GalleryPoses()
+    {
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
+        char body[8192];
+        int n = std::snprintf( body, sizeof( body ), "# slot x y z yaw_deg\n" );
+        for ( Stage0VisualHullMesh const& cand : gallery )
+        {
+            if ( !cand.posed || n <= 0 || n >= (int)sizeof( body ) - 80 ) { continue; }
+            n += std::snprintf( body + n, sizeof( body ) - (size_t)n, "%d %.4f %.4f %.4f %.2f\n",
+                cand.slotIndex + 1, cand.poseX, cand.poseY, cand.poseZ,
+                cand.poseYaw * ( 180.f / 3.14159265f ) );
+        }
+        std::vector<std::string> dirs;
+        Stage0GalleryGeneratedDirs( dirs );
+        for ( std::string const& dir : dirs )
+        {
+            CreateDirectoryA( dir.c_str(), nullptr );
+            std::string const path = JoinPath( dir, "gallery_pose.txt" );
+            FILE* file = nullptr;
+            if ( fopen_s( &file, path.c_str(), "wb" ) != 0 || !file ) { continue; }
+            fwrite( body, 1, (size_t)std::max( 0, n ), file );
+            fclose( file );
+        }
+    }
+
     void DrawStage0CandidateGallery( float ox, float oy, float ground, float sway, float breathe )
     {
-        std::vector<Stage0VisualHullMesh>& gallery=GetStage0CandidateGallery();
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
         ApplyGalleryHudVisibility( gallery );
-        constexpr float kCharacterSpacingM=1.524f;   // ~5 ft between visible assets
         int shown = 0;
-        for(Stage0VisualHullMesh const& cand:gallery)
+        for ( Stage0VisualHullMesh const& cand : gallery )
         {
-            if(!cand.renderOn)continue;
-            float const cy=oy+(float)shown*kCharacterSpacingM;
-            EmitStage0CandidateBody(ox,cy,ground,sway,breathe,0,&cand);
+            if ( !cand.renderOn ) { continue; }
+            float x, y, z, yaw;
+            Stage0CandidatePlacement( cand, shown, ox, oy, ground, x, y, z, yaw );
+            EmitStage0CandidateBody( x, y, z, sway, breathe, 0, &cand, yaw );
             ++shown;
         }
+    }
+
+    void Stage0PickRay( float& ox, float& oy, float& oz, float& dx, float& dy, float& dz )
+    {
+        float const w = (float)(std::max)( 1, g.uiWinW );
+        float const h = (float)(std::max)( 1, g.uiWinH );
+        float const ndcX = ( g.uiMouseX / w ) * 2.f - 1.f;
+        float const ndcY = ( g.uiMouseY / h ) * 2.f - 1.f;
+        float const vx = ndcX / (std::max)( 1e-6f, g.renderedProjM00 );
+        float const vy = ndcY / (std::max)( 1e-6f, g.renderedProjM11 );
+        ox = g.camX; oy = g.camY; oz = g.camZ;
+        dx = g.pickRightX * vx + g.pickUpX * vy + g.pickFwdX;
+        dy = g.pickRightY * vx + g.pickUpY * vy + g.pickFwdY;
+        dz = g.pickRightZ * vx + g.pickUpZ * vy + g.pickFwdZ;
+        float const len = std::sqrt( dx * dx + dy * dy + dz * dz );
+        if ( len > 1e-6f ) { dx /= len; dy /= len; dz /= len; }
+    }
+
+    bool Stage0RayHitsAabb( float ox, float oy, float oz, float dx, float dy, float dz,
+        float x0, float y0, float z0, float x1, float y1, float z1, float& tHit )
+    {
+        float tmin = 0.f, tmax = 80.f;
+        auto slab = [&]( float o, float d, float a, float b )
+        {
+            if ( std::fabs( d ) < 1e-8f ) { return o >= a && o <= b; }
+            float t0 = ( a - o ) / d, t1 = ( b - o ) / d;
+            if ( t0 > t1 ) { std::swap( t0, t1 ); }
+            tmin = (std::max)( tmin, t0 );
+            tmax = (std::min)( tmax, t1 );
+            return tmin <= tmax;
+        };
+        if ( !slab( ox, dx, x0, x1 ) || !slab( oy, dy, y0, y1 ) || !slab( oz, dz, z0, z1 ) )
+        { return false; }
+        tHit = tmin;
+        return tmax >= 0.f;
+    }
+
+    float Stage0RayAxisT( float ox, float oy, float oz, float dx, float dy, float dz,
+        float px, float py, float pz, float ax, float ay, float az )
+    {
+        // Closest point on the infinite axis through p along a, returned as
+        // signed metres from p. Used to drag translate handles.
+        float wx = ox - px, wy = oy - py, wz = oz - pz;
+        float const da = dx * ax + dy * ay + dz * az;
+        float const wa = wx * ax + wy * ay + wz * az;
+        float const dd = dx * dx + dy * dy + dz * dz;
+        float const den = dd - da * da;
+        if ( std::fabs( den ) < 1e-8f ) { return wa; }
+        float const tRay = ( da * wa - ( wx * dx + wy * dy + wz * dz ) ) / den;
+        return ( ox + dx * tRay - px ) * ax + ( oy + dy * tRay - py ) * ay
+             + ( oz + dz * tRay - pz ) * az;
+    }
+
+    float Stage0RayAxisDist( float ox, float oy, float oz, float dx, float dy, float dz,
+        float px, float py, float pz, float ax, float ay, float az, float len )
+    {
+        float wx = ox - px, wy = oy - py, wz = oz - pz;
+        float const da = dx * ax + dy * ay + dz * az;
+        float const wa = wx * ax + wy * ay + wz * az;
+        float const dd = dx * dx + dy * dy + dz * dz;
+        float const den = dd - da * da;
+        float tRay = 0.f, tAxis = wa;
+        if ( std::fabs( den ) > 1e-8f )
+        {
+            tRay = ( da * wa - ( wx * dx + wy * dy + wz * dz ) ) / den;
+            tAxis = wa + da * tRay;
+        }
+        if ( tRay < 0.f ) { tRay = 0.f; }
+        tAxis = std::clamp( tAxis, 0.f, len );
+        float const hx = ox + dx * tRay - ( px + ax * tAxis );
+        float const hy = oy + dy * tRay - ( py + ay * tAxis );
+        float const hz = oz + dz * tRay - ( pz + az * tAxis );
+        return std::sqrt( hx * hx + hy * hy + hz * hz );
+    }
+
+    bool Stage0GizmoYawHit( float ox, float oy, float oz, float dx, float dy, float dz,
+        float px, float py, float pz, float radius, float& yaw )
+    {
+        if ( std::fabs( dz ) < 1e-5f ) { return false; }
+        float const t = ( pz - oz ) / dz;
+        if ( t < 0.05f || t > 40.f ) { return false; }
+        float const hx = ox + dx * t - px;
+        float const hy = oy + dy * t - py;
+        float const r = std::sqrt( hx * hx + hy * hy );
+        if ( std::fabs( r - radius ) > 0.10f ) { return false; }
+        yaw = std::atan2( hy, hx );
+        return true;
+    }
+
+    bool Stage0FindCandidatePose( int slot, float& x, float& y, float& z, float& yaw,
+        Stage0VisualHullMesh** out )
+    {
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
+        float const ox = g.stage0PaletteAnchorX - 2.25f;
+        float const oy = g.stage0PaletteAnchorY + 8.10f;
+        float ground = GradeToZ( g.gradeDatum );
+        int shown = 0;
+        for ( Stage0VisualHullMesh& cand : gallery )
+        {
+            if ( !cand.renderOn ) { continue; }
+            if ( cand.slotIndex + 1 == slot )
+            {
+                Stage0CandidatePlacement( cand, shown, ox, oy, ground, x, y, z, yaw );
+                if ( out ) { *out = &cand; }
+                return true;
+            }
+            ++shown;
+        }
+        return false;
+    }
+
+    void Stage0PickRayAndGalleryOrigin( float& ox, float& oy, float& ground )
+    {
+        ox = g.stage0PaletteAnchorX - 2.25f;
+        oy = g.stage0PaletteAnchorY + 8.10f;
+        ground = GradeToZ( g.gradeDatum );
+    }
+
+    void DrawStage0TransformGizmo()
+    {
+        if ( !g.stage0Gizmo || g.stage0GizmoSlot < 1 ) { return; }
+        float x, y, z, yaw;
+        if ( !Stage0FindCandidatePose( g.stage0GizmoSlot, x, y, z, yaw, nullptr ) ) { return; }
+        float const L = 0.70f;
+        float const waist = z + 0.55f;
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_LIGHTING );
+        glDepthFunc( GL_ALWAYS );
+        glLineWidth( 3.f );
+        glBegin( GL_LINES );
+        glColor3f( 0.95f, 0.22f, 0.18f ); glVertex3f( x, y, waist ); glVertex3f( x + L, y, waist );
+        glColor3f( 0.25f, 0.85f, 0.28f ); glVertex3f( x, y, waist ); glVertex3f( x, y + L, waist );
+        glColor3f( 0.25f, 0.45f, 1.00f ); glVertex3f( x, y, waist ); glVertex3f( x, y, waist + L );
+        glEnd();
+        glColor3f( 1.f, 0.85f, 0.15f );
+        glBegin( GL_LINE_LOOP );
+        for ( int i = 0; i < 48; ++i )
+        {
+            float const a = (float)i * ( 6.2831853f / 48.f );
+            glVertex3f( x + std::cos( a ) * 0.55f, y + std::sin( a ) * 0.55f, waist );
+        }
+        glEnd();
+        glLineWidth( 1.f );
+        glDepthFunc( GL_LESS );
+    }
+
+    int Stage0HitGizmoHandle( float px, float py, float pz )
+    {
+        float ox, oy, oz, dx, dy, dz;
+        Stage0PickRay( ox, oy, oz, dx, dy, dz );
+        float const L = 0.70f;
+        float const waistZ = pz + 0.55f;
+        float best = 0.09f;
+        int hit = 0;
+        float d;
+        d = Stage0RayAxisDist( ox, oy, oz, dx, dy, dz, px, py, waistZ, 1.f, 0.f, 0.f, L );
+        if ( d < best ) { best = d; hit = 1; }
+        d = Stage0RayAxisDist( ox, oy, oz, dx, dy, dz, px, py, waistZ, 0.f, 1.f, 0.f, L );
+        if ( d < best ) { best = d; hit = 2; }
+        d = Stage0RayAxisDist( ox, oy, oz, dx, dy, dz, px, py, waistZ, 0.f, 0.f, 1.f, L );
+        if ( d < best ) { best = d; hit = 3; }
+        float yaw = 0.f;
+        if ( Stage0GizmoYawHit( ox, oy, oz, dx, dy, dz, px, py, waistZ, 0.55f, yaw ) ) { hit = 4; }
+        return hit;
+    }
+
+    bool Stage0GizmoOnMouseDown()
+    {
+        if ( !g.stage0Gizmo ) { return false; }
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
+        ApplyGalleryHudVisibility( gallery );
+        float lineupX, lineupY, ground;
+        Stage0PickRayAndGalleryOrigin( lineupX, lineupY, ground );
+        float ox, oy, oz, dx, dy, dz;
+        Stage0PickRay( ox, oy, oz, dx, dy, dz );
+
+        if ( g.stage0GizmoSlot > 0 )
+        {
+            float x, y, z, yaw;
+            Stage0VisualHullMesh* mesh = nullptr;
+            if ( Stage0FindCandidatePose( g.stage0GizmoSlot, x, y, z, yaw, &mesh ) && mesh )
+            {
+                int const handle = Stage0HitGizmoHandle( x, y, z );
+                if ( handle > 0 )
+                {
+                    g.stage0GizmoDrag = handle;
+                    g.stage0GizmoDeleteArmed = -1;
+                    if ( !mesh->posed )
+                    {
+                        mesh->posed = true;
+                        mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
+                    }
+                    if ( handle == 4 )
+                    {
+                        float hitYaw = yaw;
+                        Stage0GizmoYawHit( ox, oy, oz, dx, dy, dz, x, y, z + 0.55f, 0.55f, hitYaw );
+                        g.stage0GizmoGrab = hitYaw - mesh->poseYaw;
+                    }
+                    else
+                    {
+                        float ax = handle == 1 ? 1.f : 0.f;
+                        float ay = handle == 2 ? 1.f : 0.f;
+                        float az = handle == 3 ? 1.f : 0.f;
+                        float const originZ = handle == 3 ? mesh->poseZ : ( mesh->poseZ + 0.55f );
+                        g.stage0GizmoGrab = Stage0RayAxisT( ox, oy, oz, dx, dy, dz,
+                            mesh->poseX, mesh->poseY, originZ, ax, ay, az );
+                    }
+                    return true;
+                }
+            }
+        }
+
+        int bestSlot = -1;
+        float bestT = 80.f;
+        int shown = 0;
+        for ( Stage0VisualHullMesh const& cand : gallery )
+        {
+            if ( !cand.renderOn ) { continue; }
+            float x, y, z, yaw;
+            Stage0CandidatePlacement( cand, shown, lineupX, lineupY, ground, x, y, z, yaw );
+            float const c = std::cos( -yaw ), s = std::sin( -yaw );
+            float const rx = ox - x, ry = oy - y;
+            float const lx = c * rx - s * ry, ly = s * rx + c * ry, lz = oz - z;
+            float const rdx = c * dx - s * dy, rdy = s * dx + c * dy;
+            float tHit = 0.f;
+            if ( Stage0RayHitsAabb( lx, ly, lz, rdx, rdy, dz,
+                    cand.minX, cand.minY, cand.minZ,
+                    cand.maxX, cand.maxY, cand.maxZ, tHit ) && tHit < bestT )
+            {
+                bestT = tHit;
+                bestSlot = cand.slotIndex + 1;
+            }
+            ++shown;
+        }
+        g.stage0GizmoDrag = 0;
+        g.stage0GizmoDeleteArmed = -1;
+        g.stage0GizmoSlot = bestSlot;
+        if ( bestSlot > 0 )
+        {
+            Stage0VisualHullMesh* mesh = nullptr;
+            float x, y, z, yaw;
+            if ( Stage0FindCandidatePose( bestSlot, x, y, z, yaw, &mesh ) && mesh )
+            {
+                if ( !mesh->posed )
+                {
+                    mesh->posed = true;
+                    mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
+                }
+                g.stage0GizmoDrag = 5;
+                float ox2, oy2, oz2, dx2, dy2, dz2;
+                Stage0PickRay( ox2, oy2, oz2, dx2, dy2, dz2 );
+                if ( std::fabs( dz2 ) > 1e-5f )
+                {
+                    float const t = ( mesh->poseZ - oz2 ) / dz2;
+                    g.stage0GizmoGrab = mesh->poseX - ( ox2 + dx2 * t );
+                    g.stage0GizmoGrabY = mesh->poseY - ( oy2 + dy2 * t );
+                }
+            }
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "Gizmo: character %03d  drag to move, RGB axes, yellow ring yaw, [Del] delete", bestSlot );
+            g.statusLine = note;
+            return true;
+        }
+        g.statusLine = "Gizmo: click a catalog model";
+        return true;
+    }
+
+    void Stage0GizmoOnMouseMove()
+    {
+        if ( !g.stage0Gizmo || g.stage0GizmoDrag <= 0 || g.stage0GizmoSlot < 1 ) { return; }
+        Stage0VisualHullMesh* mesh = nullptr;
+        float x, y, z, yaw;
+        if ( !Stage0FindCandidatePose( g.stage0GizmoSlot, x, y, z, yaw, &mesh ) || !mesh ) { return; }
+        if ( !mesh->posed )
+        {
+            mesh->posed = true;
+            mesh->poseX = x; mesh->poseY = y; mesh->poseZ = z; mesh->poseYaw = yaw;
+        }
+        float ox, oy, oz, dx, dy, dz;
+        Stage0PickRay( ox, oy, oz, dx, dy, dz );
+        if ( g.stage0GizmoDrag == 5 )
+        {
+            if ( std::fabs( dz ) > 1e-5f )
+            {
+                float const t = ( mesh->poseZ - oz ) / dz;
+                mesh->poseX = ox + dx * t + g.stage0GizmoGrab;
+                mesh->poseY = oy + dy * t + g.stage0GizmoGrabY;
+            }
+            return;
+        }
+        if ( g.stage0GizmoDrag == 4 )
+        {
+            float hitYaw = 0.f;
+            if ( Stage0GizmoYawHit( ox, oy, oz, dx, dy, dz,
+                    mesh->poseX, mesh->poseY, mesh->poseZ + 0.55f, 0.55f, hitYaw ) )
+            {
+                mesh->poseYaw = hitYaw - g.stage0GizmoGrab;
+            }
+            return;
+        }
+        float ax = g.stage0GizmoDrag == 1 ? 1.f : 0.f;
+        float ay = g.stage0GizmoDrag == 2 ? 1.f : 0.f;
+        float az = g.stage0GizmoDrag == 3 ? 1.f : 0.f;
+        float const originZ = g.stage0GizmoDrag == 3 ? mesh->poseZ : ( mesh->poseZ + 0.55f );
+        float const t = Stage0RayAxisT( ox, oy, oz, dx, dy, dz,
+            mesh->poseX, mesh->poseY, originZ, ax, ay, az );
+        float const delta = t - g.stage0GizmoGrab;
+        g.stage0GizmoGrab = t;
+        mesh->poseX += ax * delta;
+        mesh->poseY += ay * delta;
+        mesh->poseZ += az * delta;
+    }
+
+    void Stage0GizmoOnMouseUp()
+    {
+        if ( g.stage0GizmoDrag > 0 )
+        {
+            SaveStage0GalleryPoses();
+            g.statusLine = "Gizmo: pose saved";
+        }
+        g.stage0GizmoDrag = 0;
+    }
+
+    void Stage0ToggleGizmo()
+    {
+        g.stage0Gizmo = !g.stage0Gizmo;
+        g.stage0GizmoDrag = 0;
+        g.stage0GizmoDeleteArmed = -1;
+        if ( !g.stage0Gizmo ) { g.stage0GizmoSlot = -1; }
+        g.statusLine = g.stage0Gizmo
+            ? "Gizmo ON - Tab to free the mouse, click a model, drag axes / yellow ring"
+            : "Gizmo OFF";
+    }
+
+    bool Stage0DeleteCandidateFiles( int slot )
+    {
+        if ( slot < 1 ) { return false; }
+        char name[80];
+        char const* extras[] = {
+            ".obj", "_basecolor.png", "_normal.png", ".sheets.json", ".sections.json",
+            ".garment", ".garment.raw", ".garment.stale"
+        };
+        std::vector<std::string> dirs;
+        Stage0GalleryGeneratedDirs( dirs );
+        bool any = false;
+        for ( std::string const& dir : dirs )
+        {
+            for ( char const* ext : extras )
+            {
+                std::snprintf( name, sizeof( name ), "stage0_body_candidate_%03d%s", slot, ext );
+                std::string const path = JoinPath( dir, name );
+                if ( DeleteFileA( path.c_str() ) ) { any = true; }
+            }
+        }
+        return any;
+    }
+
+    bool Stage0DeleteSelectedCandidate()
+    {
+        int const slot = g.stage0GizmoSlot;
+        if ( slot < 1 )
+        {
+            g.statusLine = "Gizmo: click a model first, then Delete";
+            return false;
+        }
+        if ( g.stage0GizmoDeleteArmed != slot )
+        {
+            g.stage0GizmoDeleteArmed = slot;
+            char note[96];
+            std::snprintf( note, sizeof( note ),
+                "Delete character %03d? Press Delete again to confirm", slot );
+            g.statusLine = note;
+            return false;
+        }
+        Stage0DeleteCandidateFiles( slot );
+        std::vector<Stage0VisualHullMesh>& gallery = GetStage0CandidateGallery();
+        gallery.erase( std::remove_if( gallery.begin(), gallery.end(),
+            [slot]( Stage0VisualHullMesh const& c ) { return c.slotIndex + 1 == slot; } ),
+            gallery.end() );
+        g.stage0GizmoSlot = -1;
+        g.stage0GizmoDrag = 0;
+        g.stage0GizmoDeleteArmed = -1;
+        SaveStage0GalleryPoses();
+        char note[80];
+        std::snprintf( note, sizeof( note ), "Deleted character %03d", slot );
+        g.statusLine = note;
+        return true;
     }
 
     // Toggle the render of the character whose foot pad the player is standing on
@@ -19781,7 +20423,7 @@ namespace
     // filter: 0 emit every triangle, 1 emit only GARMENT_LOINCLOTH_01, 2 emit
     // everything except the garment.
     void EmitStage0CandidateBody( float ox, float oy, float ground, float sway, float breathe,
-                                  int filter, Stage0VisualHullMesh const* meshPtr )
+                                  int filter, Stage0VisualHullMesh const* meshPtr, float yaw )
     {
         Stage0VisualHullMesh const& mesh=meshPtr?*meshPtr:GetStage0CandidateMesh();
         if(!mesh.loaded)return;
@@ -19804,6 +20446,7 @@ namespace
             glBindTexture(GL_TEXTURE_2D,slotTex);
         }
         glBegin(GL_TRIANGLES);
+        float const c=std::cos(yaw), s=std::sin(yaw);
         size_t const faceCount=mesh.indices.size()/3u;
         for(size_t f=0;f<faceCount;++f)
         {
@@ -19847,8 +20490,9 @@ namespace
                 // shade term still applies (and is 1.0 when unlit).
                 if(textured){glColor3f(shade,shade,shade);}
                 else{glColor3f(cr*shade,cg*shade,cb*shade);}
-                glNormal3fv(n);
-                glVertex3f(ox+p[0],oy+p[1]+sway*anchor,ground+p[2]+breathe*upper);
+                glNormal3f(c*n[0]-s*n[1], s*n[0]+c*n[1], n[2]);
+                glVertex3f(ox+c*p[0]-s*p[1], oy+s*p[0]+c*p[1]+sway*anchor,
+                           ground+p[2]+breathe*upper);
             }
         }
         if(textured)
@@ -20472,6 +21116,7 @@ namespace
             else
             {
                 DrawStage0PaletteCharacter();
+                if ( g.stage0Gizmo && !g.certStage0CharacterPortrait ) { DrawStage0TransformGizmo(); }
                 // Runtime comparison only.  Certification routes stay single-
                 // subject so their established camera and silhouette receipts do
                 // not silently start measuring a two-character frame.
@@ -22812,6 +23457,9 @@ namespace
             1
         };
         glLoadMatrixf( mv );
+        g.pickRightX = xx; g.pickRightY = xy; g.pickRightZ = xz;
+        g.pickUpX = yx; g.pickUpY = yy; g.pickUpZ = yz;
+        g.pickFwdX = fx; g.pickFwdY = fy; g.pickFwdZ = fz;
 
         // Far backdrop quads (depth off). BOTH use clear-sky blue — never lime/grass-green.
         // Prior ground quad was glColor(0.70,0.80,0.55)=RGB(178,204,140); dig mesh gaps
@@ -23095,7 +23743,9 @@ namespace
         }
         else
         {
-            DrawHudText( 16, 10, "[F1] readout" );
+            DrawHudText( 16, 10, g.stage0Gizmo
+                ? "[G] gizmo ON  click model  RGB move  yellow ring yaw  [Del] delete  [Tab] mouse"
+                : "[F1] readout   [G] gizmo   [Tab] mouse" );
         }
 
         g.uiWinW = w;
@@ -33297,12 +33947,12 @@ namespace
           &&!g.playStage16F1Launch&&!g.playStage16F2Launch&&!g.playStage16F3Launch
           &&!g.playStage16F4Launch&&!g.playP5b1Launch          &&!g.playP5b2aLaunch
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
-          &&!g.playP5b3b2Launch
+          &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicSettling);
+            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicDeposition);
         }
         if ( g.playStage11Launch )
         {
@@ -33583,6 +34233,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playP5b3b3aLaunch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicDeposition);
+            if(g.certP5b3b3aVisual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playStage16DLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -33690,14 +34355,16 @@ namespace
         {g.statusLine="P5b.3B - HYDRAULIC TRANSPORT  [M] stages";}
         if(g.playP5b3b2Launch)
         {g.statusLine="P5b.3B.2 - LOOSE-MATTER SETTLING  [M] stages";}
+        if(g.playP5b3b3aLaunch)
+        {g.statusLine="P5b.3B.3A - DEPOSITIONAL AGGREGATE  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
             bool const opened=fopen_s(&f,"Docs\\provenance_worldgen_launch_contract.txt","w")==0&&f;
-            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterTerrainHydraulicSettling;
+            bool const latest=g.stage0PlayView==Stage0PlayView::PresentWaterTerrainHydraulicDeposition;
             bool const closed=!g.stage0StageMenuOpen&&!g.stage0ToolDrawerOpen;
             bool const selection=g.stage0BrowserSelection==
-                BrowserIndexForView(Stage0PlayView::PresentWaterTerrainHydraulicSettling)
+                BrowserIndexForView(Stage0PlayView::PresentWaterTerrainHydraulicDeposition)
                 &&g.stage0BrowserCategory==CertificationBrowserCategoryForIndex(
                     g.stage0BrowserSelection);
             int const savedSelection=g.stage0BrowserSelection;
@@ -33716,7 +34383,7 @@ namespace
             g.stage0BrowserSelection=savedSelection;
             g.stage0BrowserCategory=savedCategory;
             bool stageSelection=true;
-            for(int index=2;index<=28;++index)
+            for(int index=2;index<=29;++index)
             {
                 stageSelection=SelectCertificationBrowserEntry(index)&&stageSelection;
                 stageSelection=std::strcmp(CertificationRuntimeStatus(
@@ -33742,7 +34409,8 @@ namespace
                 &&g.presentWaterTerrainPoreOccupancyCertified&&g.presentWaterTerrainPoreOccupancyRuntime
                 &&g.presentWaterTerrainHydraulicDetachmentCertified&&g.presentWaterTerrainHydraulicDetachmentRuntime
                 &&g.presentWaterTerrainHydraulicTransportCertified&&g.presentWaterTerrainHydraulicTransportRuntime
-                &&g.presentWaterTerrainHydraulicSettlingCertified&&g.presentWaterTerrainHydraulicSettlingRuntime;
+                &&g.presentWaterTerrainHydraulicSettlingCertified&&g.presentWaterTerrainHydraulicSettlingRuntime
+                &&g.presentWaterTerrainHydraulicDepositionCertified&&g.presentWaterTerrainHydraulicDepositionRuntime;
             bool const restored=SelectCertificationBrowserEntry(savedSelection)
                 &&g.stage0PlayView==Stage0PlayView::PresentWater;
             bool const worldSize=g.stage0LiveRadiusM==192&&g.stage0FarExtentM==0;
@@ -33752,7 +34420,7 @@ namespace
             {
                 std::fprintf(f,"WORLDGEN_LAUNCH_CONTRACT\nstatus=%s\n"
                     "menu_open=%d\ntool_drawer_open=%d\n"
-                    "runtime=%s\nlatest_certified_stage=P5b.3B.2\n"
+                    "runtime=%s\nlatest_certified_stage=P5b.3B.3A\n"
                     "live_radius_m=%d\nlive_diameter_m=%d\nfar_extent_m=%d\n"
                     "browser_selection=%d\nbrowser_category=%s\n"
                     "category_stage_navigation=%s\n"
@@ -33997,6 +34665,8 @@ namespace
         { row( "fixture=single_pick_proof  authority=STAGE13  one_strike=HARD_GATE  voxel=0.125m" ); }
         else if(IsDryHydrologyView(g.stage0PlayView))
         {row("fixture=dry_hydrology  authority=CERTIFIED  terrain=STAGE15  water=OFF");}
+        else if(IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))
+        {row("fixture=depositional_aggregate  authority=CERTIFIED  source=P5B3B2  coupling=DEPOSIT_AGGREGATE");}
         else if(IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))
         {row("fixture=loose_matter_settling  authority=CERTIFIED  source=P5B3B  coupling=SETTLE_LOOSE");}
         else if(IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView))
@@ -34049,24 +34719,47 @@ namespace
                 std::snprintf(line,sizeof(line),"depth=%.3fm  surface=%.3fm  terrain=%.3fm  units=%lld",
                     q.depthM,q.waterSurfaceZ,q.terrainZ,(long long)q.water.occupancyUnits);
                 row(line,.20f,.58f,.88f);
-                std::snprintf(line,sizeof(line),"flow=OFF  fluid_solve=0  p5b.1=ONE_WAY  p5b.2A=STATE  p5b.2B=%s  p5b.2C=%s  p5b.3A=%s  p5b.3B=%s  p5b.3B.2=%s",
+                std::snprintf(line,sizeof(line),"flow=OFF  fluid_solve=0  p5b.1=ONE_WAY  p5b.2A=STATE  p5b.2B=%s  p5b.2C=%s  p5b.3A=%s  p5b.3B=%s  p5b.3B.2=%s  p5b.3B.3A=%s",
                     (IsPresentWaterTerrainPoreView(g.stage0PlayView)
                         ||IsPresentWaterTerrainPoreOccupancyView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))?"PORE":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"PORE":"CLOSED",
                     (IsPresentWaterTerrainPoreOccupancyView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))?"OCC":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"OCC":"CLOSED",
                     (IsPresentWaterTerrainHydraulicDetachmentView(g.stage0PlayView)
                         ||IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))?"DETACH":"CLOSED",
+                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"DETACH":"CLOSED",
                     (IsPresentWaterTerrainHydraulicTransportView(g.stage0PlayView)
-                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView))?"MOVE":"CLOSED",
-                    IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)?"SETTLE":"CLOSED");
+                        ||IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"MOVE":"CLOSED",
+                    (IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)
+                        ||IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView))?"SETTLE":"CLOSED",
+                    IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)?"DEPOSIT":"CLOSED");
                 row(line,.82f,.92f,.72f);
-                if(IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicSettlingRuntime)
+                if(IsPresentWaterTerrainHydraulicDepositionView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicDepositionRuntime)
+                {
+                    auto const st=g.presentWaterTerrainHydraulicDepositionRuntime->QueryTerrainStateAt(g.feetX,g.feetY);
+                    auto const pore=g.presentWaterTerrainHydraulicDepositionRuntime->QueryPoreAt(g.feetX,g.feetY);
+                    std::snprintf(line,sizeof(line),"wet=%.2f  moist=%.2f  sat=%.2f  pore=%lld/%lld",
+                        (double)st.SurfaceWetness/1000.0,(double)st.MoistureContent/1000.0,
+                        (double)st.Saturation/1000.0,
+                        (long long)pore.StoredWaterGrams,(long long)pore.PoreCapacityGrams);
+                    row(line,.45f,.78f,.95f);
+                    std::snprintf(line,sizeof(line),"tRev=%u  loose=%lld  deposit=%lld  solids=%lld  deposits=%zu  p5b3b2=FROZEN  p5b3b3a=OPEN  p5b3c=CLOSED",
+                        g.presentWaterTerrainHydraulicDepositionRuntime->TerrainRevision(),
+                        (long long)g.presentWaterTerrainHydraulicDepositionRuntime->LooseMass(),
+                        (long long)g.presentWaterTerrainHydraulicDepositionRuntime->DepositionalMass(),
+                        (long long)g.presentWaterTerrainHydraulicDepositionRuntime->TerrainSolids(),
+                        g.presentWaterTerrainHydraulicDepositionRuntime->Stats().deposits);
+                    row(line,.35f,.70f,.90f);
+                }
+                else if(IsPresentWaterTerrainHydraulicSettlingView(g.stage0PlayView)&&g.presentWaterTerrainHydraulicSettlingRuntime)
                 {
                     auto const st=g.presentWaterTerrainHydraulicSettlingRuntime->QueryTerrainStateAt(g.feetX,g.feetY);
                     auto const pore=g.presentWaterTerrainHydraulicSettlingRuntime->QueryPoreAt(g.feetX,g.feetY);
@@ -34729,7 +35422,7 @@ namespace
         FillRect( diagnosticTab.x0, diagnosticTab.y0, diagnosticTab.x1, diagnosticTab.y1,
             diagnostics ? 0.58f : 0.36f, diagnostics ? 0.40f : 0.24f, 0.15f );
         glColor3f( 0.97f, 0.91f, 0.72f );
-        DrawHudText( runtimeTab.x0 + 18.f, runtimeTab.y0 + 10.f, "CERTIFIED RUNTIMES" );
+        DrawHudText( runtimeTab.x0 + 18.f, runtimeTab.y0 + 10.f, "STAGES / CERTS" );
         DrawHudText( diagnosticTab.x0 + 22.f, diagnosticTab.y0 + 10.f, "DIAGNOSTICS" );
         glColor3f( 0.95f, 0.86f, 0.35f );
         DrawHudText( px1 - 78.f, y1 - 30.f, "[X] CLOSE" );
@@ -34737,74 +35430,73 @@ namespace
         char line[512];
         if ( !diagnostics )
         {
-            glColor3f( 0.20f, 0.12f, 0.06f );
-            DrawHudText( px0 + 18.f, py1 - 26.f,
-                "WORLDGEN CERTIFICATION JOURNAL - category then certified stage" );
-            float const rowTop = py1 - 52.f;
-            float const detailsH=66.f;
-            float const categoryW=(std::min)(310.f,(px1-px0)*0.28f);
-            float const categoryX0=px0+18.f,categoryX1=categoryX0+categoryW;
-            float const stageX0=categoryX1+18.f,stageX1=px1-18.f;
-            float const categoryRowH=54.f;
-            for(int category=0;category<kCertificationBrowserCategoryCount;++category)
+            FillRect( px0, py0, px1, py1, 0.07f, 0.08f, 0.10f, 0.99f );
+            StrokeRect( px0, py0, px1, py1, 0.18f, 0.20f, 0.24f );
+            glColor3f( 0.82f, 0.88f, 0.94f );
+            DrawHudText( px0 + 18.f, py1 - 22.f,
+                "PLAYABLE STAGES / CERTS - one current stage   Enter/click launch   CLOSED is read-only" );
+            float const headerY1 = py1 - 40.f;
+            float const headerY0 = headerY1 - 28.f;
+            float const colHashX0 = px0 + 12.f;
+            float const colHashX1 = colHashX0 + 92.f;
+            float const colStatusX1 = px1 - 12.f;
+            float const colStatusX0 = colStatusX1 - 140.f;
+            float const colNameX0 = colHashX1 + 8.f;
+            FillRect( colHashX0, headerY0, colStatusX1, headerY1, 0.12f, 0.14f, 0.18f );
+            glColor3f( 0.70f, 0.78f, 0.86f );
+            DrawHudText( colHashX0 + 10.f, headerY0 + 8.f, "#" );
+            DrawHudText( colNameX0 + 8.f, headerY0 + 8.f, "Name" );
+            DrawHudText( colStatusX0 + 8.f, headerY0 + 8.f, "Status" );
+            float const detailsH = 36.f;
+            constexpr float stageRowH = 26.f;
+            float const rowTop = headerY0 - 4.f;
+            int const visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / stageRowH ) );
+            int const maxStart = (std::max)( 0, kStandingBoardCount - visibleRows );
+            int const firstVisible = std::clamp( g.stage0BoardSelection - visibleRows / 2, 0, maxStart );
+            int const lastVisible = (std::min)( kStandingBoardCount, firstVisible + visibleRows );
+            for ( int board = firstVisible; board < lastVisible; ++board )
             {
-                float const ry1=rowTop-(float)category*categoryRowH;
-                float const ry0=ry1-categoryRowH+7.f;
-                bool const selectedCategory=category==g.stage0BrowserCategory;
-                FillRect(categoryX0,ry0,categoryX1,ry1,
-                    selectedCategory?0.48f:0.66f,selectedCategory?0.34f:0.56f,
-                    selectedCategory?0.17f:0.39f);
-                StrokeRect(categoryX0,ry0,categoryX1,ry1,0.35f,0.24f,0.12f);
-                glColor3f(0.20f,0.12f,0.06f);
-                char categoryLine[160];
-                std::snprintf(categoryLine,sizeof(categoryLine),"%c %s",
-                    selectedCategory?'>':' ',CertificationBrowserCategoryName(category));
-                DrawHudText(categoryX0+14.f,ry0+17.f,categoryLine);
+                float const ry1 = rowTop - (float)( board - firstVisible ) * stageRowH;
+                float const ry0 = ry1 - stageRowH + 3.f;
+                bool const selected = board == g.stage0BoardSelection;
+                bool const current = StandingBoardLaunchable( board )
+                    && s_certificationBrowser[board].view == g.stage0PlayView;
+                bool const closed = !StandingBoardLaunchable( board );
+                if ( selected )
+                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.16f, 0.28f, 0.42f );
+                else if ( current )
+                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.12f, 0.18f, 0.16f );
+                else
+                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.08f, 0.09f, 0.11f );
+                char mark = current ? 'X' : ( closed ? '-' : ' ' );
+                if ( selected ) { glColor3f( 0.98f, 0.92f, 0.55f ); }
+                else if ( closed ) { glColor3f( 0.52f, 0.56f, 0.60f ); }
+                else { glColor3f( 0.88f, 0.92f, 0.96f ); }
+                std::snprintf( line, sizeof( line ), "[%c] %d", mark, board + 1 );
+                DrawHudText( colHashX0 + 8.f, ry0 + 6.f, line );
+                DrawHudText( colNameX0 + 8.f, ry0 + 6.f, StandingBoardName( board ) );
+                DrawHudText( colStatusX0 + 8.f, ry0 + 6.f, StandingBoardStatus( board ) );
             }
-
-            std::vector<int> const categoryEntries=
-                CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
-            int selectedPosition=0;
-            auto const selectedIt=std::find(categoryEntries.begin(),categoryEntries.end(),
-                g.stage0BrowserSelection);
-            if(selectedIt!=categoryEntries.end())
-            {selectedPosition=(int)(selectedIt-categoryEntries.begin());}
-            constexpr float stageRowH=46.f;
-            int const visibleRows=(std::max)(1,(int)((rowTop-py0-detailsH)/stageRowH));
-            int const maxStart=(std::max)(0,(int)categoryEntries.size()-visibleRows);
-            int const firstVisible=std::clamp(selectedPosition-visibleRows/2,0,maxStart);
-            int const lastVisible=(std::min)((int)categoryEntries.size(),firstVisible+visibleRows);
-            for(int position=firstVisible;position<lastVisible;++position)
+            if ( kStandingBoardCount > visibleRows )
             {
-                int const i=categoryEntries[position];
-                float const ry1=rowTop-(float)(position-firstVisible)*stageRowH;
-                float const ry0=ry1-stageRowH+6.f;
-                CertificationBrowserEntry const& entry = s_certificationBrowser[i];
-                bool const current = entry.view == g.stage0PlayView;
-                bool const selected=i==g.stage0BrowserSelection;
-                FillRect(stageX0,ry0,stageX1,ry1,
-                    current?0.48f:(selected?0.64f:0.72f),
-                    current?0.34f:(selected?0.51f:0.64f),
-                    current?0.17f:(selected?0.29f:0.46f));
-                StrokeRect(stageX0,ry0,stageX1,ry1,0.35f,0.24f,0.12f);
-                glColor3f( 0.20f, 0.12f, 0.06f );
-                std::snprintf(line,sizeof(line),"%c [%d] %-31s %-10s %s",
-                    selected?'>':' ',i+1,entry.label,
-                    CertificationRuntimeStatus(entry),entry.id);
-                DrawHudText(stageX0+14.f,ry0+14.f,line);
+                glColor3f( 0.55f, 0.62f, 0.70f );
+                std::snprintf( line, sizeof( line ), "showing %d-%d of %d - wheel or Up/Down",
+                    firstVisible + 1, lastVisible, kStandingBoardCount );
+                DrawHudText( colHashX0, rowTop - (float)visibleRows * stageRowH - 4.f, line );
             }
-            if((int)categoryEntries.size()>visibleRows)
+            glColor3f( 0.62f, 0.78f, 0.70f );
+            if ( StandingBoardLaunchable( g.stage0BoardSelection ) )
             {
-                glColor3f(0.34f,0.21f,0.09f);
-                std::snprintf(line,sizeof(line),"showing %d-%d of %d - wheel or Up/Down",
-                    firstVisible+1,lastVisible,(int)categoryEntries.size());
-                DrawHudText(stageX0,rowTop-(float)visibleRows*stageRowH-8.f,line);
+                CertificationBrowserEntry const& selected =
+                    s_certificationBrowser[g.stage0BoardSelection];
+                std::snprintf( line, sizeof( line ), "requires: %s", selected.dependency );
+                DrawHudText( px0 + 18.f, py0 + 12.f, line );
             }
-            CertificationBrowserEntry const& selected =
-                s_certificationBrowser[g.stage0BrowserSelection];
-            glColor3f( 0.32f, 0.20f, 0.10f );
-            std::snprintf( line, sizeof( line ), "requires: %s", selected.dependency );
-            DrawHudText( px0 + 18.f, py0 + 18.f, line );
+            else
+            {
+                DrawHudText( px0 + 18.f, py0 + 12.f,
+                    "CLOSED this cut - visible for the standing board, not a playable launch" );
+            }
         }
         else
         {
@@ -34846,7 +35538,7 @@ namespace
         }
         glColor3f( 0.90f, 0.85f, 0.70f );
         DrawHudText( x0 + 16.f, y0 + 14.f,
-            "M runtimes   T diagnostics   Left/Right category   Up/Down stage   Enter load   Esc close" );
+            "M stages table   T diagnostics   Up/Down highlight   Enter launch   Esc close" );
     }
 
     bool HandleWorldgenMenuClick( float mx, float my )
@@ -34873,6 +35565,7 @@ namespace
         {
             g.stage0StageMenuOpen = true;
             g.stage0ToolDrawerOpen = false;
+            g.stage0BoardSelection = StandingBoardIndexForView( g.stage0PlayView );
             g.stage0BrowserSelection = BrowserIndexForView( g.stage0PlayView );
             SyncCertificationBrowserCategoryToSelection();
             return true;
@@ -34886,40 +35579,23 @@ namespace
 
         if ( g.stage0StageMenuOpen )
         {
-            float const rowTop=py1-52.f;
-            float const detailsH=66.f;
-            float const categoryW=(std::min)(310.f,(px1-px0)*0.28f);
-            float const categoryX0=px0+18.f,categoryX1=categoryX0+categoryW;
-            float const stageX0=categoryX1+18.f,stageX1=px1-18.f;
-            constexpr float categoryRowH=54.f;
-            for(int category=0;category<kCertificationBrowserCategoryCount;++category)
+            float const headerY1 = py1 - 40.f;
+            float const headerY0 = headerY1 - 28.f;
+            float const colHashX0 = px0 + 12.f;
+            float const colStatusX1 = px1 - 12.f;
+            float const detailsH = 36.f;
+            constexpr float stageRowH = 26.f;
+            float const rowTop = headerY0 - 4.f;
+            int const visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / stageRowH ) );
+            int const maxStart = (std::max)( 0, kStandingBoardCount - visibleRows );
+            int const firstVisible = std::clamp( g.stage0BoardSelection - visibleRows / 2, 0, maxStart );
+            int const lastVisible = (std::min)( kStandingBoardCount, firstVisible + visibleRows );
+            for ( int board = firstVisible; board < lastVisible; ++board )
             {
-                float const ry1=rowTop-(float)category*categoryRowH;
-                float const ry0=ry1-categoryRowH+7.f;
-                if(!UiHit({categoryX0,ry0,categoryX1,ry1},mx,my))continue;
-                g.stage0BrowserCategory=category;
-                std::vector<int> const entries=CertificationBrowserEntriesInCategory(category);
-                if(!entries.empty())g.stage0BrowserSelection=entries.front();
-                return true;
-            }
-            std::vector<int> const entries=
-                CertificationBrowserEntriesInCategory(g.stage0BrowserCategory);
-            int selectedPosition=0;
-            auto const selectedIt=std::find(entries.begin(),entries.end(),g.stage0BrowserSelection);
-            if(selectedIt!=entries.end())selectedPosition=(int)(selectedIt-entries.begin());
-            constexpr float stageRowH=46.f;
-            int const visibleRows=(std::max)(1,(int)((rowTop-py0-detailsH)/stageRowH));
-            int const maxStart=(std::max)(0,(int)entries.size()-visibleRows);
-            int const firstVisible=std::clamp(selectedPosition-visibleRows/2,0,maxStart);
-            int const lastVisible=(std::min)((int)entries.size(),firstVisible+visibleRows);
-            for(int position=firstVisible;position<lastVisible;++position)
-            {
-                int const i=entries[position];
-                float const ry1=rowTop-(float)(position-firstVisible)*stageRowH;
-                float const ry0=ry1-stageRowH+6.f;
-                if(!UiHit({stageX0,ry0,stageX1,ry1},mx,my))continue;
-                g.stage0BrowserSelection=i;
-                if ( SelectCertificationBrowserEntry( i ) )
+                float const ry1 = rowTop - (float)( board - firstVisible ) * stageRowH;
+                float const ry0 = ry1 - stageRowH + 3.f;
+                if ( !UiHit( { colHashX0, ry0, colStatusX1, ry1 }, mx, my ) ) { continue; }
+                if ( SelectStandingBoardEntry( board ) )
                 {
                     g.stage0StageMenuOpen = false;
                     SetMouseLook( g.hwnd, true );
@@ -36575,6 +37251,10 @@ namespace
         { "p5b3b_to_p5b3b2", Stage0PlayView::PresentWaterTerrainHydraulicTransport, Stage0PlayView::PresentWaterTerrainHydraulicSettling },
         { "p5b3b2_to_p5b3b", Stage0PlayView::PresentWaterTerrainHydraulicSettling, Stage0PlayView::PresentWaterTerrainHydraulicTransport },
         { "p5b3b2_to_p5b3b2", Stage0PlayView::PresentWaterTerrainHydraulicSettling, Stage0PlayView::PresentWaterTerrainHydraulicSettling },
+        { "cold_clean_to_p5b3b3a", Stage0PlayView::Clean, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
+        { "p5b3b2_to_p5b3b3a", Stage0PlayView::PresentWaterTerrainHydraulicSettling, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
+        { "p5b3b3a_to_p5b3b2", Stage0PlayView::PresentWaterTerrainHydraulicDeposition, Stage0PlayView::PresentWaterTerrainHydraulicSettling },
+        { "p5b3b3a_to_p5b3b3a", Stage0PlayView::PresentWaterTerrainHydraulicDeposition, Stage0PlayView::PresentWaterTerrainHydraulicDeposition },
     };
 
     struct RuntimeIndependenceReceipt
@@ -36663,9 +37343,10 @@ namespace
         Stage0PlayView::PresentWaterTerrainHydraulicDetachment,
         Stage0PlayView::PresentWaterTerrainHydraulicTransport,
         Stage0PlayView::PresentWaterTerrainHydraulicSettling,
+        Stage0PlayView::PresentWaterTerrainHydraulicDeposition,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -38054,7 +38735,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==27)
+        if(g.certWorldgenCardinalStageFilter==28)
+            certPath="Docs\\provenance_p5b3b3a_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==27)
             certPath="Docs\\provenance_p5b3b2_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==26)
             certPath="Docs\\provenance_p5b3b_cardinal_replacement_cert.txt";
@@ -38224,7 +38907,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==27)
+            if(g.certWorldgenCardinalStageFilter==28)
+                tracePath="Docs\\provenance_p5b3b3a_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==27)
                 tracePath="Docs\\provenance_p5b3b2_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==26)
                 tracePath="Docs\\provenance_p5b3b_cardinal_replacement_trace.csv";
@@ -39848,6 +40533,17 @@ namespace
         int64_t looseMass=0;
     };
 
+    struct P5b3b3aSoakTelemetry
+    {
+        int deposits=0;
+        int depositWakes=0;
+        int remobilizes=0;
+        int staleRefuse=0;
+        uint32_t depositionRevision=0;
+        int64_t looseMass=0;
+        int64_t depositionalMass=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -39918,6 +40614,7 @@ namespace
         P5b3aSoakTelemetry p5b3aStart{};
         P5b3bSoakTelemetry p5b3bStart{};
         P5b3b2SoakTelemetry p5b3b2Start{};
+        P5b3b3aSoakTelemetry p5b3b3aStart{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -39985,6 +40682,21 @@ namespace
         t.staleRefuse=(int)st.staleRefuse;
         t.settlingRevision=g.presentWaterTerrainHydraulicSettlingRuntime->SettlingRevision();
         t.looseMass=g.presentWaterTerrainHydraulicSettlingRuntime->LooseMass();
+        return t;
+    }
+
+    P5b3b3aSoakTelemetry CaptureP5b3b3aSoakTelemetry()
+    {
+        P5b3b3aSoakTelemetry t;
+        if(!g.presentWaterTerrainHydraulicDepositionRuntime)return t;
+        auto const& st=g.presentWaterTerrainHydraulicDepositionRuntime->Stats();
+        t.deposits=(int)st.deposits;
+        t.depositWakes=(int)st.depositWakes;
+        t.remobilizes=(int)st.remobilizes;
+        t.staleRefuse=(int)st.staleRefuse;
+        t.depositionRevision=g.presentWaterTerrainHydraulicDepositionRuntime->DepositionRevision();
+        t.looseMass=g.presentWaterTerrainHydraulicDepositionRuntime->LooseMass();
+        t.depositionalMass=g.presentWaterTerrainHydraulicDepositionRuntime->DepositionalMass();
         return t;
     }
 
@@ -40611,6 +41323,7 @@ namespace
         P5b3aSoakTelemetry const p5b3aNow=CaptureP5b3aSoakTelemetry();
         P5b3bSoakTelemetry const p5b3bNow=CaptureP5b3bSoakTelemetry();
         P5b3b2SoakTelemetry const p5b3b2Now=CaptureP5b3b2SoakTelemetry();
+        P5b3b3aSoakTelemetry const p5b3b3aNow=CaptureP5b3b3aSoakTelemetry();
         int const p5b2cPoreXfer=SoakDeltaNonneg(p5b2cNow.poreTransfers,run.p5b2cStart.poreTransfers);
         int const p5b2cWetToDry=SoakDeltaNonneg(p5b2cNow.wetToDry,run.p5b2cStart.wetToDry);
         int const p5b2cDryToWet=SoakDeltaNonneg(p5b2cNow.dryToWet,run.p5b2cStart.dryToWet);
@@ -40645,6 +41358,13 @@ namespace
         int const p5b3b2Stale=SoakDeltaNonneg(p5b3b2Now.staleRefuse,run.p5b3b2Start.staleRefuse);
         int const p5b3b2SRev=SoakDeltaNonneg((int)p5b3b2Now.settlingRevision,(int)run.p5b3b2Start.settlingRevision);
         int const p5b3b2Loose=SoakDeltaNonneg((int)p5b3b2Now.looseMass,(int)run.p5b3b2Start.looseMass);
+        int const p5b3b3aDeposit=SoakDeltaNonneg(p5b3b3aNow.deposits,run.p5b3b3aStart.deposits);
+        int const p5b3b3aWake=SoakDeltaNonneg(p5b3b3aNow.depositWakes,run.p5b3b3aStart.depositWakes);
+        int const p5b3b3aRemob=SoakDeltaNonneg(p5b3b3aNow.remobilizes,run.p5b3b3aStart.remobilizes);
+        int const p5b3b3aStale=SoakDeltaNonneg(p5b3b3aNow.staleRefuse,run.p5b3b3aStart.staleRefuse);
+        int const p5b3b3aDRev=SoakDeltaNonneg((int)p5b3b3aNow.depositionRevision,(int)run.p5b3b3aStart.depositionRevision);
+        int const p5b3b3aLoose=SoakDeltaNonneg((int)p5b3b3aNow.looseMass,(int)run.p5b3b3aStart.looseMass);
+        int const p5b3b3aDepMass=SoakDeltaNonneg((int)p5b3b3aNow.depositionalMass,(int)run.p5b3b3aStart.depositionalMass);
         char const* p5b2cPhysicsVerdict="PASS_idle";
         if(p5b2cEvents==0)p5b2cPhysicsVerdict="PASS_idle";
         else if(p5b2cEvents<=8&&p5b2cEvents*50<=(std::max)(created,1))p5b2cPhysicsVerdict="PASS_bounded";
@@ -40671,6 +41391,11 @@ namespace
           &&p5b3b2SRev==0&&p5b3b2Loose==0)p5b3b2PhysicsVerdict="PASS_idle";
         else p5b3b2PhysicsVerdict="FAIL_accumulating";
         bool const p5b3b2Ok=std::strncmp(p5b3b2PhysicsVerdict,"FAIL",4)!=0;
+        char const* p5b3b3aPhysicsVerdict="PASS_idle";
+        if(p5b3b3aDeposit==0&&p5b3b3aWake==0&&p5b3b3aRemob==0&&p5b3b3aStale==0
+          &&p5b3b3aDRev==0&&p5b3b3aLoose==0&&p5b3b3aDepMass==0)p5b3b3aPhysicsVerdict="PASS_idle";
+        else p5b3b3aPhysicsVerdict="FAIL_accumulating";
+        bool const p5b3b3aOk=std::strncmp(p5b3b3aPhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -40712,9 +41437,11 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk;
         char certPathBuf[160];
-        char const* certPath=g.certStreamingSoakStageFilter==27
+        char const* certPath=g.certStreamingSoakStageFilter==28
+            ?"Docs\\provenance_p5b3b3a_streaming_soak_cert.txt"
+            :(g.certStreamingSoakStageFilter==27
             ?"Docs\\provenance_p5b3b2_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==26
             ?"Docs\\provenance_p5b3b_streaming_soak_cert.txt"
@@ -40726,7 +41453,7 @@ namespace
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
             ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
-            :"Docs\\provenance_streaming_soak_cert.txt")))));
+            :"Docs\\provenance_streaming_soak_cert.txt"))))));
         if(g.soakDrawLane!=0)
         {
             std::snprintf(certPathBuf,sizeof(certPathBuf),
@@ -40749,7 +41476,7 @@ namespace
             "mode=%s\nbearing=%s\ninformational_only=%d\n"
             "soak_draw=%s\n"
             "soak_water_backend=%s\n"
-            "p5b2b=%s\np5b2c=%s\np5b3a=%s\np5b3b=%s\np5b3b2=%s\np5b3c=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
+            "p5b2b=%s\np5b2c=%s\np5b3a=%s\np5b3b=%s\np5b3b2=%s\np5b3b3a=%s\np5b3b3b=CLOSED\np5b3c=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
             "stop_duration_s=%.3f\nstop_elapsed_s=%.3f\ndrain_elapsed_s=%.3f\n"
             "return_to_origin=%d\nreturn_elapsed_s=%.3f\nsettle_elapsed_s=%.3f\n"
             "distance_m=%.1f\nend_distance_m=%.1f\npackages_created=%d\npackages_retired=%d\n"
@@ -40806,6 +41533,14 @@ namespace
             "p5b3b2.settling_revision_delta=%d\n"
             "p5b3b2.loose_mass_delta=%d\n"
             "check.p5b3b2_travel_physics=%s\n"
+            "p5b3b3a.deposits=%d\n"
+            "p5b3b3a.deposit_wakes=%d\n"
+            "p5b3b3a.remobilizes=%d\n"
+            "p5b3b3a.stale_refuse=%d\n"
+            "p5b3b3a.deposition_revision_delta=%d\n"
+            "p5b3b3a.loose_mass_delta=%d\n"
+            "p5b3b3a.depositional_mass_delta=%d\n"
+            "check.p5b3b3a_travel_physics=%s\n"
             "check.pore_state_wakes_bounded=%s\n"
             "check.occupancy_topology_wakes_bounded=%s\n"
             "check.zero_movement_frames_over_16_667=%s\n"
@@ -40921,7 +41656,8 @@ namespace
             g.certStreamingSoakStageFilter>=24?(g.certStreamingSoakStageFilter==24?"OPEN":"FROZEN"):"CLOSED",
             g.certStreamingSoakStageFilter>=25?(g.certStreamingSoakStageFilter==25?"OPEN":"FROZEN"):"CLOSED",
             g.certStreamingSoakStageFilter>=26?(g.certStreamingSoakStageFilter==26?"OPEN":"FROZEN"):"CLOSED",
-            g.certStreamingSoakStageFilter==27?"OPEN":"CLOSED",
+            g.certStreamingSoakStageFilter>=27?(g.certStreamingSoakStageFilter==27?"OPEN":"FROZEN"):"CLOSED",
+            g.certStreamingSoakStageFilter==28?"OPEN":"CLOSED",
             g.soakStopDurationS,run.stopElapsedS,run.drainElapsedS,
             g.soakReturnToOrigin?1:0,run.returnElapsedS,run.settleElapsedS,
             run.peakDistanceM,run.distanceM,created,retired,run.maxResidentPackages,
@@ -40952,6 +41688,8 @@ namespace
             p5b3bPhysicsVerdict,
             p5b3b2Settle,p5b3b2Wake,p5b3b2Pending,p5b3b2Stale,p5b3b2SRev,p5b3b2Loose,
             p5b3b2PhysicsVerdict,
+            p5b3b3aDeposit,p5b3b3aWake,p5b3b3aRemob,p5b3b3aStale,p5b3b3aDRev,p5b3b3aLoose,p5b3b3aDepMass,
+            p5b3b3aPhysicsVerdict,
             poreStateWakeVerdict,occTopoWakeVerdict,
             frameOk?"PASS":(informational?"INFORMATIONAL":"FAIL"),
             complete?"PASS":"FAIL",
@@ -41602,7 +42340,9 @@ namespace
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
-            char const* tracePath=g.certStreamingSoakStageFilter==27
+            char const* tracePath=g.certStreamingSoakStageFilter==28
+                ?"Docs\\provenance_p5b3b3a_streaming_soak_trace.csv"
+                :(g.certStreamingSoakStageFilter==27
                 ?"Docs\\provenance_p5b3b2_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==26
                 ?"Docs\\provenance_p5b3b_streaming_soak_trace.csv"
@@ -41614,7 +42354,7 @@ namespace
                 ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==22
                 ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
-                :"Docs\\provenance_streaming_soak_trace.csv")))));
+                :"Docs\\provenance_streaming_soak_trace.csv"))))));
             fopen_s(&run.trace,tracePath,"wb");
             if(run.trace)
             {
@@ -41674,6 +42414,7 @@ namespace
                 run.p5b3aStart=CaptureP5b3aSoakTelemetry();
                 run.p5b3bStart=CaptureP5b3bSoakTelemetry();
                 run.p5b3b2Start=CaptureP5b3b2SoakTelemetry();
+                run.p5b3b3aStart=CaptureP5b3b3aSoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -42457,6 +43198,8 @@ namespace
         else if ( g.playWorldgenBaseline )
         {
             WorldgenPlayInitialize();
+            if(g.presentWaterTerrainHydraulicDepositionRuntime&&!g.presentWaterTerrainHydraulicDepositionRuntime->Complete())
+            {++s_traversalWake.topologyActivations;g.presentWaterTerrainHydraulicDepositionRuntime->Tick(48);}
             if(g.presentWaterTerrainHydraulicSettlingRuntime&&!g.presentWaterTerrainHydraulicSettlingRuntime->Complete())
             {++s_traversalWake.topologyActivations;g.presentWaterTerrainHydraulicSettlingRuntime->Tick(48);}
             if(g.presentWaterTerrainHydraulicTransportRuntime&&!g.presentWaterTerrainHydraulicTransportRuntime->Complete())
@@ -44194,6 +44937,120 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certP5b3b3aVisual)
+        {
+            static ULONGLONG visualStartMsP5b3b3a=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::PresentWaterTerrainHydraulicDeposition);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::PresentWaterTerrainHydraulicDeposition);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f
+                &&g.presentWaterTerrainHydraulicDepositionRuntime&&g.presentWaterTerrainHydraulicDepositionRuntime->Complete();
+            if(!g.presentWaterTerrainHydraulicDepositionRuntime)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_p5b3b3a_depositional_aggregate_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"P5B3B3A_DEPOSITIONAL_AGGREGATE_PLAYER_VISUAL FAIL\n"
+                        "reason=authority_load_failed\nload=%s\nview=%s\n",
+                        g.presentWaterTerrainHydraulicDepositionAuthorityReason.c_str(),
+                        Stage0PlayViewName(g.stage0PlayView));
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            else if(!settled&&GetTickCount64()-visualStartMsP5b3b3a>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_p5b3b3a_depositional_aggregate_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"P5B3B3A_DEPOSITIONAL_AGGREGATE_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n"
+                        "view=%s\nload=%s\nruntime=%d\ncomplete=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0,
+                        Stage0PlayViewName(g.stage0PlayView),
+                        g.presentWaterTerrainHydraulicDepositionAuthorityReason.c_str(),
+                        g.presentWaterTerrainHydraulicDepositionRuntime?1:0,
+                        (g.presentWaterTerrainHydraulicDepositionRuntime
+                            &&g.presentWaterTerrainHydraulicDepositionRuntime->Complete())?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certP5b3b3aVisualFrames;
+            if(g.certP5b3b3aVisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_p5b3b3a_depositional_aggregate_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const* water=ActivePresentWaterKernel();
+                auto const q=water?water->QueryAt(g.feetX,g.feetY):CausalPresentWater::Query{};
+                bool nearbyWater=false,nearbyChannel=false;
+                if(water)
+                {
+                    double const step=water->Drainage().StepM();
+                    for(int y=-8;y<=8;++y)for(int x=-8;x<=8;++x)
+                    {auto const n=water->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyWater=nearbyWater||(n.found&&n.occupied);
+                        nearbyChannel=nearbyChannel||(n.found&&n.sediment.erosion.drainage.found
+                            &&n.sediment.erosion.drainage.cell.channel);}
+                }
+                bool const pairCoherent=g.presentWaterTerrainHydraulicDepositionRuntime
+                    &&g.presentWaterTerrainHydraulicDepositionRuntime->PublishedTerrainRevision()
+                        ==g.presentWaterTerrainHydraulicDepositionRuntime->TerrainRevision()
+                    &&g.presentWaterTerrainHydraulicDepositionRuntime->PublishedWaterTopologyRevision()
+                        ==g.presentWaterTerrainHydraulicDepositionRuntime->WaterTopologyRevision();
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_p5b3b3a_depositional_aggregate_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&nearbyWater&&nearbyChannel
+                    &&g.presentWaterTerrainHydraulicDepositionCertified
+                    &&g.presentWaterTerrainHydraulicDepositionRuntime
+                    &&g.presentWaterTerrainHydraulicDepositionRuntime->Complete()&&pairCoherent
+                    &&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601;
+                if(opened)
+                {
+                    std::fprintf(file,"P5B3B3A_DEPOSITIONAL_AGGREGATE_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_p5b3b3a_depositional_aggregate_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "local_depth_m=%.6f\nlocal_kind=%s\nnearby_water=%d\nnearby_channel=%d\n"
+                        "terrain_source=P5B3B3A_DEPOSITIONAL_AGGREGATE\n"
+                        "present_water_occupancy=1\nbody_local_equilibration=1\n"
+                        "graph_authorized_transfer=1\nexternal_conserved_transfer=1\n"
+                        "dynamic_occupancy=1\nhydraulic_topology=1\n"
+                        "terrain_to_water=1\nwater_to_terrain_state=1\nwater_to_terrain_pore=1\n"
+                        "pore_occupancy_topology=1\nhydraulic_detachment=1\n"
+                        "hydraulic_transport=1\nloose_matter_settling=1\ndepositional_aggregate=1\n"
+                        "water_to_terrain_matter=1\nchoice_a_local_loose=1\n"
+                        "host_formation_weld=0\nterrain_reincorporation=0\n"
+                        "published_pair_coherent=%d\nloose_mass=%lld\ndepositional_mass=%lld\ndeposits=%zu\n"
+                        "water_rendering=1\nfluid_solve=0\nflow_simulation=0\n"
+                        "runtime_erosion=0\nlive_ecology=0\np5b1=frozen\np5b2a=frozen\n"
+                        "p5b2b=frozen\np5b2c=frozen\np5b3a=frozen\np5b3b=frozen\n"
+                        "p5b3b2=frozen\np5b3b3a=open\np5b3b3b=closed\np5b3c=closed\n"
+                        "rainfall=closed\ndeep_groundwater=closed\nbank_collapse=closed\n"
+                        "16c_remobilization=closed\n",
+                        passed?"PASS":"FAIL",g.certP5b3b3aVisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,q.depthM,
+                        CausalPresentWater::BodyKindName(q.water.kind),
+                        nearbyWater?1:0,nearbyChannel?1:0,pairCoherent?1:0,
+                        (long long)(g.presentWaterTerrainHydraulicDepositionRuntime
+                            ?g.presentWaterTerrainHydraulicDepositionRuntime->LooseMass():0),
+                        (long long)(g.presentWaterTerrainHydraulicDepositionRuntime
+                            ?g.presentWaterTerrainHydraulicDepositionRuntime->DepositionalMass():0),
+                        g.presentWaterTerrainHydraulicDepositionRuntime
+                            ?g.presentWaterTerrainHydraulicDepositionRuntime->Stats().deposits:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.certStage16DVisual)
         {
             static ULONGLONG visualStartMs16d=GetTickCount64();
@@ -45076,6 +45933,7 @@ namespace
                     {
                         g.stage0StageMenuOpen = !g.stage0StageMenuOpen;
                         g.stage0ToolDrawerOpen = false;
+                        g.stage0BoardSelection = StandingBoardIndexForView( g.stage0PlayView );
                         g.stage0BrowserSelection = BrowserIndexForView( g.stage0PlayView );
                         SyncCertificationBrowserCategoryToSelection();
                         SetMouseLook( hwnd, !g.stage0StageMenuOpen );
@@ -45106,7 +45964,7 @@ namespace
                 {
                     int const step = wParam == VK_UP ? -1 : 1;
                     if ( g.stage0StageMenuOpen )
-                    {MoveCertificationBrowserStage(step);}
+                    {MoveStandingBoard(step);}
                     else
                     {
                         g.stage0ToolSelection =
@@ -45119,13 +45977,14 @@ namespace
                     && ( wParam == VK_LEFT || wParam == VK_RIGHT ) )
                 {
                     MoveCertificationBrowserCategory(wParam==VK_LEFT?-1:1);
+                    g.stage0BoardSelection=g.stage0BrowserSelection;
                     g.keys[wParam]=false;
                     return 0;
                 }
                 else if ( g.playWorldgenBaseline && g.stage0StageMenuOpen
                     && ( wParam == VK_RETURN || wParam == VK_SPACE ) )
                 {
-                    if ( SelectCertificationBrowserEntry( g.stage0BrowserSelection ) )
+                    if ( SelectStandingBoardEntry( g.stage0BoardSelection ) )
                     {
                         g.stage0StageMenuOpen = false;
                         EnterViewportInput( hwnd );
@@ -45331,6 +46190,21 @@ namespace
                     SetMouseLook( hwnd, !g.mouseLook );
                     return 0;
                 }
+                else if ( g.provRenderWorkbench && ( wParam == 'G' || wParam == 'g' ) )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                    {
+                        Stage0ToggleGizmo();
+                        if ( g.stage0Gizmo && g.mouseLook ) { SetMouseLook( hwnd, false ); }
+                    }
+                    g.keys['G'] = g.keys['g'] = false;
+                    return 0;
+                }
+                else if ( wParam == VK_DELETE && g.stage0Gizmo )
+                {
+                    if ( ( lParam & ( 1LL << 30 ) ) == 0 ) { Stage0DeleteSelectedCandidate(); }
+                    return 0;
+                }
                 else if ( wParam == 'C' || wParam == 'c' )
                 {
                     g.chipMode = (ChipMode)( ( (int)g.chipMode + 1 ) % 3 );
@@ -45461,7 +46335,7 @@ namespace
                     short const delta = GET_WHEEL_DELTA_WPARAM( wParam );
                     int const step = delta > 0 ? -1 : 1;
                     if ( g.stage0StageMenuOpen )
-                    {MoveCertificationBrowserStage(step);}
+                    {MoveStandingBoard(step);}
                     else
                     {
                         g.stage0ToolSelection =
@@ -45513,16 +46387,21 @@ namespace
                 return 0;
             case WM_LBUTTONDOWN:
             {
+                int const mx = (int)(short)LOWORD( lParam );
+                int const my = (int)(short)HIWORD( lParam );
+                RECT rc{}; GetClientRect( hwnd, &rc );
+                g.uiWinW = (std::max)( 1, (int)rc.right );
+                g.uiWinH = (std::max)( 1, (int)rc.bottom );
+                UpdateUiMouseFromWin( mx, my );
+                if ( g.stage0Gizmo && !g.mouseLook && !g.journalOpen
+                  && !g.stage0StageMenuOpen && !g.stage0ToolDrawerOpen )
+                {
+                    if ( Stage0GizmoOnMouseDown() ) { return 0; }
+                }
                 if ( g.playWorldgenBaseline )
                 {
                     if ( g.stage0StageMenuOpen || g.stage0ToolDrawerOpen )
                     {
-                        int const mx = (int)(short)LOWORD( lParam );
-                        int const my = (int)(short)HIWORD( lParam );
-                        RECT rc{}; GetClientRect( hwnd, &rc );
-                        g.uiWinW = (std::max)( 1, (int)rc.right );
-                        g.uiWinH = (std::max)( 1, (int)rc.bottom );
-                        UpdateUiMouseFromWin( mx, my );
                         HandleWorldgenMenuClick( g.uiMouseX, g.uiMouseY );
                         return 0;
                     }
@@ -45530,12 +46409,6 @@ namespace
                     BeginStage0ToolStrike();
                     return 0;
                 }
-                int mx = (int)(short)LOWORD( lParam );
-                int my = (int)(short)HIWORD( lParam );
-                RECT rc; GetClientRect( hwnd, &rc );
-                g.uiWinW = (std::max)( 1, (int)rc.right );
-                g.uiWinH = (std::max)( 1, (int)rc.bottom );
-                UpdateUiMouseFromWin( mx, my );
                 if ( TryHotbarClick( g.uiMouseX, g.uiMouseY ) ) { return 0; }
                 if ( g.journalOpen )
                 {
@@ -45546,6 +46419,9 @@ namespace
                 TryDigHandful();
                 return 0;
             }
+            case WM_LBUTTONUP:
+                Stage0GizmoOnMouseUp();
+                return 0;
             case WM_RBUTTONDOWN:
             {
                 if ( g.playWorldgenBaseline )
@@ -45579,6 +46455,11 @@ namespace
                 g.uiWinW = (std::max)( 1, (int)rc.right );
                 g.uiWinH = (std::max)( 1, (int)rc.bottom );
                 UpdateUiMouseFromWin( mx, my );
+                if ( g.stage0Gizmo && g.stage0GizmoDrag > 0 && !g.mouseLook )
+                {
+                    Stage0GizmoOnMouseMove();
+                    return 0;
+                }
                 if ( g.journalOpen || !g.mouseLook )
                 {
                     return 0;
@@ -45679,6 +46560,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runPresentWaterTerrainHydraulicDetachmentCert = false;
         bool runPresentWaterTerrainHydraulicTransportCert = false;
         bool runPresentWaterTerrainHydraulicSettlingCert = false;
+        bool runPresentWaterTerrainHydraulicDepositionCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -45716,6 +46598,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_transport_floor.cpc";
         char presentWaterTerrainHydraulicSettlingPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_settling_floor.cpc";
+        char presentWaterTerrainHydraulicDepositionPath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_deposition_floor.cpc";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -45838,6 +46722,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-p5b3b2")==0
                   ||_wcsicmp(certArgv[i],L"--cert-loose-matter-settling")==0)
                 {runPresentWaterTerrainHydraulicSettlingCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-p5b3b3a-depositional-aggregate")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-p5b3b3a")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-depositional-aggregate")==0)
+                {runPresentWaterTerrainHydraulicDepositionCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -46038,6 +46926,23 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 presentWaterTerrainHydraulicSettlingPath);
             CausalPresentWaterTerrainHydraulicSettling::WriteCertArtifact(result,
                 "Docs\\provenance_p5b3b2_loose_matter_settling_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runPresentWaterTerrainHydraulicDepositionCert)
+        {
+            auto const result=CausalPresentWaterTerrainHydraulicDeposition::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                presentWaterPath,presentWaterBodyPath,presentWaterEquilibratePath,
+                presentWaterTransferPath,presentWaterExternalPath,presentWaterTopologyPath,
+                presentWaterTerrainResponsePath,presentWaterTerrainStatePath,
+                presentWaterTerrainPorePath,presentWaterTerrainPoreOccupancyPath,
+                presentWaterTerrainHydraulicDetachmentPath,
+                presentWaterTerrainHydraulicTransportPath,
+                presentWaterTerrainHydraulicSettlingPath,
+                presentWaterTerrainHydraulicDepositionPath);
+            CausalPresentWaterTerrainHydraulicDeposition::WriteCertArtifact(result,
+                "Docs\\provenance_p5b3b3a_depositional_aggregate_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -47011,6 +47916,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-p5b3b3a")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage-p5b3b3a")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=28;
+                    g.playWorldgenBaseline=true;g.playP5b3b3aLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -47022,8 +47936,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
                 if(_wcsicmp(argv[i],L"--cert-streaming-soak")==0
-                  ||_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b2")==0
+                  ||_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3a")==0
                   ||_wcsicmp(argv[i],L"--cert-worldgen-streaming-soak")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=28;
+                    g.playWorldgenBaseline=true;g.playP5b3b3aLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b2")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=27;
@@ -47230,6 +48152,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-p5b3b3a-depositional-aggregate")==0
+                  ||_wcsicmp(argv[i],L"--play-p5b3b3a")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playP5b3b3aLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-stage16f2-water-transfer-visual")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
@@ -47304,6 +48233,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playP5b3b2Launch=true;g.certP5b3b2Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-p5b3b3a-depositional-aggregate-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-p5b3b3a-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playP5b3b3aLaunch=true;g.certP5b3b3aVisual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

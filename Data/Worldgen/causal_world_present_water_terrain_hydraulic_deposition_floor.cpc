@@ -1,0 +1,20 @@
+PROVENANCE_CAUSAL_PRESENT_WATER_TERRAIN_HYDRAULIC_DEPOSITION_V1
+# P5b.3B.3A: a settled loose parcel may be admitted as a depositional
+# aggregate (loose/packed sediment body). Same material ID is not the same
+# structural body. Destination stays transported/deposited matter — never
+# host-formation weld, never terrain host solids += grams.
+# CLOSED: P5b.3B.3B compaction/terrain integration, P5b.3C bank/support
+# collapse, 16C remobilization, cement/lithify, general erosion, rainfall,
+# evaporation, groundwater, plant uptake, ecology, full WorldOperationScheduler.
+world_identity_hash=36d381f2ab7bb953
+worldgen_id=provenance_causal_world
+worldgen_version=1
+schema_version=1
+region_key=causal_world_present_water_terrain_hydraulic_deposition_floor
+parent_region_key=causal_world_present_water_terrain_hydraulic_settling_floor
+parent_authority_revision=1
+authority_revision=1
+p5b3b3a_event_id=a5b3200d00000001
+chronology=206
+p5b3b3a_enabled=1
+default_budget_transactions=48

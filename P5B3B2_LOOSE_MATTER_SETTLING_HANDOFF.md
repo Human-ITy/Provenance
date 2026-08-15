@@ -36,7 +36,8 @@ LooseMatterId
 
 ```
 P5b.3C  bank/support collapse           CLOSED
-P5b.3B.3 terrain reincorporation        CLOSED
+P5b.3B.3A depositional aggregate        (next cut; not this freeze)
+P5b.3B.3B compaction / terrain integration CLOSED
 16C remobilization                      CLOSED
 general erosion / 16B active erosion    CLOSED
 rainfall / evaporation / groundwater    CLOSED
@@ -61,8 +62,9 @@ P5b.2B  bounded pore storage              CERTIFIED / FROZEN
 P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
 P5b.3A  hydraulic detachment              CERTIFIED / FROZEN @ 6c467fb7
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
-P5b.3B.2 loose-matter settling            CERTIFIED
-P5b.3B.3 terrain reincorporation          CLOSED
+P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
+P5b.3B.3A depositional aggregate          (not this freeze)
+P5b.3B.3B compaction / terrain integration CLOSED
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -121,8 +123,9 @@ counters **0** (settles, settle wakes, pending retained, stale refuse,
 settling revision, loose mass). 3B/3A/2C travel physics also idle. 300/900
 not run.
 
-**P5b.3C / 3B.3 / 16C stay CLOSED.** No bank/support collapse, no terrain
-reincorporation of settled loose matter, no 16C remobilization.
+**P5b.3C / 3B.3B / 16C stay CLOSED.** No bank/support collapse, no compaction
+or host-formation weld. See `P5B3B3A_DEPOSITIONAL_AGGREGATE_HANDOFF.md` for
+the next certified cut (depositional aggregate, not host weld).
 
 ## Player runtime
 
@@ -145,5 +148,5 @@ Analytical receipt: `Docs/provenance_p5b3b2_loose_matter_settling_cert.txt`
 Txn receipt: `Docs/provenance_p5b3b2_loose_matter_settling_receipts.csv`  
 Soak receipt: `Docs/provenance_p5b3b2_streaming_soak_cert.txt`
 
-P5b.3C / 3B.3 / rainfall / groundwater / general erosion / 16C remobilization
+P5b.3C / 3B.3B / rainfall / groundwater / general erosion / 16C remobilization
 stay CLOSED.

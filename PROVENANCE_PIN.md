@@ -242,8 +242,9 @@ P5b.2B  bounded pore storage              CERTIFIED
 P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
 P5b.3A  hydraulic detachment              CERTIFIED / FROZEN
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
-P5b.3B.2 loose-matter settling            CERTIFIED
-P5b.3B.3 terrain reincorporation          CLOSED
+P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
+P5b.3B.3A depositional aggregate          CERTIFIED
+P5b.3B.3B compaction / terrain integration CLOSED
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -303,7 +304,7 @@ unchanged, loose 80 at dest. Handoff: `P5B3B_HYDRAULIC_TRANSPORT_HANDOFF.md`.
 Play: `PLAY_P5B3B_HYDRAULIC_TRANSPORT.cmd` / `--play-p5b3b-hydraulic-transport`.
 Cert: `CERT_P5B3B_HYDRAULIC_TRANSPORT.cmd`.
 
-**P5b.3B.2 CERTIFIED** — a transported parcel may come to rest at a physically
+**P5b.3B.2 CERTIFIED / FROZEN** @ `eeabfb8c` — a transported parcel may come to rest at a physically
 admissible location while remaining the same conserved loose matter. Settling
 changes location + motion/rest only — not identity, not terrain fill.
 Disabled == exact 3B transport `876ac027936dce35`. Enabled settling digest
@@ -312,8 +313,16 @@ unchanged (80 → 80 Settled). Handoff: `P5B3B2_LOOSE_MATTER_SETTLING_HANDOFF.md
 Play: `PLAY_P5B3B2_LOOSE_MATTER_SETTLING.cmd` / `--play-p5b3b2-loose-matter-settling`.
 Cert: `CERT_P5B3B2_LOOSE_MATTER_SETTLING.cmd`.
 
+**P5b.3B.3A CERTIFIED** — settled loose matter may be admitted as a depositional
+sediment body. Same material ID ≠ host formation. Terrain host solids unchanged.
+Disabled == exact 3B.2 settling `ab46ebdbe3aa6778`. Enabled deposition digest
+`694388e61fa37503` (budget 1 == N == unbounded). Loose 80 → 0, depositional
+0 → 80. Handoff: `P5B3B3A_DEPOSITIONAL_AGGREGATE_HANDOFF.md`.
+Play: `PLAY_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd` / `--play-p5b3b3a-depositional-aggregate`.
+Cert: `CERT_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd`. In-client stages table: **M**.
+
 **P5b.3C CLOSED** — bank/support collapse.  
-**P5b.3B.3 CLOSED** — terrain reincorporation of settled loose matter.  
+**P5b.3B.3B CLOSED** — compaction / terrain integration (host weld, lithify).  
 Also closed: general erosion, rainfall, groundwater, active 16B erosion,
 16C remobilization, ecology.
 
@@ -327,13 +336,13 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
   Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
-- Test A: `--cert-worldgen-cardinal-replacement-p5b3b2` (EVERY CUT, latest).
-  Digest `0ace5164520e5da0` (3B was `59a2725b6b89fd77`; stage identity
+- Test A: `--cert-worldgen-cardinal-replacement-p5b3b3a` (EVERY CUT, latest).
+  Digest `9ffe2cb954206be1` (3B.2 was `0ace5164520e5da0`; stage identity
   changed). Movement frames over 16.667 = 0 on N/E/S/W.
-- Test B: `--cert-streaming-soak-p5b3b2` (90 s NE fly **PASS** this cut:
-  0 / 76169 movement frames >16.667, max 7.280 ms, 2601, pending 0.
-  P5b.3B.2 travel physics **idle**: settles / settle wakes / pending /
-  stale / revision / loose mass all 0. 3B/3A/2C travel physics also idle.
+- Test B: `--cert-streaming-soak-p5b3b3a` (90 s NE fly **PASS** this cut:
+  0 / 86580 movement frames >16.667, max 7.231 ms, 2601, pending 0.
+  P5b.3B.3A travel physics **idle**: deposits / deposit wakes / remobilizes /
+  stale / revision / loose / depositional mass all 0. 3B.2/3B/3A/2C also idle.
   300/900 not run. Long-haul 300/900 remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
@@ -398,8 +407,9 @@ legal receipt) @ `e64a4df3`. **P5b.2A FROZEN** (state only).
 **P5b.2B CERTIFIED** (bounded pore). **P5b.2C FROZEN** (pore occupancy /
 topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B FROZEN** (hydraulic transport of already-detached loose matter).
-**P5b.3B.2 CERTIFIED** (loose-matter settling: location + rest, not identity).
-**P5b.3B.3 CLOSED** (terrain reincorporation). **P5b.3C CLOSED.**
+**P5b.3B.2 CERTIFIED / FROZEN** (loose-matter settling: location + rest, not identity).
+**P5b.3B.3A CERTIFIED** (depositional aggregate: settled loose → sediment body, not host weld).
+**P5b.3B.3B CLOSED** (compaction / terrain integration). **P5b.3C CLOSED.**
 Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
