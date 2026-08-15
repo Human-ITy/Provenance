@@ -58,7 +58,7 @@ full WorldOperationScheduler                   CLOSED
 
 ## Freeze
 
-This cut SHA is stamped after commit on `provenance/client-spike`.
+This cut: `2f722735` (`2f722735f80e98db41221200f756c74d6757ea37`).
 Parent: P5b.3B.3A `160a0842` (`160a0842adcce58e7206cdd10370b94334ccda54`).
 3B.2 `eeabfb8c`. 3B `67d5f524`. 3A `6c467fb7`. Long-haul infrastructure
 baseline `f7ae29ea`. Gameplay 2B `8bb75265` otherwise frozen.
@@ -73,7 +73,7 @@ P5b.3A  hydraulic detachment              CERTIFIED / FROZEN @ 6c467fb7
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
 P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
 P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
-P5b.3B.3B compaction / terrain surface    CERTIFIED
+P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 P5b.3C  bank/support collapse             CLOSED
 ```
 

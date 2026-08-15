@@ -244,7 +244,7 @@ P5b.3A  hydraulic detachment              CERTIFIED / FROZEN
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
 P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
 P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
-P5b.3B.3B compaction / terrain surface    CERTIFIED
+P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 P5b.3C  bank/support collapse             CLOSED
 ```
 
@@ -321,7 +321,7 @@ Disabled == exact 3B.2 settling `ab46ebdbe3aa6778`. Enabled deposition digest
 Play: `PLAY_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd` / `--play-p5b3b3a-depositional-aggregate`.
 Cert: `CERT_P5B3B3A_DEPOSITIONAL_AGGREGATE.cmd`. In-client stages table: **M**.
 
-**P5b.3B.3B CERTIFIED** — a deposited aggregate may compact under admissible
+**P5b.3B.3B CERTIFIED / FROZEN** @ `2f722735` — a deposited aggregate may compact under admissible
 load and participate in terrain surface + collision/support while remaining
 the same depositional body. Compaction is state, not a mass transfer.
 Disabled == exact 3B.3A deposition `694388e61fa37503`. Enabled compaction
@@ -418,7 +418,7 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B FROZEN** (hydraulic transport of already-detached loose matter).
 **P5b.3B.2 CERTIFIED / FROZEN** (loose-matter settling: location + rest, not identity).
 **P5b.3B.3A CERTIFIED / FROZEN** (depositional aggregate: settled loose → sediment body, not host weld).
-**P5b.3B.3B CERTIFIED** (compaction: deposited body → stable deposited ground, not host weld).
+**P5b.3B.3B CERTIFIED / FROZEN** @ `2f722735` (compaction: deposited body → stable deposited ground, not host weld).
 **P5b.3C CLOSED.** Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
