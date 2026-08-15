@@ -100,8 +100,11 @@ namespace
     constexpr float kCrouchEyeHeightM = 1.05f;
     constexpr float kCapsuleRadiusM = 0.35f;
     constexpr float kWalkSpeedMps = 5.0f;    // brisk walk
+    constexpr float kRunSpeedMps = 8.0f;     // distinct from walk and sprint
     constexpr float kSprintSpeedMps = 11.0f; // matches Unreal sprint ~cell/s order
     constexpr float kFlySpeedMps = 24.f;
+    constexpr float kCertifiedStressFlyMps = 480.f;
+    constexpr float kInformationalStressFlyMps = 960.f;
     constexpr float kFlySprintMps = 48.f;
     constexpr float kFlySprintTierDistanceM = 50.f;
     constexpr float kFlySprintTierStepMps = 24.f;
@@ -594,6 +597,16 @@ namespace
         // replacement in N/E/S/W and prove exact regeneration on return.
         bool certWorldgenCardinalReplacement = false;
         int certWorldgenCardinalStageFilter = -1; // diagnostic subset; permanent gate uses -1
+        // --cert-streaming-soak: indefinite outward travel. Distinct from
+        // cardinal replacement (exact return). First landing default 90 s;
+        // milestone is 300-900 s via --soak-duration-s=.
+        bool certStreamingSoak = false;
+        int certStreamingSoakStageFilter = 22; // p5b2a latest play stage
+        double soakDurationS = 90.0;
+        float soakSpeedMps = kFlySpeedMps;
+        int soakMode = 3; // 0 walk 1 run 2 sprint 3 fly
+        int soakBearing = 4; // 0 N 1 E 2 S 3 W 4 NE 5 SE 6 SW 7 NW
+        bool soakInformationalOnly = false; // 960 m/s is not a product gate
         bool certStage11ResidencyWaterfall = false;
         // Capture-free traversal bearing for the waterfall route.
         // 0=north(+Y) 1=east(+X) 2=south(-Y) 3=west(-X), matching the cardinal
@@ -1429,6 +1442,23 @@ namespace
     };
 
     AppState g;
+
+    // Cross-system traversal wake. Declared early so publish, evict, water
+    // query, and both cert harnesses can increment the same counters.
+    struct TraversalWakeCost
+    {
+        int packagesCreated=0;
+        int packagesRetired=0;
+        int derivedMeshRebuilds=0;
+        int collisionPublications=0;
+        int waterBodyReconstructions=0;
+        int topologyActivations=0;
+        int grassLoads=0;
+        int treeLoads=0;
+        int waterBodiesQueried=0;
+        std::unordered_set<uint64_t> waterBodyIds;
+    };
+    TraversalWakeCost s_traversalWake;
 
     struct Stage11ResidencyWaterfallCounters
     {
@@ -2695,6 +2725,16 @@ namespace
         if ( g.presentWaterEquilibrateRuntime ) { return &g.presentWaterEquilibrateRuntime->Water(); }
         if ( g.presentWaterBodyRuntime ) { return &g.presentWaterBodyRuntime->Water(); }
         return g.presentWaterRuntime.get();
+    }
+
+    void NoteTraversalWaterQuery(double x,double y)
+    {
+        CausalPresentWater::Kernel const* water=ActivePresentWaterKernel();
+        if(!water)return;
+        auto const q=water->QueryAt(x,y);
+        if(!q.found||!q.water.bodyId)return;
+        if(s_traversalWake.waterBodyIds.insert(q.water.bodyId).second)
+        {++s_traversalWake.waterBodiesQueried;}
     }
 
     bool UsesBareEarthTerrain( Stage0PlayView view )
@@ -12210,6 +12250,7 @@ namespace
             g.stage7TerrainBlocks.erase( it );
         }
         g.perfHfBlocksEvicted += (int)evict.size();
+        s_traversalWake.packagesRetired += (int)evict.size();
 
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
         for ( int bx = bounds.bx0; bx <= bounds.bx1; ++bx )
@@ -12337,6 +12378,33 @@ namespace
     // ahead of the deliberately extreme 16 m/frame (960 m/s at 60 Hz) flight
     // rung.  GL publication remains single-owner and frame-budgeted.
     constexpr int kStage8CpuWorkerCount=4;
+
+    int Stage8WorkerQueueDepth()
+    {
+        std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+        return (int)s_stage8PackageWorkers.pending.size()
+            +s_stage8PackageWorkers.active;
+    }
+
+    SIZE_T ProcessWorkingSetBytes()
+    {
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb=sizeof(pmc);
+        if(!GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),sizeof(pmc)))
+        {return 0;}
+        return pmc.WorkingSetSize;
+    }
+
+    SIZE_T ProcessPrivateBytes()
+    {
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb=sizeof(pmc);
+        if(!GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),sizeof(pmc)))
+        {return 0;}
+        return pmc.PrivateUsage;
+    }
 
     bool IsStage56WorkerView(Stage0PlayView view)
     {return view==Stage0PlayView::Clean||IsCausalGeologyView(view)||IsCausalExposureView(view);}
@@ -12746,8 +12814,12 @@ namespace
         }
         glEnd();glEndList();QueryPerformanceCounter(&compileEnd);
         int const tris=(int)package.mesh.triangles.size();
+        bool const publishedCollision=package.collisionSurface!=nullptr;
         terrainBlocks.emplace(key,Stage0TerrainBlock{
             list,tris,std::move(package.collisionSurface)});
+        ++s_traversalWake.packagesCreated;
+        ++s_traversalWake.derivedMeshRebuilds;
+        if(publishedCollision)++s_traversalWake.collisionPublications;
         if(package.legacyStage7)g.stage7TerrainTriangles+=tris;
         else if(!package.legacyStage56)g.stage8TerrainTriangles+=tris;
         g.perfHfTris+=tris;
@@ -13286,6 +13358,7 @@ namespace
             terrainBlocks.erase( it );
         }
         g.perfHfBlocksEvicted += (int)evict.size();
+        s_traversalWake.packagesRetired += (int)evict.size();
         int const playerBx=FloorDivCell((int)std::floor(g.feetX),kStage0TerrainBlockCells);
         int const playerBy=FloorDivCell((int)std::floor(g.feetY),kStage0TerrainBlockCells);
         for ( int by = bounds.by0; by <= bounds.by1; ++by )
@@ -18443,6 +18516,8 @@ namespace
                 else if(d2<82.f*82.f){++g.livingWorldTreeMid;}
                 else{++g.livingWorldTreeImpostors;}
                 ++g.livingWorldTreeActive;--g.livingWorldTreeCulled;
+                s_traversalWake.treeLoads=(std::max)(s_traversalWake.treeLoads,
+                    g.livingWorldTreeActive);
             }
             glEnd();glLineWidth(1.f);glEnable(GL_CULL_FACE);
             QueryPerformanceCounter(&q1);
@@ -18580,6 +18655,8 @@ namespace
             if(!std::isfinite(slope)||slope>kSyntheticGrassMaxSlope)
             {++g.livingWorldGrassRejectedSlope;continue;}
             ++g.livingWorldGrassHostCells;
+            s_traversalWake.grassLoads=(std::max)(s_traversalWake.grassLoads,
+                g.livingWorldGrassHostCells);
             float const density=GrassDensityFactor(std::sqrt(cellD2));
             for(int s=0;s<kSitesPerCell;++s)
             {
@@ -34926,6 +35003,17 @@ namespace
         int framesOver16 = 0;
         double movementWorstFrameMs = 0.0;
         int movementFramesOver16 = 0;
+        int wakeWaterBodyReconstructions = 0;
+        int wakeTopologyActivations = 0;
+        int wakeDerivedMeshRebuilds = 0;
+        int wakeGrassLoads = 0;
+        int wakeTreeLoads = 0;
+        int wakeCollisionPublications = 0;
+        int packagesCreated = 0;
+        int packagesRetired = 0;
+        int maxPendingPackages = 0;
+        int maxWorkerQueue = 0;
+        TraversalWakeCost wakeStart{};
         std::vector<unsigned char> originImage;
         int originImageW = 0, originImageH = 0;
     };
@@ -35309,6 +35397,23 @@ namespace
         receipt.worstFrameMs = (std::max)(
             receipt.worstFrameMs, g.playWorldgenFrameMs );
         if ( g.playWorldgenFrameMs > 16.667 ) { ++receipt.framesOver16; }
+        receipt.maxPendingPackages = (std::max)( receipt.maxPendingPackages,
+            Stage0PendingPackageCount( receipt.view ) );
+        receipt.maxWorkerQueue = (std::max)( receipt.maxWorkerQueue,
+            Stage8WorkerQueueDepth() );
+        receipt.packagesCreated = s_traversalWake.packagesCreated - receipt.wakeStart.packagesCreated;
+        receipt.packagesRetired = s_traversalWake.packagesRetired - receipt.wakeStart.packagesRetired;
+        receipt.wakeWaterBodyReconstructions =
+            s_traversalWake.waterBodyReconstructions - receipt.wakeStart.waterBodyReconstructions;
+        receipt.wakeTopologyActivations =
+            s_traversalWake.topologyActivations - receipt.wakeStart.topologyActivations;
+        receipt.wakeDerivedMeshRebuilds =
+            s_traversalWake.derivedMeshRebuilds - receipt.wakeStart.derivedMeshRebuilds;
+        receipt.wakeGrassLoads = s_traversalWake.grassLoads;
+        receipt.wakeTreeLoads = s_traversalWake.treeLoads;
+        receipt.wakeCollisionPublications =
+            s_traversalWake.collisionPublications - receipt.wakeStart.collisionPublications;
+        NoteTraversalWaterQuery( g.feetX, g.feetY );
     }
 
     void ValidateCardinalOuterAuthority( CardinalReplacementReceipt& receipt )
@@ -35540,7 +35645,12 @@ namespace
                 "residency_complete=%s "
                 "geometry_return=%s material_feature_return=%s collision_return=%s "
                 "packages_return=%s worst_frame_ms=%.3f frames_over_16_667=%d "
-                "movement_worst_frame_ms=%.3f movement_frames_over_16_667=%d\n",
+                "movement_worst_frame_ms=%.3f movement_frames_over_16_667=%d "
+                "packages_created=%d packages_retired=%d max_pending_packages=%d "
+                "max_worker_queue=%d wake_water_body_reconstructions=%d "
+                "wake_topology_activations=%d wake_derived_mesh_rebuilds=%d "
+                "wake_grass_loads=%d wake_tree_loads=%d "
+                "wake_collision_publications=%d wake_water_bodies_queried=%d\n",
                 r.stage, r.bearing, rowPassed ? "PASS" : "FAIL",
                 r.originPackageCount, r.outerPackageCount, r.returnPackageCount,
                 r.originPackagesAtOuter, r.maxResidentPackages, r.maxResidentCells,
@@ -35561,7 +35671,13 @@ namespace
                 r.origin.collision == r.returned.collision ? "PASS" : "FAIL",
                 r.origin.packages == r.returned.packages ? "PASS" : "FAIL",
                 r.worstFrameMs, r.framesOver16,
-                r.movementWorstFrameMs,r.movementFramesOver16 );
+                r.movementWorstFrameMs,r.movementFramesOver16,
+                r.packagesCreated, r.packagesRetired, r.maxPendingPackages,
+                r.maxWorkerQueue, r.wakeWaterBodyReconstructions,
+                r.wakeTopologyActivations, r.wakeDerivedMeshRebuilds,
+                r.wakeGrassLoads, r.wakeTreeLoads,
+                r.wakeCollisionPublications,
+                s_traversalWake.waterBodiesQueried - r.wakeStart.waterBodiesQueried );
         }
         std::fprintf( file,
             "WORLDGEN_CARDINAL_REPLACEMENT %s\n"
@@ -35670,6 +35786,7 @@ namespace
             g.feetX = 128.5f; g.feetY = 128.5f;
             g.playerX = 128; g.playerY = 128;
             RebuildStage0PlayableRuntime();
+            r.wakeStart = s_traversalWake;
             SetCardinalCamera( r, 0.f, true );
             s_cardinalDistanceM = 0.f;
             s_cardinalPhaseFrames = 0;
@@ -37006,6 +37123,292 @@ namespace
         }
     }
 
+    // ---- Long-haul streaming soak ----------------------------------------
+    // Cardinal replacement proves exact return over a bounded route. This
+    // certificate proves travel distance can grow indefinitely while resident
+    // work and memory stay bounded around the player. No return is required.
+    struct StreamingSoakRun
+    {
+        int phase=0;
+        int warmFrames=0;
+        double elapsedS=0.0;
+        double pendingSinceS=-1.0;
+        float distanceM=0.f;
+        float dirX=0.f,dirY=1.f;
+        int movementFrames=0;
+        int framesOver16=0;
+        int framesBelowRadius=0;
+        int groundFailures=0;
+        int collisionMismatches=0;
+        int maxResidentPackages=0;
+        int maxPendingPackages=0;
+        int maxWorkerQueue=0;
+        int endPending=0;
+        float minCompleteRadiusM=1e9f;
+        double oldestPendingAgeS=0.0;
+        SIZE_T startWorkingSet=0,maxWorkingSet=0,endWorkingSet=0;
+        SIZE_T startPrivate=0,maxPrivate=0,endPrivate=0;
+        TraversalWakeCost wakeStart{};
+        std::vector<double> frameMs;
+        FILE* trace=nullptr;
+    };
+    StreamingSoakRun s_streamingSoak;
+
+    char const* SoakBearingName(int bearing)
+    {
+        static char const* const names[8]={
+            "north","east","south","west","northeast","southeast","southwest","northwest"};
+        return names[bearing&7];
+    }
+
+    char const* SoakModeName(int mode)
+    {
+        static char const* const names[4]={"walk","run","sprint","fly"};
+        return names[mode&3];
+    }
+
+    void SoakBearingStep(int bearing,float& dx,float& dy)
+    {
+        static float const sx[8]={0.f,1.f,0.f,-1.f,1.f,1.f,-1.f,-1.f};
+        static float const sy[8]={1.f,0.f,-1.f,0.f,1.f,-1.f,-1.f,1.f};
+        dx=sx[bearing&7];dy=sy[bearing&7];
+        if(bearing>=4)
+        {
+            float const inv=1.f/std::sqrt(2.f);
+            dx*=inv;dy*=inv;
+        }
+    }
+
+    float SoakModeSpeedMps()
+    {
+        if(g.soakSpeedMps>0.f)return g.soakSpeedMps;
+        if(g.soakMode==0)return kWalkSpeedMps;
+        if(g.soakMode==1)return kRunSpeedMps;
+        if(g.soakMode==2)return kSprintSpeedMps;
+        return kFlySpeedMps;
+    }
+
+    void SoakPlace(float distanceM,bool fly)
+    {
+        float const x=128.5f+s_streamingSoak.dirX*distanceM;
+        float const y=128.5f+s_streamingSoak.dirY*distanceM;
+        float surfaceZ=0.f;
+        double collisionQueryMs=0.0;
+        Stage11PlaceProbe(x,y,fly,surfaceZ,
+            s_streamingSoak.groundFailures,s_streamingSoak.collisionMismatches,
+            collisionQueryMs,std::atan2(s_streamingSoak.dirX,s_streamingSoak.dirY));
+        NoteTraversalWaterQuery(x,y);
+    }
+
+    bool WriteStreamingSoakArtifact()
+    {
+        auto& run=s_streamingSoak;
+        int const declared=Stage0DeclaredMaxResidentPackages(g.stage0LiveRadiusM);
+        float const speed=SoakModeSpeedMps();
+        bool const informational=g.soakInformationalOnly
+            ||speed+0.001f>=kInformationalStressFlyMps;
+        int const created=s_traversalWake.packagesCreated-run.wakeStart.packagesCreated;
+        int const retired=s_traversalWake.packagesRetired-run.wakeStart.packagesRetired;
+        int const waterRecon=s_traversalWake.waterBodyReconstructions
+            -run.wakeStart.waterBodyReconstructions;
+        int const topo=s_traversalWake.topologyActivations-run.wakeStart.topologyActivations;
+        int const mesh=s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds;
+        int const collision=s_traversalWake.collisionPublications
+            -run.wakeStart.collisionPublications;
+        int const bodies=s_traversalWake.waterBodiesQueried-run.wakeStart.waterBodiesQueried;
+        double sum=0.0,worst=0.0;
+        for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
+        double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
+        bool const complete=run.minCompleteRadiusM>=(float)g.stage0LiveRadiusM-0.001f
+            &&run.framesBelowRadius==0;
+        bool const bounded=run.maxResidentPackages<=declared
+            &&run.endPending==0
+            &&run.maxPendingPackages<=declared;
+        bool const traveled=run.distanceM>=0.80f*speed*(float)g.soakDurationS
+            &&created>0&&retired>0;
+        bool const frameOk=informational||(run.movementFrames>0&&run.framesOver16==0);
+        bool const integrity=run.movementFrames>0&&run.groundFailures==0
+            &&run.collisionMismatches==0;
+        bool const passed=integrity&&complete&&bounded&&traveled&&frameOk;
+        char const* certPath=g.certStreamingSoakStageFilter==22
+            ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
+            :"Docs\\provenance_streaming_soak_cert.txt";
+        FILE* f=nullptr;
+        if(fopen_s(&f,certPath,"wb")!=0||!f)return false;
+        std::fprintf(f,
+            "TRAVERSAL_STREAMING_SOAK\n"
+            "law=travel_distance_grows_indefinitely_while_residency_and_memory_stay_bounded\n"
+            "distinct_from=cardinal_replacement_exact_return\n"
+            "stage_filter=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
+            "duration_s=%.3f\nconfigured_speed_mps=%.3f\n"
+            "mode=%s\nbearing=%s\ninformational_only=%d\n"
+            "p5b2b=CLOSED\np5b3=CLOSED\nrainfall=CLOSED\nerosion=CLOSED\n"
+            "distance_m=%.1f\npackages_created=%d\npackages_retired=%d\n"
+            "max_resident_packages=%d\ndeclared_max_packages=%d\n"
+            "end_pending_packages=%d\nmax_pending_packages=%d\n"
+            "oldest_pending_age_s=%.3f\nmin_complete_radius_m=%.2f\n"
+            "frames_below_192m=%d\nmax_worker_queue=%d\n"
+            "start_working_set_bytes=%llu\nmax_working_set_bytes=%llu\n"
+            "end_working_set_bytes=%llu\nstart_private_bytes=%llu\n"
+            "max_private_bytes=%llu\nend_private_bytes=%llu\n"
+            "measured_frames=%d\nmean_frame_ms=%.3f\np95_frame_ms=%.3f\n"
+            "p99_frame_ms=%.3f\nmax_frame_ms=%.3f\nframes_over_16_667=%d\n"
+            "ground_failures=%d\ncollision_mismatches=%d\n"
+            "wake.water_body_reconstructions=%d\n"
+            "wake.hydraulic_topology_activations=%d\n"
+            "wake.derived_mesh_rebuilds=%d\n"
+            "wake.grass_loads=%d\n"
+            "wake.tree_loads=%d\n"
+            "wake.collision_publications=%d\n"
+            "wake.water_bodies_queried=%d\n"
+            "check.zero_movement_frames_over_16_667=%s\n"
+            "check.complete_required_residency=%s\n"
+            "check.bounded_package_count=%s\n"
+            "check.no_growing_backlog=%s\n"
+            "check.creation_and_retirement=%s\n"
+            "check.distance_grew=%s\n"
+            "overall=%s\n",
+            g.certStreamingSoakStageFilter,g.stage0LiveRadiusM,g.stage0FarExtentM,
+            g.soakDurationS,(double)speed,SoakModeName(g.soakMode),
+            SoakBearingName(g.soakBearing),informational?1:0,
+            run.distanceM,created,retired,run.maxResidentPackages,declared,
+            run.endPending,run.maxPendingPackages,run.oldestPendingAgeS,
+            run.minCompleteRadiusM==1e9f?0.f:run.minCompleteRadiusM,
+            run.framesBelowRadius,run.maxWorkerQueue,
+            (unsigned long long)run.startWorkingSet,
+            (unsigned long long)run.maxWorkingSet,
+            (unsigned long long)run.endWorkingSet,
+            (unsigned long long)run.startPrivate,
+            (unsigned long long)run.maxPrivate,
+            (unsigned long long)run.endPrivate,
+            run.movementFrames,mean,
+            Stage11WaterfallPercentile(run.frameMs,.95),
+            Stage11WaterfallPercentile(run.frameMs,.99),worst,run.framesOver16,
+            run.groundFailures,run.collisionMismatches,
+            waterRecon,topo,mesh,s_traversalWake.grassLoads,s_traversalWake.treeLoads,
+            collision,bodies,
+            frameOk?"PASS":(informational?"INFORMATIONAL":"FAIL"),
+            complete?"PASS":"FAIL",
+            run.maxResidentPackages<=declared?"PASS":"FAIL",
+            run.endPending==0?"PASS":"FAIL",
+            (created>0&&retired>0)?"PASS":"FAIL",
+            traveled?"PASS":"FAIL",
+            informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
+                :(passed?"PASS":"FAIL"));
+        std::fclose(f);
+        if(run.trace){std::fclose(run.trace);run.trace=nullptr;}
+        return informational?true:passed;
+    }
+
+    void StreamingSoakTick()
+    {
+        if(!g.certStreamingSoak||!g.playWorldgenInitialized)return;
+        auto& run=s_streamingSoak;
+        if(run.phase==0)
+        {
+            int const stageIndex=g.certStreamingSoakStageFilter>=0
+                ?g.certStreamingSoakStageFilter:22;
+            Stage0PlayView const view=s_boundaryViews[stageIndex];
+            SoakBearingStep(g.soakBearing,run.dirX,run.dirY);
+            g.stage0ToolGeologyCutaway=false;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolPerformanceHud=false;g.stage0ToolMutationHud=false;
+            g.stage0StageMenuOpen=false;g.stage0ToolDrawerOpen=false;
+            SelectStage0PlayView(view);
+            g.feetX=128.5f;g.feetY=128.5f;g.playerX=128;g.playerY=128;
+            RebuildStage0PlayableRuntime();
+            run.wakeStart=s_traversalWake;
+            run.startWorkingSet=ProcessWorkingSetBytes();
+            run.startPrivate=ProcessPrivateBytes();
+            run.maxWorkingSet=run.startWorkingSet;
+            run.maxPrivate=run.startPrivate;
+            char const* tracePath=g.certStreamingSoakStageFilter==22
+                ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
+                :"Docs\\provenance_streaming_soak_trace.csv";
+            fopen_s(&run.trace,tracePath,"wb");
+            if(run.trace)
+            {
+                std::fprintf(run.trace,
+                    "elapsed_s,distance_m,x,y,mode,frame_ms,resident_packages,"
+                    "pending_packages,worker_queue,complete_radius_m,"
+                    "working_set_bytes,private_bytes,packages_created,"
+                    "packages_retired,wake_water_body,wake_topology,"
+                    "wake_mesh,wake_collision,wake_grass,wake_tree\n");
+            }
+            SoakPlace(0.f,g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps);
+            run.warmFrames=0;run.phase=1;return;
+        }
+        bool const fly=g.soakMode>=3||SoakModeSpeedMps()>=kFlySpeedMps;
+        bool const settled=g.columnQueue.empty()&&g.pending==PendingKind::None
+            &&Stage0PendingPackageCount(g.stage0PlayView)==0&&Stage8PackageJobsIdle();
+        if(run.phase==1)
+        {
+            SoakPlace(0.f,fly);
+            if(++run.warmFrames>=120&&settled
+              &&Stage0MinCompleteRadiusM(g.stage0PlayView)>=(float)g.stage0LiveRadiusM-0.001f)
+            {
+                run.phase=2;run.elapsedS=0.0;run.distanceM=0.f;
+                run.wakeStart=s_traversalWake;
+            }
+            return;
+        }
+        if(run.phase==2)
+        {
+            float const speed=SoakModeSpeedMps();
+            double const dt=(std::min)(0.05,(std::max)(0.001,g.playWorldgenFrameMs/1000.0));
+            run.distanceM+=speed*(float)dt;
+            SoakPlace(run.distanceM,fly);
+            ++run.movementFrames;
+            run.frameMs.push_back(g.playWorldgenFrameMs);
+            if(g.playWorldgenFrameMs>16.667)++run.framesOver16;
+            float const complete=Stage0MinCompleteRadiusM(g.stage0PlayView);
+            int const pending=Stage0PendingPackageCount(g.stage0PlayView);
+            int const workers=Stage8WorkerQueueDepth();
+            run.minCompleteRadiusM=(std::min)(run.minCompleteRadiusM,complete);
+            if(complete<(float)g.stage0LiveRadiusM-0.001f)++run.framesBelowRadius;
+            run.maxResidentPackages=(std::max)(run.maxResidentPackages,
+                (int)CardinalPackageMap(g.stage0PlayView).size());
+            run.maxPendingPackages=(std::max)(run.maxPendingPackages,pending);
+            run.maxWorkerQueue=(std::max)(run.maxWorkerQueue,workers);
+            run.elapsedS+=dt;
+            if(pending>0)
+            {
+                if(run.pendingSinceS<0.0)run.pendingSinceS=run.elapsedS;
+                run.oldestPendingAgeS=(std::max)(run.oldestPendingAgeS,
+                    run.elapsedS-run.pendingSinceS);
+            }
+            else run.pendingSinceS=-1.0;
+            SIZE_T const ws=ProcessWorkingSetBytes();
+            SIZE_T const priv=ProcessPrivateBytes();
+            run.maxWorkingSet=(std::max)(run.maxWorkingSet,ws);
+            run.maxPrivate=(std::max)(run.maxPrivate,priv);
+            run.endWorkingSet=ws;run.endPrivate=priv;run.endPending=pending;
+            if(run.trace&&(run.movementFrames%30==0||run.elapsedS>=g.soakDurationS))
+            {
+                std::fprintf(run.trace,
+                    "%.3f,%.1f,%.3f,%.3f,%s,%.3f,%d,%d,%d,%.2f,%llu,%llu,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                    run.elapsedS,run.distanceM,g.feetX,g.feetY,SoakModeName(g.soakMode),
+                    g.playWorldgenFrameMs,(int)CardinalPackageMap(g.stage0PlayView).size(),
+                    pending,workers,complete,
+                    (unsigned long long)ws,(unsigned long long)priv,
+                    s_traversalWake.packagesCreated-run.wakeStart.packagesCreated,
+                    s_traversalWake.packagesRetired-run.wakeStart.packagesRetired,
+                    s_traversalWake.waterBodyReconstructions-run.wakeStart.waterBodyReconstructions,
+                    s_traversalWake.topologyActivations-run.wakeStart.topologyActivations,
+                    s_traversalWake.derivedMeshRebuilds-run.wakeStart.derivedMeshRebuilds,
+                    s_traversalWake.collisionPublications-run.wakeStart.collisionPublications,
+                    s_traversalWake.grassLoads,s_traversalWake.treeLoads);
+            }
+            if(run.elapsedS>=g.soakDurationS)
+            {
+                run.endPending=pending;
+                bool const ok=WriteStreamingSoakArtifact();
+                g.certStreamingSoak=false;
+                PostQuitMessage(ok?0:2);
+            }
+        }
+    }
+
     void LivingWorldLoadAfterRender()
     {
         if(!g.certLivingWorldLoad||s_livingWorldLoad.receipts.empty())return;
@@ -37425,19 +37828,20 @@ namespace
         {
             WorldgenPlayInitialize();
             if(g.presentWaterTerrainStateRuntime&&!g.presentWaterTerrainStateRuntime->Complete())
-                g.presentWaterTerrainStateRuntime->Tick(48);
+            {++s_traversalWake.waterBodyReconstructions;g.presentWaterTerrainStateRuntime->Tick(48);}
             if(g.presentWaterTerrainResponseRuntime&&!g.presentWaterTerrainResponseRuntime->Complete())
-                g.presentWaterTerrainResponseRuntime->Tick(48);
+            {++s_traversalWake.waterBodyReconstructions;g.presentWaterTerrainResponseRuntime->Tick(48);}
             if(g.presentWaterTopologyRuntime&&!g.presentWaterTopologyRuntime->Complete())
-                g.presentWaterTopologyRuntime->Tick(48);
+            {++s_traversalWake.topologyActivations;g.presentWaterTopologyRuntime->Tick(48);}
             if(g.presentWaterExternalRuntime&&!g.presentWaterExternalRuntime->Complete())
-                g.presentWaterExternalRuntime->Tick(48);
+            {++s_traversalWake.waterBodyReconstructions;g.presentWaterExternalRuntime->Tick(48);}
             if(g.presentWaterTransferRuntime&&!g.presentWaterTransferRuntime->Complete())
-                g.presentWaterTransferRuntime->Tick(48);
+            {++s_traversalWake.waterBodyReconstructions;g.presentWaterTransferRuntime->Tick(48);}
             if(g.presentWaterEquilibrateRuntime&&!g.presentWaterEquilibrateRuntime->Complete())
-                g.presentWaterEquilibrateRuntime->Tick(48);
+            {++s_traversalWake.waterBodyReconstructions;g.presentWaterEquilibrateRuntime->Tick(48);}
             RuntimeIndependenceTick();
             WorldgenCardinalReplacementTick();
+            StreamingSoakTick();
             Stage11ResidencyWaterfallTick();
             Stage11ShiftScalingTick();
             Stage11FreeFlyTick();
@@ -37485,7 +37889,8 @@ namespace
             bool const certMode=g.certDig||g.certGeo||g.certLsi||g.certAsync||g.certP4
                 ||g.certResidency||g.certStress||g.certWater||g.certPickFracture
                 ||g.certShelterCleanBenchmark||g.certSinglePickBenchmark||g.certPickMatrixOnly
-                ||g.certWorldgenBaselinePerf||g.playWorldgenBaseline;
+                ||g.certWorldgenBaselinePerf||g.playWorldgenBaseline
+                ||g.certStreamingSoak;
             if(!certMode)
             {
                 g.shelterStampLoadAttempted=true;
@@ -41308,6 +41713,57 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.playWorldgenBaseline=true;g.playP5b2aLaunch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak")==0
+                  ||_wcsicmp(argv[i],L"--cert-streaming-soak-p5b2a")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-streaming-soak")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=22;
+                    g.playWorldgenBaseline=true;g.playP5b2aLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-duration-s=",18)==0)
+                {
+                    double const seconds=_wtof(argv[i]+18);
+                    if(seconds>=10.0&&seconds<=1800.0)g.soakDurationS=seconds;
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-speed-mps=",17)==0)
+                {
+                    float const speed=(float)_wtof(argv[i]+17);
+                    if(speed>0.f&&speed<=kInformationalStressFlyMps+0.001f)
+                    {
+                        g.soakSpeedMps=speed;
+                        if(speed+0.001f>=kInformationalStressFlyMps)
+                        {g.soakInformationalOnly=true;g.soakMode=3;}
+                        else if(speed+0.001f>=kFlySpeedMps)g.soakMode=3;
+                    }
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-mode=",12)==0)
+                {
+                    wchar_t const* mode=argv[i]+12;
+                    if(_wcsicmp(mode,L"walk")==0){g.soakMode=0;g.soakSpeedMps=kWalkSpeedMps;}
+                    else if(_wcsicmp(mode,L"run")==0){g.soakMode=1;g.soakSpeedMps=kRunSpeedMps;}
+                    else if(_wcsicmp(mode,L"sprint")==0){g.soakMode=2;g.soakSpeedMps=kSprintSpeedMps;}
+                    else if(_wcsicmp(mode,L"fly")==0||_wcsicmp(mode,L"free-flight")==0
+                      ||_wcsicmp(mode,L"freefly")==0){g.soakMode=3;g.soakSpeedMps=kFlySpeedMps;}
+                    continue;
+                }
+                if(_wcsnicmp(argv[i],L"--soak-bearing=",15)==0)
+                {
+                    wchar_t const* b=argv[i]+15;
+                    if(_wcsicmp(b,L"north")==0||_wcsicmp(b,L"n")==0)g.soakBearing=0;
+                    else if(_wcsicmp(b,L"east")==0||_wcsicmp(b,L"e")==0)g.soakBearing=1;
+                    else if(_wcsicmp(b,L"south")==0||_wcsicmp(b,L"s")==0)g.soakBearing=2;
+                    else if(_wcsicmp(b,L"west")==0||_wcsicmp(b,L"w")==0)g.soakBearing=3;
+                    else if(_wcsicmp(b,L"northeast")==0||_wcsicmp(b,L"ne")==0)g.soakBearing=4;
+                    else if(_wcsicmp(b,L"southeast")==0||_wcsicmp(b,L"se")==0)g.soakBearing=5;
+                    else if(_wcsicmp(b,L"southwest")==0||_wcsicmp(b,L"sw")==0)g.soakBearing=6;
+                    else if(_wcsicmp(b,L"northwest")==0||_wcsicmp(b,L"nw")==0)g.soakBearing=7;
+                    continue;
                 }
                 if(_wcsicmp(argv[i],L"--play-stage16f2-water-transfer")==0
                   ||_wcsicmp(argv[i],L"--play-stage16f2")==0)

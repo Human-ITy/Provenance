@@ -273,6 +273,19 @@ Also closed: water erosion, sediment transport, bank collapse, rainfall,
 groundwater, active 16B erosion, 16C remobilization, ecology.
 
 ```
+TRAVERSAL + STREAMING SOAK (standing matrix)
+```
+
+Cardinal replacement ≠ soak. A stage is certified only if the player can keep
+moving through newly generated world indefinitely, within bounded residency
+and frame-time limits. Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
+
+- Test A: `--cert-worldgen-cardinal-replacement-p5b2a` (EVERY CUT)
+- Test B: `--cert-streaming-soak-p5b2a` (first landing 90 s; milestone 300–900 s)
+- Do not weaken 16.667 / 2601 / exact-return gates.
+- P5b.2B / P5b.3 / rainfall / erosion remain CLOSED.
+
+```
 P5 SIDE-GATE — MATERIAL-TRUE PICK FRACTURE + CLOSED LOCAL SURFACE
 SHA: fa73dd240214ce48659937fa5df757d05d10c15f
 ```

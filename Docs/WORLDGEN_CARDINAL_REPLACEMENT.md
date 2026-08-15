@@ -56,7 +56,11 @@ Docs/provenance_cardinal_<stage>_<bearing>_outer.ppm
 Docs/provenance_cardinal_visual_audit_all.png
 ```
 
-Passing this certificate closes world-replacement correctness only. Synchronous
-residency/reconstruction spikes remain a separate performance gate. Macro
-geography remains blocked until the Stage 6 and compiled-relief hitch lane is
-closed.
+Passing this certificate closes world-replacement correctness only. It is
+**Test A** of the standing traversal matrix. It does not prove indefinite
+travel. Long-haul bounded residency is **Test B**:
+`TRAVERSAL_STREAMING_SOAK_HANDOFF.md` / `--cert-streaming-soak`.
+
+Synchronous residency/reconstruction spikes remain a separate performance
+gate. Macro geography remains blocked until the Stage 6 and compiled-relief
+hitch lane is closed.

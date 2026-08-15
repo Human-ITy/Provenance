@@ -44,6 +44,7 @@ They may **not** disagree about subvoxel occupancy, grams, terrain mutation, wat
 | **P4.4** Upstream body id wire | Production `terrain_mutate` emits body/agg ids; `--cert-p4` vs committed bridge | See `PROVENANCE_PIN.md` |
 | **P4.5** Gameplay-scale stress floor | History must not scale recurring frame cost; `--cert-stress` | See `PROVENANCE_PIN.md` |
 | **P5** Water | P5a ledger freeze; **P5b.1 FROZEN** one-way; **P5b.2A CERTIFIED** state-only. P5b.2B/P5b.3 CLOSED | See `PROVENANCE_PIN.md` / `P5B2A_TERRAIN_STATE_HANDOFF.md` |
+| **Traversal** | Standing matrix: Test A cardinal replacement ≠ Test B streaming soak | `TRAVERSAL_STREAMING_SOAK_HANDOFF.md` |
 
 ### The voxel-form gate (user law)
 
@@ -81,6 +82,11 @@ Not a mobile claim. Separate study required for Android/iOS.
 ## Continuation criteria
 
 Keep going only if shared-route benchmarks beat Unreal on residency / latency / memory **without** dropping collision, receipts, grams, or persistence.
+
+A worldgen stage is not certified just because its math is correct. It is
+certified only if the player can keep moving through newly generated world
+indefinitely, within bounded residency and frame-time limits. Cardinal
+replacement (exact return) is not a soak. See `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 ## Reject / defer
 
