@@ -252,7 +252,7 @@ occupied water with no admissible conserved resolution → refuse.
 
 ```
 P5b.2A WATER → TERRAIN MATERIAL STATE — REVERSE STATE ONLY
-SHA: (landed this commit)
+SHA: 570c7be27260289eb26a3608d7aed5416c929449
 PARENT: e64a4df3 / 5f4c075d / 4e6db843
 ```
 

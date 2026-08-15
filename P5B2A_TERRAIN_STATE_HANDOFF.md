@@ -15,7 +15,8 @@ SimulationDomain extract.
 
 ## Freeze
 
-P5b.1 remains frozen at pin `e64a4df3` on `provenance/client-spike`
+P5b.2A coupling landed at `570c7be27260289eb26a3608d7aed5416c929449` on
+`provenance/client-spike`. P5b.1 remains frozen at pin `e64a4df3`
 (player-path land `5f4c075d`, coupling land `4e6db843`). Stage 16F.4 remains
 frozen at `3d84eac4`.
 
