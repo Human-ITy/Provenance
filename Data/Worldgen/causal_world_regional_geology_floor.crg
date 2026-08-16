@@ -1,0 +1,36 @@
+PROVENANCE_CAUSAL_REGIONAL_GEOLOGY_V1
+# MW2: persistent regional 3D geology keyed to certified MW1 provinces.
+# Subsurface truth only. Present surface remains the MW1 forcing field.
+# No valley carving, drainage rewrite, or compiled erosion program.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_geology_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_geology_floor
+authority_revision=1
+geology_event_id=5e20120000000001
+chronology=40
+seed=mw2-64km-01
+regional_geology_enabled=1
+fold_amplitude_m=120.0
+fold_wavelength_m=3200.0
+fault_across_m=800.0
+fault_dip_deg=65.0
+fault_slip_m=220.0
+fault_heave_m=80.0
+pluton_along_m=4000.0
+pluton_across_m=1500.0
+pluton_z_m=800.0
+pluton_radius_along_m=2500.0
+pluton_radius_across_m=1600.0
+pluton_radius_z_m=900.0
+pluton_irregularity=0.08
+basin_unconformity_z_m=-400.0
+basin_fill_base_m=60.0
+basin_fill_per_subsidence=1.60
+host_lower_min_m=80.0
+host_lower_max_m=420.0
+host_middle_min_m=420.0
+host_middle_max_m=780.0
+host_upper_min_m=780.0
+basement_top_m=80.0
