@@ -1,0 +1,19 @@
+PROVENANCE_CAUSAL_REGIONAL_REGOLITH_V1
+# MW7: compiled near-surface soils / regolith on certified MW1–MW6.
+# Derived profile state. Not a terrain carver, not vegetation, not biomes.
+# Off / no-MW7 leaves exact MW6 geometry, bodies, and hydroclimate identity.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_regolith_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_regolith_floor
+authority_revision=1
+regolith_event_id=4d57370000000001
+chronology=90
+seed=mw7-64km-01
+regional_regolith_enabled=1
+grid_step_m=256.0
+weathering_scale=1.00
+depth_scale=1.00
+organic_potential_scale=1.00
+saturation_wetness=0.55

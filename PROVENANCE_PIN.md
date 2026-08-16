@@ -255,7 +255,8 @@ MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
 MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
 MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
-MW7–MW8 soils → biomes                    CLOSED
+MW7     soils / regolith                  CERTIFIED
+MW8     biomes                            CLOSED
 ```
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
@@ -388,7 +389,7 @@ the intersection surface, not FormationId. Off / no-MW3 == exact MW2 present
 river network is MW4. Handoff: `MW3_REGIONAL_EROSION_HANDOFF.md`.
 Play: `PLAY_MW3_REGIONAL_EROSION.cmd` / `--play-mw3-regional-erosion`.
 Cert: `CERT_MW3_REGIONAL_EROSION.cmd`.
-CLOSED: MW7–MW8, 3C structural collapse, 16C runtime remobilization.
+CLOSED: MW8 biomes, 3C structural collapse, 16C runtime remobilization.
 Do not add PLAYABLE biome/flora rows.
 
 **MW4 CERTIFIED / FROZEN** @ `cc7fe436` — watershed + valley organization on the MW3 surface,
@@ -398,7 +399,7 @@ drainage identity from 64 km through 12.5 cm bank/bed (host MW2
 FormationId on the MW4-off / no-MW5 path). Handoff: `MW4_DRAINAGE_VALLEYS_HANDOFF.md`.
 Play: `PLAY_MW4_DRAINAGE_VALLEYS.cmd` / `--play-mw4-drainage-valleys`.
 Cert: `CERT_MW4_DRAINAGE_VALLEYS.cmd`.
-CLOSED: MW7–MW8, 3C structural collapse, 16C runtime remobilization,
+CLOSED: MW8 biomes, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership.
 
 **MW5 CERTIFIED / FROZEN** @ `ba6faf61` — depositional landscape consuming MW3/MW4 export mass.
@@ -409,7 +410,7 @@ conserved: source == deposited + boundary export. Handoff:
 `MW5_DEPOSITIONAL_LANDSCAPE_HANDOFF.md`.
 Play: `PLAY_MW5_DEPOSITIONAL_LANDSCAPE.cmd` / `--play-mw5-depositional-landscape`.
 Cert: `CERT_MW5_DEPOSITIONAL_LANDSCAPE.cmd`.
-CLOSED: MW7–MW8, 3C structural collapse, 16C runtime remobilization,
+CLOSED: MW8 biomes, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership.
 
 **MW6 CERTIFIED / FROZEN** @ `e8704845` — compiled regional hydroclimate on the certified MW1–MW5
@@ -422,8 +423,20 @@ not scoped to the 64 km cert box. Prevailing moisture azimuth is regional
 `MW6_HYDROCLIMATE_HANDOFF.md`.
 Play: `PLAY_MW6_HYDROCLIMATE.cmd` / `--play-mw6-hydroclimate`.
 Cert: `CERT_MW6_HYDROCLIMATE.cmd`.
-CLOSED: MW7–MW8, 3C structural collapse, 16C runtime remobilization,
+CLOSED: MW8 biomes, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership, live weather, glaciers.
+
+**MW7 CERTIFIED** — derived near-surface soils / regolith profile on certified
+MW1–MW6. Not host geology, not a depositional body, not a terrain carver, and
+not vegetation. Off / no-MW7 == exact MW6 present (max |ΔZ| 0) with unchanged
+HydroclimateId, deposit bodies, and FormationId. A 12.5 cm sample in an MW5
+deposit retains the body's source ancestry (`D05_BASIN_FILL` / `B03_HOST_UPPER`).
+Handoff: `MW7_SOILS_REGOLITH_HANDOFF.md`.
+Play: `PLAY_MW7_SOILS_REGOLITH.cmd` / `--play-mw7-soils-regolith`.
+Cert: `CERT_MW7_SOILS_REGOLITH.cmd`.
+CLOSED: MW8 biomes, MW9 flora/fauna, 3C structural collapse, 16C runtime
+remobilization, live P5b / 16D play ownership, live weather, glaciers,
+groundwater, vegetation.
 
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
@@ -435,9 +448,11 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
   Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
-- Test A: `--cert-worldgen-cardinal-replacement-mw6` (EVERY CUT, latest).
-  Digest `0720123f96a82229` origin==return. 2601 packages. Movement frames
-  over 16.667 = 0 on N/E/S/W (worst movement ~4.7 ms). MW5 control remains
+- Test A: `--cert-worldgen-cardinal-replacement-mw7` (EVERY CUT, latest).
+  Digest `983e0d8f7014d5ea` origin==return. 2601 packages. Movement frames
+  over 16.667 = 0 on N/E/S/W (worst movement ~5.8 ms). MW6 control remains
+  `--cert-worldgen-cardinal-replacement-mw6` digest `0720123f96a82229`.
+  MW5 control remains
   `--cert-worldgen-cardinal-replacement-mw5` digest `bdef220660da3b68`.
   MW4 control remains
   `--cert-worldgen-cardinal-replacement-mw4` digest `e7d0f813783e2e9f`.
@@ -450,10 +465,10 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   `--cert-worldgen-cardinal-replacement-16c1` digest `e7bb12b2b2ec12e3`.
   3B.3B control remains `--cert-worldgen-cardinal-replacement-p5b3b3b`
   digest `1d1dd0776f69f322`.
-- Test B: `--cert-streaming-soak-mw6` (90 s NE fly **PASS** this cut:
-  0 / 84699 frames >16.667, max 8.999 ms, 2601, pending 0.
-  MW1/MW2/MW3/MW4/MW5/MW6 travel physics **idle**: rebuilds = 0, compiles = 0. P5b 2C–3B.3B
-  and 16C.1 also idle. 300/900 not run — no persistent MW6 workload.
+- Test B: `--cert-streaming-soak-mw7` (90 s NE fly **PASS** this cut:
+  0 / 84043 frames >16.667, max 11.158 ms, 2601, pending 0.
+  MW1/MW2/MW3/MW4/MW5/MW6/MW7 travel physics **idle**: rebuilds = 0, compiles = 0. P5b 2C–3B.3B
+  and 16C.1 also idle. 300/900 not run — no persistent MW7 workload.
   Long-haul 300/900 remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
@@ -484,7 +499,8 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   MW4 90 s Test B **PASS** (idle rebuilds/compiles = 0).
   MW5 90 s Test B **PASS** (idle rebuilds/compiles = 0).
   MW6 90 s Test B **PASS** (idle rebuilds/compiles = 0).
-  **P5b.3C / 16C remobilization / MW7–MW8 stay CLOSED.**
+  MW7 90 s Test B **PASS** (idle rebuilds/compiles = 0).
+  **P5b.3C / 16C remobilization / MW8 biomes stay CLOSED.**
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. **P5b.3C** / rainfall / erosion
@@ -536,7 +552,8 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW4 CERTIFIED / FROZEN** @ `cc7fe436` (watershed + valley organization on the MW3 surface; no river-noise layer).
 **MW5 CERTIFIED / FROZEN** @ `ba6faf61` (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
 **MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
-**P5b.3C CLOSED** (structural collapse). **MW7–MW8 CLOSED**.
+**MW7 CERTIFIED** (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
+**P5b.3C CLOSED** (structural collapse). **MW8 biomes CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
