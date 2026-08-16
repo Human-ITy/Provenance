@@ -254,7 +254,7 @@ MW2     regional 3D geology               CERTIFIED / FROZEN @ 6ada7260
 MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
 MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
 MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
-MW6     hydroclimate                      CERTIFIED
+MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7–MW8 soils → biomes                    CLOSED
 ```
 
@@ -412,7 +412,7 @@ Cert: `CERT_MW5_DEPOSITIONAL_LANDSCAPE.cmd`.
 CLOSED: MW7–MW8, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership.
 
-**MW6 CERTIFIED** — compiled regional hydroclimate on the certified MW1–MW5
+**MW6 CERTIFIED / FROZEN** @ `e8704845` — compiled regional hydroclimate on the certified MW1–MW5
 landscape. Long-term temperature, moisture, orographic/rain-shadow, wetness,
 runoff potential, snow-persistence, exposure, and basin/valley tendency.
 Does not mutate terrain (off == exact MW5 present, max |ΔZ| 0). Does not
@@ -535,7 +535,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW3 CERTIFIED / FROZEN** @ `0274e22e` (compiled denudation on MW2 geology; intersection surface only).
 **MW4 CERTIFIED / FROZEN** @ `cc7fe436` (watershed + valley organization on the MW3 surface; no river-noise layer).
 **MW5 CERTIFIED / FROZEN** @ `ba6faf61` (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
-**MW6 CERTIFIED** (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
+**MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
 **P5b.3C CLOSED** (structural collapse). **MW7–MW8 CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 

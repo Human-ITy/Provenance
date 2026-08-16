@@ -40,7 +40,7 @@ edge.
 
 ## This cut
 
-SHA: see `PROVENANCE_PIN.md` after land.
+SHA: `e8704845` (`e8704845a00c9945423b791b79f73c3fa6e5a48b`).
 
 Freeze parents:
 
@@ -177,7 +177,7 @@ MW2 regional 3D geology          CERTIFIED / FROZEN @ 6ada7260
 MW3 regional erosion             CERTIFIED / FROZEN @ 0274e22e
 MW4 drainage / valleys           CERTIFIED / FROZEN @ cc7fe436
 MW5 depositional landscape       CERTIFIED / FROZEN @ ba6faf61
-MW6 hydroclimate                 CERTIFIED
+MW6 hydroclimate                 CERTIFIED / FROZEN @ e8704845
 MW7 soils / regolith             CLOSED
 MW8 biomes                       CLOSED
 ```
