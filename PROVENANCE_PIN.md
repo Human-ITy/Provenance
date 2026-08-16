@@ -255,7 +255,7 @@ MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
 MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
 MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
-MW7     soils / regolith                  CERTIFIED
+MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CLOSED
 ```
 
@@ -426,7 +426,7 @@ Cert: `CERT_MW6_HYDROCLIMATE.cmd`.
 CLOSED: MW8 biomes, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership, live weather, glaciers.
 
-**MW7 CERTIFIED** — derived near-surface soils / regolith profile on certified
+**MW7 CERTIFIED / FROZEN** @ `307e92fc` — derived near-surface soils / regolith profile on certified
 MW1–MW6. Not host geology, not a depositional body, not a terrain carver, and
 not vegetation. Off / no-MW7 == exact MW6 present (max |ΔZ| 0) with unchanged
 HydroclimateId, deposit bodies, and FormationId. A 12.5 cm sample in an MW5
@@ -552,7 +552,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW4 CERTIFIED / FROZEN** @ `cc7fe436` (watershed + valley organization on the MW3 surface; no river-noise layer).
 **MW5 CERTIFIED / FROZEN** @ `ba6faf61` (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
 **MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
-**MW7 CERTIFIED** (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
+**MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
 **P5b.3C CLOSED** (structural collapse). **MW8 biomes CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 

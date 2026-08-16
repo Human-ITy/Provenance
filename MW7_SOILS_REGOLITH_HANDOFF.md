@@ -39,7 +39,7 @@ windows can agree.
 
 ## This cut
 
-SHA: see `PROVENANCE_PIN.md` after land.
+SHA: `307e92fc` (`307e92fc41d9654f6994ea3ec4daf27f4ddab797`).
 
 Freeze parents:
 
@@ -185,7 +185,7 @@ MW3 regional erosion             CERTIFIED / FROZEN @ 0274e22e
 MW4 drainage / valleys           CERTIFIED / FROZEN @ cc7fe436
 MW5 depositional landscape       CERTIFIED / FROZEN @ ba6faf61
 MW6 hydroclimate                 CERTIFIED / FROZEN @ e8704845
-MW7 soils / regolith             CERTIFIED
+MW7 soils / regolith             CERTIFIED / FROZEN @ 307e92fc
 MW8 biomes                       CLOSED
 ```
 
