@@ -1,0 +1,26 @@
+PROVENANCE_CAUSAL_REGIONAL_HYDROCLIMATE_V1
+# MW6: compiled regional hydroclimate forcing on certified MW1–MW5 terrain.
+# Long-term temperature / moisture / exposure regime. Not live weather.
+# Moisture azimuth is a larger-system transport direction, not a 64 km box edge.
+# Does not mutate terrain. Off / no-MW6 leaves exact MW5 geometry.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_hydroclimate_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_hydroclimate_floor
+authority_revision=1
+hydroclimate_event_id=4d57360000000001
+chronology=80
+seed=mw6-64km-01
+regional_hydroclimate_enabled=1
+grid_step_m=256.0
+moisture_azimuth_deg=298.0
+sea_level_temp_c=6.5
+lapse_k_per_km=6.5
+latitude_temp_k_per_deg=0.55
+seasonal_base_k=11.0
+moisture_supply=1.00
+orographic_gain_scale=0.85
+rain_shadow_scale=0.90
+freeze_threshold_c=0.0
+et_base=0.42
