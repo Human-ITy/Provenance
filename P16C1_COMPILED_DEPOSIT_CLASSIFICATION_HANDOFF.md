@@ -31,6 +31,13 @@ frozen Stage 16C compiled sediment
 Play kernel is **16C-weight**: classification owns compiled sediment only.
 Analytical cert loads 16D once to prove water digest unchanged.
 
+## Freeze
+
+This cut: `047d4304` (`047d430421c8230475a6ae55faa95cf00df0791f`).
+Parents: P5b.3B.3B `2f722735`, P5b.3B.3A `160a0842`. 16C sediment
+`1367584c41aedcdf` / geometry `7ae7aa62c50489e2`. 16D water
+`636d01ba00d3dffe`.
+
 ## Freeze parents
 
 ```
@@ -38,7 +45,7 @@ Analytical cert loads 16D once to prove water digest unchanged.
 P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
 P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 16C     compiled sediment routing         CERTIFIED / FROZEN
-16C.1   compiled-deposit classification   CERTIFIED
+16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
 P5b.3C  structural collapse               CLOSED
 ```
 

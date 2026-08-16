@@ -248,7 +248,7 @@ P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
 P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 P5b.3C  structural collapse               CLOSED
 16C     compiled sediment routing         CERTIFIED / FROZEN
-16C.1   compiled-deposit classification   CERTIFIED
+16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
 ```
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
@@ -349,7 +349,8 @@ ecology.
 **16C CERTIFIED / FROZEN** — compiled sediment routing unchanged
 (`1367584c41aedcdf` / geometry `7ae7aa62c50489e2`).
 
-**16C.1 CERTIFIED** — last local-chain bridge before macro-scale worldgen.
+**16C.1 CERTIFIED / FROZEN** @ `047d4304` — last local-chain bridge before
+macro-scale worldgen.
 Already-compiled 16C sediment is labeled loose / settled aggregate /
 compacted deposit / not depositional. Classification is not a ledger
 transfer. Off == frozen 16C/16D present (`2eb519c42ca5bd6b`). On
@@ -452,7 +453,7 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B.3A CERTIFIED / FROZEN** (depositional aggregate: settled loose → sediment body, not host weld).
 **P5b.3B.3B CERTIFIED / FROZEN** @ `2f722735` (compaction: deposited body → stable deposited ground, not host weld).
 **3A–3B.3B** = worldgen shaping primitive (ready). **16C** CERTIFIED
-unchanged. **16C.1** CERTIFIED (last local bridge before macro).
+unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before macro).
 **P5b.3C CLOSED** (structural collapse). Macro provinces / mountain belts /
 basins **not opened**. Erosion / rainfall / deep groundwater CLOSED.
 
