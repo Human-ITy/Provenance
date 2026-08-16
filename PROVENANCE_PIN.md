@@ -251,7 +251,7 @@ P5b.3C  structural collapse               CLOSED
 16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
 MW1     provinces / belts / basins        CERTIFIED / FROZEN @ 569269aa
 MW2     regional 3D geology               CERTIFIED / FROZEN @ 6ada7260
-MW3     regional erosion                  CERTIFIED
+MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
 MW4–MW8 drainage → biomes                 CLOSED
 ```
 
@@ -379,7 +379,7 @@ Off / no-MW2 == frozen 16C.1 local present. Handoff:
 Play: `PLAY_MW2_REGIONAL_GEOLOGY.cmd` / `--play-mw2-regional-geology`.
 Cert: `CERT_MW2_REGIONAL_GEOLOGY.cmd`.
 
-**MW3 CERTIFIED** — compiled denudation on MW2 geology + MW1 relief. Changes
+**MW3 CERTIFIED / FROZEN** @ `0274e22e` — compiled denudation on MW2 geology + MW1 relief. Changes
 the intersection surface, not FormationId. Off / no-MW3 == exact MW2 present
 (max |ΔZ| 0). Mass conserved: removed == exported. Provisional flow only;
 river network is MW4. Handoff: `MW3_REGIONAL_EROSION_HANDOFF.md`.
@@ -486,7 +486,7 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before macro).
 **MW1 CERTIFIED / FROZEN** @ `569269aa` (provinces / belts / basins; 64 km forcing field).
 **MW2 CERTIFIED / FROZEN** @ `6ada7260` (regional 3D geology; persistent bodies through depth).
-**MW3 CERTIFIED** (compiled denudation on MW2 geology; intersection surface only).
+**MW3 CERTIFIED / FROZEN** @ `0274e22e` (compiled denudation on MW2 geology; intersection surface only).
 **P5b.3C CLOSED** (structural collapse). **MW4–MW8 CLOSED**.
 Certified river network / rainfall / deep groundwater CLOSED.
 

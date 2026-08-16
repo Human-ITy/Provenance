@@ -28,7 +28,7 @@ MW2 present surface (and frozen local 16C.1) untouched.
 
 ## This cut
 
-SHA: `PENDING_STAMP` (filled after the certify commit).
+SHA: `0274e22e` (`0274e22e784f3c70a7b5af70dff5123a1644a089`).
 
 Freeze parents:
 
@@ -144,7 +144,7 @@ DEFERRED
 MACRO WORLDGEN
 MW1 provinces / belts / basins   CERTIFIED
 MW2 regional 3D geology          CERTIFIED / FROZEN @ 6ada7260
-MW3 regional erosion             CERTIFIED
+MW3 regional erosion             CERTIFIED / FROZEN @ 0274e22e
 MW4 valley/drainage morphology   CLOSED
 MW5 depositional landscape       CLOSED
 MW6 hydroclimate                 CLOSED
