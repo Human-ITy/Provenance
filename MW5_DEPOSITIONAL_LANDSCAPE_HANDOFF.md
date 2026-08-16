@@ -33,7 +33,7 @@ body, or trunk-valley package can accumulate across neighboring windows.
 
 ## This cut
 
-SHA: `THIS_CUT` (full hash filled by the freeze stamp).
+SHA: `ba6faf61` (`ba6faf61b0159a670191b05e1a68363645341b8a`).
 
 Freeze parents:
 
@@ -195,7 +195,7 @@ MW1 provinces / belts / basins   CERTIFIED
 MW2 regional 3D geology          CERTIFIED / FROZEN @ 6ada7260
 MW3 regional erosion             CERTIFIED / FROZEN @ 0274e22e
 MW4 drainage / valleys           CERTIFIED / FROZEN @ cc7fe436
-MW5 depositional landscape       CERTIFIED
+MW5 depositional landscape       CERTIFIED / FROZEN @ ba6faf61
 MW6 hydroclimate                 CLOSED
 MW7 soils / regolith             CLOSED
 MW8 biomes                       CLOSED

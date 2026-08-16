@@ -253,7 +253,7 @@ MW1     provinces / belts / basins        CERTIFIED / FROZEN @ 569269aa
 MW2     regional 3D geology               CERTIFIED / FROZEN @ 6ada7260
 MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
 MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
-MW5     depositional landscape            CERTIFIED
+MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6–MW8 hydroclimate → biomes             CLOSED
 ```
 
@@ -400,7 +400,7 @@ Cert: `CERT_MW4_DRAINAGE_VALLEYS.cmd`.
 CLOSED: MW6–MW8, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership.
 
-**MW5 CERTIFIED** — depositional landscape consuming MW3/MW4 export mass.
+**MW5 CERTIFIED / FROZEN** @ `ba6faf61` — depositional landscape consuming MW3/MW4 export mass.
 Fans, valley fill, floodplains, bars, basin fill, terraces, and colluvial
 aprons as 16C.1 / 3B.3B bodies (loose / settled / compacted), distinct from
 host FormationId. Off / no-MW5 == exact MW4 present (max |ΔZ| 0). Mass
@@ -517,7 +517,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW2 CERTIFIED / FROZEN** @ `6ada7260` (regional 3D geology; persistent bodies through depth).
 **MW3 CERTIFIED / FROZEN** @ `0274e22e` (compiled denudation on MW2 geology; intersection surface only).
 **MW4 CERTIFIED / FROZEN** @ `cc7fe436` (watershed + valley organization on the MW3 surface; no river-noise layer).
-**MW5 CERTIFIED** (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
+**MW5 CERTIFIED / FROZEN** @ `ba6faf61` (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
 **P5b.3C CLOSED** (structural collapse). **MW6–MW8 CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
