@@ -47,7 +47,7 @@ compact arbitrarily (no admissible load)       CLOSED
 trigger bank collapse                          CLOSED
 enter compiled Stage-16C history               CLOSED
 formation-ID merge                             CLOSED
-P5b.3C support / bank collapse                 CLOSED
+P5b.3C structural collapse                     CLOSED
 16C remobilization                             CLOSED
 general soil mechanics                         CLOSED
 general erosion                                CLOSED
@@ -69,12 +69,13 @@ P5b.1   terrain → water coupling          CERTIFIED / FROZEN
 P5b.2A  reverse state coupling            CERTIFIED / FROZEN
 P5b.2B  bounded pore storage              CERTIFIED / FROZEN
 P5b.2C  pore occupancy / topology         CERTIFIED / FROZEN
+3A–3B.3B  runtime deposition chain   worldgen shaping primitive (ready)
 P5b.3A  hydraulic detachment              CERTIFIED / FROZEN @ 6c467fb7
 P5b.3B  hydraulic loose-matter transport  CERTIFIED / FROZEN @ 67d5f524
 P5b.3B.2 loose-matter settling            CERTIFIED / FROZEN @ eeabfb8c
 P5b.3B.3A depositional aggregate          CERTIFIED / FROZEN @ 160a0842
 P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
-P5b.3C  bank/support collapse             CLOSED
+P5b.3C  structural collapse               CLOSED
 ```
 
 ```
@@ -127,14 +128,31 @@ launches a playable stage. CLOSED row (P5b.3C only) is visible and not
 launchable. Esc or M closes. Launch flags still work; the menu does not
 rewrite certified world truth.
 
+Caption above the 3A–3B.3B block when that range is on screen:
+
 ```
-3A      hydraulic detachment                  CERTIFIED
-3B      hydraulic transport                   CERTIFIED
-3B.2    loose settling                        CERTIFIED
+3A-3B.3B  runtime deposition chain   worldgen shaping primitive (ready)
+```
+
+```
+3A      detachment                            CERTIFIED
+3B      transport                             CERTIFIED
+3B.2    settling                              CERTIFIED
 3B.3A   depositional aggregate                CERTIFIED
-3B.3B   compaction / stable terrain surface   CERTIFIED
-3C      support / bank collapse               CLOSED
+3B.3B   compaction                            CERTIFIED
+3C      structural collapse                   CLOSED
 ```
+
+**Chain closed.** Host geology ≠ loose ≠ transported ≠ settled aggregate ≠
+compacted deposited ground; same MaterialId allowed. Runtime still only
+wakes locally when a player/event disturbs it.
+
+**P5b.3C remains CLOSED** — structural connectivity / multi-body; different
+problem class. Not launchable.
+
+**Next local bridge (now certified):** Stage 16C.1 compiled-deposit
+classification. See `P16C1_COMPILED_DEPOSIT_CLASSIFICATION_HANDOFF.md`.
+16C remobilization / 16C mass-routing rewrite / macro provinces stay CLOSED.
 
 ## Record
 
@@ -155,8 +173,9 @@ counters **0** (compacts, compact wakes, remobilizes, stale refuse,
 compaction revision, loose mass, depositional mass). 3B.3A/3B.2/3B/3A/2C
 travel physics also idle. 300/900 not run.
 
-**P5b.3C / 16C stay CLOSED.** No bank/support collapse, no host-formation
-weld, no cement/lithify, no formation-ID merge, no 16C remobilization.
+**P5b.3C / 16C stay CLOSED.** No structural collapse, no host-formation
+weld, no cement/lithify, no formation-ID merge, no 16C remobilization,
+no classify-compiled-deposits worldgen pass.
 
 ## Player runtime
 
@@ -180,4 +199,5 @@ Txn receipt: `Docs/provenance_p5b3b3b_compaction_receipts.csv`
 Soak receipt: `Docs/provenance_p5b3b3b_streaming_soak_cert.txt`
 
 P5b.3C / rainfall / groundwater / general erosion / cementation /
-lithification / formation merge / 16C remobilization stay CLOSED.
+lithification / formation merge / 16C remobilization / 16C classify
+compiled deposits stay CLOSED.

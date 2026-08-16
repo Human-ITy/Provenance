@@ -34,6 +34,7 @@
 #include "CausalDryHydrology.h"
 #include "CausalCompiledFluvialErosion.h"
 #include "CausalCompiledSediment.h"
+#include "CausalCompiledDepositClassification.h"
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -560,7 +561,8 @@ namespace
         PresentWaterTerrainHydraulicTransport = 30,
         PresentWaterTerrainHydraulicSettling = 31,
         PresentWaterTerrainHydraulicDeposition = 32,
-        PresentWaterTerrainHydraulicCompaction = 33
+        PresentWaterTerrainHydraulicCompaction = 33,
+        CompiledDepositClassification = 34
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -917,6 +919,8 @@ namespace
         bool playP5b3b2Launch = false;
         bool playP5b3b3aLaunch = false;
         bool playP5b3b3bLaunch = false;
+        bool playStage16C1Launch = false;
+        int classifyCompiledDepositsOverride = -1;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -961,6 +965,8 @@ namespace
         int certP5b3b3aVisualFrames = 0;
         bool certP5b3b3bVisual = false;
         int certP5b3b3bVisualFrames = 0;
+        bool certStage16C1Visual = false;
+        int certStage16C1VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1145,6 +1151,8 @@ namespace
         bool compiledFluvialCertified = false;
         bool compiledSedimentAuthorityAttempted = false;
         bool compiledSedimentCertified = false;
+        bool compiledDepositClassificationAuthorityAttempted = false;
+        bool compiledDepositClassificationCertified = false;
         bool presentWaterAuthorityAttempted = false;
         bool presentWaterCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
@@ -1162,6 +1170,7 @@ namespace
         std::string dryHydrologyAuthorityReason = "not_loaded";
         std::string compiledFluvialAuthorityReason = "not_loaded";
         std::string compiledSedimentAuthorityReason = "not_loaded";
+        std::string compiledDepositClassificationAuthorityReason = "not_loaded";
         std::string presentWaterAuthorityReason = "not_loaded";
         bool presentWaterBodyAuthorityAttempted = false;
         bool presentWaterBodyCertified = false;
@@ -1220,6 +1229,7 @@ namespace
         std::unique_ptr<CausalDryHydrology::Kernel> dryHydrologyRuntime;
         std::unique_ptr<CausalCompiledFluvialErosion::Kernel> compiledFluvialRuntime;
         std::unique_ptr<CausalCompiledSediment::Kernel> compiledSedimentRuntime;
+        std::unique_ptr<CausalCompiledDepositClassification::Kernel> compiledDepositClassificationRuntime;
         std::unique_ptr<CausalPresentWater::Kernel> presentWaterRuntime;
         std::unique_ptr<CausalPresentWaterBody::Kernel> presentWaterBodyRuntime;
         std::unique_ptr<CausalPresentWaterEquilibrate::Kernel> presentWaterEquilibrateRuntime;
@@ -3194,6 +3204,16 @@ namespace
         return view == Stage0PlayView::CompiledSediment;
     }
 
+    bool IsCompiledDepositClassificationView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::CompiledDepositClassification;
+    }
+
+    bool UsesCompiledSedimentTerrain( Stage0PlayView view )
+    {
+        return IsCompiledSedimentView(view)||IsCompiledDepositClassificationView(view);
+    }
+
     bool IsPresentWaterView( Stage0PlayView view )
     {
         return view == Stage0PlayView::PresentWater;
@@ -3317,7 +3337,7 @@ namespace
     bool UsesBareEarthTerrain( Stage0PlayView view )
     {
         return IsBareEarthGeographyView(view)||IsDryHydrologyView(view)
-            ||IsCompiledFluvialErosionView(view)||IsCompiledSedimentView(view)
+            ||IsCompiledFluvialErosionView(view)||UsesCompiledSedimentTerrain(view)
             ||UsesPresentWaterOccupancy(view);
     }
 
@@ -3397,6 +3417,8 @@ namespace
             "Data\\Worldgen\\causal_world_compiled_fluvial_erosion_floor.cfe";
         constexpr char const* kSedimentPath =
             "Data\\Worldgen\\causal_world_compiled_sediment_floor.csd";
+        constexpr char const* kCompiledDepositClassificationPath =
+            "Data\\Worldgen\\causal_world_compiled_deposit_classification_floor.cdc";
         constexpr char const* kPresentWaterPath =
             "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         constexpr char const* kPresentWaterBodyPath =
@@ -3737,6 +3759,33 @@ namespace
                 g.presentWaterAuthorityReason=g.presentWaterCertified?"certified":reason;
             }
             return g.presentWaterCertified&&g.presentWaterRuntime!=nullptr;
+        }
+
+        if(IsCompiledDepositClassificationView(view))
+        {
+            if(!g.compiledDepositClassificationAuthorityAttempted)
+            {
+                g.compiledDepositClassificationAuthorityAttempted=true;
+                CausalCompiledDepositClassification::Control control=
+                    CausalCompiledDepositClassification::Control::Program;
+                if(g.classifyCompiledDepositsOverride==0)
+                    control=CausalCompiledDepositClassification::Control::ForceOff;
+                else if(g.classifyCompiledDepositsOverride==1)
+                    control=CausalCompiledDepositClassification::Control::ForceOn;
+                std::string reason;g.compiledDepositClassificationRuntime=
+                    CausalCompiledDepositClassification::LoadKernel(kGeologyPath,kExposurePath,
+                        kErosionPath,kIntrusionPath,kMineralizationPath,kFaultPath,
+                        kBreachPath,kGeographyPath,kHydrologyPath,kFluvialPath,
+                        kSedimentPath,kCompiledDepositClassificationPath,
+                        &reason,control);
+                g.compiledDepositClassificationCertified=
+                    g.compiledDepositClassificationRuntime!=nullptr
+                    &&!g.compiledDepositClassificationRuntime->Stale();
+                g.compiledDepositClassificationAuthorityReason=
+                    g.compiledDepositClassificationCertified?"certified":reason;
+            }
+            return g.compiledDepositClassificationCertified
+                &&g.compiledDepositClassificationRuntime!=nullptr;
         }
 
         if(IsCompiledSedimentView(view))
@@ -4290,12 +4339,21 @@ namespace
         return samples;
     }
 
+    CausalCompiledSediment::Kernel const* ActiveCompiledSedimentKernel(Stage0PlayView view)
+    {
+        if(IsCompiledDepositClassificationView(view)&&g.compiledDepositClassificationRuntime)
+            return &g.compiledDepositClassificationRuntime->Sediment();
+        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+            return g.compiledSedimentRuntime.get();
+        return nullptr;
+    }
+
     CausalBareEarthGeography::Kernel const* ActiveBareEarthKernel(Stage0PlayView view)
     {
         if(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel())
             return &ActivePresentWaterKernel()->Geography();
-        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
-            return &g.compiledSedimentRuntime->Geography();
+        if(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view))
+            return &ActiveCompiledSedimentKernel(view)->Geography();
         if(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime)
             return &g.compiledFluvialRuntime->Geography();
         if(IsDryHydrologyView(view)&&g.dryHydrologyRuntime)
@@ -4334,8 +4392,8 @@ namespace
                 // side depending on whether the package was already resident.
                 auto const geology=UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel()
                     ?ActivePresentWaterKernel()->SurfaceGeology(x,y)
-                    :(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
-                    ?g.compiledSedimentRuntime->SurfaceGeology(x,y)
+                    :(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view)
+                    ?ActiveCompiledSedimentKernel(view)->SurfaceGeology(x,y)
                     :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
                         ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y)));
                 if(!geology.found)return false;
@@ -4343,14 +4401,14 @@ namespace
             }
             outZ=(float)(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel()
                 ?ActivePresentWaterKernel()->ReconstructedZ(x,y)
-                :(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
-                ?g.compiledSedimentRuntime->ReconstructedZ(x,y)
+                :(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view)
+                ?ActiveCompiledSedimentKernel(view)->ReconstructedZ(x,y)
                 :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
                     ?g.compiledFluvialRuntime->ReconstructedZ(x,y):geography->ReconstructedZ(x,y))));
             auto const geology=UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel()
                 ?ActivePresentWaterKernel()->SurfaceGeology(x,y)
-                :(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime
-                ?g.compiledSedimentRuntime->SurfaceGeology(x,y)
+                :(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view)
+                ?ActiveCompiledSedimentKernel(view)->SurfaceGeology(x,y)
                 :(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime
                     ?g.compiledFluvialRuntime->SurfaceGeology(x,y):geography->SurfaceGeology(x,y)));
             if(!geology.found)return false;
@@ -4517,11 +4575,12 @@ namespace
             if(z>=surface-0.05)return ActivePresentWaterKernel()->SurfaceGeology(x,y);
             return ActivePresentWaterKernel()->QueryGeology(x,y,z);
         }
-        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+        if(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view))
         {
-            double const surface=g.compiledSedimentRuntime->ReconstructedZ(x,y);
-            if(z>=surface-0.05)return g.compiledSedimentRuntime->SurfaceGeology(x,y);
-            return g.compiledSedimentRuntime->QueryGeology(x,y,z);
+            auto const* sediment=ActiveCompiledSedimentKernel(view);
+            double const surface=sediment->ReconstructedZ(x,y);
+            if(z>=surface-0.05)return sediment->SurfaceGeology(x,y);
+            return sediment->QueryGeology(x,y,z);
         }
         if(UsesBareEarthTerrain(view))
         {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->Query(x,y,z);}
@@ -4575,12 +4634,13 @@ namespace
             }
             return ActivePresentWaterKernel()->Geography().QueryMaterial(x,y,z);
         }
-        if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
+        if(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view))
         {
-            double const surface=g.compiledSedimentRuntime->ReconstructedZ(x,y);
+            auto const* sediment=ActiveCompiledSedimentKernel(view);
+            double const surface=sediment->ReconstructedZ(x,y);
             if(z>=surface-0.05)
             {
-                auto const geology=g.compiledSedimentRuntime->SurfaceGeology(x,y);
+                auto const geology=sediment->SurfaceGeology(x,y);
                 if(!geology.found)return {};
                 char const* material=
                     geology.material=="shale"?"shale":
@@ -4590,7 +4650,7 @@ namespace
                 return {true,material,
                     geology.chronology.empty()?0u:geology.chronology.back()};
             }
-            return g.compiledSedimentRuntime->Geography().QueryMaterial(x,y,z);
+            return sediment->Geography().QueryMaterial(x,y,z);
         }
         if(UsesBareEarthTerrain(view))
         {auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->QueryMaterial(x,y,z);}
@@ -11462,8 +11522,8 @@ namespace
             if(sampleResidentCausalPackage(outZ))return true;
             outZ=(float)(UsesPresentWaterOccupancy(g.stage0PlayView)&&ActivePresentWaterKernel()
                 ?ActivePresentWaterKernel()->ReconstructedZ(x,y)
-                :(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime
-                ?g.compiledSedimentRuntime->ReconstructedZ(x,y)
+                :(UsesCompiledSedimentTerrain(g.stage0PlayView)&&ActiveCompiledSedimentKernel(g.stage0PlayView)
+                ?ActiveCompiledSedimentKernel(g.stage0PlayView)->ReconstructedZ(x,y)
                 :(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime
                     ?g.compiledFluvialRuntime->ReconstructedZ(x,y)
                     :ActiveBareEarthKernel(g.stage0PlayView)->ReconstructedZ(x,y))));
@@ -14094,9 +14154,9 @@ namespace
         else if(UsesPresentWaterOccupancy(job.view)&&workerGeography&&ActivePresentWaterKernel())
         {SampleCompiledSedimentWorkerBlockInto(*workerGeography,
             ActivePresentWaterKernel()->Sediment(),job.bx,job.by,surfaceSamples);}
-        else if(IsCompiledSedimentView(job.view)&&workerGeography&&g.compiledSedimentRuntime)
+        else if(UsesCompiledSedimentTerrain(job.view)&&workerGeography&&ActiveCompiledSedimentKernel(job.view))
         {SampleCompiledSedimentWorkerBlockInto(*workerGeography,
-            *g.compiledSedimentRuntime,job.bx,job.by,surfaceSamples);}
+            *ActiveCompiledSedimentKernel(job.view),job.bx,job.by,surfaceSamples);}
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
         {SampleCompiledFluvialWorkerBlockInto(*workerGeography,
             *g.compiledFluvialRuntime,job.bx,job.by,surfaceSamples);}
@@ -14147,13 +14207,14 @@ namespace
                     surfaceSamples,descriptors.crossings[i]);
                 CausalWorldGeology::MaterialSample geology{};
                 if((UsesPresentWaterOccupancy(job.view)&&ActivePresentWaterKernel()&&workerGeography)
-                  ||(IsCompiledSedimentView(job.view)&&g.compiledSedimentRuntime&&workerGeography))
+                  ||(UsesCompiledSedimentTerrain(job.view)&&ActiveCompiledSedimentKernel(job.view)&&workerGeography))
                 {
                     // Mirror SampleCompiledSedimentWorkerBlock: use the
                     // thread-local geography for Stage-15 Z and shared sediment
                     // only for incision/deposit tables (POD reads).
                     auto const& sediment=UsesPresentWaterOccupancy(job.view)
-                        ?ActivePresentWaterKernel()->Sediment():*g.compiledSedimentRuntime;
+                        ?ActivePresentWaterKernel()->Sediment()
+                        :*ActiveCompiledSedimentKernel(job.view);
                     double const stage15Z=workerGeography->ReconstructedZ(point.x,point.y);
                     double const parentZ=stage15Z-sediment.Erosion()
                         .AuthorizedIncisionDepth(*workerGeography,point.x,point.y,stage15Z);
@@ -14589,7 +14650,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -14640,8 +14701,8 @@ namespace
         {surfaceSamples=g.causalBreachRuntime->SampleBlock(bx,by);}
         else if(UsesPresentWaterOccupancy(g.stage0PlayView)&&ActivePresentWaterKernel())
         {surfaceSamples=ActivePresentWaterKernel()->SampleBlock(bx,by);}
-        else if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
-        {surfaceSamples=g.compiledSedimentRuntime->SampleBlock(bx,by);}
+        else if(UsesCompiledSedimentTerrain(g.stage0PlayView)&&ActiveCompiledSedimentKernel(g.stage0PlayView))
+        {surfaceSamples=ActiveCompiledSedimentKernel(g.stage0PlayView)->SampleBlock(bx,by);}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {surfaceSamples=g.compiledFluvialRuntime->SampleBlock(bx,by);}
         else if(UsesBareEarthTerrain(g.stage0PlayView)&&ActiveBareEarthKernel(g.stage0PlayView))
@@ -14857,7 +14918,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -15061,6 +15122,7 @@ namespace
         if ( IsDryHydrologyView( view ) ) { return 13; }
         if ( IsCompiledFluvialErosionView( view ) ) { return 14; }
         if ( IsCompiledSedimentView( view ) ) { return 15; }
+        if ( IsCompiledDepositClassificationView( view ) ) { return 31; }
         if ( IsPresentWaterBodyView( view ) ) { return 17; }
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
@@ -15139,6 +15201,8 @@ namespace
           "HYDROLOGY.DRY_DRAINAGE_AUTHORITY", "drainage-derived incision, widening, and headward erosion without water", Stage0PlayView::CompiledFluvialErosion },
         { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.COMPILED_SEDIMENT", "Stage 16C - Compiled Sediment Routing",
           "GEOMORPH.COMPILED_FLUVIAL_EROSION", "dry sediment source, transport, deposition, and outlet export without water", Stage0PlayView::CompiledSediment },
+        { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.COMPILED_DEPOSIT_CLASSIFICATION", "Stage 16C.1 - Compiled-Deposit Classification",
+          "GEOMORPH.COMPILED_SEDIMENT", "classify compiled 16C sediment into loose / settled / compacted, not host weld", Stage0PlayView::CompiledDepositClassification },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -15185,8 +15249,22 @@ namespace
     };
 
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
-        { "P5b.3C bank / support collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" }
+        { "P5b.3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" }
     };
+
+    bool IsRuntimeDepositionChainView( Stage0PlayView view )
+    {
+        return view==Stage0PlayView::PresentWaterTerrainHydraulicDetachment
+            || view==Stage0PlayView::PresentWaterTerrainHydraulicTransport
+            || view==Stage0PlayView::PresentWaterTerrainHydraulicSettling
+            || view==Stage0PlayView::PresentWaterTerrainHydraulicDeposition
+            || view==Stage0PlayView::PresentWaterTerrainHydraulicCompaction;
+    }
+
+    char const* RuntimeDepositionChainCaption()
+    {
+        return "3A-3B.3B  runtime deposition chain   worldgen shaping primitive (ready)";
+    }
 
     constexpr int kCertificationBrowserCategoryCount = 3;
 
@@ -15280,6 +15358,8 @@ namespace
         { attempted = g.compiledFluvialAuthorityAttempted; certified = g.compiledFluvialCertified; }
         else if ( IsCompiledSedimentView( entry.view ) )
         { attempted = g.compiledSedimentAuthorityAttempted; certified = g.compiledSedimentCertified; }
+        else if ( IsCompiledDepositClassificationView( entry.view ) )
+        { attempted = g.compiledDepositClassificationAuthorityAttempted; certified = g.compiledDepositClassificationCertified; }
         else if ( IsPresentWaterBodyView( entry.view ) )
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
@@ -15334,12 +15414,59 @@ namespace
     {
         if(boardIndex<0||boardIndex>=kCertificationBrowserCount)return "CLOSED";
         CertificationBrowserEntry const& entry=s_certificationBrowser[boardIndex];
-        char const* runtime=CertificationRuntimeStatus(entry);
         if(entry.view==g.stage0PlayView)return "PLAYABLE";
+        if(IsRuntimeDepositionChainView(entry.view))return "CERTIFIED";
+        char const* runtime=CertificationRuntimeStatus(entry);
         if(std::strcmp(runtime,"CERTIFIED")==0||std::strcmp(runtime,"CURRENT")==0)
             return "CERTIFIED";
         if(std::strcmp(runtime,"FAILED")==0)return "CLOSED";
         return "PLAYABLE";
+    }
+
+    struct StandingBoardTableGeom
+    {
+        float headerY0, headerY1;
+        float colHashX0, colHashX1, colNameX0, colStatusX0, colStatusX1;
+        float rowTop;
+        float stageRowH;
+        int firstVisible;
+        int lastVisible;
+        bool showDepositionCaption;
+        float captionY0;
+    };
+
+    StandingBoardTableGeom MakeStandingBoardTableGeom( float px0, float py0, float px1, float py1 )
+    {
+        StandingBoardTableGeom tbl{};
+        tbl.headerY1 = py1 - 40.f;
+        tbl.headerY0 = tbl.headerY1 - 28.f;
+        tbl.colHashX0 = px0 + 12.f;
+        tbl.colHashX1 = tbl.colHashX0 + 92.f;
+        tbl.colStatusX1 = px1 - 12.f;
+        tbl.colStatusX0 = tbl.colStatusX1 - 140.f;
+        tbl.colNameX0 = tbl.colHashX1 + 8.f;
+        tbl.stageRowH = 26.f;
+        float const detailsH = 36.f;
+        float rowTop = tbl.headerY0 - 4.f;
+        int visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / tbl.stageRowH ) );
+        int const maxStart = (std::max)( 0, kStandingBoardCount - visibleRows );
+        tbl.firstVisible = std::clamp( g.stage0BoardSelection - visibleRows / 2, 0, maxStart );
+        tbl.lastVisible = (std::min)( kStandingBoardCount, tbl.firstVisible + visibleRows );
+        int const chainFirst = BrowserIndexForView(
+            Stage0PlayView::PresentWaterTerrainHydraulicDetachment );
+        int const chainLast = BrowserIndexForView(
+            Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
+        tbl.showDepositionCaption = chainFirst < tbl.lastVisible && chainLast >= tbl.firstVisible;
+        if ( tbl.showDepositionCaption )
+        {
+            constexpr float captionH = 22.f;
+            tbl.captionY0 = rowTop - 16.f;
+            rowTop -= captionH;
+            visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / tbl.stageRowH ) );
+            tbl.lastVisible = (std::min)( kStandingBoardCount, tbl.firstVisible + visibleRows );
+        }
+        tbl.rowTop = rowTop;
+        return tbl;
     }
 
     int StandingBoardIndexForView( Stage0PlayView view )
@@ -15578,6 +15705,7 @@ namespace
             if ( IsDryHydrologyView( view ) ) { reason = &g.dryHydrologyAuthorityReason; }
             if ( IsCompiledFluvialErosionView( view ) ) { reason = &g.compiledFluvialAuthorityReason; }
             if ( IsCompiledSedimentView( view ) ) { reason = &g.compiledSedimentAuthorityReason; }
+            if ( IsCompiledDepositClassificationView( view ) ) { reason = &g.compiledDepositClassificationAuthorityReason; }
             if ( IsPresentWaterBodyView( view ) ) { reason = &g.presentWaterBodyAuthorityReason; }
             if ( IsPresentWaterEquilibrateView( view ) ) { reason = &g.presentWaterEquilibrateAuthorityReason; }
             if ( IsPresentWaterExternalView( view ) ) { reason = &g.presentWaterExternalAuthorityReason; }
@@ -15675,6 +15803,13 @@ namespace
         else if ( IsCompiledSedimentView( view ) && g.compiledSedimentRuntime )
         {
             auto const& authority=g.compiledSedimentRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsCompiledDepositClassificationView( view ) && g.compiledDepositClassificationRuntime )
+        {
+            auto const& authority=g.compiledDepositClassificationRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -15793,6 +15928,15 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="STAGE 16C - compiled sediment routing; water and P5b closed";
+        }
+        if(g.playWorldgenInitialized&&IsCompiledDepositClassificationView(view)&&oldView!=view)
+        {
+            g.feetX=-96.0f;g.feetY=-128.0f;g.yaw=0.42f;g.pitch=-0.18f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="STAGE 16C.1 - compiled-deposit classification; no remobilization";
         }
         if(g.playWorldgenInitialized&&IsPresentWaterView(view)&&oldView!=view)
         {
@@ -15977,6 +16121,7 @@ namespace
             case Stage0PlayView::DryHydrology: return "CERTIFIED DRY WATERSHED AUTHORITY";
             case Stage0PlayView::CompiledFluvialErosion: return "CERTIFIED COMPILED FLUVIAL EROSION";
             case Stage0PlayView::CompiledSediment: return "CERTIFIED COMPILED SEDIMENT ROUTING";
+            case Stage0PlayView::CompiledDepositClassification: return "CERTIFIED COMPILED-DEPOSIT CLASSIFICATION";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -22264,8 +22409,8 @@ namespace
         CausalPresentWater::Kernel const* water=nullptr;
         if(UsesPresentWaterOccupancy(g.stage0PlayView)&&ActivePresentWaterKernel())
         {water=ActivePresentWaterKernel();sediment=&water->Sediment();fluvial=&sediment->Erosion();kernel=&sediment->Drainage();}
-        else if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
-        {sediment=g.compiledSedimentRuntime.get();fluvial=&sediment->Erosion();kernel=&sediment->Drainage();}
+        else if(UsesCompiledSedimentTerrain(g.stage0PlayView)&&ActiveCompiledSedimentKernel(g.stage0PlayView))
+        {sediment=ActiveCompiledSedimentKernel(g.stage0PlayView);fluvial=&sediment->Erosion();kernel=&sediment->Drainage();}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {fluvial=g.compiledFluvialRuntime.get();kernel=&fluvial->Drainage();}
         else if(IsDryHydrologyView(g.stage0PlayView)&&g.dryHydrologyRuntime)
@@ -34109,6 +34254,7 @@ namespace
           &&!g.playStage16F4Launch&&!g.playP5b1Launch          &&!g.playP5b2aLaunch
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
           &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch&&!g.playP5b3b3bLaunch
+          &&!g.playStage16C1Launch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34409,6 +34555,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playStage16C1Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::CompiledDepositClassification);
+            if(g.certStage16C1Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=-96.0f;g.feetY=-172.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(-96.0f,-112.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34535,6 +34696,8 @@ namespace
         {g.statusLine="P5b.3B.3A - DEPOSITIONAL AGGREGATE  [M] stages";}
         if(g.playP5b3b3bLaunch)
         {g.statusLine="P5b.3B.3B - COMPACTION / STABLE TERRAIN SURFACE  [M] stages";}
+        if(g.playStage16C1Launch)
+        {g.statusLine="STAGE 16C.1 - COMPILED-DEPOSIT CLASSIFICATION  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -35160,6 +35323,28 @@ namespace
                 }
             }
         }
+        else if(IsCompiledDepositClassificationView(g.stage0PlayView)&&g.compiledDepositClassificationRuntime)
+        {
+            auto const q=g.compiledDepositClassificationRuntime->QueryAt(g.feetX,g.feetY);
+            if(q.sediment.erosion.drainage.found)
+            {
+                std::snprintf(line,sizeof(line),"class=%s  phase=%s  weld=%d  walk=%d",
+                    CausalCompiledDepositClassification::DepositClassName(q.classified.depositClass),
+                    CausalPresentWaterTerrainHydraulicDeposition::BodyPhaseName(q.classified.phase),
+                    q.classified.weldedToHost?1:0,q.classified.isStableWalkingSurface?1:0);
+                row(line,.95f,.82f,.30f);
+                std::snprintf(line,sizeof(line),"deposit=%.3ekg  mobile=%.3ekg  depth=%.3fm  material=%s",
+                    q.sediment.sediment.depositedMassG/1000.0,q.sediment.sediment.mobileMassG/1000.0,
+                    q.sediment.depositDepthM,
+                    q.sediment.sediment.depositMaterial.empty()?q.sediment.sediment.sourceMaterial.c_str()
+                        :q.sediment.sediment.depositMaterial.c_str());
+                row(line,1.0f,.62f,.24f);
+                std::snprintf(line,sizeof(line),"body=%s  hostFeat=%s  16C=FROZEN  remob=0  3C=CLOSED",
+                    CausalWorldGeology::Hex64(q.classified.depositBodyId).c_str(),
+                    CausalWorldGeology::Hex64(q.classified.hostFeatureId).c_str());
+                row(line,.82f,.92f,.72f);
+            }
+        }
         else if(IsCompiledSedimentView(g.stage0PlayView)&&g.compiledSedimentRuntime)
         {
             auto const q=g.compiledSedimentRuntime->QueryAt(g.feetX,g.feetY);
@@ -35640,25 +35825,25 @@ namespace
             glColor3f( 0.82f, 0.88f, 0.94f );
             DrawHudText( px0 + 18.f, py1 - 22.f,
                 "PLAYABLE STAGES / CERTS - one current stage   Enter/click launch   CLOSED is read-only" );
-            float const headerY1 = py1 - 40.f;
-            float const headerY0 = headerY1 - 28.f;
-            float const colHashX0 = px0 + 12.f;
-            float const colHashX1 = colHashX0 + 92.f;
-            float const colStatusX1 = px1 - 12.f;
-            float const colStatusX0 = colStatusX1 - 140.f;
-            float const colNameX0 = colHashX1 + 8.f;
-            FillRect( colHashX0, headerY0, colStatusX1, headerY1, 0.12f, 0.14f, 0.18f );
+            StandingBoardTableGeom const tbl = MakeStandingBoardTableGeom( px0, py0, px1, py1 );
+            FillRect( tbl.colHashX0, tbl.headerY0, tbl.colStatusX1, tbl.headerY1, 0.12f, 0.14f, 0.18f );
             glColor3f( 0.70f, 0.78f, 0.86f );
-            DrawHudText( colHashX0 + 10.f, headerY0 + 8.f, "#" );
-            DrawHudText( colNameX0 + 8.f, headerY0 + 8.f, "Name" );
-            DrawHudText( colStatusX0 + 8.f, headerY0 + 8.f, "Status" );
-            float const detailsH = 36.f;
-            constexpr float stageRowH = 26.f;
-            float const rowTop = headerY0 - 4.f;
-            int const visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / stageRowH ) );
-            int const maxStart = (std::max)( 0, kStandingBoardCount - visibleRows );
-            int const firstVisible = std::clamp( g.stage0BoardSelection - visibleRows / 2, 0, maxStart );
-            int const lastVisible = (std::min)( kStandingBoardCount, firstVisible + visibleRows );
+            DrawHudText( tbl.colHashX0 + 10.f, tbl.headerY0 + 8.f, "#" );
+            DrawHudText( tbl.colNameX0 + 8.f, tbl.headerY0 + 8.f, "Name" );
+            DrawHudText( tbl.colStatusX0 + 8.f, tbl.headerY0 + 8.f, "Status" );
+            if ( tbl.showDepositionCaption )
+            {
+                FillRect( tbl.colHashX0, tbl.captionY0 - 4.f, tbl.colStatusX1, tbl.captionY0 + 16.f,
+                    0.10f, 0.13f, 0.10f );
+                glColor3f( 0.78f, 0.86f, 0.62f );
+                DrawHudText( tbl.colNameX0 + 8.f, tbl.captionY0,
+                    RuntimeDepositionChainCaption() );
+            }
+            float const stageRowH = tbl.stageRowH;
+            float const rowTop = tbl.rowTop;
+            int const firstVisible = tbl.firstVisible;
+            int const lastVisible = tbl.lastVisible;
+            int const visibleRows = lastVisible - firstVisible;
             for ( int board = firstVisible; board < lastVisible; ++board )
             {
                 float const ry1 = rowTop - (float)( board - firstVisible ) * stageRowH;
@@ -35668,26 +35853,26 @@ namespace
                     && s_certificationBrowser[board].view == g.stage0PlayView;
                 bool const closed = !StandingBoardLaunchable( board );
                 if ( selected )
-                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.16f, 0.28f, 0.42f );
+                    FillRect( tbl.colHashX0, ry0, tbl.colStatusX1, ry1, 0.16f, 0.28f, 0.42f );
                 else if ( current )
-                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.12f, 0.18f, 0.16f );
+                    FillRect( tbl.colHashX0, ry0, tbl.colStatusX1, ry1, 0.12f, 0.18f, 0.16f );
                 else
-                    FillRect( colHashX0, ry0, colStatusX1, ry1, 0.08f, 0.09f, 0.11f );
+                    FillRect( tbl.colHashX0, ry0, tbl.colStatusX1, ry1, 0.08f, 0.09f, 0.11f );
                 char mark = current ? 'X' : ( closed ? '-' : ' ' );
                 if ( selected ) { glColor3f( 0.98f, 0.92f, 0.55f ); }
                 else if ( closed ) { glColor3f( 0.52f, 0.56f, 0.60f ); }
                 else { glColor3f( 0.88f, 0.92f, 0.96f ); }
                 std::snprintf( line, sizeof( line ), "[%c] %d", mark, board + 1 );
-                DrawHudText( colHashX0 + 8.f, ry0 + 6.f, line );
-                DrawHudText( colNameX0 + 8.f, ry0 + 6.f, StandingBoardName( board ) );
-                DrawHudText( colStatusX0 + 8.f, ry0 + 6.f, StandingBoardStatus( board ) );
+                DrawHudText( tbl.colHashX0 + 8.f, ry0 + 6.f, line );
+                DrawHudText( tbl.colNameX0 + 8.f, ry0 + 6.f, StandingBoardName( board ) );
+                DrawHudText( tbl.colStatusX0 + 8.f, ry0 + 6.f, StandingBoardStatus( board ) );
             }
             if ( kStandingBoardCount > visibleRows )
             {
                 glColor3f( 0.55f, 0.62f, 0.70f );
                 std::snprintf( line, sizeof( line ), "showing %d-%d of %d - wheel or Up/Down",
                     firstVisible + 1, lastVisible, kStandingBoardCount );
-                DrawHudText( colHashX0, rowTop - (float)visibleRows * stageRowH - 4.f, line );
+                DrawHudText( tbl.colHashX0, rowTop - (float)visibleRows * stageRowH - 4.f, line );
             }
             glColor3f( 0.62f, 0.78f, 0.70f );
             if ( StandingBoardLaunchable( g.stage0BoardSelection ) )
@@ -35784,22 +35969,12 @@ namespace
 
         if ( g.stage0StageMenuOpen )
         {
-            float const headerY1 = py1 - 40.f;
-            float const headerY0 = headerY1 - 28.f;
-            float const colHashX0 = px0 + 12.f;
-            float const colStatusX1 = px1 - 12.f;
-            float const detailsH = 36.f;
-            constexpr float stageRowH = 26.f;
-            float const rowTop = headerY0 - 4.f;
-            int const visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / stageRowH ) );
-            int const maxStart = (std::max)( 0, kStandingBoardCount - visibleRows );
-            int const firstVisible = std::clamp( g.stage0BoardSelection - visibleRows / 2, 0, maxStart );
-            int const lastVisible = (std::min)( kStandingBoardCount, firstVisible + visibleRows );
-            for ( int board = firstVisible; board < lastVisible; ++board )
+            StandingBoardTableGeom const tbl = MakeStandingBoardTableGeom( px0, py0, px1, py1 );
+            for ( int board = tbl.firstVisible; board < tbl.lastVisible; ++board )
             {
-                float const ry1 = rowTop - (float)( board - firstVisible ) * stageRowH;
-                float const ry0 = ry1 - stageRowH + 3.f;
-                if ( !UiHit( { colHashX0, ry0, colStatusX1, ry1 }, mx, my ) ) { continue; }
+                float const ry1 = tbl.rowTop - (float)( board - tbl.firstVisible ) * tbl.stageRowH;
+                float const ry0 = ry1 - tbl.stageRowH + 3.f;
+                if ( !UiHit( { tbl.colHashX0, ry0, tbl.colStatusX1, ry1 }, mx, my ) ) { continue; }
                 if ( SelectStandingBoardEntry( board ) )
                 {
                     g.stage0StageMenuOpen = false;
@@ -37554,9 +37729,10 @@ namespace
         Stage0PlayView::PresentWaterTerrainHydraulicSettling,
         Stage0PlayView::PresentWaterTerrainHydraulicDeposition,
         Stage0PlayView::PresentWaterTerrainHydraulicCompaction,
+        Stage0PlayView::CompiledDepositClassification,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -38695,8 +38871,8 @@ namespace
         {
             if(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel())
                 return ActivePresentWaterKernel()->SurfaceGeology(x,y);
-            if(IsCompiledSedimentView(view)&&g.compiledSedimentRuntime)
-                return g.compiledSedimentRuntime->SurfaceGeology(x,y);
+            if(UsesCompiledSedimentTerrain(view)&&ActiveCompiledSedimentKernel(view))
+                return ActiveCompiledSedimentKernel(view)->SurfaceGeology(x,y);
             if(IsCompiledFluvialErosionView(view)&&g.compiledFluvialRuntime)
                 return g.compiledFluvialRuntime->SurfaceGeology(x,y);
             auto const* geography=ActiveBareEarthKernel(view);if(geography)return geography->SurfaceGeology(x,y);
@@ -38945,7 +39121,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==29)
+        if(g.certWorldgenCardinalStageFilter==30)
+            certPath="Docs\\provenance_16c1_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==29)
             certPath="Docs\\provenance_p5b3b3b_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==28)
             certPath="Docs\\provenance_p5b3b3a_cardinal_replacement_cert.txt";
@@ -39119,7 +39297,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==29)
+            if(g.certWorldgenCardinalStageFilter==30)
+                tracePath="Docs\\provenance_16c1_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==29)
                 tracePath="Docs\\provenance_p5b3b3b_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==28)
                 tracePath="Docs\\provenance_p5b3b3a_cardinal_replacement_trace.csv";
@@ -40769,6 +40949,15 @@ namespace
         int64_t depositionalMass=0;
     };
 
+    struct Stage16C1SoakTelemetry
+    {
+        int compileClassifies=0;
+        int runtimeClassifies=0;
+        int remobilizes=0;
+        int staleRefuse=0;
+        uint32_t classificationRevision=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -40841,6 +41030,7 @@ namespace
         P5b3b2SoakTelemetry p5b3b2Start{};
         P5b3b3aSoakTelemetry p5b3b3aStart{};
         P5b3b3bSoakTelemetry p5b3b3bStart{};
+        Stage16C1SoakTelemetry stage16c1Start{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -40938,6 +41128,19 @@ namespace
         t.compactionRevision=g.presentWaterTerrainHydraulicCompactionRuntime->CompactionRevision();
         t.looseMass=g.presentWaterTerrainHydraulicCompactionRuntime->LooseMass();
         t.depositionalMass=g.presentWaterTerrainHydraulicCompactionRuntime->DepositionalMass();
+        return t;
+    }
+
+    Stage16C1SoakTelemetry CaptureStage16C1SoakTelemetry()
+    {
+        Stage16C1SoakTelemetry t;
+        if(!g.compiledDepositClassificationRuntime)return t;
+        auto const& st=g.compiledDepositClassificationRuntime->GetStats();
+        t.compileClassifies=(int)st.compileClassifies;
+        t.runtimeClassifies=(int)st.runtimeClassifies;
+        t.remobilizes=(int)st.remobilizes;
+        t.staleRefuse=(int)st.staleRefuse;
+        t.classificationRevision=st.classificationRevision;
         return t;
     }
 
@@ -41566,6 +41769,7 @@ namespace
         P5b3b2SoakTelemetry const p5b3b2Now=CaptureP5b3b2SoakTelemetry();
         P5b3b3aSoakTelemetry const p5b3b3aNow=CaptureP5b3b3aSoakTelemetry();
         P5b3b3bSoakTelemetry const p5b3b3bNow=CaptureP5b3b3bSoakTelemetry();
+        Stage16C1SoakTelemetry const stage16c1Now=CaptureStage16C1SoakTelemetry();
         int const p5b2cPoreXfer=SoakDeltaNonneg(p5b2cNow.poreTransfers,run.p5b2cStart.poreTransfers);
         int const p5b2cWetToDry=SoakDeltaNonneg(p5b2cNow.wetToDry,run.p5b2cStart.wetToDry);
         int const p5b2cDryToWet=SoakDeltaNonneg(p5b2cNow.dryToWet,run.p5b2cStart.dryToWet);
@@ -41650,6 +41854,15 @@ namespace
           &&p5b3b3bCRev==0&&p5b3b3bLoose==0&&p5b3b3bDepMass==0)p5b3b3bPhysicsVerdict="PASS_idle";
         else p5b3b3bPhysicsVerdict="FAIL_accumulating";
         bool const p5b3b3bOk=std::strncmp(p5b3b3bPhysicsVerdict,"FAIL",4)!=0;
+        int const stage16c1Runtime=SoakDeltaNonneg(stage16c1Now.runtimeClassifies,run.stage16c1Start.runtimeClassifies);
+        int const stage16c1Remob=SoakDeltaNonneg(stage16c1Now.remobilizes,run.stage16c1Start.remobilizes);
+        int const stage16c1Stale=SoakDeltaNonneg(stage16c1Now.staleRefuse,run.stage16c1Start.staleRefuse);
+        int const stage16c1Rev=SoakDeltaNonneg((int)stage16c1Now.classificationRevision,(int)run.stage16c1Start.classificationRevision);
+        char const* stage16c1PhysicsVerdict="PASS_idle";
+        if(stage16c1Runtime==0&&stage16c1Remob==0&&stage16c1Stale==0&&stage16c1Rev==0)
+            stage16c1PhysicsVerdict="PASS_idle";
+        else stage16c1PhysicsVerdict="FAIL_accumulating";
+        bool const stage16c1Ok=std::strncmp(stage16c1PhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -41691,9 +41904,11 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok;
         char certPathBuf[160];
-        char const* certPath=g.certStreamingSoakStageFilter==29
+        char const* certPath=g.certStreamingSoakStageFilter==30
+            ?"Docs\\provenance_16c1_streaming_soak_cert.txt"
+            :(g.certStreamingSoakStageFilter==29
             ?"Docs\\provenance_p5b3b3b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==28
             ?"Docs\\provenance_p5b3b3a_streaming_soak_cert.txt"
@@ -41709,7 +41924,7 @@ namespace
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
             ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
-            :"Docs\\provenance_streaming_soak_cert.txt")))))));
+            :"Docs\\provenance_streaming_soak_cert.txt"))))))));
         if(g.soakDrawLane!=0)
         {
             std::snprintf(certPathBuf,sizeof(certPathBuf),
@@ -42037,6 +42252,12 @@ namespace
             crtEightTwelve,
             informational?(passed?"INFORMATIONAL_PASS":"INFORMATIONAL_FAIL")
                 :(passed?"PASS":"FAIL"));
+        std::fprintf(f,
+            "16c1_runtime_classifies=%d\n16c1_remobilizes=%d\n16c1_stale_refuse=%d\n"
+            "16c1_classification_revision_delta=%d\n16c1_travel_physics=%s\n"
+            "16c1_compile_classifies=%d\n",
+            stage16c1Runtime,stage16c1Remob,stage16c1Stale,stage16c1Rev,
+            stage16c1PhysicsVerdict,stage16c1Now.compileClassifies);
         {
             int const stations[]={0,1000,2000,4000,8000,12000};
             for(int s:stations)
@@ -42607,7 +42828,9 @@ namespace
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
-            char const* tracePath=g.certStreamingSoakStageFilter==29
+            char const* tracePath=g.certStreamingSoakStageFilter==30
+                ?"Docs\\provenance_16c1_streaming_soak_trace.csv"
+                :(g.certStreamingSoakStageFilter==29
                 ?"Docs\\provenance_p5b3b3b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==28
                 ?"Docs\\provenance_p5b3b3a_streaming_soak_trace.csv"
@@ -42623,7 +42846,7 @@ namespace
                 ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==22
                 ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
-                :"Docs\\provenance_streaming_soak_trace.csv")))))));
+                :"Docs\\provenance_streaming_soak_trace.csv"))))))));
             fopen_s(&run.trace,tracePath,"wb");
             if(run.trace)
             {
@@ -42685,6 +42908,7 @@ namespace
                 run.p5b3b2Start=CaptureP5b3b2SoakTelemetry();
                 run.p5b3b3aStart=CaptureP5b3b3aSoakTelemetry();
                 run.p5b3b3bStart=CaptureP5b3b3bSoakTelemetry();
+                run.stage16c1Start=CaptureStage16C1SoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -45571,6 +45795,81 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certStage16C1Visual)
+        {
+            static ULONGLONG visualStartMs16c1=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::CompiledDepositClassification);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::CompiledDepositClassification);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMs16c1>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_16c1_compiled_deposit_classification_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"STAGE16C1_COMPILED_DEPOSIT_CLASSIFICATION_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certStage16C1VisualFrames;
+            if(g.certStage16C1VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_16c1_compiled_deposit_classification_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.compiledDepositClassificationRuntime
+                    ?g.compiledDepositClassificationRuntime->QueryAt(g.feetX,g.feetY)
+                    :CausalCompiledDepositClassification::Query{};
+                bool nearbyDeposit=false,nearbyClass=false;
+                if(g.compiledDepositClassificationRuntime)
+                {
+                    double const step=g.compiledDepositClassificationRuntime->Drainage().StepM();
+                    for(int y=-6;y<=6;++y)for(int x=-6;x<=6;++x)
+                    {auto const n=g.compiledDepositClassificationRuntime->QueryAt(g.feetX+x*step,g.feetY+y*step);
+                        nearbyDeposit=nearbyDeposit||(n.sediment.erosion.drainage.found&&n.sediment.depositDepthM>.01);
+                        nearbyClass=nearbyClass||(n.classified.depositClass
+                            !=CausalCompiledDepositClassification::DepositClass::NotDepositional);}
+                }
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_16c1_compiled_deposit_classification_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.sediment.erosion.drainage.found
+                    &&g.compiledDepositClassificationCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601
+                    &&g.compiledDepositClassificationRuntime
+                    &&g.compiledDepositClassificationRuntime->GetStats().runtimeClassifies==0
+                    &&g.compiledDepositClassificationRuntime->GetStats().remobilizes==0;
+                if(opened)
+                {
+                    std::fprintf(file,"STAGE16C1_COMPILED_DEPOSIT_CLASSIFICATION_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_16c1_compiled_deposit_classification_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "local_class=%s\nlocal_deposit_m=%.6f\nnearby_class=%d\nnearby_deposit=%d\n"
+                        "runtime_classifies=%u\nremobilizes=%u\n"
+                        "terrain_source=STAGE16C_COMPILED_SEDIMENT\n"
+                        "16c_mass_routing=frozen\nwater=frozen\n3c=closed\nmacro=closed\n",
+                        passed?"PASS":"FAIL",g.certStage16C1VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,
+                        CausalCompiledDepositClassification::DepositClassName(q.classified.depositClass),
+                        q.sediment.depositDepthM,nearbyClass?1:0,nearbyDeposit?1:0,
+                        g.compiledDepositClassificationRuntime
+                            ?g.compiledDepositClassificationRuntime->GetStats().runtimeClassifies:0,
+                        g.compiledDepositClassificationRuntime
+                            ?g.compiledDepositClassificationRuntime->GetStats().remobilizes:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -47006,6 +47305,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runPresentWaterTerrainHydraulicSettlingCert = false;
         bool runPresentWaterTerrainHydraulicDepositionCert = false;
         bool runPresentWaterTerrainHydraulicCompactionCert = false;
+        bool runCompiledDepositClassificationCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -47047,6 +47347,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_deposition_floor.cpc";
         char presentWaterTerrainHydraulicCompactionPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_compaction_floor.cpc";
+        char compiledDepositClassificationPath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_compiled_deposit_classification_floor.cdc";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -47177,6 +47479,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-p5b3b3b")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compaction")==0)
                 {runPresentWaterTerrainHydraulicCompactionCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-16c1-compiled-deposit-classification")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-16c1")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-compiled-deposit-classification")==0)
+                {runCompiledDepositClassificationCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -47412,6 +47718,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 presentWaterTerrainHydraulicCompactionPath);
             CausalPresentWaterTerrainHydraulicCompaction::WriteCertArtifact(result,
                 "Docs\\provenance_p5b3b3b_compaction_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runCompiledDepositClassificationCert)
+        {
+            auto const result=CausalCompiledDepositClassification::RunCert(descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                presentWaterPath,compiledDepositClassificationPath);
+            CausalCompiledDepositClassification::WriteCertArtifact(result,
+                "Docs\\provenance_16c1_compiled_deposit_classification_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -48403,6 +48719,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-16c1")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage16c1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=30;
+                    g.playWorldgenBaseline=true;g.playStage16C1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -48420,6 +48745,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=29;
                     g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-16c1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=30;
+                    g.playWorldgenBaseline=true;g.playStage16C1Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
@@ -48652,6 +48985,18 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-16c1-compiled-deposit-classification")==0
+                  ||_wcsicmp(argv[i],L"--play-16c1")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playStage16C1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsnicmp(argv[i],L"--classify-compiled-deposits=",29)==0)
+                {
+                    g.classifyCompiledDepositsOverride=_wtoi(argv[i]+29)?1:0;
+                    continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-stage16f2-water-transfer-visual")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
@@ -48742,6 +49087,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playP5b3b3bLaunch=true;g.certP5b3b3bVisual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-16c1-compiled-deposit-classification-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-16c1-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playStage16C1Launch=true;g.certStage16C1Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

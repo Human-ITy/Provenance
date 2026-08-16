@@ -1,0 +1,20 @@
+STAGE16C1_COMPILED_DEPOSIT_CLASSIFICATION_PLAYER_VISUAL PASS
+frames_settled=90
+stage=STAGE 16C.1 COMPILED-DEPOSIT CLASSIFICATION
+image=Docs/provenance_16c1_compiled_deposit_classification_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+local_class=not_depositional
+local_deposit_m=0.033126
+nearby_class=1
+nearby_deposit=1
+runtime_classifies=0
+remobilizes=0
+terrain_source=STAGE16C_COMPILED_SEDIMENT
+16c_mass_routing=frozen
+water=frozen
+3c=closed
+macro=closed
