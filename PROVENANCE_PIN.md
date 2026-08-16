@@ -249,6 +249,8 @@ P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 P5b.3C  structural collapse               CLOSED
 16C     compiled sediment routing         CERTIFIED / FROZEN
 16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
+MW1     provinces / belts / basins        CERTIFIED
+MW2–MW8 regional geology → biomes         CLOSED
 ```
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
@@ -360,10 +362,14 @@ Handoff: `P16C1_COMPILED_DEPOSIT_CLASSIFICATION_HANDOFF.md`.
 Play: `PLAY_16C1_COMPILED_DEPOSIT_CLASSIFICATION.cmd`.
 Cert: `CERT_16C1_COMPILED_DEPOSIT_CLASSIFICATION.cmd`.
 
-**Next architectural candidate (NOT opened):** macro-scale worldgen
-(provinces / mountain belts / basins / regional drainage / hydroclimate /
-soils / biomes). Do not add PLAYABLE macro-province rows. 16C remobilization
-and 16C mass-routing rewrite stay CLOSED.
+**MW1 CERTIFIED** — provinces / mountain belts / basins. Absolute-coordinate
+64 km geologic forcing field (not final planet terrain). Off / no-MW1 ==
+frozen 16C.1 local present. Production source is not the 4096 m wrap.
+Handoff: `MW1_PROVINCES_HANDOFF.md`.
+Play: `PLAY_MW1_PROVINCES.cmd` / `--play-mw1-provinces`.
+Cert: `CERT_MW1_PROVINCES.cmd`.
+CLOSED: MW2–MW8, 3C structural collapse, 16C runtime remobilization.
+Do not add PLAYABLE biome/flora rows.
 
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
@@ -375,15 +381,16 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
 
 - Test S: `--cert-semantic-distance` (teleport+settle across/beyond 4.096 km
   Stage-15 domain; independent of Test B). `CERT_SEMANTIC_DISTANCE.cmd`.
-- Test A: `--cert-worldgen-cardinal-replacement-16c1` (EVERY CUT, latest).
-  Digest `e7bb12b2b2ec12e3` origin==return. 2601 packages. Movement frames
-  over 16.667 = 0 on N/E/S/W (worst movement ~4.8 ms). 3B.3B control remains
-  `--cert-worldgen-cardinal-replacement-p5b3b3b` digest `1d1dd0776f69f322`.
-- Test B: `--cert-streaming-soak-16c1` (90 s NE fly **PASS** this cut:
-  0 / 84161 movement frames >16.667, max 6.178 ms, 2601, pending 0.
-  16C.1 travel physics **idle**: runtime classifies / remobilizes / stale /
-  revision delta = 0; compile classifies = 1. P5b 2C–3B.3B also idle.
-  300/900 not run — worldgen-only, no new persistent workload.
+- Test A: `--cert-worldgen-cardinal-replacement-mw1` (EVERY CUT, latest).
+  Digest `017a2368097d219c` origin==return. 2601 packages. Movement frames
+  over 16.667 = 0 on N/E/S/W (worst movement ~4.5 ms). 16C.1 control remains
+  `--cert-worldgen-cardinal-replacement-16c1` digest `e7bb12b2b2ec12e3`.
+  3B.3B control remains `--cert-worldgen-cardinal-replacement-p5b3b3b`
+  digest `1d1dd0776f69f322`.
+- Test B: `--cert-streaming-soak-mw1` (90 s NE fly **PASS** this cut:
+  0 / 88171 frames >16.667, max 5.917 ms, 2601, pending 0.
+  MW1 travel physics **idle**: rebuilds = 0, compiles = 0. P5b 2C–3B.3B
+  and 16C.1 also idle. 300/900 not run — no persistent MW1 workload.
   Long-haul 300/900 remain the 2B baseline receipts.)
 - 2A control remains `--cert-streaming-soak-p5b2a`: residency PASS, frame
   gate FAIL (20 / 20079 frames >16.667, max 60.687 ms). Do not relax 16.667.
@@ -407,8 +414,9 @@ Contract: `TRAVERSAL_STREAMING_SOAK_HANDOFF.md`.
   `erosion_cache_entries` now reads the four worker kernels. Golden:
   cache enabled == forced-cold recompute. 16.667 not relaxed.
   P5b.3B.3B 90 s Test B **PASS** (idle 3B.3B compact count = 0).
-  16C.1 90 s Test B **PASS** (idle runtime classifies = 0). **P5b.3C /
-  16C remobilization / macro provinces stay CLOSED.**
+  16C.1 90 s Test B **PASS** (idle runtime classifies = 0).
+  MW1 90 s Test B **PASS** (idle rebuilds/compiles = 0).
+  **P5b.3C / 16C remobilization / MW2–MW8 stay CLOSED.**
 - Ownership-class private accounting + checkpoint drain at 0/1/2/4/8/12 km
   + return-origin receipt are required on every soak receipt.
 - P5b.2B gameplay frozen at `8bb75265`. **P5b.3C** / rainfall / erosion
@@ -454,8 +462,9 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B.3B CERTIFIED / FROZEN** @ `2f722735` (compaction: deposited body → stable deposited ground, not host weld).
 **3A–3B.3B** = worldgen shaping primitive (ready). **16C** CERTIFIED
 unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before macro).
-**P5b.3C CLOSED** (structural collapse). Macro provinces / mountain belts /
-basins **not opened**. Erosion / rainfall / deep groundwater CLOSED.
+**MW1 CERTIFIED** (provinces / belts / basins; 64 km forcing field).
+**P5b.3C CLOSED** (structural collapse). **MW2–MW8 CLOSED**.
+Erosion / rainfall / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
 Preferred binary: `Build\x64_Release_pickcov\ProvenanceClient.exe` (do not rely on `RunProvenanceClient.bat` newest-timestamp alone). Live: LMB pick; sky/clear in|around hole = FAIL; deform past fracture+min recon halo = FAIL; miss/punch/surround explosion = capture, not pass.

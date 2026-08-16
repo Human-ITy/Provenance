@@ -1,0 +1,21 @@
+MW1_PROVINCES_PLAYER_VISUAL PASS
+frames_settled=90
+stage=MW1 PROVINCES / MOUNTAIN BELTS / BASINS
+image=Docs/provenance_mw1_provinces_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+province_id=1
+province_type=mountain_belt
+surface_z_m=1211.490
+uplift_m=1096.547
+rebuilds=1
+wrap=0
+production_source=absolute_coordinate
+mw2=closed
+mw3=closed
+mw4=closed
+3c=closed
+16c_remobilization=closed

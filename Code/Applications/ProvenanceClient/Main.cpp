@@ -35,6 +35,7 @@
 #include "CausalCompiledFluvialErosion.h"
 #include "CausalCompiledSediment.h"
 #include "CausalCompiledDepositClassification.h"
+#include "CausalMacroProvinces.h"
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -562,7 +563,8 @@ namespace
         PresentWaterTerrainHydraulicSettling = 31,
         PresentWaterTerrainHydraulicDeposition = 32,
         PresentWaterTerrainHydraulicCompaction = 33,
-        CompiledDepositClassification = 34
+        CompiledDepositClassification = 34,
+        MacroProvinces = 35
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -920,7 +922,9 @@ namespace
         bool playP5b3b3aLaunch = false;
         bool playP5b3b3bLaunch = false;
         bool playStage16C1Launch = false;
+        bool playMw1Launch = false;
         int classifyCompiledDepositsOverride = -1;
+        int macroProvincesOverride = -1;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -967,6 +971,8 @@ namespace
         int certP5b3b3bVisualFrames = 0;
         bool certStage16C1Visual = false;
         int certStage16C1VisualFrames = 0;
+        bool certMw1Visual = false;
+        int certMw1VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1153,6 +1159,8 @@ namespace
         bool compiledSedimentCertified = false;
         bool compiledDepositClassificationAuthorityAttempted = false;
         bool compiledDepositClassificationCertified = false;
+        bool macroProvincesAuthorityAttempted = false;
+        bool macroProvincesCertified = false;
         bool presentWaterAuthorityAttempted = false;
         bool presentWaterCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
@@ -1171,6 +1179,7 @@ namespace
         std::string compiledFluvialAuthorityReason = "not_loaded";
         std::string compiledSedimentAuthorityReason = "not_loaded";
         std::string compiledDepositClassificationAuthorityReason = "not_loaded";
+        std::string macroProvincesAuthorityReason = "not_loaded";
         std::string presentWaterAuthorityReason = "not_loaded";
         bool presentWaterBodyAuthorityAttempted = false;
         bool presentWaterBodyCertified = false;
@@ -1230,6 +1239,7 @@ namespace
         std::unique_ptr<CausalCompiledFluvialErosion::Kernel> compiledFluvialRuntime;
         std::unique_ptr<CausalCompiledSediment::Kernel> compiledSedimentRuntime;
         std::unique_ptr<CausalCompiledDepositClassification::Kernel> compiledDepositClassificationRuntime;
+        std::unique_ptr<CausalMacroProvinces::Kernel> macroProvincesRuntime;
         std::unique_ptr<CausalPresentWater::Kernel> presentWaterRuntime;
         std::unique_ptr<CausalPresentWaterBody::Kernel> presentWaterBodyRuntime;
         std::unique_ptr<CausalPresentWaterEquilibrate::Kernel> presentWaterEquilibrateRuntime;
@@ -3209,6 +3219,16 @@ namespace
         return view == Stage0PlayView::CompiledDepositClassification;
     }
 
+    bool IsMacroProvincesView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::MacroProvinces;
+    }
+
+    bool UsesMacroProvincesTerrain( Stage0PlayView view )
+    {
+        return IsMacroProvincesView(view);
+    }
+
     bool UsesCompiledSedimentTerrain( Stage0PlayView view )
     {
         return IsCompiledSedimentView(view)||IsCompiledDepositClassificationView(view);
@@ -3351,7 +3371,8 @@ namespace
         // These views render and collide against their certified 8 m package
         // stream. The older one-metre cell map is only a bounded local
         // diagnostic/tool cache and must not duplicate live terrain residency.
-        return UsesExactLocalMaterialization(view)||UsesBareEarthTerrain(view);
+        return UsesExactLocalMaterialization(view)||UsesBareEarthTerrain(view)
+            ||UsesMacroProvincesTerrain(view);
     }
 
     bool IsCausalPlayableView( Stage0PlayView view )
@@ -3361,7 +3382,7 @@ namespace
             || IsGraniteIntrusionView( view ) || IsContactMineralizationView( view )
             || IsCutCOccupancyView( view ) || IsFaultDisplacementView( view )
             || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization( view )
-            || UsesBareEarthTerrain( view );
+            || UsesBareEarthTerrain( view ) || UsesMacroProvincesTerrain( view );
     }
 
     char const* PresentationIsolationModeName( int mode )
@@ -3419,6 +3440,8 @@ namespace
             "Data\\Worldgen\\causal_world_compiled_sediment_floor.csd";
         constexpr char const* kCompiledDepositClassificationPath =
             "Data\\Worldgen\\causal_world_compiled_deposit_classification_floor.cdc";
+        constexpr char const* kMacroProvincesPath =
+            "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp";
         constexpr char const* kPresentWaterPath =
             "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         constexpr char const* kPresentWaterBodyPath =
@@ -3759,6 +3782,24 @@ namespace
                 g.presentWaterAuthorityReason=g.presentWaterCertified?"certified":reason;
             }
             return g.presentWaterCertified&&g.presentWaterRuntime!=nullptr;
+        }
+
+        if(IsMacroProvincesView(view))
+        {
+            if(!g.macroProvincesAuthorityAttempted)
+            {
+                g.macroProvincesAuthorityAttempted=true;
+                CausalMacroProvinces::Control control=CausalMacroProvinces::Control::Program;
+                if(g.macroProvincesOverride==0)
+                    control=CausalMacroProvinces::Control::ForceOff;
+                else if(g.macroProvincesOverride==1)
+                    control=CausalMacroProvinces::Control::ForceOn;
+                std::string reason;g.macroProvincesRuntime=
+                    CausalMacroProvinces::LoadKernel(kMacroProvincesPath,&reason,control);
+                g.macroProvincesCertified=g.macroProvincesRuntime!=nullptr;
+                g.macroProvincesAuthorityReason=g.macroProvincesCertified?"certified":reason;
+            }
+            return g.macroProvincesCertified&&g.macroProvincesRuntime!=nullptr;
         }
 
         if(IsCompiledDepositClassificationView(view))
@@ -4293,6 +4334,20 @@ namespace
         return kernel.get();
     }
 
+    CausalMacroProvinces::Kernel* ThreadMacroProvincesKernel()
+    {
+        thread_local std::unique_ptr<CausalMacroProvinces::Kernel> kernel;
+        thread_local bool attempted=false;
+        if(!attempted)
+        {
+            attempted=true;std::string reason;
+            kernel=CausalMacroProvinces::LoadKernel(
+                "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp",&reason,
+                CausalMacroProvinces::Control::ForceOn);
+        }
+        return kernel.get();
+    }
+
     void SampleCompiledFluvialWorkerBlockInto(
         CausalBareEarthGeography::Kernel const& geography,
         CausalCompiledFluvialErosion::Kernel const& erosion,int bx,int by,
@@ -4381,6 +4436,20 @@ namespace
     bool SampleCausalPlayableCell( Stage0PlayView view, double x, double y,
         float& outZ, std::string& outCap )
     {
+        if ( UsesMacroProvincesTerrain( view ) )
+        {
+            if(!g.macroProvincesRuntime)return false;
+            if(SampleResidentCausalPackageSurface(x,y,outZ))
+            {
+                auto const geology=g.macroProvincesRuntime->SurfaceGeology(x,y);
+                if(!geology.found)return false;
+                outCap=geology.material;return true;
+            }
+            outZ=(float)g.macroProvincesRuntime->ReconstructedZ(x,y);
+            auto const geology=g.macroProvincesRuntime->SurfaceGeology(x,y);
+            if(!geology.found)return false;
+            outCap=geology.material;return true;
+        }
         if ( UsesBareEarthTerrain( view ) )
         {
             auto const* geography=ActiveBareEarthKernel(view);if(!geography)return false;
@@ -4991,6 +5060,7 @@ namespace
             || IsSurfaceBreachView( g.stage0PlayView )
             || UsesExactLocalMaterialization( g.stage0PlayView )
             || UsesBareEarthTerrain( g.stage0PlayView )
+            || UsesMacroProvincesTerrain( g.stage0PlayView )
             || IsCutCOccupancyView( g.stage0PlayView );
         float const dualOffset = dualSurface ? -0.25f : 0.f;
         b.minX = b.bx0 * kStage0TerrainBlockCells + dualOffset;
@@ -11516,6 +11586,15 @@ namespace
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
+          && UsesMacroProvincesTerrain( g.stage0PlayView )
+          && g.macroProvincesRuntime )
+        {
+            if(sampleResidentCausalPackage(outZ))return true;
+            outZ=(float)g.macroProvincesRuntime->ReconstructedZ(x,y);
+            return std::isfinite(outZ);
+        }
+        if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
+          || g.certWorldgenLadderLivePerf )
           && UsesBareEarthTerrain( g.stage0PlayView )
           && ActiveBareEarthKernel(g.stage0PlayView) )
         {
@@ -14136,6 +14215,8 @@ namespace
         QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&q0);
         CausalBareEarthGeography::Kernel* const workerGeography=
             UsesBareEarthTerrain(job.view)?ThreadBareEarthKernel():nullptr;
+        CausalMacroProvinces::Kernel* const workerMw1=
+            UsesMacroProvincesTerrain(job.view)?ThreadMacroProvincesKernel():nullptr;
 
         if(out.integratedCutC)
         {
@@ -14160,6 +14241,8 @@ namespace
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
         {SampleCompiledFluvialWorkerBlockInto(*workerGeography,
             *g.compiledFluvialRuntime,job.bx,job.by,surfaceSamples);}
+        else if(UsesMacroProvincesTerrain(job.view)&&workerMw1)
+        {workerMw1->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(UsesBareEarthTerrain(job.view)&&workerGeography)
         {workerGeography->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(IsFaultDisplacementView(job.view)&&g.causalFaultRuntime)
@@ -14650,7 +14733,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -14705,6 +14788,8 @@ namespace
         {surfaceSamples=ActiveCompiledSedimentKernel(g.stage0PlayView)->SampleBlock(bx,by);}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {surfaceSamples=g.compiledFluvialRuntime->SampleBlock(bx,by);}
+        else if(UsesMacroProvincesTerrain(g.stage0PlayView)&&g.macroProvincesRuntime)
+        {g.macroProvincesRuntime->SampleBlockInto(bx,by,surfaceSamples);}
         else if(UsesBareEarthTerrain(g.stage0PlayView)&&ActiveBareEarthKernel(g.stage0PlayView))
         {surfaceSamples=ActiveBareEarthKernel(g.stage0PlayView)->SampleBlock(bx,by);}
         else if(IsFaultDisplacementView(g.stage0PlayView)&&g.causalFaultRuntime)
@@ -14918,7 +15003,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -15123,6 +15208,7 @@ namespace
         if ( IsCompiledFluvialErosionView( view ) ) { return 14; }
         if ( IsCompiledSedimentView( view ) ) { return 15; }
         if ( IsCompiledDepositClassificationView( view ) ) { return 31; }
+        if ( IsMacroProvincesView( view ) ) { return 32; }
         if ( IsPresentWaterBodyView( view ) ) { return 17; }
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
@@ -15203,6 +15289,8 @@ namespace
           "GEOMORPH.COMPILED_FLUVIAL_EROSION", "dry sediment source, transport, deposition, and outlet export without water", Stage0PlayView::CompiledSediment },
         { "GEOLOGY / GEOMORPHOLOGY", "GEOMORPH.COMPILED_DEPOSIT_CLASSIFICATION", "Stage 16C.1 - Compiled-Deposit Classification",
           "GEOMORPH.COMPILED_SEDIMENT", "classify compiled 16C sediment into loose / settled / compacted, not host weld", Stage0PlayView::CompiledDepositClassification },
+        { "GEOLOGY / GEOMORPHOLOGY", "MACRO.PROVINCES_BELTS_BASINS", "MW1 - Provinces / Mountain Belts / Basins",
+          "GEOMORPH.COMPILED_DEPOSIT_CLASSIFICATION", "64 km geologic forcing field: provinces, uplift/subsidence, belts, basins", Stage0PlayView::MacroProvinces },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -15239,7 +15327,7 @@ namespace
 
     constexpr int kCertificationBrowserCount =
         (int)( sizeof( s_certificationBrowser ) / sizeof( s_certificationBrowser[0] ) );
-    constexpr int kStandingBoardClosedCount = 1;
+    constexpr int kStandingBoardClosedCount = 9;
     constexpr int kStandingBoardCount = kCertificationBrowserCount + kStandingBoardClosedCount;
 
     struct StandingBoardClosedEntry
@@ -15249,8 +15337,21 @@ namespace
     };
 
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
-        { "P5b.3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" }
+        { "3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" },
+        { "16C runtime remobilization", "GEOMORPH.16C_RUNTIME_REMOBILIZATION" },
+        { "MW2 regional 3D geology", "MACRO.REGIONAL_3D_GEOLOGY" },
+        { "MW3 regional erosion", "MACRO.REGIONAL_EROSION" },
+        { "MW4 valley/drainage morphology", "MACRO.VALLEY_DRAINAGE" },
+        { "MW5 depositional landscape", "MACRO.DEPOSITIONAL_LANDSCAPE" },
+        { "MW6 hydroclimate", "MACRO.HYDROCLIMATE" },
+        { "MW7 soils", "MACRO.SOILS" },
+        { "MW8 biomes", "MACRO.BIOMES" }
     };
+
+    char const* MacroWorldgenCaption()
+    {
+        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2-MW8 CLOSED";
+    }
 
     bool IsRuntimeDepositionChainView( Stage0PlayView view )
     {
@@ -15360,6 +15461,8 @@ namespace
         { attempted = g.compiledSedimentAuthorityAttempted; certified = g.compiledSedimentCertified; }
         else if ( IsCompiledDepositClassificationView( entry.view ) )
         { attempted = g.compiledDepositClassificationAuthorityAttempted; certified = g.compiledDepositClassificationCertified; }
+        else if ( IsMacroProvincesView( entry.view ) )
+        { attempted = g.macroProvincesAuthorityAttempted; certified = g.macroProvincesCertified; }
         else if ( IsPresentWaterBodyView( entry.view ) )
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
@@ -15432,7 +15535,9 @@ namespace
         int firstVisible;
         int lastVisible;
         bool showDepositionCaption;
+        bool showMacroCaption;
         float captionY0;
+        float macroCaptionY0;
     };
 
     StandingBoardTableGeom MakeStandingBoardTableGeom( float px0, float py0, float px1, float py1 )
@@ -15457,10 +15562,20 @@ namespace
         int const chainLast = BrowserIndexForView(
             Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
         tbl.showDepositionCaption = chainFirst < tbl.lastVisible && chainLast >= tbl.firstVisible;
+        int const mw1Board = BrowserIndexForView( Stage0PlayView::MacroProvinces );
+        tbl.showMacroCaption = mw1Board < tbl.lastVisible && mw1Board >= tbl.firstVisible;
         if ( tbl.showDepositionCaption )
         {
             constexpr float captionH = 22.f;
             tbl.captionY0 = rowTop - 16.f;
+            rowTop -= captionH;
+            visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / tbl.stageRowH ) );
+            tbl.lastVisible = (std::min)( kStandingBoardCount, tbl.firstVisible + visibleRows );
+        }
+        if ( tbl.showMacroCaption )
+        {
+            constexpr float captionH = 22.f;
+            tbl.macroCaptionY0 = rowTop - 16.f;
             rowTop -= captionH;
             visibleRows = (std::max)( 1, (int)( ( rowTop - py0 - detailsH ) / tbl.stageRowH ) );
             tbl.lastVisible = (std::min)( kStandingBoardCount, tbl.firstVisible + visibleRows );
@@ -15706,6 +15821,7 @@ namespace
             if ( IsCompiledFluvialErosionView( view ) ) { reason = &g.compiledFluvialAuthorityReason; }
             if ( IsCompiledSedimentView( view ) ) { reason = &g.compiledSedimentAuthorityReason; }
             if ( IsCompiledDepositClassificationView( view ) ) { reason = &g.compiledDepositClassificationAuthorityReason; }
+            if ( IsMacroProvincesView( view ) ) { reason = &g.macroProvincesAuthorityReason; }
             if ( IsPresentWaterBodyView( view ) ) { reason = &g.presentWaterBodyAuthorityReason; }
             if ( IsPresentWaterEquilibrateView( view ) ) { reason = &g.presentWaterEquilibrateAuthorityReason; }
             if ( IsPresentWaterExternalView( view ) ) { reason = &g.presentWaterExternalAuthorityReason; }
@@ -15810,6 +15926,13 @@ namespace
         else if ( IsCompiledDepositClassificationView( view ) && g.compiledDepositClassificationRuntime )
         {
             auto const& authority=g.compiledDepositClassificationRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsMacroProvincesView( view ) && g.macroProvincesRuntime )
+        {
+            auto const& authority=g.macroProvincesRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -15937,6 +16060,15 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="STAGE 16C.1 - compiled-deposit classification; no remobilization";
+        }
+        if(g.playWorldgenInitialized&&IsMacroProvincesView(view)&&oldView!=view)
+        {
+            g.feetX=2580.0f;g.feetY=-4860.0f;g.yaw=2.85f;g.pitch=-0.12f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="MW1 - provinces / mountain belts / basins; 64 km forcing field";
         }
         if(g.playWorldgenInitialized&&IsPresentWaterView(view)&&oldView!=view)
         {
@@ -16122,6 +16254,7 @@ namespace
             case Stage0PlayView::CompiledFluvialErosion: return "CERTIFIED COMPILED FLUVIAL EROSION";
             case Stage0PlayView::CompiledSediment: return "CERTIFIED COMPILED SEDIMENT ROUTING";
             case Stage0PlayView::CompiledDepositClassification: return "CERTIFIED COMPILED-DEPOSIT CLASSIFICATION";
+            case Stage0PlayView::MacroProvinces: return "CERTIFIED MW1 PROVINCES / MOUNTAIN BELTS / BASINS";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -16953,6 +17086,7 @@ namespace
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
           || UsesBareEarthTerrain( g.stage0PlayView )
+          || UsesMacroProvincesTerrain( g.stage0PlayView )
           || IsCutCOccupancyView( g.stage0PlayView ) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
@@ -16968,6 +17102,7 @@ namespace
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
           || UsesBareEarthTerrain( g.stage0PlayView )
+          || UsesMacroProvincesTerrain( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)std::floor( x / blockSize );
@@ -16985,6 +17120,7 @@ namespace
           || IsSurfaceBreachView( g.stage0PlayView )
           || UsesExactLocalMaterialization( g.stage0PlayView )
           || UsesBareEarthTerrain( g.stage0PlayView )
+          || UsesMacroProvincesTerrain( g.stage0PlayView )
             ? (float)CausalVisibleExposure::kBlockSizeM
             : (float)kStage0TerrainBlockCells;
         int const bx = (int)(int32_t)( key >> 32 );
@@ -17110,6 +17246,7 @@ namespace
                 || IsSurfaceBreachView( g.stage0PlayView )
                 || UsesExactLocalMaterialization( g.stage0PlayView )
                 || UsesBareEarthTerrain( g.stage0PlayView )
+                || UsesMacroProvincesTerrain( g.stage0PlayView )
                 || IsCutCOccupancyView( g.stage0PlayView );
             float const latticeOrigin = dualLattice ? 0.25f : 0.f;
             int const ix0 = (int)std::floor( ( x0 - latticeOrigin ) / kTerrainTriangleStepM );
@@ -22638,6 +22775,7 @@ namespace
               || IsSurfaceBreachView( g.stage0PlayView )
               || UsesExactLocalMaterialization( g.stage0PlayView )
               || UsesBareEarthTerrain( g.stage0PlayView )
+              || UsesMacroProvincesTerrain( g.stage0PlayView )
               || IsCutCOccupancyView( g.stage0PlayView ) ) )
             { DrawStage8TerrainBlocks(); }
             else if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
@@ -34254,7 +34392,7 @@ namespace
           &&!g.playStage16F4Launch&&!g.playP5b1Launch          &&!g.playP5b2aLaunch
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
           &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch&&!g.playP5b3b3bLaunch
-          &&!g.playStage16C1Launch
+          &&!g.playStage16C1Launch&&!g.playMw1Launch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34570,6 +34708,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playMw1Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::MacroProvinces);
+            if(g.certMw1Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=2580.0f;g.feetY=-4920.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(2580.0f,-4860.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+52.0f;
+                g.yaw=0.0f;g.pitch=-0.48f;
+            }
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34698,6 +34851,8 @@ namespace
         {g.statusLine="P5b.3B.3B - COMPACTION / STABLE TERRAIN SURFACE  [M] stages";}
         if(g.playStage16C1Launch)
         {g.statusLine="STAGE 16C.1 - COMPILED-DEPOSIT CLASSIFICATION  [M] stages";}
+        if(g.playMw1Launch)
+        {g.statusLine="MW1 - PROVINCES / MOUNTAIN BELTS / BASINS  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -35838,6 +35993,14 @@ namespace
                 glColor3f( 0.78f, 0.86f, 0.62f );
                 DrawHudText( tbl.colNameX0 + 8.f, tbl.captionY0,
                     RuntimeDepositionChainCaption() );
+            }
+            if ( tbl.showMacroCaption )
+            {
+                FillRect( tbl.colHashX0, tbl.macroCaptionY0 - 4.f, tbl.colStatusX1, tbl.macroCaptionY0 + 16.f,
+                    0.10f, 0.12f, 0.16f );
+                glColor3f( 0.70f, 0.82f, 0.90f );
+                DrawHudText( tbl.colNameX0 + 8.f, tbl.macroCaptionY0,
+                    MacroWorldgenCaption() );
             }
             float const stageRowH = tbl.stageRowH;
             float const rowTop = tbl.rowTop;
@@ -37730,9 +37893,10 @@ namespace
         Stage0PlayView::PresentWaterTerrainHydraulicDeposition,
         Stage0PlayView::PresentWaterTerrainHydraulicCompaction,
         Stage0PlayView::CompiledDepositClassification,
+        Stage0PlayView::MacroProvinces,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1", "mw1"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -38425,7 +38589,8 @@ namespace
           || IsFaultDisplacementView( test.target )
           || IsSurfaceBreachView( test.target )
           || UsesExactLocalMaterialization( test.target )
-          || UsesBareEarthTerrain( test.target ) )
+          || UsesBareEarthTerrain( test.target )
+          || UsesMacroProvincesTerrain( test.target ) )
         {
             receipt.packages = (int)g.stage8TerrainBlocks.size();
             receipt.triangles = g.stage8TerrainTriangles;
@@ -38620,7 +38785,7 @@ namespace
         if ( IsDifferentialErosionView( view ) || IsGraniteIntrusionView( view )
           || IsContactMineralizationView( view ) || IsFaultDisplacementView( view )
           || IsSurfaceBreachView( view ) || UsesExactLocalMaterialization(view)
-          || UsesBareEarthTerrain(view) )
+          || UsesBareEarthTerrain(view) || UsesMacroProvincesTerrain(view) )
         { return g.stage8TerrainBlocks; }
         return g.stage0TerrainBlocks;
     }
@@ -38867,6 +39032,8 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
+        if(UsesMacroProvincesTerrain(view)&&g.macroProvincesRuntime)
+            return g.macroProvincesRuntime->SurfaceGeology(x,y);
         if(UsesBareEarthTerrain(view))
         {
             if(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel())
@@ -39121,7 +39288,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==30)
+        if(g.certWorldgenCardinalStageFilter==31)
+            certPath="Docs\\provenance_mw1_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==30)
             certPath="Docs\\provenance_16c1_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==29)
             certPath="Docs\\provenance_p5b3b3b_cardinal_replacement_cert.txt";
@@ -39297,7 +39466,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==30)
+            if(g.certWorldgenCardinalStageFilter==31)
+                tracePath="Docs\\provenance_mw1_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==30)
                 tracePath="Docs\\provenance_16c1_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==29)
                 tracePath="Docs\\provenance_p5b3b3b_cardinal_replacement_trace.csv";
@@ -40958,6 +41129,13 @@ namespace
         uint32_t classificationRevision=0;
     };
 
+    struct Mw1SoakTelemetry
+    {
+        int rebuilds=0;
+        int compiles=0;
+        int queries=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -41031,6 +41209,7 @@ namespace
         P5b3b3aSoakTelemetry p5b3b3aStart{};
         P5b3b3bSoakTelemetry p5b3b3bStart{};
         Stage16C1SoakTelemetry stage16c1Start{};
+        Mw1SoakTelemetry mw1Start{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -41141,6 +41320,17 @@ namespace
         t.remobilizes=(int)st.remobilizes;
         t.staleRefuse=(int)st.staleRefuse;
         t.classificationRevision=st.classificationRevision;
+        return t;
+    }
+
+    Mw1SoakTelemetry CaptureMw1SoakTelemetry()
+    {
+        Mw1SoakTelemetry t;
+        if(!g.macroProvincesRuntime)return t;
+        auto const& st=g.macroProvincesRuntime->GetStats();
+        t.rebuilds=(int)st.rebuilds;
+        t.compiles=(int)st.compiles;
+        t.queries=(int)st.queries;
         return t;
     }
 
@@ -41770,6 +41960,7 @@ namespace
         P5b3b3aSoakTelemetry const p5b3b3aNow=CaptureP5b3b3aSoakTelemetry();
         P5b3b3bSoakTelemetry const p5b3b3bNow=CaptureP5b3b3bSoakTelemetry();
         Stage16C1SoakTelemetry const stage16c1Now=CaptureStage16C1SoakTelemetry();
+        Mw1SoakTelemetry const mw1Now=CaptureMw1SoakTelemetry();
         int const p5b2cPoreXfer=SoakDeltaNonneg(p5b2cNow.poreTransfers,run.p5b2cStart.poreTransfers);
         int const p5b2cWetToDry=SoakDeltaNonneg(p5b2cNow.wetToDry,run.p5b2cStart.wetToDry);
         int const p5b2cDryToWet=SoakDeltaNonneg(p5b2cNow.dryToWet,run.p5b2cStart.dryToWet);
@@ -41863,6 +42054,12 @@ namespace
             stage16c1PhysicsVerdict="PASS_idle";
         else stage16c1PhysicsVerdict="FAIL_accumulating";
         bool const stage16c1Ok=std::strncmp(stage16c1PhysicsVerdict,"FAIL",4)!=0;
+        int const mw1Rebuilds=SoakDeltaNonneg(mw1Now.rebuilds,run.mw1Start.rebuilds);
+        int const mw1Compiles=SoakDeltaNonneg(mw1Now.compiles,run.mw1Start.compiles);
+        char const* mw1PhysicsVerdict="PASS_idle";
+        if(mw1Rebuilds==0&&mw1Compiles==0)mw1PhysicsVerdict="PASS_idle";
+        else mw1PhysicsVerdict="FAIL_accumulating";
+        bool const mw1Ok=std::strncmp(mw1PhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -41904,9 +42101,11 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok&&mw1Ok;
         char certPathBuf[160];
-        char const* certPath=g.certStreamingSoakStageFilter==30
+        char const* certPath=g.certStreamingSoakStageFilter==31
+            ?"Docs\\provenance_mw1_streaming_soak_cert.txt"
+            :(g.certStreamingSoakStageFilter==30
             ?"Docs\\provenance_16c1_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==29
             ?"Docs\\provenance_p5b3b3b_streaming_soak_cert.txt"
@@ -41924,7 +42123,7 @@ namespace
             ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
             :(g.certStreamingSoakStageFilter==22
             ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
-            :"Docs\\provenance_streaming_soak_cert.txt"))))))));
+            :"Docs\\provenance_streaming_soak_cert.txt")))))))));
         if(g.soakDrawLane!=0)
         {
             std::snprintf(certPathBuf,sizeof(certPathBuf),
@@ -42255,9 +42454,11 @@ namespace
         std::fprintf(f,
             "16c1_runtime_classifies=%d\n16c1_remobilizes=%d\n16c1_stale_refuse=%d\n"
             "16c1_classification_revision_delta=%d\n16c1_travel_physics=%s\n"
-            "16c1_compile_classifies=%d\n",
+            "16c1_compile_classifies=%d\n"
+            "mw1_rebuilds=%d\nmw1_compiles=%d\nmw1_travel_physics=%s\n",
             stage16c1Runtime,stage16c1Remob,stage16c1Stale,stage16c1Rev,
-            stage16c1PhysicsVerdict,stage16c1Now.compileClassifies);
+            stage16c1PhysicsVerdict,stage16c1Now.compileClassifies,
+            mw1Rebuilds,mw1Compiles,mw1PhysicsVerdict);
         {
             int const stations[]={0,1000,2000,4000,8000,12000};
             for(int s:stations)
@@ -42828,7 +43029,9 @@ namespace
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
-            char const* tracePath=g.certStreamingSoakStageFilter==30
+            char const* tracePath=g.certStreamingSoakStageFilter==31
+                ?"Docs\\provenance_mw1_streaming_soak_trace.csv"
+                :(g.certStreamingSoakStageFilter==30
                 ?"Docs\\provenance_16c1_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==29
                 ?"Docs\\provenance_p5b3b3b_streaming_soak_trace.csv"
@@ -42846,7 +43049,7 @@ namespace
                 ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
                 :(g.certStreamingSoakStageFilter==22
                 ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
-                :"Docs\\provenance_streaming_soak_trace.csv"))))))));
+                :"Docs\\provenance_streaming_soak_trace.csv")))))))));
             fopen_s(&run.trace,tracePath,"wb");
             if(run.trace)
             {
@@ -42909,6 +43112,7 @@ namespace
                 run.p5b3b3aStart=CaptureP5b3b3aSoakTelemetry();
                 run.p5b3b3bStart=CaptureP5b3b3bSoakTelemetry();
                 run.stage16c1Start=CaptureStage16C1SoakTelemetry();
+                run.mw1Start=CaptureMw1SoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -45870,6 +46074,66 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certMw1Visual)
+        {
+            static ULONGLONG visualStartMsMw1=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::MacroProvinces);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::MacroProvinces);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMsMw1>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_mw1_provinces_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"MW1_PROVINCES_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certMw1VisualFrames;
+            if(g.certMw1VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_mw1_provinces_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.macroProvincesRuntime
+                    ?g.macroProvincesRuntime->SampleForcing(g.feetX,g.feetY)
+                    :CausalMacroProvinces::ForcingSample{};
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_mw1_provinces_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.provinceId!=0
+                    &&g.macroProvincesCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601
+                    &&g.macroProvincesRuntime
+                    &&g.macroProvincesRuntime->GetStats().rebuilds==1;
+                if(opened)
+                {
+                    std::fprintf(file,"MW1_PROVINCES_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_mw1_provinces_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "province_id=%u\nprovince_type=%s\nsurface_z_m=%.3f\nuplift_m=%.3f\n"
+                        "rebuilds=%d\nwrap=0\nproduction_source=absolute_coordinate\n"
+                        "mw2=closed\nmw3=closed\nmw4=closed\n3c=closed\n16c_remobilization=closed\n",
+                        passed?"PASS":"FAIL",g.certMw1VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,
+                        q.provinceId,CausalMacroProvinces::ProvinceTypeName(q.provinceType),
+                        q.surfaceZ,q.upliftM,
+                        g.macroProvincesRuntime?(int)g.macroProvincesRuntime->GetStats().rebuilds:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -47306,6 +47570,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runPresentWaterTerrainHydraulicDepositionCert = false;
         bool runPresentWaterTerrainHydraulicCompactionCert = false;
         bool runCompiledDepositClassificationCert = false;
+        bool runMacroProvincesCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -47349,6 +47614,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_present_water_terrain_hydraulic_compaction_floor.cpc";
         char compiledDepositClassificationPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_compiled_deposit_classification_floor.cdc";
+        char macroProvincesPath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -47483,6 +47750,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-16c1")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-deposit-classification")==0)
                 {runCompiledDepositClassificationCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw1-provinces")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-mw1")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-macro-provinces")==0)
+                {runMacroProvincesCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -47728,6 +47999,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 presentWaterPath,compiledDepositClassificationPath);
             CausalCompiledDepositClassification::WriteCertArtifact(result,
                 "Docs\\provenance_16c1_compiled_deposit_classification_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runMacroProvincesCert)
+        {
+            auto const result=CausalMacroProvinces::RunCert(macroProvincesPath,
+                descriptorPath,exposurePath,erosionPath,intrusionPath,mineralizationPath,
+                faultPath,breachPath,geographyPath,hydrologyPath,fluvialErosionPath,
+                sedimentPath,compiledDepositClassificationPath);
+            CausalMacroProvinces::WriteCertArtifact(result,
+                "Docs\\provenance_mw1_provinces_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -48728,6 +49009,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-mw1")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage-mw1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=31;
+                    g.playWorldgenBaseline=true;g.playMw1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -48753,6 +49043,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=30;
                     g.playWorldgenBaseline=true;g.playStage16C1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-mw1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=31;
+                    g.playWorldgenBaseline=true;g.playMw1Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
@@ -48992,6 +49290,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-mw1-provinces")==0
+                  ||_wcsicmp(argv[i],L"--play-mw1")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw1Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsnicmp(argv[i],L"--classify-compiled-deposits=",29)==0)
                 {
                     g.classifyCompiledDepositsOverride=_wtoi(argv[i]+29)?1:0;
@@ -49095,6 +49400,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playStage16C1Launch=true;g.certStage16C1Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mw1-provinces-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-mw1-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw1Launch=true;g.certMw1Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
