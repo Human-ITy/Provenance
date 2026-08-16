@@ -1,0 +1,27 @@
+PROVENANCE_CAUSAL_REGIONAL_DEPOSITION_V1
+# MW5: depositional landscape consuming certified MW3/MW4 export mass.
+# Builds fans, valley fill, floodplains, bars, basin fill, terraces, and
+# colluvial aprons as depositional bodies (16C.1 / 3B.3B vocabulary).
+# Does not invent sediment, merge into host FormationId, or open MW6.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_deposition_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_deposition_floor
+authority_revision=1
+deposition_event_id=4d57350000000001
+chronology=70
+seed=mw5-64km-01
+regional_deposition_enabled=1
+grid_step_m=256.0
+density_g_per_m3=2650000.0
+max_deposit_m=72.0
+upland_pass_frac=0.965
+channel_pass_frac=0.82
+fan_pass_frac=0.22
+valley_pass_frac=0.48
+basin_pass_frac=0.28
+floodplain_pass_frac=0.40
+colluvial_pass_frac=0.92
+terrace_spread_frac=0.14
+low_supply_scale=0.18
