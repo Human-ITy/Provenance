@@ -1,0 +1,26 @@
+PROVENANCE_CAUSAL_REGIONAL_EROSION_V1
+# MW3: compiled denudation acting on certified MW2 geology + MW1 relief.
+# Changes the intersection surface only. Does not invent mountain shape,
+# certify a river network (MW4), or deposit basin fill (MW5).
+# Mass removed from upland occupancy/surface is exported/routed erosion mass.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_erosion_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_erosion_floor
+authority_revision=1
+erosion_event_id=4d57330000000001
+chronology=50
+seed=mw3-64km-01
+regional_erosion_enabled=1
+grid_step_m=256.0
+hillslope_k=22.0
+fluvial_k=34.0
+relief_k=14.0
+max_denudation_m=260.0
+sandstone_resistance=1.72
+shale_resistance=0.58
+granite_resistance=2.48
+structure_strength=0.62
+density_g_per_m3=2650000.0
+integration_step_m=4.0

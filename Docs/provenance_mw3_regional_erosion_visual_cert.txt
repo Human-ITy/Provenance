@@ -1,0 +1,25 @@
+MW3_REGIONAL_EROSION_PLAYER_VISUAL PASS
+frames_settled=90
+stage=CERTIFIED MW3 REGIONAL EROSION
+image=Docs/provenance_mw3_regional_erosion_player_view.ppm
+lower_frame_sky_pixels=0
+lower_frame_dark_pixels=0
+lower_frame_sampled_pixels=433552
+resident_packages=2601
+pending_packages=0
+formation_id=B03_HOST_UPPER
+material=shale
+feature_id=2000000000000013
+major_ridges=17
+sub_ridges=34
+belt_relief_m=1655.111
+anisotropy_deg=27.771
+anisotropy_score=0.9986
+wrap_rms_m=188.106
+rebuilds=1
+wrap=0
+production_source=absolute_coordinate
+mw4=closed
+mw5=closed
+3c=closed
+16c_remobilization=closed

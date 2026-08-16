@@ -37,6 +37,7 @@
 #include "CausalCompiledDepositClassification.h"
 #include "CausalMacroProvinces.h"
 #include "CausalRegionalGeology.h"
+#include "CausalRegionalErosion.h" // MW3 compiled denudation
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -566,7 +567,8 @@ namespace
         PresentWaterTerrainHydraulicCompaction = 33,
         CompiledDepositClassification = 34,
         MacroProvinces = 35,
-        RegionalGeology = 36
+        RegionalGeology = 36,
+        RegionalErosion = 37
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -926,9 +928,11 @@ namespace
         bool playStage16C1Launch = false;
         bool playMw1Launch = false;
         bool playMw2Launch = false;
+        bool playMw3Launch = false;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
         int regionalGeologyOverride = -1;
+        int regionalErosionOverride = -1;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -979,6 +983,8 @@ namespace
         int certMw1VisualFrames = 0;
         bool certMw2Visual = false;
         int certMw2VisualFrames = 0;
+        bool certMw3Visual = false;
+        int certMw3VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1169,6 +1175,8 @@ namespace
         bool macroProvincesCertified = false;
         bool regionalGeologyAuthorityAttempted = false;
         bool regionalGeologyCertified = false;
+        bool regionalErosionAuthorityAttempted = false;
+        bool regionalErosionCertified = false;
         bool presentWaterAuthorityAttempted = false;
         bool presentWaterCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
@@ -1189,6 +1197,7 @@ namespace
         std::string compiledDepositClassificationAuthorityReason = "not_loaded";
         std::string macroProvincesAuthorityReason = "not_loaded";
         std::string regionalGeologyAuthorityReason = "not_loaded";
+        std::string regionalErosionAuthorityReason = "not_loaded";
         std::string presentWaterAuthorityReason = "not_loaded";
         bool presentWaterBodyAuthorityAttempted = false;
         bool presentWaterBodyCertified = false;
@@ -1250,6 +1259,7 @@ namespace
         std::unique_ptr<CausalCompiledDepositClassification::Kernel> compiledDepositClassificationRuntime;
         std::unique_ptr<CausalMacroProvinces::Kernel> macroProvincesRuntime;
         std::unique_ptr<CausalRegionalGeology::Kernel> regionalGeologyRuntime;
+        std::unique_ptr<CausalRegionalErosion::Kernel> regionalErosionRuntime;
         std::unique_ptr<CausalPresentWater::Kernel> presentWaterRuntime;
         std::unique_ptr<CausalPresentWaterBody::Kernel> presentWaterBodyRuntime;
         std::unique_ptr<CausalPresentWaterEquilibrate::Kernel> presentWaterEquilibrateRuntime;
@@ -3239,9 +3249,15 @@ namespace
         return view == Stage0PlayView::RegionalGeology;
     }
 
+    bool IsRegionalErosionView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::RegionalErosion;
+    }
+
     bool UsesMacroProvincesTerrain( Stage0PlayView view )
     {
-        return IsMacroProvincesView(view)||IsRegionalGeologyView(view);
+        return IsMacroProvincesView(view)||IsRegionalGeologyView(view)
+            ||IsRegionalErosionView(view);
     }
 
     bool UsesCompiledSedimentTerrain( Stage0PlayView view )
@@ -3459,6 +3475,8 @@ namespace
             "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp";
         constexpr char const* kRegionalGeologyPath =
             "Data\\Worldgen\\causal_world_regional_geology_floor.crg";
+        constexpr char const* kRegionalErosionPath =
+            "Data\\Worldgen\\causal_world_regional_erosion_floor.cre";
         constexpr char const* kPresentWaterPath =
             "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         constexpr char const* kPresentWaterBodyPath =
@@ -3799,6 +3817,25 @@ namespace
                 g.presentWaterAuthorityReason=g.presentWaterCertified?"certified":reason;
             }
             return g.presentWaterCertified&&g.presentWaterRuntime!=nullptr;
+        }
+
+        if(IsRegionalErosionView(view))
+        {
+            if(!g.regionalErosionAuthorityAttempted)
+            {
+                g.regionalErosionAuthorityAttempted=true;
+                CausalRegionalErosion::Control control=CausalRegionalErosion::Control::Program;
+                if(g.regionalErosionOverride==0)
+                    control=CausalRegionalErosion::Control::ForceOff;
+                else if(g.regionalErosionOverride==1)
+                    control=CausalRegionalErosion::Control::ForceOn;
+                std::string reason;g.regionalErosionRuntime=
+                    CausalRegionalErosion::LoadKernel(kRegionalErosionPath,kRegionalGeologyPath,
+                        kMacroProvincesPath,&reason,control);
+                g.regionalErosionCertified=g.regionalErosionRuntime!=nullptr;
+                g.regionalErosionAuthorityReason=g.regionalErosionCertified?"certified":reason;
+            }
+            return g.regionalErosionCertified&&g.regionalErosionRuntime!=nullptr;
         }
 
         if(IsRegionalGeologyView(view))
@@ -4399,6 +4436,22 @@ namespace
         return kernel.get();
     }
 
+    CausalRegionalErosion::Kernel* ThreadRegionalErosionKernel()
+    {
+        thread_local std::unique_ptr<CausalRegionalErosion::Kernel> kernel;
+        thread_local bool attempted=false;
+        if(!attempted)
+        {
+            attempted=true;std::string reason;
+            kernel=CausalRegionalErosion::LoadKernel(
+                "Data\\Worldgen\\causal_world_regional_erosion_floor.cre",
+                "Data\\Worldgen\\causal_world_regional_geology_floor.crg",
+                "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp",&reason,
+                CausalRegionalErosion::Control::ForceOn);
+        }
+        return kernel.get();
+    }
+
     void SampleCompiledFluvialWorkerBlockInto(
         CausalBareEarthGeography::Kernel const& geography,
         CausalCompiledFluvialErosion::Kernel const& erosion,int bx,int by,
@@ -4489,6 +4542,20 @@ namespace
     {
         if ( UsesMacroProvincesTerrain( view ) )
         {
+            if(IsRegionalErosionView(view))
+            {
+                if(!g.regionalErosionRuntime)return false;
+                if(SampleResidentCausalPackageSurface(x,y,outZ))
+                {
+                    auto const geology=g.regionalErosionRuntime->SurfaceGeology(x,y);
+                    if(!geology.found)return false;
+                    outCap=geology.material;return true;
+                }
+                outZ=(float)g.regionalErosionRuntime->ReconstructedZ(x,y);
+                auto const geology=g.regionalErosionRuntime->SurfaceGeology(x,y);
+                if(!geology.found)return false;
+                outCap=geology.material;return true;
+            }
             if(IsRegionalGeologyView(view))
             {
                 if(!g.regionalGeologyRuntime)return false;
@@ -4703,6 +4770,8 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsRegionalErosionView(view)&&g.regionalErosionRuntime)
+            return g.regionalErosionRuntime->Query(x,y,z);
         if(IsRegionalGeologyView(view)&&g.regionalGeologyRuntime)
             return g.regionalGeologyRuntime->Query(x,y,z);
         if(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel())
@@ -4753,6 +4822,8 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsRegionalErosionView(view)&&g.regionalErosionRuntime)
+            return g.regionalErosionRuntime->QueryMaterial(x,y,z);
         if(IsRegionalGeologyView(view)&&g.regionalGeologyRuntime)
             return g.regionalGeologyRuntime->QueryMaterial(x,y,z);
         if(UsesPresentWaterOccupancy(view)&&ActivePresentWaterKernel())
@@ -11656,12 +11727,14 @@ namespace
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
           && UsesMacroProvincesTerrain( g.stage0PlayView )
-          && (g.regionalGeologyRuntime||g.macroProvincesRuntime) )
+          && (g.regionalErosionRuntime||g.regionalGeologyRuntime||g.macroProvincesRuntime) )
         {
             if(sampleResidentCausalPackage(outZ))return true;
-            outZ=(float)(g.regionalGeologyRuntime
+            outZ=(float)(g.regionalErosionRuntime
+                ?g.regionalErosionRuntime->ReconstructedZ(x,y)
+                :(g.regionalGeologyRuntime
                 ?g.regionalGeologyRuntime->ReconstructedZ(x,y)
-                :g.macroProvincesRuntime->ReconstructedZ(x,y));
+                :g.macroProvincesRuntime->ReconstructedZ(x,y)));
             return std::isfinite(outZ);
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
@@ -14290,6 +14363,8 @@ namespace
             IsMacroProvincesView(job.view)?ThreadMacroProvincesKernel():nullptr;
         CausalRegionalGeology::Kernel* const workerMw2=
             IsRegionalGeologyView(job.view)?ThreadRegionalGeologyKernel():nullptr;
+        CausalRegionalErosion::Kernel* const workerMw3=
+            IsRegionalErosionView(job.view)?ThreadRegionalErosionKernel():nullptr;
 
         if(out.integratedCutC)
         {
@@ -14314,6 +14389,8 @@ namespace
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
         {SampleCompiledFluvialWorkerBlockInto(*workerGeography,
             *g.compiledFluvialRuntime,job.bx,job.by,surfaceSamples);}
+        else if(IsRegionalErosionView(job.view)&&workerMw3)
+        {workerMw3->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(IsRegionalGeologyView(job.view)&&workerMw2)
         {workerMw2->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(UsesMacroProvincesTerrain(job.view)&&workerMw1)
@@ -14812,7 +14889,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -14867,6 +14944,8 @@ namespace
         {surfaceSamples=ActiveCompiledSedimentKernel(g.stage0PlayView)->SampleBlock(bx,by);}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {surfaceSamples=g.compiledFluvialRuntime->SampleBlock(bx,by);}
+        else if(IsRegionalErosionView(g.stage0PlayView)&&g.regionalErosionRuntime)
+        {g.regionalErosionRuntime->SampleBlockInto(bx,by,surfaceSamples);}
         else if(IsRegionalGeologyView(g.stage0PlayView)&&g.regionalGeologyRuntime)
         {g.regionalGeologyRuntime->SampleBlockInto(bx,by,surfaceSamples);}
         else if(UsesMacroProvincesTerrain(g.stage0PlayView)&&g.macroProvincesRuntime)
@@ -15084,7 +15163,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -15291,6 +15370,7 @@ namespace
         if ( IsCompiledDepositClassificationView( view ) ) { return 31; }
         if ( IsMacroProvincesView( view ) ) { return 32; }
         if ( IsRegionalGeologyView( view ) ) { return 33; }
+        if ( IsRegionalErosionView( view ) ) { return 34; }
         if ( IsPresentWaterBodyView( view ) ) { return 17; }
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
@@ -15375,6 +15455,8 @@ namespace
           "GEOMORPH.COMPILED_DEPOSIT_CLASSIFICATION", "64 km geologic forcing field: provinces, uplift/subsidence, belts, basins", Stage0PlayView::MacroProvinces },
         { "GEOLOGY / GEOMORPHOLOGY", "MACRO.REGIONAL_3D_GEOLOGY", "MW2 - Regional 3D Geology",
           "MACRO.PROVINCES_BELTS_BASINS", "persistent 3D formations, faults, intrusions, and chronology through depth", Stage0PlayView::RegionalGeology },
+        { "GEOLOGY / GEOMORPHOLOGY", "MACRO.REGIONAL_EROSION", "MW3 - Regional Erosion",
+          "MACRO.REGIONAL_3D_GEOLOGY", "compiled denudation on MW2 geology; intersection surface only", Stage0PlayView::RegionalErosion },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -15411,7 +15493,7 @@ namespace
 
     constexpr int kCertificationBrowserCount =
         (int)( sizeof( s_certificationBrowser ) / sizeof( s_certificationBrowser[0] ) );
-    constexpr int kStandingBoardClosedCount = 8;
+    constexpr int kStandingBoardClosedCount = 7;
     constexpr int kStandingBoardCount = kCertificationBrowserCount + kStandingBoardClosedCount;
 
     struct StandingBoardClosedEntry
@@ -15423,7 +15505,6 @@ namespace
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
         { "3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" },
         { "16C runtime remobilization", "GEOMORPH.16C_RUNTIME_REMOBILIZATION" },
-        { "MW3 regional erosion", "MACRO.REGIONAL_EROSION" },
         { "MW4 valley/drainage morphology", "MACRO.VALLEY_DRAINAGE" },
         { "MW5 depositional landscape", "MACRO.DEPOSITIONAL_LANDSCAPE" },
         { "MW6 hydroclimate", "MACRO.HYDROCLIMATE" },
@@ -15433,7 +15514,7 @@ namespace
 
     char const* MacroWorldgenCaption()
     {
-        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3-MW8 CLOSED";
+        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3 CERTIFIED  MW4-MW8 CLOSED";
     }
 
     bool IsRuntimeDepositionChainView( Stage0PlayView view )
@@ -15548,6 +15629,8 @@ namespace
         { attempted = g.macroProvincesAuthorityAttempted; certified = g.macroProvincesCertified; }
         else if ( IsRegionalGeologyView( entry.view ) )
         { attempted = g.regionalGeologyAuthorityAttempted; certified = g.regionalGeologyCertified; }
+        else if ( IsRegionalErosionView( entry.view ) )
+        { attempted = g.regionalErosionAuthorityAttempted; certified = g.regionalErosionCertified; }
         else if ( IsPresentWaterBodyView( entry.view ) )
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
@@ -15649,8 +15732,10 @@ namespace
         tbl.showDepositionCaption = chainFirst < tbl.lastVisible && chainLast >= tbl.firstVisible;
         int const mw1Board = BrowserIndexForView( Stage0PlayView::MacroProvinces );
         int const mw2Board = BrowserIndexForView( Stage0PlayView::RegionalGeology );
+        int const mw3Board = BrowserIndexForView( Stage0PlayView::RegionalErosion );
         tbl.showMacroCaption = (mw1Board < tbl.lastVisible && mw1Board >= tbl.firstVisible)
-            || (mw2Board < tbl.lastVisible && mw2Board >= tbl.firstVisible);
+            || (mw2Board < tbl.lastVisible && mw2Board >= tbl.firstVisible)
+            || (mw3Board < tbl.lastVisible && mw3Board >= tbl.firstVisible);
         if ( tbl.showDepositionCaption )
         {
             constexpr float captionH = 22.f;
@@ -15910,6 +15995,7 @@ namespace
             if ( IsCompiledDepositClassificationView( view ) ) { reason = &g.compiledDepositClassificationAuthorityReason; }
             if ( IsMacroProvincesView( view ) ) { reason = &g.macroProvincesAuthorityReason; }
             if ( IsRegionalGeologyView( view ) ) { reason = &g.regionalGeologyAuthorityReason; }
+            if ( IsRegionalErosionView( view ) ) { reason = &g.regionalErosionAuthorityReason; }
             if ( IsPresentWaterBodyView( view ) ) { reason = &g.presentWaterBodyAuthorityReason; }
             if ( IsPresentWaterEquilibrateView( view ) ) { reason = &g.presentWaterEquilibrateAuthorityReason; }
             if ( IsPresentWaterExternalView( view ) ) { reason = &g.presentWaterExternalAuthorityReason; }
@@ -16028,6 +16114,13 @@ namespace
         else if ( IsRegionalGeologyView( view ) && g.regionalGeologyRuntime )
         {
             auto const& authority=g.regionalGeologyRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsRegionalErosionView( view ) && g.regionalErosionRuntime )
+        {
+            auto const& authority=g.regionalErosionRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -16173,6 +16266,15 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="MW2 - regional 3D geology; formations through depth";
+        }
+        if(g.playWorldgenInitialized&&IsRegionalErosionView(view)&&oldView!=view)
+        {
+            g.feetX=2580.0f;g.feetY=-4860.0f;g.yaw=2.85f;g.pitch=-0.12f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="MW3 - regional erosion; denuded intersection on MW2 geology";
         }
         if(g.playWorldgenInitialized&&IsPresentWaterView(view)&&oldView!=view)
         {
@@ -16360,6 +16462,7 @@ namespace
             case Stage0PlayView::CompiledDepositClassification: return "CERTIFIED COMPILED-DEPOSIT CLASSIFICATION";
             case Stage0PlayView::MacroProvinces: return "CERTIFIED MW1 PROVINCES / MOUNTAIN BELTS / BASINS";
             case Stage0PlayView::RegionalGeology: return "CERTIFIED MW2 REGIONAL 3D GEOLOGY";
+            case Stage0PlayView::RegionalErosion: return "CERTIFIED MW3 REGIONAL EROSION";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -34497,7 +34600,7 @@ namespace
           &&!g.playStage16F4Launch&&!g.playP5b1Launch          &&!g.playP5b2aLaunch
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
           &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch&&!g.playP5b3b3bLaunch
-          &&!g.playStage16C1Launch&&!g.playMw1Launch&&!g.playMw2Launch
+          &&!g.playStage16C1Launch&&!g.playMw1Launch&&!g.playMw2Launch&&!g.playMw3Launch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34843,6 +34946,21 @@ namespace
                 g.yaw=0.0f;g.pitch=-0.48f;
             }
         }
+        if(g.playMw3Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::RegionalErosion);
+            if(g.certMw3Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                g.feetX=2580.0f;g.feetY=-4920.0f;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(2580.0f,-4860.0f,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+72.0f;
+                g.yaw=0.0f;g.pitch=-0.50f;
+            }
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -34975,6 +35093,8 @@ namespace
         {g.statusLine="MW1 - PROVINCES / MOUNTAIN BELTS / BASINS  [M] stages";}
         if(g.playMw2Launch)
         {g.statusLine="MW2 - REGIONAL 3D GEOLOGY  [M] stages";}
+        if(g.playMw3Launch)
+        {g.statusLine="MW3 - REGIONAL EROSION  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -38017,9 +38137,10 @@ namespace
         Stage0PlayView::CompiledDepositClassification,
         Stage0PlayView::MacroProvinces,
         Stage0PlayView::RegionalGeology,
+        Stage0PlayView::RegionalErosion,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1", "mw1", "mw2"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1", "mw1", "mw2", "mw3"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -39155,6 +39276,8 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
+        if(IsRegionalErosionView(view)&&g.regionalErosionRuntime)
+            return g.regionalErosionRuntime->SurfaceGeology(x,y);
         if(IsRegionalGeologyView(view)&&g.regionalGeologyRuntime)
             return g.regionalGeologyRuntime->SurfaceGeology(x,y);
         if(UsesMacroProvincesTerrain(view)&&g.macroProvincesRuntime)
@@ -39413,7 +39536,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==32)
+        if(g.certWorldgenCardinalStageFilter==33)
+            certPath="Docs\\provenance_mw3_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==32)
             certPath="Docs\\provenance_mw2_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==31)
             certPath="Docs\\provenance_mw1_cardinal_replacement_cert.txt";
@@ -39593,7 +39718,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==32)
+            if(g.certWorldgenCardinalStageFilter==33)
+                tracePath="Docs\\provenance_mw3_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==32)
                 tracePath="Docs\\provenance_mw2_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==31)
                 tracePath="Docs\\provenance_mw1_cardinal_replacement_trace.csv";
@@ -41272,6 +41399,13 @@ namespace
         int queries=0;
     };
 
+    struct Mw3SoakTelemetry
+    {
+        int rebuilds=0;
+        int compiles=0;
+        int queries=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -41347,6 +41481,7 @@ namespace
         Stage16C1SoakTelemetry stage16c1Start{};
         Mw1SoakTelemetry mw1Start{};
         Mw2SoakTelemetry mw2Start{};
+        Mw3SoakTelemetry mw3Start{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -41476,6 +41611,17 @@ namespace
         Mw2SoakTelemetry t;
         if(!g.regionalGeologyRuntime)return t;
         auto const& st=g.regionalGeologyRuntime->GetStats();
+        t.rebuilds=(int)st.rebuilds;
+        t.compiles=(int)st.compiles;
+        t.queries=(int)st.queries;
+        return t;
+    }
+
+    Mw3SoakTelemetry CaptureMw3SoakTelemetry()
+    {
+        Mw3SoakTelemetry t;
+        if(!g.regionalErosionRuntime)return t;
+        auto const& st=g.regionalErosionRuntime->GetStats();
         t.rebuilds=(int)st.rebuilds;
         t.compiles=(int)st.compiles;
         t.queries=(int)st.queries;
@@ -42215,6 +42361,13 @@ namespace
         if(mw2Rebuilds==0&&mw2Compiles==0)mw2PhysicsVerdict="PASS_idle";
         else mw2PhysicsVerdict="FAIL_accumulating";
         bool const mw2Ok=std::strncmp(mw2PhysicsVerdict,"FAIL",4)!=0;
+        Mw3SoakTelemetry const mw3Now=CaptureMw3SoakTelemetry();
+        int const mw3Rebuilds=SoakDeltaNonneg(mw3Now.rebuilds,run.mw3Start.rebuilds);
+        int const mw3Compiles=SoakDeltaNonneg(mw3Now.compiles,run.mw3Start.compiles);
+        char const* mw3PhysicsVerdict="PASS_idle";
+        if(mw3Rebuilds==0&&mw3Compiles==0)mw3PhysicsVerdict="PASS_idle";
+        else mw3PhysicsVerdict="FAIL_accumulating";
+        bool const mw3Ok=std::strncmp(mw3PhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -42256,31 +42409,33 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok&&mw1Ok&&mw2Ok;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok&&mw1Ok&&mw2Ok&&mw3Ok;
         char certPathBuf[160];
-        char const* certPath=g.certStreamingSoakStageFilter==32
-            ?"Docs\\provenance_mw2_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==31
-            ?"Docs\\provenance_mw1_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==30
-            ?"Docs\\provenance_16c1_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==29
-            ?"Docs\\provenance_p5b3b3b_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==28
-            ?"Docs\\provenance_p5b3b3a_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==27
-            ?"Docs\\provenance_p5b3b2_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==26
-            ?"Docs\\provenance_p5b3b_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==25
-            ?"Docs\\provenance_p5b3a_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==24
-            ?"Docs\\provenance_p5b2c_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==23
-            ?"Docs\\provenance_p5b2b_streaming_soak_cert.txt"
-            :(g.certStreamingSoakStageFilter==22
-            ?"Docs\\provenance_p5b2a_streaming_soak_cert.txt"
-            :"Docs\\provenance_streaming_soak_cert.txt"))))))))));
+        char const* certPath="Docs\\provenance_streaming_soak_cert.txt";
+        if(g.certStreamingSoakStageFilter==33)
+            certPath="Docs\\provenance_mw3_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==32)
+            certPath="Docs\\provenance_mw2_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==31)
+            certPath="Docs\\provenance_mw1_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==30)
+            certPath="Docs\\provenance_16c1_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==29)
+            certPath="Docs\\provenance_p5b3b3b_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==28)
+            certPath="Docs\\provenance_p5b3b3a_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==27)
+            certPath="Docs\\provenance_p5b3b2_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==26)
+            certPath="Docs\\provenance_p5b3b_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==25)
+            certPath="Docs\\provenance_p5b3a_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==24)
+            certPath="Docs\\provenance_p5b2c_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==23)
+            certPath="Docs\\provenance_p5b2b_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==22)
+            certPath="Docs\\provenance_p5b2a_streaming_soak_cert.txt";
         if(g.soakDrawLane!=0)
         {
             std::snprintf(certPathBuf,sizeof(certPathBuf),
@@ -42613,11 +42768,13 @@ namespace
             "16c1_classification_revision_delta=%d\n16c1_travel_physics=%s\n"
             "16c1_compile_classifies=%d\n"
             "mw1_rebuilds=%d\nmw1_compiles=%d\nmw1_travel_physics=%s\n"
-            "mw2_rebuilds=%d\nmw2_compiles=%d\nmw2_travel_physics=%s\n",
+            "mw2_rebuilds=%d\nmw2_compiles=%d\nmw2_travel_physics=%s\n"
+            "mw3_rebuilds=%d\nmw3_compiles=%d\nmw3_travel_physics=%s\n",
             stage16c1Runtime,stage16c1Remob,stage16c1Stale,stage16c1Rev,
             stage16c1PhysicsVerdict,stage16c1Now.compileClassifies,
             mw1Rebuilds,mw1Compiles,mw1PhysicsVerdict,
-            mw2Rebuilds,mw2Compiles,mw2PhysicsVerdict);
+            mw2Rebuilds,mw2Compiles,mw2PhysicsVerdict,
+            mw3Rebuilds,mw3Compiles,mw3PhysicsVerdict);
         {
             int const stations[]={0,1000,2000,4000,8000,12000};
             for(int s:stations)
@@ -43188,29 +43345,31 @@ namespace
             run.maxWorkingSet=run.startWorkingSet;
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
-            char const* tracePath=g.certStreamingSoakStageFilter==32
-                ?"Docs\\provenance_mw2_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==31
-                ?"Docs\\provenance_mw1_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==30
-                ?"Docs\\provenance_16c1_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==29
-                ?"Docs\\provenance_p5b3b3b_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==28
-                ?"Docs\\provenance_p5b3b3a_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==27
-                ?"Docs\\provenance_p5b3b2_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==26
-                ?"Docs\\provenance_p5b3b_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==25
-                ?"Docs\\provenance_p5b3a_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==24
-                ?"Docs\\provenance_p5b2c_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==23
-                ?"Docs\\provenance_p5b2b_streaming_soak_trace.csv"
-                :(g.certStreamingSoakStageFilter==22
-                ?"Docs\\provenance_p5b2a_streaming_soak_trace.csv"
-                :"Docs\\provenance_streaming_soak_trace.csv"))))))))));
+            char const* tracePath="Docs\\provenance_streaming_soak_trace.csv";
+            if(g.certStreamingSoakStageFilter==33)
+                tracePath="Docs\\provenance_mw3_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==32)
+                tracePath="Docs\\provenance_mw2_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==31)
+                tracePath="Docs\\provenance_mw1_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==30)
+                tracePath="Docs\\provenance_16c1_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==29)
+                tracePath="Docs\\provenance_p5b3b3b_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==28)
+                tracePath="Docs\\provenance_p5b3b3a_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==27)
+                tracePath="Docs\\provenance_p5b3b2_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==26)
+                tracePath="Docs\\provenance_p5b3b_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==25)
+                tracePath="Docs\\provenance_p5b3a_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==24)
+                tracePath="Docs\\provenance_p5b2c_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==23)
+                tracePath="Docs\\provenance_p5b2b_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==22)
+                tracePath="Docs\\provenance_p5b2a_streaming_soak_trace.csv";
             fopen_s(&run.trace,tracePath,"wb");
             if(run.trace)
             {
@@ -43275,6 +43434,7 @@ namespace
                 run.stage16c1Start=CaptureStage16C1SoakTelemetry();
                 run.mw1Start=CaptureMw1SoakTelemetry();
                 run.mw2Start=CaptureMw2SoakTelemetry();
+                run.mw3Start=CaptureMw3SoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -46356,6 +46516,74 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certMw3Visual)
+        {
+            static ULONGLONG visualStartMsMw3=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::RegionalErosion);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::RegionalErosion);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMsMw3>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_mw3_regional_erosion_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"MW3_REGIONAL_EROSION_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certMw3VisualFrames;
+            if(g.certMw3VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_mw3_regional_erosion_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.regionalErosionRuntime
+                    ?g.regionalErosionRuntime->SurfaceGeology(g.feetX,g.feetY)
+                    :CausalWorldGeology::GeoSample{};
+                CausalRegionalErosion::VisualMetrics vis{};
+                if(g.regionalErosionRuntime)
+                    vis=CausalRegionalErosion::MeasureVisual(*g.regionalErosionRuntime);
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_mw3_regional_erosion_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&!q.formationId.empty()
+                    &&g.regionalErosionCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601
+                    &&g.regionalErosionRuntime
+                    &&g.regionalErosionRuntime->GetStats().rebuilds==1
+                    &&vis.majorRidges>=2&&vis.wrapRmsM>40.0;
+                if(opened)
+                {
+                    std::fprintf(file,"MW3_REGIONAL_EROSION_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_mw3_regional_erosion_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "formation_id=%s\nmaterial=%s\nfeature_id=%s\n"
+                        "major_ridges=%d\nsub_ridges=%d\nbelt_relief_m=%.3f\n"
+                        "anisotropy_deg=%.3f\nanisotropy_score=%.4f\nwrap_rms_m=%.3f\n"
+                        "rebuilds=%d\nwrap=0\nproduction_source=absolute_coordinate\n"
+                        "mw4=closed\nmw5=closed\n3c=closed\n16c_remobilization=closed\n",
+                        passed?"PASS":"FAIL",g.certMw3VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,
+                        q.formationId.c_str(),q.material.c_str(),
+                        CausalWorldGeology::Hex64(q.featureId).c_str(),
+                        vis.majorRidges,vis.subRidges,vis.beltReliefM,
+                        vis.anisotropyDeg,vis.anisotropyScore,vis.wrapRmsM,
+                        g.regionalErosionRuntime?(int)g.regionalErosionRuntime->GetStats().rebuilds:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -47794,6 +48022,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runCompiledDepositClassificationCert = false;
         bool runMacroProvincesCert = false;
         bool runRegionalGeologyCert = false;
+        bool runRegionalErosionCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -47841,6 +48070,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp";
         char regionalGeologyPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_regional_geology_floor.crg";
+        char regionalErosionPath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_regional_erosion_floor.cre";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -47983,6 +48214,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-mw2")==0
                   ||_wcsicmp(certArgv[i],L"--cert-regional-geology")==0)
                 {runRegionalGeologyCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw3-regional-erosion")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-mw3")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-regional-erosion")==0)
+                {runRegionalErosionCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -48248,6 +48483,17 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 fluvialErosionPath,sedimentPath,compiledDepositClassificationPath);
             CausalRegionalGeology::WriteCertArtifact(result,
                 "Docs\\provenance_mw2_regional_geology_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runRegionalErosionCert)
+        {
+            auto const result=CausalRegionalErosion::RunCert(regionalErosionPath,
+                regionalGeologyPath,macroProvincesPath,descriptorPath,exposurePath,
+                erosionPath,intrusionPath,mineralizationPath,faultPath,breachPath,
+                geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                compiledDepositClassificationPath);
+            CausalRegionalErosion::WriteCertArtifact(result,
+                "Docs\\provenance_mw3_regional_erosion_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -49266,6 +49512,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-mw3")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage-mw3")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=33;
+                    g.playWorldgenBaseline=true;g.playMw3Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -49307,6 +49562,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=32;
                     g.playWorldgenBaseline=true;g.playMw2Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-mw3")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=33;
+                    g.playWorldgenBaseline=true;g.playMw3Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
@@ -49560,6 +49823,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-mw3-regional-erosion")==0
+                  ||_wcsicmp(argv[i],L"--play-mw3")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw3Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsnicmp(argv[i],L"--classify-compiled-deposits=",29)==0)
                 {
                     g.classifyCompiledDepositsOverride=_wtoi(argv[i]+29)?1:0;
@@ -49679,6 +49949,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playMw2Launch=true;g.certMw2Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mw3-regional-erosion-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-mw3-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw3Launch=true;g.certMw3Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
