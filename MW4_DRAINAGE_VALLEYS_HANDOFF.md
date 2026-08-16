@@ -29,7 +29,7 @@ Production source is **absolute-coordinate 64 km regional authority**
 
 ## This cut
 
-SHA: `THIS_CUT` (full hash filled by the freeze stamp).
+SHA: `cc7fe436` (`cc7fe436df53f5d85111f7e913bb3203951d4944`).
 
 Freeze parents:
 
@@ -178,7 +178,7 @@ MACRO WORLDGEN
 MW1 provinces / belts / basins   CERTIFIED
 MW2 regional 3D geology          CERTIFIED / FROZEN @ 6ada7260
 MW3 regional erosion             CERTIFIED / FROZEN @ 0274e22e
-MW4 drainage / valleys           CERTIFIED
+MW4 drainage / valleys           CERTIFIED / FROZEN @ cc7fe436
 MW5 depositional landscape       CLOSED
 MW6 hydroclimate                 CLOSED
 MW7 soils / regolith             CLOSED

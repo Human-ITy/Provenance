@@ -252,7 +252,7 @@ P5b.3C  structural collapse               CLOSED
 MW1     provinces / belts / basins        CERTIFIED / FROZEN @ 569269aa
 MW2     regional 3D geology               CERTIFIED / FROZEN @ 6ada7260
 MW3     regional erosion                  CERTIFIED / FROZEN @ 0274e22e
-MW4     drainage / valleys                CERTIFIED
+MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
 MW5–MW8 deposition → biomes               CLOSED
 ```
 
@@ -389,7 +389,7 @@ Cert: `CERT_MW3_REGIONAL_EROSION.cmd`.
 CLOSED: MW5–MW8, 3C structural collapse, 16C runtime remobilization.
 Do not add PLAYABLE biome/flora rows.
 
-**MW4 CERTIFIED** — watershed + valley organization on the MW3 surface,
+**MW4 CERTIFIED / FROZEN** @ `cc7fe436` — watershed + valley organization on the MW3 surface,
 steered by MW2 structure. Not a river-noise layer. Off / no-MW4 == exact
 MW3 present (max |ΔZ| 0). Mass conserved: removed == exported. H2H
 drainage identity from 64 km through 12.5 cm bank/bed (host MW2
@@ -501,7 +501,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW1 CERTIFIED / FROZEN** @ `569269aa` (provinces / belts / basins; 64 km forcing field).
 **MW2 CERTIFIED / FROZEN** @ `6ada7260` (regional 3D geology; persistent bodies through depth).
 **MW3 CERTIFIED / FROZEN** @ `0274e22e` (compiled denudation on MW2 geology; intersection surface only).
-**MW4 CERTIFIED** (watershed + valley organization on the MW3 surface; no river-noise layer).
+**MW4 CERTIFIED / FROZEN** @ `cc7fe436` (watershed + valley organization on the MW3 surface; no river-noise layer).
 **P5b.3C CLOSED** (structural collapse). **MW5–MW8 CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
