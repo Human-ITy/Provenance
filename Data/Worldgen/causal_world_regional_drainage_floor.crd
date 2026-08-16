@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_REGIONAL_DRAINAGE_V1
+# MW4: watershed + valley organization on certified MW3 denuded surface.
+# Steered by MW2 structure. Does not invent a river-noise layer, deposit
+# basin fill (MW5), or own live hydrology presentation.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_drainage_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_drainage_floor
+authority_revision=1
+drainage_event_id=4d57340000000001
+chronology=60
+seed=mw4-64km-01
+regional_drainage_enabled=1
+grid_step_m=256.0
+channel_threshold_km2=6.0
+depression_epsilon_m=0.05
+structure_strength=0.58
+valley_k=1.0
+max_valley_incision_m=48.0
+density_g_per_m3=2650000.0
