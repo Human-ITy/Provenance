@@ -249,7 +249,7 @@ P5b.3B.3B compaction / terrain surface    CERTIFIED / FROZEN @ 2f722735
 P5b.3C  structural collapse               CLOSED
 16C     compiled sediment routing         CERTIFIED / FROZEN
 16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
-MW1     provinces / belts / basins        CERTIFIED
+MW1     provinces / belts / basins        CERTIFIED / FROZEN @ 569269aa
 MW2–MW8 regional geology → biomes         CLOSED
 ```
 
@@ -362,7 +362,7 @@ Handoff: `P16C1_COMPILED_DEPOSIT_CLASSIFICATION_HANDOFF.md`.
 Play: `PLAY_16C1_COMPILED_DEPOSIT_CLASSIFICATION.cmd`.
 Cert: `CERT_16C1_COMPILED_DEPOSIT_CLASSIFICATION.cmd`.
 
-**MW1 CERTIFIED** — provinces / mountain belts / basins. Absolute-coordinate
+**MW1 CERTIFIED / FROZEN** @ `569269aa` — provinces / mountain belts / basins. Absolute-coordinate
 64 km geologic forcing field (not final planet terrain). Off / no-MW1 ==
 frozen 16C.1 local present. Production source is not the 4096 m wrap.
 Handoff: `MW1_PROVINCES_HANDOFF.md`.
@@ -462,7 +462,7 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **P5b.3B.3B CERTIFIED / FROZEN** @ `2f722735` (compaction: deposited body → stable deposited ground, not host weld).
 **3A–3B.3B** = worldgen shaping primitive (ready). **16C** CERTIFIED
 unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before macro).
-**MW1 CERTIFIED** (provinces / belts / basins; 64 km forcing field).
+**MW1 CERTIFIED / FROZEN** @ `569269aa` (provinces / belts / basins; 64 km forcing field).
 **P5b.3C CLOSED** (structural collapse). **MW2–MW8 CLOSED**.
 Erosion / rainfall / deep groundwater CLOSED.
 

@@ -22,7 +22,7 @@ not MW1 macro geography.
 
 ## This cut
 
-SHA: pending (filled after commit on `provenance/client-spike`).
+SHA: `569269aa` (`569269aaf65a00316e3040d7b85ceb9c49712476`).
 
 Freeze parents:
 
