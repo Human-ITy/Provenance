@@ -250,7 +250,7 @@ P5b.3C  structural collapse               CLOSED
 16C     compiled sediment routing         CERTIFIED / FROZEN
 16C.1   compiled-deposit classification   CERTIFIED / FROZEN @ 047d4304
 MW1     provinces / belts / basins        CERTIFIED / FROZEN @ 569269aa
-MW2     regional 3D geology               CERTIFIED
+MW2     regional 3D geology               CERTIFIED / FROZEN @ 6ada7260
 MW3–MW8 regional erosion → biomes         CLOSED
 ```
 
@@ -370,7 +370,7 @@ Handoff: `MW1_PROVINCES_HANDOFF.md`.
 Play: `PLAY_MW1_PROVINCES.cmd` / `--play-mw1-provinces`.
 Cert: `CERT_MW1_PROVINCES.cmd`.
 
-**MW2 CERTIFIED** — regional 3D geology keyed to MW1 provinces. Persistent
+**MW2 CERTIFIED / FROZEN** @ `6ada7260` — regional 3D geology keyed to MW1 provinces. Persistent
 formations, faults, intrusions, bedding, and chronology from 64 km to
 12.5 cm. Surface is the existing MW1 present surface (no new carver).
 Off / no-MW2 == frozen 16C.1 local present. Handoff:
@@ -474,7 +474,7 @@ topology). **P5b.3A FROZEN** (hydraulic detachment, choice A local loose).
 **3A–3B.3B** = worldgen shaping primitive (ready). **16C** CERTIFIED
 unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before macro).
 **MW1 CERTIFIED / FROZEN** @ `569269aa` (provinces / belts / basins; 64 km forcing field).
-**MW2 CERTIFIED** (regional 3D geology; persistent bodies through depth).
+**MW2 CERTIFIED / FROZEN** @ `6ada7260` (regional 3D geology; persistent bodies through depth).
 **P5b.3C CLOSED** (structural collapse). **MW3–MW8 CLOSED**.
 Erosion / rainfall / deep groundwater CLOSED.
 

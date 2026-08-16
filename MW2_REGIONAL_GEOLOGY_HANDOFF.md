@@ -26,7 +26,7 @@ MW1-only (or frozen local 16C.1) path untouched.
 
 ## This cut
 
-SHA: pending stamp after commit.
+SHA: `6ada7260` (`6ada7260511f2144f7fc9de4f23fb8fc2f877f82`).
 
 Freeze parents:
 
@@ -128,7 +128,7 @@ DEFERRED
 
 MACRO WORLDGEN
 MW1 provinces / belts / basins   CERTIFIED
-MW2 regional 3D geology          CERTIFIED
+MW2 regional 3D geology          CERTIFIED / FROZEN @ 6ada7260
 MW3 regional erosion             CLOSED
 MW4 valley/drainage morphology   CLOSED
 MW5 depositional landscape       CLOSED
