@@ -180,7 +180,7 @@ MW4 drainage / valleys           CERTIFIED / FROZEN @ cc7fe436
 MW5 depositional landscape       CERTIFIED / FROZEN @ ba6faf61
 MW6 hydroclimate                 CERTIFIED / FROZEN @ e8704845
 MW7 soils / regolith             CERTIFIED / FROZEN @ 307e92fc
-MW8 biomes                       CERTIFIED / FROZEN @ __CERTIFY_SHA__
+MW8 biomes                       CERTIFIED / FROZEN @ e8155fa3
 MW9 flora / fauna                CLOSED
 ```
 
