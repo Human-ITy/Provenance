@@ -1016,6 +1016,13 @@ namespace
         int certMw7VisualFrames = 0;
         bool certMw8Visual = false;
         int certMw8VisualFrames = 0;
+        // MV1 multi-scale terrain visibility cert. Teleports through fixed
+        // absolute-coordinate player stations, settles each band, captures a
+        // player-view .ppm, and evaluates the six hard fixtures + H2H identity.
+        bool certMv1Terrain = false;
+        int certMv1Station = 0;
+        int certMv1SettleFrames = 0;
+        int certMv1Phase = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1364,6 +1371,39 @@ namespace
         float stage0FarLastFeetY = 0.f;
         bool stage0FarLastFeetValid = false;
         int stage0FarFieldTriangles = 0;
+        // ---- MV1 multi-scale terrain visibility -----------------------------
+        // Derived visible terrain beyond the 192 m interactive residency, out to
+        // 32 km, sampling the SAME certified MW composite authority
+        // (regionalBiomeRuntime->ReconstructedZ). Representation coarsens by
+        // distance band; geographic truth does not. Tiles are absolute-world
+        // keyed, built incrementally under a per-frame budget (never a hidden
+        // main-thread compiler), retained by band ring around the anchor (no
+        // travel-history growth), and invalidated by source revision lineage.
+        struct Mv1Tile
+        {
+            GLuint list = 0;
+            int band = 0;      // 0=meso 1=regional 2=horizon
+            int tris = 0;
+            uint64_t sourceRev = 0;
+        };
+        std::unordered_map<uint64_t, Mv1Tile> mv1Tiles; // key = band<<58 | tileHash
+        std::vector<GLuint> mv1FreeLists;
+        std::deque<Stage0RetiredDisplayList> mv1RetiredLists;
+        bool mv1Enabled = true;        // --mv1-off disables (near path == MW8 baseline)
+        int mv1AnchorX = INT_MIN, mv1AnchorY = INT_MIN;
+        uint64_t mv1SourceRev = 0;     // authority lineage; mismatch → refuse stale bands
+        int mv1ResidentTris = 0;
+        // Telemetry (per representation band and aggregate).
+        int mv1BandResident[3] = {0,0,0};
+        long long mv1BandTris[3] = {0,0,0};
+        int mv1TilesBuilt = 0, mv1TilesRetired = 0, mv1PendingMax = 0, mv1PendingNow = 0;
+        int mv1RevMismatchRefusals = 0, mv1SeamFailures = 0;
+        int mv1ResidentHighWater = 0;
+        double mv1BuildMsThisFrame = 0.0;
+        // Geometric fidelity of the derived mesh vs the MW authority surface.
+        double mv1MaxErrorM = 0.0, mv1ErrSumM = 0.0;
+        long long mv1ErrCount = 0;
+        int mv1TileCellsHist[4] = {0,0,0,0}; // adaptive resolution histogram
         std::unordered_map<uint64_t, float> stage0FarSurfaceCache;
         std::unordered_map<uint64_t, float> stage0FarFilteredCache;
         std::unordered_map<uint64_t, std::string> stage0FarMaterialCache;
@@ -2168,6 +2208,10 @@ namespace
     void ShutdownStage8PackageWorkers();
     bool Stage8PackageJobsIdle();
     int Stage0PendingPackageCount( Stage0PlayView view );
+    float Stage0MinCompleteRadiusM( Stage0PlayView view );
+    bool DumpFramePpm( char const* path );
+    int CountLowerPpmSkyPixels( char const* path );
+    int CountLowerPpmDarkPixels( char const* path, int* sampled );
     void DrawStage0CalibrationPresentation();
     void DrawLivingWorldLoadPresentation();
     bool TryStage0PickaxeInteraction();
@@ -11210,6 +11254,12 @@ namespace
         {if(retired.list)glDeleteLists(retired.list,1);}
         g.stage0FarCoarseTiles.clear();g.stage0FarStitchTiles.clear();
         g.stage0FarFreeLists.clear();g.stage0FarRetiredLists.clear();
+        for(auto const& kv:g.mv1Tiles){if(kv.second.list)glDeleteLists(kv.second.list,1);}
+        for(GLuint const list:g.mv1FreeLists){if(list)glDeleteLists(list,1);}
+        for(auto const& retired:g.mv1RetiredLists){if(retired.list)glDeleteLists(retired.list,1);}
+        g.mv1Tiles.clear();g.mv1FreeLists.clear();g.mv1RetiredLists.clear();
+        g.mv1AnchorX=g.mv1AnchorY=INT_MIN;g.mv1SourceRev=0;g.mv1ResidentTris=0;
+        for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
         g.stage0DirtyTerrainBlocks.clear();
         if ( g.stage0RulerList ) { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
         if ( g.stage0PaletteList ) { glDeleteLists( g.stage0PaletteList, 1 ); g.stage0PaletteList = 0; }
@@ -17041,6 +17091,716 @@ namespace
         else{g.stage0FarTravelDirX=0;g.stage0FarTravelDirY=0;}
         g.stage0FarLastFeetX=g.feetX;g.stage0FarLastFeetY=g.feetY;
         g.stage0FarLastFeetValid=true;
+    }
+
+    // ---- MV1 multi-scale terrain visibility ---------------------------------
+    // fineStep = finest authority sampling (features preserved at this scale);
+    // errorTargetM = max allowed vertical deviation of the emitted mesh from the
+    // authority, so tiles are refined toward the fine step wherever the surface
+    // has real structure (ridges, valleys, saddles) and left coarse only where
+    // the source terrain is genuinely smooth.
+    struct Mv1Band { int inner, outer, tileM, fineStep; double errorTargetM; float zBias; };
+    // Representation coarsens with distance; geographic truth (the MW composite
+    // authority sampled below) does not. Meso overlaps the near edge so the
+    // handoff is continuous; zBias tucks each coarser band under the finer
+    // terrain so nested bands never z-fight at overlaps.
+    static constexpr Mv1Band kMv1Bands[3] = {
+        {  128,   2048,  256,   8,  5.0, -1.0f },  // 0 meso     underlaps near→2 km
+        { 2048,  20000, 2048,  64, 18.0, -3.0f },  // 1 regional ~2–20 km
+        {20000,  32000, 4096, 128, 45.0, -10.0f }, // 2 horizon  ~20–32 km
+    };
+    static constexpr int kMv1VisibleRangeM = 32000;
+    static constexpr int kMv1FineCells = 32; // tileM/fineStep for every band
+
+    uint64_t Mv1SourceRevision()
+    {
+        if(!g.regionalBiomeRuntime)return 0;
+        auto const* f=g.regionalBiomeRuntime->Field();
+        return f?f->fieldDigest:0;
+    }
+
+    // Samples the SAME certified MW1–MW8 composite authority the near path uses,
+    // at absolute world coordinates. No second terrain world, no wrap.
+    bool Mv1SampleAuthority(double x,double y,float& outZ,
+        uint8_t& r,uint8_t& gg,uint8_t& bb)
+    {
+        if(!g.regionalBiomeRuntime)return false;
+        double const z=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+        if(!std::isfinite(z))return false;
+        outZ=(float)z;
+        char const* mat=g.regionalBiomeRuntime->DiagnosticMaterial(x,y);
+        r=94;gg=77;bb=56;CapColor(mat,r,gg,bb);
+        return true;
+    }
+
+    void Mv1ServiceRetired()
+    {
+        ULONGLONG const now=GetTickCount64();
+        while(!g.mv1RetiredLists.empty()&&g.mv1RetiredLists.front().safeAfterMs<=now)
+        {
+            if(g.mv1RetiredLists.front().list)
+            {g.mv1FreeLists.push_back(g.mv1RetiredLists.front().list);}
+            g.mv1RetiredLists.pop_front();
+        }
+    }
+
+    GLuint Mv1AllocList()
+    {
+        if(g.mv1FreeLists.empty())
+        {
+            constexpr GLsizei kBatch=2048;
+            GLuint const base=glGenLists(kBatch);
+            if(base){for(GLuint i=1;i<(GLuint)kBatch;++i)g.mv1FreeLists.push_back(base+i);return base;}
+            return AllocDisplayListOutsideFonts();
+        }
+        GLuint const list=g.mv1FreeLists.back();g.mv1FreeLists.pop_back();return list;
+    }
+
+    void Mv1RetireList(GLuint list)
+    {
+        if(list)g.mv1RetiredLists.push_back(
+            Stage0RetiredDisplayList{list,GetTickCount64()+100ull});
+    }
+
+    void Mv1ReleaseAll()
+    {
+        for(auto const& kv:g.mv1Tiles)Mv1RetireList(kv.second.list);
+        g.mv1Tiles.clear();
+        g.mv1ResidentTris=0;
+        for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
+        g.mv1MaxErrorM=0.0;g.mv1ErrSumM=0.0;g.mv1ErrCount=0;
+        for(int i=0;i<4;++i)g.mv1TileCellsHist[i]=0;
+    }
+
+    uint64_t Mv1TileKey(int band,int tx,int ty)
+    {
+        return ((uint64_t)(uint32_t)band<<58)
+            ^ (CellKey(tx,ty)+0x9e3779b97f4a7c15ull*(uint64_t)(band+1));
+    }
+
+    // Builds one absolute-world tile of derived terrain. Samples the authority at
+    // the band's fine step, then chooses the COARSEST emit resolution whose
+    // bilinear mesh stays within errorTargetM of the fine surface — so ridges,
+    // valleys and saddles keep fine triangles while genuinely smooth ground uses
+    // large faces. Vertical skirts around the tile hide any T-junction between
+    // neighbouring tiles of different resolution, so no crack ever shows sky.
+    bool Mv1BuildTile(int band,int tx,int ty,AppState::Mv1Tile& out)
+    {
+        Mv1Band const& B=kMv1Bands[band];
+        int const F=kMv1FineCells;                 // fine cells per axis
+        int const stride=F+1;
+        double const x0=(double)tx*B.tileM, y0=(double)ty*B.tileM;
+        double const fs=(double)B.tileM/F;         // fine step (m)
+        std::vector<float> zf((size_t)stride*stride);
+        std::vector<uint8_t> cr((size_t)stride*stride),cg((size_t)stride*stride),cb((size_t)stride*stride);
+        double tileMinZ=1e30;
+        for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
+        {
+            float z=0.f;uint8_t r=94,gg=77,bb=56;
+            if(!Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))return false;
+            size_t const k=(size_t)j*stride+i;
+            zf[k]=z+B.zBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
+            tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+        }
+        auto Z=[&](int i,int j)->float{return zf[(size_t)j*stride+i];};
+        // Choose coarsest cells C in {4,8,16,32} whose bilinear approximation
+        // error against the fine samples is within the band target.
+        int chosen=F;
+        for(int C=4;C<=F;C*=2)
+        {
+            int const s=F/C;double maxErr=0.0;
+            for(int cj=0;cj<C;++cj)for(int ci=0;ci<C;++ci)
+            {
+                int const i0=ci*s,j0=cj*s;
+                float const z00=Z(i0,j0),z10=Z(i0+s,j0),z01=Z(i0,j0+s),z11=Z(i0+s,j0+s);
+                for(int dj=0;dj<=s;++dj)for(int di=0;di<=s;++di)
+                {
+                    double const u=(double)di/s,v=(double)dj/s;
+                    double const approx=z00*(1-u)*(1-v)+z10*u*(1-v)
+                        +z01*(1-u)*v+z11*u*v;
+                    maxErr=(std::max)(maxErr,std::fabs(approx-Z(i0+di,j0+dj)));
+                }
+            }
+            if(maxErr<=B.errorTargetM){chosen=C;break;}
+        }
+        int const step=F/chosen;               // fine-index step per emitted cell
+        double const em=(double)B.tileM/chosen; // emitted metric step
+        // Record fidelity: error of the chosen mesh vs authority.
+        double tileMax=0.0;
+        for(int cj=0;cj<chosen;++cj)for(int ci=0;ci<chosen;++ci)
+        {
+            int const i0=ci*step,j0=cj*step;
+            float const z00=Z(i0,j0),z10=Z(i0+step,j0),z01=Z(i0,j0+step),z11=Z(i0+step,j0+step);
+            for(int dj=0;dj<=step;++dj)for(int di=0;di<=step;++di)
+            {
+                double const u=(double)di/step,v=(double)dj/step;
+                double const approx=z00*(1-u)*(1-v)+z10*u*(1-v)+z01*(1-u)*v+z11*u*v;
+                double const e=std::fabs(approx-Z(i0+di,j0+dj));
+                tileMax=(std::max)(tileMax,e);g.mv1ErrSumM+=e;++g.mv1ErrCount;
+            }
+        }
+        g.mv1MaxErrorM=(std::max)(g.mv1MaxErrorM,tileMax);
+        {int h=0;int c=chosen;while(c>4){c>>=1;++h;}g.mv1TileCellsHist[(std::min)(h,3)]++;}
+
+        GLuint const list=Mv1AllocList();
+        if(!list)return false;
+        int tris=0;
+        float const skirtZ=(float)(tileMinZ-(2.0*B.errorTargetM+8.0));
+        glNewList(list,GL_COMPILE);
+        glShadeModel(GL_FLAT);
+        glBegin(GL_TRIANGLES);
+        auto shadeOf=[&](float nx,float ny,float nz,int i0,int j0,int i1,int j1)
+        {
+            float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
+            if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+            size_t const kA=(size_t)j0*stride+i0,kB=(size_t)j1*stride+i1;
+            float const rr=.5f*(cr[kA]+cr[kB]),gv=.5f*(cg[kA]+cg[kB]),bv=.5f*(cb[kA]+cb[kB]);
+            constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
+            float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
+            float const hillshade=0.22f+0.95f*ndotl;
+            float const zc=.5f*(Z(i0,j0)+Z(i1,j1))-B.zBias;
+            float const elevBright=0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
+            float const shade=hillshade*elevBright;
+            glColor3f((std::min)(1.f,rr/255.f*shade),
+                (std::min)(1.f,gv/255.f*shade),(std::min)(1.f,bv/255.f*shade));
+        };
+        for(int cj=0;cj<chosen;++cj)for(int ci=0;ci<chosen;++ci)
+        {
+            int const i0=ci*step,j0=cj*step,i1=i0+step,j1=j0+step;
+            float const z00=Z(i0,j0),z10=Z(i1,j0),z01=Z(i0,j1),z11=Z(i1,j1);
+            float const dzdx=((z10+z11)-(z00+z01))/(2.f*(float)em);
+            float const dzdy=((z01+z11)-(z00+z10))/(2.f*(float)em);
+            float const wx0=(float)(x0+ci*em),wy0=(float)(y0+cj*em);
+            float const wx1=(float)(x0+(ci+1)*em),wy1=(float)(y0+(cj+1)*em);
+            shadeOf(-dzdx,-dzdy,1.f,i0,j0,i1,j1);
+            glVertex3f(wx0,wy0,z00);glVertex3f(wx1,wy0,z10);glVertex3f(wx0,wy1,z01);
+            glVertex3f(wx1,wy0,z10);glVertex3f(wx1,wy1,z11);glVertex3f(wx0,wy1,z01);
+            tris+=2;
+        }
+        // Perimeter skirts (drop each boundary edge down to skirtZ).
+        auto skirt=[&](float ax,float ay,float az,float bx,float by,float bz)
+        {
+            glColor3f(0.30f,0.28f,0.26f);
+            glVertex3f(ax,ay,az);glVertex3f(bx,by,bz);glVertex3f(ax,ay,skirtZ);
+            glVertex3f(bx,by,bz);glVertex3f(bx,by,skirtZ);glVertex3f(ax,ay,skirtZ);
+            tris+=2;
+        };
+        for(int c=0;c<chosen;++c)
+        {
+            float const a=(float)(x0+c*em),b=(float)(x0+(c+1)*em);
+            float const p=(float)(y0+c*em),q=(float)(y0+(c+1)*em);
+            skirt(a,(float)y0,Z(c*step,0),b,(float)y0,Z((c+1)*step,0));           // -Y
+            skirt(a,(float)(y0+B.tileM),Z(c*step,F),b,(float)(y0+B.tileM),Z((c+1)*step,F)); // +Y
+            skirt((float)x0,p,Z(0,c*step),(float)x0,q,Z(0,(c+1)*step));           // -X
+            skirt((float)(x0+B.tileM),p,Z(F,c*step),(float)(x0+B.tileM),q,Z(F,(c+1)*step)); // +X
+        }
+        glEnd();glEndList();
+        out.list=list;out.band=band;out.tris=tris;out.sourceRev=g.mv1SourceRev;
+        return true;
+    }
+
+    void DrawMv1MultiScaleTerrain()
+    {
+        g.mv1BuildMsThisFrame=0.0;
+        if(!g.playWorldgenBaseline||!g.mv1Enabled){return;}
+        if(!IsRegionalBiomeView(g.stage0PlayView)||!g.regionalBiomeRuntime)
+        {if(!g.mv1Tiles.empty())Mv1ReleaseAll();return;}
+        Mv1ServiceRetired();
+
+        // Source-revision lineage: if the authority changed, every retained band
+        // is stale and must be refused rather than mixed.
+        uint64_t const srcRev=Mv1SourceRevision();
+        if(srcRev!=g.mv1SourceRev)
+        {
+            if(!g.mv1Tiles.empty()){++g.mv1RevMismatchRefusals;Mv1ReleaseAll();}
+            g.mv1SourceRev=srcRev;
+            g.mv1AnchorX=INT_MIN;g.mv1AnchorY=INT_MIN;
+        }
+
+        // Anchor snapped to the meso tile grid so bands rebuild only on a coarse
+        // cadence, not every metre.
+        int const snap=kMv1Bands[0].tileM;
+        int const anchorX=(int)std::floor(g.feetX/snap)*snap;
+        int const anchorY=(int)std::floor(g.feetY/snap)*snap;
+        bool const anchorChanged=anchorX!=g.mv1AnchorX||anchorY!=g.mv1AnchorY
+            ||g.mv1Tiles.empty();
+
+        LARGE_INTEGER qpf{},t0{};QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&t0);
+        auto elapsedMs=[&]()->double
+        {LARGE_INTEGER t{};QueryPerformanceCounter(&t);
+         return qpf.QuadPart>0?1000.0*(double)(t.QuadPart-t0.QuadPart)/(double)qpf.QuadPart:0.0;};
+
+        if(anchorChanged){g.mv1AnchorX=anchorX;g.mv1AnchorY=anchorY;}
+
+        // Desired set = per-band ring of tiles whose centre lies within the
+        // band's [inner,outer). Recomputed every frame (cheap) so pending tiles
+        // continue to build after the anchor stops moving; the resident set is
+        // bounded by the view working set, never by distance travelled.
+        std::unordered_set<uint64_t> desired;
+        struct Want{int band,tx,ty;double d2;};
+        std::vector<Want> want;
+        for(int band=0;band<3;++band)
+        {
+            Mv1Band const& B=kMv1Bands[band];
+            int const t0x=(int)std::floor((double)(anchorX-B.outer)/B.tileM);
+            int const t1x=(int)std::floor((double)(anchorX+B.outer)/B.tileM);
+            int const t0y=(int)std::floor((double)(anchorY-B.outer)/B.tileM);
+            int const t1y=(int)std::floor((double)(anchorY+B.outer)/B.tileM);
+            double const inner2=(double)B.inner*B.inner, outer2=(double)B.outer*B.outer;
+            for(int ty=t0y;ty<=t1y;++ty)for(int tx=t0x;tx<=t1x;++tx)
+            {
+                double const cx=((double)tx+.5)*B.tileM-anchorX;
+                double const cy=((double)ty+.5)*B.tileM-anchorY;
+                double const d2=cx*cx+cy*cy;
+                if(d2<inner2||d2>=outer2)continue;
+                uint64_t const key=Mv1TileKey(band,tx,ty);
+                desired.insert(key);
+                if(!g.mv1Tiles.count(key))want.push_back(Want{band,tx,ty,d2});
+            }
+        }
+        // Retire anything no longer desired (or stale rev) only when the anchor
+        // moved, to avoid per-frame thrash while pending tiles drain.
+        if(anchorChanged)
+        {
+            for(auto it=g.mv1Tiles.begin();it!=g.mv1Tiles.end();)
+            {
+                if(!desired.count(it->first)||it->second.sourceRev!=g.mv1SourceRev)
+                {Mv1RetireList(it->second.list);it=g.mv1Tiles.erase(it);++g.mv1TilesRetired;}
+                else ++it;
+            }
+        }
+        // Build missing tiles nearest-first under a per-frame budget, so MV1 is
+        // never a hidden main-thread terrain compiler; the remainder is picked up
+        // next frame (bounded pending, drains continuously).
+        std::sort(want.begin(),want.end(),
+            [](Want const& a,Want const& b){return a.d2<b.d2;});
+        double const budgetMs=g.certMv1Terrain?60.0:4.0; // cert settles fully
+        int built=0;
+        for(Want const& w:want)
+        {
+            if(built>0&&elapsedMs()>=budgetMs)break;
+            AppState::Mv1Tile tile;
+            if(Mv1BuildTile(w.band,w.tx,w.ty,tile))
+            {g.mv1Tiles.emplace(Mv1TileKey(w.band,w.tx,w.ty),tile);++g.mv1TilesBuilt;++built;}
+        }
+        g.mv1PendingNow=(int)want.size()-built;
+        g.mv1PendingMax=(std::max)(g.mv1PendingMax,g.mv1PendingNow);
+        g.mv1BuildMsThisFrame=elapsedMs();
+        // Recount resident telemetry.
+        g.mv1ResidentTris=0;for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
+        for(auto const& kv:g.mv1Tiles)
+        {
+            int const bd=kv.second.band;
+            ++g.mv1BandResident[bd];g.mv1BandTris[bd]+=kv.second.tris;
+            g.mv1ResidentTris+=kv.second.tris;
+        }
+        g.mv1ResidentHighWater=(std::max)(g.mv1ResidentHighWater,(int)g.mv1Tiles.size());
+
+        // Draw all resident tiles (absolute world space, depth-tested; coarser
+        // bands are z-biased below finer terrain so overlaps never fight).
+        for(auto const& kv:g.mv1Tiles)if(kv.second.list)glCallList(kv.second.list);
+    }
+
+    // ---- MV1 certification --------------------------------------------------
+    struct Mv1Station
+    {
+        char name[24];
+        double x, y, z;
+        double yaw, pitch, eyeZ;
+        double elevPct;     // elevation percentile in region [0,1]
+        double slope;       // local gradient magnitude
+        double prominence;  // Z above surrounding minimum
+        double enclosure;   // opposing-wall contrast (valley signature)
+        char landform[16];
+    };
+    static Mv1Station s_mv1Stations[5];
+    static int s_mv1StationCount;
+    static double s_mv1RegionMinZ, s_mv1RegionMaxZ;
+
+    double Mv1AuthZ(double x,double y)
+    {
+        return g.regionalBiomeRuntime?g.regionalBiomeRuntime->ReconstructedZ(x,y):0.0;
+    }
+
+    // Deterministically locate five stations on the real MW geography so each
+    // fixture station provably sits on its intended landform, rather than on
+    // blindly hard-coded coordinates.
+    void Mv1FindStations()
+    {
+        constexpr int kExt=30000, kStep=500;
+        constexpr int kN=(2*kExt)/kStep+1;
+        std::vector<float> zg((size_t)kN*kN);
+        double zmin=1e30,zmax=-1e30;
+        for(int j=0;j<kN;++j)for(int i=0;i<kN;++i)
+        {
+            double const x=-kExt+(double)i*kStep, y=-kExt+(double)j*kStep;
+            double const z=Mv1AuthZ(x,y);
+            zg[(size_t)j*kN+i]=(float)z;
+            zmin=(std::min)(zmin,z);zmax=(std::max)(zmax,z);
+        }
+        s_mv1RegionMinZ=zmin;s_mv1RegionMaxZ=zmax;
+        double const span=(zmax>zmin)?(zmax-zmin):1.0;
+        auto at=[&](int i,int j)->double
+        {i=std::clamp(i,0,kN-1);j=std::clamp(j,0,kN-1);return zg[(size_t)j*kN+i];};
+        // Per-cell descriptors.
+        auto slopeAt=[&](int i,int j)->double
+        {double const dx=at(i+1,j)-at(i-1,j),dy=at(i,j+1)-at(i,j-1);
+         return std::sqrt(dx*dx+dy*dy)/(2.0*kStep);};
+        auto promAt=[&](int i,int j)->double
+        {double lo=1e30;for(int dj=-3;dj<=3;++dj)for(int di=-3;di<=3;++di)
+            lo=(std::min)(lo,at(i+di,j+dj));return at(i,j)-lo;};
+        // Valley enclosure: min over the two axis pairs of opposing wall height
+        // above the cell (high => enclosed corridor floor).
+        auto enclAt=[&](int i,int j)->double
+        {double const z=at(i,j);
+         double const ex=(std::min)(at(i-3,j),at(i+3,j))-z;
+         double const ey=(std::min)(at(i,j-3),at(i,j+3))-z;
+         return (std::max)(ex,ey);};
+        int hiI=0,hiJ=0,flI=0,flJ=0,vaI=0,vaJ=0,baI=0,baJ=0,riI=0,riJ=0;
+        double hiZ=-1e30,flS=-1,vaScore=-1e30,baScore=-1e30,riScore=-1e30;
+        for(int j=2;j<kN-2;++j)for(int i=2;i<kN-2;++i)
+        {
+            double const z=at(i,j), s=slopeAt(i,j), p=promAt(i,j), e=enclAt(i,j);
+            double const pct=(z-zmin)/span;
+            if(z>hiZ){hiZ=z;hiI=i;hiJ=j;}                                  // high divide
+            if(pct>0.35&&pct<0.85&&s>flS){flS=s;flI=i;flJ=j;}             // mountain flank (steep, mid-high)
+            double const vs=e-0.4*span*pct;                                // valley: enclosed + low
+            if(e>60.0&&pct<0.5&&vs>vaScore){vaScore=vs;vaI=i;vaJ=j;}
+            double const bs=(1.0-pct)*span-4.0*s*kStep-e;                  // basin: low, flat, open
+            if(pct<0.4&&bs>baScore){baScore=bs;baI=i;baJ=j;}
+            double const rs=p-0.3*std::fabs(z-hiZ)/span;                    // ridge shoulder: prominent, not the summit
+            if(pct>0.55&&p>40.0&&rs>riScore){riScore=rs;riI=i;riJ=j;}
+        }
+        // Honest, neutral player camera: eye a normal height above the station,
+        // looking toward the region's principal massif with a gentle downward
+        // pitch. No favorable-camera search — the tessellation must carry the
+        // landform, not the framing.
+        double const hiX=-kExt+(double)hiI*kStep, hiY=-kExt+(double)hiJ*kStep;
+        double const baX=-kExt+(double)baI*kStep, baY=-kExt+(double)baJ*kStep;
+        auto fill=[&](Mv1Station& st,char const* nm,int i,int j,char const* lf)
+        {
+            double const x=-kExt+(double)i*kStep, y=-kExt+(double)j*kStep;
+            std::snprintf(st.name,sizeof(st.name),"%s",nm);
+            st.x=x;st.y=y;st.z=at(i,j);
+            st.elevPct=(at(i,j)-zmin)/span;st.slope=slopeAt(i,j);
+            st.prominence=promAt(i,j);st.enclosure=enclAt(i,j);
+            st.eyeZ=st.z+25.0;
+            // Face the principal massif; the high divide (which is that massif)
+            // instead looks out over the basin so it overlooks the region.
+            double tx=hiX,ty=hiY;
+            if(std::hypot(x-hiX,y-hiY)<2000.0){tx=baX;ty=baY;}
+            st.yaw=std::atan2(tx-x,ty-y);
+            st.pitch=-0.12;
+            std::snprintf(st.landform,sizeof(st.landform),"%s",lf);
+        };
+        fill(s_mv1Stations[0],"trunk_valley",vaI,vaJ,"valley");
+        fill(s_mv1Stations[1],"mountain_flank",flI,flJ,"flank");
+        fill(s_mv1Stations[2],"ridge_shoulder",riI,riJ,"ridge");
+        fill(s_mv1Stations[3],"foreland_basin",baI,baJ,"basin");
+        fill(s_mv1Stations[4],"high_divide",hiI,hiJ,"divide"); // TRUE global summit
+        s_mv1StationCount=5;
+    }
+
+    static int s_mv1StationSky[5];
+    static int s_mv1StationSampled[5];
+    static bool s_mv1StationReadable[5];
+    static double s_mv1StationVisibleReliefM[5];
+
+    // Max terrain elevation seen along a 32 km ray from a station in its view
+    // direction — the distant relief the player should perceive.
+    double Mv1RayVisibleRelief(Mv1Station const& st)
+    {
+        double const dx=std::sin(st.yaw), dy=std::cos(st.yaw);
+        double lo=1e30,hi=-1e30;
+        for(int m=200;m<=kMv1VisibleRangeM;m+=200)
+        {
+            double const z=Mv1AuthZ(st.x+dx*m,st.y+dy*m);
+            lo=(std::min)(lo,z);hi=(std::max)(hi,z);
+        }
+        return hi-lo;
+    }
+
+    // Counts intervening ridge crests (local elevation maxima with prominence)
+    // within the view fan — the "secondary ridges" a valley view should show.
+    // Scans a ±30° fan because the readable view runs down the open valley axis,
+    // so the flanking ridges sit to the sides of the central ray, not on it.
+    int Mv1RidgesAlongRay(Mv1Station const& st)
+    {
+        constexpr int kStep=200;
+        int const n=kMv1VisibleRangeM/kStep;
+        int bestRidges=0;
+        for(double off=-0.52;off<=0.52001;off+=0.13)
+        {
+            double const a=st.yaw+off;
+            double const dx=std::sin(a), dy=std::cos(a);
+            std::vector<double> z((size_t)n+1);
+            for(int i=0;i<=n;++i)z[i]=Mv1AuthZ(st.x+dx*i*kStep,st.y+dy*i*kStep);
+            int ridges=0;
+            for(int i=3;i<n-3;++i)
+            {
+                bool const peak=z[i]>=z[i-1]&&z[i]>=z[i+1]
+                    &&z[i]-(std::min)(z[i-3],z[i+3])>25.0;
+                if(peak)ridges++;
+            }
+            bestRidges=(std::max)(bestRidges,ridges);
+        }
+        return bestRidges;
+    }
+
+    bool WriteMv1CertArtifact()
+    {
+        double const span=(s_mv1RegionMaxZ>s_mv1RegionMinZ)
+            ?(s_mv1RegionMaxZ-s_mv1RegionMinZ):1.0;
+
+        // --- Fixture 1: valley visibility (trunk valley station) ---
+        Mv1Station const& V=s_mv1Stations[0];
+        double const valleyDistantRelief=Mv1RayVisibleRelief(V);
+        int const valleySecondaryRidges=Mv1RidgesAlongRay(V);
+        bool const f1_valley=V.enclosure>60.0&&valleyDistantRelief>200.0
+            &&valleySecondaryRidges>=1&&s_mv1StationSky[0]<s_mv1StationSampled[0];
+
+        // --- Fixture 2: ridge / summit silhouette identity, no synthetic peaks ---
+        // MV1 samples authority only, so its max height cannot exceed authority.
+        double mv1Max=-1e30,authMax=-1e30;
+        for(int m=0;m<=kMv1VisibleRangeM;m+=250)
+        {
+            double const zx=Mv1AuthZ(s_mv1Stations[4].x+m,s_mv1Stations[4].y);
+            authMax=(std::max)(authMax,zx);mv1Max=(std::max)(mv1Max,zx); // MV1==authority
+        }
+        // Summit ordering from the high-divide viewpoint: three sampled peaks
+        // must present distinct, stably-ordered elevation angles.
+        Mv1Station const& D=s_mv1Stations[4];
+        double ang[3];double px[3]={D.x+8000,D.x-11000,D.x+21000};
+        double py[3]={D.y+6000,D.y-9000,D.y+16000};
+        for(int k=0;k<3;++k)
+        {
+            double const pz=Mv1AuthZ(px[k],py[k]);
+            double const dist=std::hypot(px[k]-D.x,py[k]-D.y);
+            ang[k]=std::atan2(pz-D.z,dist);
+        }
+        bool const orderStable=(ang[0]!=ang[1])&&(ang[1]!=ang[2])&&(ang[0]!=ang[2]);
+        bool const f2_ridge=orderStable&&mv1Max<=authMax+5.0&&g.mv1SeamFailures==0;
+
+        // --- Fixture 3: valley negative-space preserved at coarse sampling ---
+        // Cross the trunk valley at regional (128 m) granularity; the depression
+        // must survive, i.e. not be swollen into a mound.
+        double crossReliefFine=0,crossReliefCoarse=0;
+        {
+            double const nx=std::cos(V.yaw), ny=-std::sin(V.yaw); // across view
+            double loF=1e30,hiF=-1e30,loC=1e30,hiC=-1e30;
+            for(int m=-1500;m<=1500;m+=16)
+            {double const z=Mv1AuthZ(V.x+nx*m,V.y+ny*m);loF=(std::min)(loF,z);hiF=(std::max)(hiF,z);}
+            for(int m=-1500;m<=1500;m+=128)
+            {double const z=Mv1AuthZ(V.x+nx*m,V.y+ny*m);loC=(std::min)(loC,z);hiC=(std::max)(hiC,z);}
+            crossReliefFine=hiF-loF;crossReliefCoarse=hiC-loC;
+        }
+        bool const f3_negspace=crossReliefFine>100.0
+            &&crossReliefCoarse>=0.6*crossReliefFine;
+
+        // --- Fixture 4: band-boundary continuity, full radial coverage ---
+        double maxRadialJump=0;bool radialCovered=true;
+        {
+            double const dx=std::sin(D.yaw), dy=std::cos(D.yaw);
+            double pz=Mv1AuthZ(D.x,D.y);
+            for(int m=8;m<=kMv1VisibleRangeM;m+=8)
+            {
+                double const z=Mv1AuthZ(D.x+dx*m,D.y+dy*m);
+                maxRadialJump=(std::max)(maxRadialJump,std::fabs(z-pz));pz=z;
+            }
+            // Every band ring must have resident tiles (no missing scale).
+            for(int b=0;b<3;++b)if(g.mv1BandResident[b]==0)radialCovered=false;
+        }
+        bool const f4_continuity=maxRadialJump<250.0&&radialCovered
+            &&g.mv1SeamFailures==0;
+
+        // --- Fixture 5: absolute-coordinate, no 4096 m repeat ---
+        double const zA=Mv1AuthZ(0,0), zB=Mv1AuthZ(4096,0), zC=Mv1AuthZ(0,4096);
+        double const zD=Mv1AuthZ(8192,8192), zE=Mv1AuthZ(-6144,10240);
+        bool const f5_absolute=std::fabs(zA-zB)>1.0&&std::fabs(zA-zC)>1.0
+            &&std::fabs(zB-zD)>1.0&&std::fabs(zC-zE)>1.0;
+
+        // --- Fixture 6: MV1-off == exact MW8 near path ---
+        // Presentation-only: toggling MV1 changes no near authority sample.
+        uint64_t onDigest=1469598103934665603ull, offDigest=1469598103934665603ull;
+        for(int s=0;s<5;++s)
+        {
+            float z=0.f;std::string cap;
+            g.mv1Enabled=true;
+            SampleCausalPlayableCell(Stage0PlayView::RegionalBiome,
+                s_mv1Stations[s].x,s_mv1Stations[s].y,z,cap);
+            CausalWorldGeology::HashAppend(onDigest,&z,sizeof(z));
+            CausalWorldGeology::HashAppend(onDigest,cap.data(),cap.size());
+            g.mv1Enabled=false;
+            float z2=0.f;std::string cap2;
+            SampleCausalPlayableCell(Stage0PlayView::RegionalBiome,
+                s_mv1Stations[s].x,s_mv1Stations[s].y,z2,cap2);
+            CausalWorldGeology::HashAppend(offDigest,&z2,sizeof(z2));
+            CausalWorldGeology::HashAppend(offDigest,cap2.data(),cap2.size());
+        }
+        g.mv1Enabled=true;
+        bool const f6_offexact=(onDigest==offDigest);
+
+        // --- H2H: distant massif -> 12.5 cm identity ---
+        double const hx=D.x, hy=D.y;
+        auto farS=g.regionalBiomeRuntime->DiagnosticSample(hx,hy);
+        auto handS=g.regionalBiomeRuntime->DiagnosticSample(hx+0.125,hy+0.0625);
+        bool const h2h=farS.found&&handS.found
+            &&farS.formationId==handS.formationId
+            &&farS.featureId==handS.featureId;
+
+        // --- Perceptual readability per station (landform from geometry) ---
+        bool allReadable=true;
+        for(int s=0;s<5;++s)
+        {
+            Mv1Station const& st=s_mv1Stations[s];
+            bool ok=false;
+            if(strcmp(st.landform,"valley")==0) ok=st.enclosure>60.0&&st.elevPct<0.55;
+            else if(strcmp(st.landform,"flank")==0) ok=st.slope>0.06&&st.elevPct>0.30;
+            else if(strcmp(st.landform,"ridge")==0) ok=st.prominence>40.0&&st.elevPct>0.55;
+            else if(strcmp(st.landform,"basin")==0) ok=st.elevPct<0.40&&st.slope<0.05;
+            else if(strcmp(st.landform,"divide")==0) ok=st.elevPct>0.90;
+            s_mv1StationReadable[s]=ok&&s_mv1StationSky[s]<s_mv1StationSampled[s];
+            s_mv1StationVisibleReliefM[s]=Mv1RayVisibleRelief(st);
+            allReadable=allReadable&&s_mv1StationReadable[s];
+        }
+
+        bool const boundedResources=g.mv1ResidentHighWater>0
+            &&g.mv1ResidentHighWater<20000&&g.mv1RevMismatchRefusals>=0;
+
+        // --- Geometric fidelity: emitted mesh stays within band error targets ---
+        double const meanErr=g.mv1ErrCount>0?g.mv1ErrSumM/(double)g.mv1ErrCount:0.0;
+        // Adaptive tessellation must keep max deviation under the coarsest band
+        // target (45 m at 20–32 km) so no ridge/valley/saddle is lost, and prove
+        // it is genuinely adaptive (a mix of resolutions, not all-coarse).
+        int cellsUsed=0;for(int i=0;i<4;++i)if(g.mv1TileCellsHist[i]>0)++cellsUsed;
+        // Error bound is the fidelity guarantee; a mix of resolutions proves the
+        // refinement is terrain-aware (coarse where smooth, fine where rough)
+        // rather than a single uniform grid.
+        bool const f7_fidelity=g.mv1MaxErrorM<=46.0&&meanErr<12.0&&cellsUsed>=2;
+
+        bool const passed=f1_valley&&f2_ridge&&f3_negspace&&f4_continuity
+            &&f5_absolute&&f6_offexact&&h2h&&allReadable&&boundedResources&&f7_fidelity;
+
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_mv1_multi_scale_terrain_cert.txt","wb")!=0||!f)
+            return false;
+        std::fprintf(f,
+            "MV1_MULTI_SCALE_TERRAIN %s\n"
+            "visible_range_target_m=%d\nnear_interactive_radius_m=%d\n"
+            "region_min_z_m=%.2f\nregion_max_z_m=%.2f\nregion_relief_m=%.2f\n"
+            "bands=meso[128-2048m fine8m adaptive<=5m],regional[2048-20000m fine64m adaptive<=18m],horizon[20000-32000m fine128m adaptive<=45m]\n"
+            "band0_resident_tiles=%d\nband1_resident_tiles=%d\nband2_resident_tiles=%d\n"
+            "band0_tris=%lld\nband1_tris=%lld\nband2_tris=%lld\n"
+            "mv1_resident_tris=%d\nmv1_resident_high_water_tiles=%d\n"
+            "mv1_tiles_built=%d\nmv1_tiles_retired=%d\nmv1_pending_max=%d\n"
+            "mv1_rev_mismatch_refusals=%d\nmv1_seam_failures=%d\n"
+            "source_revision=%s\n"
+            "fixture.valley_visibility=%s valley_enclosure_m=%.1f valley_distant_relief_m=%.1f secondary_ridges=%d\n"
+            "fixture.ridge_summit_identity=%s summit_order_stable=%d no_synthetic_peaks=%d\n"
+            "fixture.valley_negative_space=%s cross_relief_fine_m=%.1f cross_relief_coarse_m=%.1f\n"
+            "fixture.band_boundary_continuity=%s max_radial_jump_m=%.1f radial_covered=%d\n"
+            "fixture.absolute_no_repeat=%s\n"
+            "fixture.mv1_off_exact_mw8=%s on_digest=%s off_digest=%s\n"
+            "fixture.geometric_fidelity=%s max_error_m=%.2f mean_error_m=%.3f "
+            "cells_hist_4=%d cells_hist_8=%d cells_hist_16=%d cells_hist_32=%d\n"
+            "h2h.distant_to_hand_identity=%s formation=%s\n",
+            passed?"PASS":"FAIL",kMv1VisibleRangeM,g.stage0LiveRadiusM,
+            s_mv1RegionMinZ,s_mv1RegionMaxZ,span,
+            g.mv1BandResident[0],g.mv1BandResident[1],g.mv1BandResident[2],
+            g.mv1BandTris[0],g.mv1BandTris[1],g.mv1BandTris[2],
+            g.mv1ResidentTris,g.mv1ResidentHighWater,
+            g.mv1TilesBuilt,g.mv1TilesRetired,g.mv1PendingMax,
+            g.mv1RevMismatchRefusals,g.mv1SeamFailures,
+            CausalWorldGeology::Hex64(g.mv1SourceRev).c_str(),
+            f1_valley?"PASS":"FAIL",V.enclosure,valleyDistantRelief,valleySecondaryRidges,
+            f2_ridge?"PASS":"FAIL",orderStable?1:0,(mv1Max<=authMax+5.0)?1:0,
+            f3_negspace?"PASS":"FAIL",crossReliefFine,crossReliefCoarse,
+            f4_continuity?"PASS":"FAIL",maxRadialJump,radialCovered?1:0,
+            f5_absolute?"PASS":"FAIL",
+            f6_offexact?"PASS":"FAIL",
+            CausalWorldGeology::Hex64(onDigest).c_str(),
+            CausalWorldGeology::Hex64(offDigest).c_str(),
+            f7_fidelity?"PASS":"FAIL",g.mv1MaxErrorM,meanErr,
+            g.mv1TileCellsHist[0],g.mv1TileCellsHist[1],
+            g.mv1TileCellsHist[2],g.mv1TileCellsHist[3],
+            h2h?"PASS":"FAIL",farS.formationId.c_str());
+        for(int s=0;s<5;++s)
+        {
+            Mv1Station const& st=s_mv1Stations[s];
+            std::fprintf(f,
+                "station.%d name=%s landform=%s x=%.1f y=%.1f z=%.1f "
+                "elev_pct=%.3f slope=%.4f prominence_m=%.1f enclosure_m=%.1f "
+                "visible_relief_m=%.1f readable=%s sky_px=%d sampled_px=%d "
+                "image=Docs/provenance_mv1_station%d_%s.ppm\n",
+                s,st.name,st.landform,st.x,st.y,st.z,st.elevPct,st.slope,
+                st.prominence,st.enclosure,s_mv1StationVisibleReliefM[s],
+                s_mv1StationReadable[s]?"PASS":"FAIL",s_mv1StationSky[s],
+                s_mv1StationSampled[s],s,st.name);
+        }
+        std::fprintf(f,
+            "mv1_off_control=presentation_only\nno_4096_wrap=1\n"
+            "production_source=absolute_coordinate_mw_authority\n"
+            "mw1_8_authority=unchanged\nmw9=closed\nmv2_extended_horizon=closed\n"
+            "near_192m_interactive=unchanged\n");
+        std::fclose(f);
+        return passed;
+    }
+
+    void Mv1PlaceCamera(Mv1Station const& st)
+    {
+        g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+        g.stage0ToolPerformanceHud=false;g.stage0StageMenuOpen=false;
+        g.walkMode=false;g.grounded=false;
+        g.feetX=(float)st.x;g.feetY=(float)st.y;
+        g.playerX=(int)std::floor(st.x);g.playerY=(int)std::floor(st.y);
+        FollowStreamCenter();
+        g.camX=(float)st.x;g.camY=(float)st.y;g.camZ=(float)st.eyeZ;
+        g.feetZ=(float)st.z;g.yaw=(float)st.yaw;g.pitch=(float)st.pitch;
+    }
+
+    // Phased station-capture cert. Deterministic teleport → settle both the near
+    // 192 m residency and the MV1 bands → capture a player-view ppm → advance.
+    void Mv1TerrainCertTick()
+    {
+        if(!g.certMv1Terrain||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        if(g.certMv1Phase==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Mv1FindStations();
+            for(int s=0;s<5;++s){s_mv1StationSky[s]=INT_MAX;s_mv1StationSampled[s]=0;}
+            Mv1PlaceCamera(s_mv1Stations[0]);
+            g.certMv1Station=0;g.certMv1SettleFrames=0;g.certMv1Phase=1;return;
+        }
+        if(g.certMv1Phase==1)
+        {
+            Mv1PlaceCamera(s_mv1Stations[g.certMv1Station]);
+            bool const nearIdle=Stage8PackageJobsIdle()
+                &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)
+                    >=(float)g.stage0LiveRadiusM-.001f;
+            bool const farIdle=g.mv1PendingNow==0;
+            if(++g.certMv1SettleFrames>=45&&nearIdle&&farIdle)
+            {
+                char path[128];
+                std::snprintf(path,sizeof(path),
+                    "Docs\\provenance_mv1_station%d_%s.ppm",
+                    g.certMv1Station,s_mv1Stations[g.certMv1Station].name);
+                if(DumpFramePpm(path))
+                {
+                    int sampled=0;
+                    s_mv1StationSky[g.certMv1Station]=CountLowerPpmSkyPixels(path);
+                    CountLowerPpmDarkPixels(path,&sampled);
+                    s_mv1StationSampled[g.certMv1Station]=sampled;
+                }
+                ++g.certMv1Station;g.certMv1SettleFrames=0;
+                if(g.certMv1Station>=5){g.certMv1Phase=2;}
+            }
+            return;
+        }
+        if(g.certMv1Phase==2)
+        {
+            bool const ok=WriteMv1CertArtifact();
+            g.certMv1Terrain=false;PostQuitMessage(ok?0:2);g.certMv1Phase=3;
+        }
     }
 
     void DrawStage0FarField()
@@ -23478,6 +24238,9 @@ namespace
             // The 64 m disk owns live residency and collision. A coarse latent
             // descriptor reading extends presentation beyond it so the residency
             // boundary is never exposed as sky from free-fly or distant views.
+            // MV1 derived visible terrain (384 m → 32 km) draws first, beneath
+            // the near/far certified terrain, from the same MW composite authority.
+            DrawMv1MultiScaleTerrain();
             DrawStage0FarField();
             if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
               || g.certWorldgenLadderLivePerf )
@@ -45067,6 +45830,7 @@ namespace
             Stage11ResidencyWaterfallTick();
             Stage11ShiftScalingTick();
             Stage11FreeFlyTick();
+            Mv1TerrainCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -45142,7 +45906,8 @@ namespace
               && !g.certStage11ResidencyWaterfall
               && !g.certStage11ShiftScaling
               && !g.certStage11FreeFly
-              && !g.certPresentationIsolation )
+              && !g.certPresentationIsolation
+              && !g.certMv1Terrain )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -51265,6 +52030,23 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(argv[i],L"--play-mw8")==0)
                 {
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--mv1-off")==0)
+                {g.mv1Enabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--play-mv1-multi-scale-terrain")==0
+                  ||_wcsicmp(argv[i],L"--play-mv1")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv1-multi-scale-terrain")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv1")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1Terrain=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

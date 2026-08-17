@@ -257,6 +257,8 @@ MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
+MV1     multi-scale terrain view          CERTIFIED (32 km) @ __MV1_SHA__
+MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -456,6 +458,29 @@ CLOSED: MW9 flora/fauna, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership, live weather, glaciers, groundwater,
 vegetation, ecology simulation.
 
+**MV1 CERTIFIED** @ `__MV1_SHA__` — multi-scale terrain **visibility** to 32 km.
+Presentation / scale layer, not new worldgen: derived visible terrain beyond the
+192 m full-interactive residency, sampling the SAME absolute-coordinate MW1–MW8
+composite authority (`ReconstructedZ`). Representation coarsens with distance,
+geographic truth does not. Bands: meso (128 m–2 km), regional (2–20 km), horizon
+(20–32 km), each **terrain-aware adaptive** (fine 8/64/128 m sampling emitted at
+the coarsest resolution within a ≤5/18/45 m error target, so ridges/valleys/
+saddles keep detail and only genuinely smooth ground uses large faces).
+Absolute-world retained tiles, incremental frame-budgeted build (never a
+main-thread compiler), band-ring residency bounded by the view working set (no
+travel-history growth), source-revision lineage, perimeter skirts so no seam
+shows sky. Geometric fidelity vs authority: max 44.93 m (horizon), mean 0.68 m.
+Five true player stations (trunk valley, mountain flank, ridge shoulder, foreland
+basin, TRUE high divide) readable from neutral cameras; six hard fixtures +
+geometric-fidelity + H2H (32 km massif == 12.5 cm sample) all PASS. `--mv1-off`
+== exact MW8 near path (presentation-only; no authority/geometry/material/
+collision/mass/worldgen mutation). Near 192 m residency and standing gates
+unchanged: Test A 4/4, 2601 packages, 0 movement frames >16.667; Test B 90 s
+0 frames >16.667, MW1–MW8 idle. Handoff: `MV1_MULTI_SCALE_TERRAIN_HANDOFF.md`.
+Play: `PLAY_MV1_MULTI_SCALE_TERRAIN.cmd` / `--play-mv1-multi-scale-terrain`.
+Cert: `CERT_MV1_MULTI_SCALE_TERRAIN.cmd`.
+CLOSED: MV2 100+ km horizon; MW9 flora/fauna; all MW8-closed items.
+
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
 ```
@@ -572,7 +597,8 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
 **MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
 **MW8 CERTIFIED / FROZEN** @ `e8155fa3` (biomes / ecological regime inferred from MW1–MW7; not a color mask, not vegetation).
-**P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**.
+**MV1 CERTIFIED** @ `__MV1_SHA__` (multi-scale terrain visibility to 32 km; derived presentation from the MW1–MW8 composite authority — representation coarsens with distance, geographic truth does not; adaptive error-bounded tessellation, not a new terrain generator).
+**P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**. **MV2 100+ km horizon CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  

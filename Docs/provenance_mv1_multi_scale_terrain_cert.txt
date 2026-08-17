@@ -1,0 +1,41 @@
+MV1_MULTI_SCALE_TERRAIN PASS
+visible_range_target_m=32000
+near_interactive_radius_m=192
+region_min_z_m=-221.85
+region_max_z_m=1607.80
+region_relief_m=1829.66
+bands=meso[128-2048m fine8m adaptive<=5m],regional[2048-20000m fine64m adaptive<=18m],horizon[20000-32000m fine128m adaptive<=45m]
+band0_resident_tiles=208
+band1_resident_tiles=297
+band2_resident_tiles=116
+band0_tris=13312
+band1_tris=39040
+band2_tris=12928
+mv1_resident_tris=65280
+mv1_resident_high_water_tiles=626
+mv1_tiles_built=1967
+mv1_tiles_retired=1346
+mv1_pending_max=611
+mv1_rev_mismatch_refusals=0
+mv1_seam_failures=0
+source_revision=74b2a07dda24041d
+fixture.valley_visibility=PASS valley_enclosure_m=109.0 valley_distant_relief_m=1585.2 secondary_ridges=5
+fixture.ridge_summit_identity=PASS summit_order_stable=1 no_synthetic_peaks=1
+fixture.valley_negative_space=PASS cross_relief_fine_m=659.3 cross_relief_coarse_m=626.9
+fixture.band_boundary_continuity=PASS max_radial_jump_m=8.2 radial_covered=1
+fixture.absolute_no_repeat=PASS
+fixture.mv1_off_exact_mw8=PASS on_digest=6d144e3cff00132c off_digest=6d144e3cff00132c
+fixture.geometric_fidelity=PASS max_error_m=44.93 mean_error_m=0.679 cells_hist_4=1662 cells_hist_8=291 cells_hist_16=14 cells_hist_32=0
+h2h.distant_to_hand_identity=PASS formation=alpine_barren
+station.0 name=trunk_valley landform=valley x=20500.0 y=2000.0 z=20.5 elev_pct=0.132 slope=0.1180 prominence_m=91.4 enclosure_m=109.0 visible_relief_m=1585.2 readable=PASS sky_px=0 sampled_px=433552 image=Docs/provenance_mv1_station0_trunk_valley.ppm
+station.1 name=mountain_flank landform=flank x=7500.0 y=-3500.0 z=857.8 elev_pct=0.590 slope=0.9471 prominence_m=849.9 enclosure_m=-628.6 visible_relief_m=1452.2 readable=PASS sky_px=0 sampled_px=433552 image=Docs/provenance_mv1_station1_mountain_flank.ppm
+station.2 name=ridge_shoulder landform=ridge x=6500.0 y=-3000.0 z=1481.8 elev_pct=0.931 slope=0.1424 prominence_m=1443.9 enclosure_m=-436.5 visible_relief_m=1440.9 readable=PASS sky_px=0 sampled_px=433552 image=Docs/provenance_mv1_station2_ridge_shoulder.ppm
+station.3 name=foreland_basin landform=basin x=10000.0 y=-11500.0 z=-204.4 elev_pct=0.010 slope=0.0014 prominence_m=17.0 enclosure_m=-14.8 visible_relief_m=1816.7 readable=PASS sky_px=0 sampled_px=433552 image=Docs/provenance_mv1_station3_foreland_basin.ppm
+station.4 name=high_divide landform=divide x=2000.0 y=5500.0 z=1607.8 elev_pct=1.000 slope=0.0414 prominence_m=229.4 enclosure_m=-120.7 visible_relief_m=1832.2 readable=PASS sky_px=0 sampled_px=433552 image=Docs/provenance_mv1_station4_high_divide.ppm
+mv1_off_control=presentation_only
+no_4096_wrap=1
+production_source=absolute_coordinate_mw_authority
+mw1_8_authority=unchanged
+mw9=closed
+mv2_extended_horizon=closed
+near_192m_interactive=unchanged
