@@ -1,0 +1,39 @@
+MV1G_GPU_PRESENTATION PASS
+gpu_timer=AVAILABLE
+gpu_timer_source=ARB_timer_query GL_TIME_ELAPSED async
+gpu_query_available=yes
+gpu_query_samples=2646
+gpu_query_max_latency_frames=1
+visible_range_m=32000
+near_interactive_radius_m=192
+mv1_resident_high_water_tiles=626
+max_draw_calls=626
+gpu_stall_threshold_ms=8.00
+worst_gpu_draw_ms=0.5277
+first_visible_cold_max_ms=0.0224
+warm_repeat_max_ms=0.0126
+gpu_vram_bytes=UNAVAILABLE (no reliable memory extension queried)
+gpu_upload_time=UNAVAILABLE (display-list publish timing is driver-implementation-defined; see cpu_publish below)
+gate.gpu_draw_bounded=PASS
+gate.no_recurring_first_use_stall=PASS
+gate.draw_calls_bounded=PASS
+gate.resident_geometry_bounded=PASS
+scenario.first_visible_cold frames=397 gpu_p50_ms=0.0068 gpu_p95_ms=0.0141 gpu_p99_ms=0.0177 gpu_max_ms=0.0224 draw_calls_max=626 tris_submitted_total=9864128
+scenario.station_trunk_valley frames=48 gpu_p50_ms=0.0033 gpu_p95_ms=0.0035 gpu_p99_ms=0.0036 gpu_max_ms=0.0039 draw_calls_max=626 tris_submitted_total=2777088
+scenario.station_mountain_flank frames=264 gpu_p50_ms=0.0087 gpu_p95_ms=0.0178 gpu_p99_ms=0.0227 gpu_max_ms=0.5277 draw_calls_max=626 tris_submitted_total=10779264
+scenario.station_ridge_shoulder frames=364 gpu_p50_ms=0.0041 gpu_p95_ms=0.0106 gpu_p99_ms=0.0143 gpu_max_ms=0.0203 draw_calls_max=625 tris_submitted_total=23233344
+scenario.station_foreland_basin frames=263 gpu_p50_ms=0.0079 gpu_p95_ms=0.0154 gpu_p99_ms=0.0175 gpu_max_ms=0.0204 draw_calls_max=622 tris_submitted_total=11420160
+scenario.station_high_divide frames=377 gpu_p50_ms=0.0087 gpu_p95_ms=0.0159 gpu_p99_ms=0.0201 gpu_max_ms=0.2497 draw_calls_max=621 tris_submitted_total=16570368
+scenario.worst_orientation_sweep frames=144 gpu_p50_ms=0.0073 gpu_p95_ms=0.0159 gpu_p99_ms=0.0205 gpu_max_ms=0.1547 draw_calls_max=621 tris_submitted_total=6352384
+scenario.rotate_360 frames=140 gpu_p50_ms=0.0071 gpu_p95_ms=0.0159 gpu_p99_ms=0.0190 gpu_max_ms=0.0207 draw_calls_max=429 tris_submitted_total=6082560
+scenario.movement_band_churn frames=160 gpu_p50_ms=0.0058 gpu_p95_ms=0.0109 gpu_p99_ms=0.0139 gpu_max_ms=0.0147 draw_calls_max=402 tris_submitted_total=4192448
+scenario.warm_repeat frames=489 gpu_p50_ms=0.0053 gpu_p95_ms=0.0092 gpu_p99_ms=0.0108 gpu_max_ms=0.0126 draw_calls_max=626 tris_submitted_total=15191488
+outlier_owner=none_all_bounded
+cpu_publish=see_mv1_terrain_cert(glNewList_compile_in_build_budget)
+resource_lifetime=bounded_by_visible_working_set
+travel_history_accumulation=none
+mv1_geometry_unchanged=1
+mw1_8_authority_unchanged=1
+mv1d_distance_readability=closed
+mv2_extended_horizon=closed
+mw9=closed

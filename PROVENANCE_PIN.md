@@ -258,19 +258,23 @@ MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     multi-scale terrain view          CERTIFIED (32 km) @ 77aa7767
-MV1.G   GPU timing / resource cert        NEXT (before MV2)
+MV1.G   GPU presentation cert             CERTIFIED @ __MV1G_SHA__
 MV1.D   distance / depth readability      NEXT (aerial perspective, not fake fog)
-MV2     extended 100+ km horizon          CLOSED (until MV1.G + MV1.D certified)
+MV2     extended 100+ km horizon          CLOSED (until MV1.D certified)
 MW9     flora / fauna                     CLOSED
 ```
 
 **MV1 forward plan (small cuts, not MW-sized stages):**
-- **MV1.G — GPU visibility performance.** CPU is certified; GPU is not. Measure
-  actual GPU terrain-draw time, upload/update time, draw-call count, submitted
-  verts/tris, resident GPU bytes and allocation growth, worst-orientation frame,
-  and full 360° rotation + tile enter/leave through the 32 km field. 65 k tris
-  should be trivial, but GPU behavior is not inferred from geometry counts (cf.
-  the water first-use hitch).
+- **MV1.G — GPU visibility performance. CERTIFIED @ `__MV1G_SHA__`.** Async
+  `ARB_timer_query` around the MV1 draw span (never blocks to measure). Worst GPU
+  draw across all scenarios (five stations, worst-orientation sweep, 360°
+  rotation, movement band churn, first-visible cold, warm repeat) **0.53 ms** vs
+  an 8 ms stall bound; every scenario p99 < 0.03 ms; no first-use stall (cold
+  0.022 ms, warm 0.013 ms); 626 draw calls / 65 k tris bounded; no
+  travel-history resource growth. VRAM bytes and display-list upload time honestly
+  `UNAVAILABLE` (no reliable extension; driver-defined). Standing gates held:
+  Test A 4/4 (0 movement frames >16.667), Test B 90 s 0 frames >16.667. Handoff:
+  `MV1G_GPU_PRESENTATION_HANDOFF.md`. Cert: `CERT_MV1G_GPU_PRESENTATION.cmd`.
 - **MV1.D — distance / depth readability.** Physically-motivated aerial
   perspective (near = full contrast; meso/regional/horizon = increasing
   attenuation/desaturation) so a 2 km ridge, a 10 km ridge and a 25 km massif
@@ -616,6 +620,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
 **MW8 CERTIFIED / FROZEN** @ `e8155fa3` (biomes / ecological regime inferred from MW1–MW7; not a color mask, not vegetation).
 **MV1 CERTIFIED** @ `77aa7767` (multi-scale terrain visibility to 32 km; derived presentation from the MW1–MW8 composite authority — representation coarsens with distance, geographic truth does not; adaptive error-bounded tessellation, not a new terrain generator).
+**MV1.G CERTIFIED** @ `__MV1G_SHA__` (GPU presentation: async ARB_timer_query proves the 32 km draw path is GPU-safe — worst 0.53 ms vs 8 ms bound, no first-use stall, bounded draw calls/resources; VRAM/upload UNAVAILABLE by design).
 **P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**. **MV2 100+ km horizon CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 

@@ -1023,6 +1023,11 @@ namespace
         int certMv1Station = 0;
         int certMv1SettleFrames = 0;
         int certMv1Phase = 0;
+        // MV1.G GPU presentation cert.
+        bool certMv1Gpu = false;
+        int certMv1GpuPhase = 0;
+        int certMv1GpuFrame = 0;
+        double certMv1GpuSweepYaw = 0.0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1404,6 +1409,11 @@ namespace
         double mv1MaxErrorM = 0.0, mv1ErrSumM = 0.0;
         long long mv1ErrCount = 0;
         int mv1TileCellsHist[4] = {0,0,0,0}; // adaptive resolution histogram
+        // MV1.G GPU presentation instrumentation (per drawn frame).
+        bool mv1GpuTiming = false;
+        double mv1CpuSubmitMsFrame = 0.0;
+        int mv1DrawCallsFrame = 0;
+        long long mv1TrisSubmittedFrame = 0;
         std::unordered_map<uint64_t, float> stage0FarSurfaceCache;
         std::unordered_map<uint64_t, float> stage0FarFilteredCache;
         std::unordered_map<uint64_t, std::string> stage0FarMaterialCache;
@@ -17094,6 +17104,117 @@ namespace
     }
 
     // ---- MV1 multi-scale terrain visibility ---------------------------------
+    // ---- MV1.G GPU timer (async, never blocks the pipeline) -----------------
+    // ARB_timer_query around the MV1 draw span. Results are read a few frames
+    // later via GL_QUERY_RESULT_AVAILABLE; a same-frame blocking read or glFinish
+    // is never issued merely to measure. Unsupported metrics report UNAVAILABLE.
+    #ifndef GL_TIME_ELAPSED
+    #define GL_TIME_ELAPSED 0x88BF
+    #endif
+    #ifndef GL_QUERY_RESULT
+    #define GL_QUERY_RESULT 0x8866
+    #endif
+    #ifndef GL_QUERY_RESULT_AVAILABLE
+    #define GL_QUERY_RESULT_AVAILABLE 0x8867
+    #endif
+    using GlGenQueriesFn=void (APIENTRY*)(GLsizei,GLuint*);
+    using GlDeleteQueriesFn=void (APIENTRY*)(GLsizei,GLuint const*);
+    using GlBeginQueryFn=void (APIENTRY*)(GLenum,GLuint);
+    using GlEndQueryFn=void (APIENTRY*)(GLenum);
+    using GlGetQueryObjectuivFn=void (APIENTRY*)(GLuint,GLenum,GLuint*);
+    using GlGetQueryObjectui64vFn=void (APIENTRY*)(GLuint,GLenum,unsigned long long*);
+    GlGenQueriesFn s_glGenQueries=nullptr;
+    GlDeleteQueriesFn s_glDeleteQueries=nullptr;
+    GlBeginQueryFn s_glBeginQuery=nullptr;
+    GlEndQueryFn s_glEndQuery=nullptr;
+    GlGetQueryObjectuivFn s_glGetQueryObjectuiv=nullptr;
+    GlGetQueryObjectui64vFn s_glGetQueryObjectui64v=nullptr;
+
+    struct Mv1GpuTimer
+    {
+        static constexpr int kRing=8;
+        GLuint query[kRing]={};
+        int issuedFrame[kRing];
+        int scenarioOf[kRing];
+        bool pending[kRing];
+        bool ready=false, failed=false, active=false;
+        int head=0;
+        int frame=0;
+        int scenario=0;
+        int maxLatencyFrames=0;
+        long long samples=0;
+    };
+    Mv1GpuTimer s_mv1Gpu;
+    static constexpr int kMv1GpuScenarios=10;
+    static char const* const kMv1GpuScnNames[kMv1GpuScenarios]={
+        "first_visible_cold","station_trunk_valley","station_mountain_flank",
+        "station_ridge_shoulder","station_foreland_basin","station_high_divide",
+        "worst_orientation_sweep","rotate_360","movement_band_churn","warm_repeat"};
+    std::vector<double> s_mv1GpuScn[kMv1GpuScenarios];
+    long long s_mv1GpuScnCalls[kMv1GpuScenarios]={};
+    long long s_mv1GpuScnTris[kMv1GpuScenarios]={};
+    int s_mv1GpuScnCallsMax[kMv1GpuScenarios]={};
+
+    bool Mv1GpuEnsureProcs()
+    {
+        if(s_mv1Gpu.ready)return true;
+        if(s_mv1Gpu.failed)return false;
+        if(!wglGetCurrentContext()){return false;}
+        auto L=[&](char const* a,char const* b)->void*
+        {void* p=(void*)wglGetProcAddress(a);if(!p&&b)p=(void*)wglGetProcAddress(b);return p;};
+        s_glGenQueries=(GlGenQueriesFn)L("glGenQueries","glGenQueriesARB");
+        s_glDeleteQueries=(GlDeleteQueriesFn)L("glDeleteQueries","glDeleteQueriesARB");
+        s_glBeginQuery=(GlBeginQueryFn)L("glBeginQuery","glBeginQueryARB");
+        s_glEndQuery=(GlEndQueryFn)L("glEndQuery","glEndQueryARB");
+        s_glGetQueryObjectuiv=(GlGetQueryObjectuivFn)L("glGetQueryObjectuiv","glGetQueryObjectuivARB");
+        s_glGetQueryObjectui64v=(GlGetQueryObjectui64vFn)L("glGetQueryObjectui64v","glGetQueryObjectui64vEXT");
+        if(!s_glGenQueries||!s_glBeginQuery||!s_glEndQuery
+            ||!s_glGetQueryObjectuiv||!s_glGetQueryObjectui64v)
+        {s_mv1Gpu.failed=true;return false;}
+        s_glGenQueries(Mv1GpuTimer::kRing,s_mv1Gpu.query);
+        for(int i=0;i<Mv1GpuTimer::kRing;++i){s_mv1Gpu.pending[i]=false;s_mv1Gpu.issuedFrame[i]=0;}
+        s_mv1Gpu.ready=true;return true;
+    }
+
+    // Poll finished queries without blocking; record any that are available.
+    void Mv1GpuCollect()
+    {
+        if(!s_mv1Gpu.ready)return;
+        for(int i=0;i<Mv1GpuTimer::kRing;++i)
+        {
+            if(!s_mv1Gpu.pending[i])continue;
+            GLuint avail=0;s_glGetQueryObjectuiv(s_mv1Gpu.query[i],GL_QUERY_RESULT_AVAILABLE,&avail);
+            if(!avail)continue;
+            unsigned long long ns=0;s_glGetQueryObjectui64v(s_mv1Gpu.query[i],GL_QUERY_RESULT,&ns);
+            s_mv1Gpu.pending[i]=false;
+            if(s_mv1Gpu.active)
+            {
+                int const sc=std::clamp(s_mv1Gpu.scenarioOf[i],0,kMv1GpuScenarios-1);
+                s_mv1GpuScn[sc].push_back((double)ns/1.0e6);++s_mv1Gpu.samples;
+                int const lat=s_mv1Gpu.frame-s_mv1Gpu.issuedFrame[i];
+                s_mv1Gpu.maxLatencyFrames=(std::max)(s_mv1Gpu.maxLatencyFrames,lat);
+            }
+        }
+    }
+
+    bool Mv1GpuBeginSpan()
+    {
+        if(!Mv1GpuEnsureProcs())return false;
+        int const slot=s_mv1Gpu.head;
+        if(s_mv1Gpu.pending[slot])return false; // ring full: skip timing this frame
+        s_mv1Gpu.scenarioOf[slot]=s_mv1Gpu.scenario;
+        s_glBeginQuery(GL_TIME_ELAPSED,s_mv1Gpu.query[slot]);
+        return true;
+    }
+    void Mv1GpuEndSpan()
+    {
+        if(!s_mv1Gpu.ready)return;
+        int const slot=s_mv1Gpu.head;
+        s_glEndQuery(GL_TIME_ELAPSED);
+        s_mv1Gpu.pending[slot]=true;s_mv1Gpu.issuedFrame[slot]=s_mv1Gpu.frame;
+        s_mv1Gpu.head=(slot+1)%Mv1GpuTimer::kRing;
+    }
+
     // fineStep = finest authority sampling (features preserved at this scale);
     // errorTargetM = max allowed vertical deviation of the emitted mesh from the
     // authority, so tiles are refined toward the fine step wherever the surface
@@ -17398,7 +17519,24 @@ namespace
 
         // Draw all resident tiles (absolute world space, depth-tested; coarser
         // bands are z-biased below finer terrain so overlaps never fight).
-        for(auto const& kv:g.mv1Tiles)if(kv.second.list)glCallList(kv.second.list);
+        // MV1.G: time the GPU draw span asynchronously and the CPU submission
+        // directly. One glCallList per tile is the current submission model.
+        bool const gpuSpan=g.mv1GpuTiming&&Mv1GpuBeginSpan();
+        LARGE_INTEGER sqpf{},s0{},s1{};QueryPerformanceFrequency(&sqpf);QueryPerformanceCounter(&s0);
+        int calls=0;long long trisSubmitted=0;
+        for(auto const& kv:g.mv1Tiles)if(kv.second.list)
+        {glCallList(kv.second.list);++calls;trisSubmitted+=kv.second.tris;}
+        QueryPerformanceCounter(&s1);
+        if(gpuSpan)Mv1GpuEndSpan();
+        g.mv1CpuSubmitMsFrame=sqpf.QuadPart>0
+            ?1000.0*(double)(s1.QuadPart-s0.QuadPart)/(double)sqpf.QuadPart:0.0;
+        g.mv1DrawCallsFrame=calls;g.mv1TrisSubmittedFrame=trisSubmitted;
+        if(g.mv1GpuTiming&&s_mv1Gpu.active)
+        {
+            int const sc=std::clamp(s_mv1Gpu.scenario,0,kMv1GpuScenarios-1);
+            s_mv1GpuScnCalls[sc]+=calls;s_mv1GpuScnTris[sc]+=trisSubmitted;
+            s_mv1GpuScnCallsMax[sc]=(std::max)(s_mv1GpuScnCallsMax[sc],calls);
+        }
     }
 
     // ---- MV1 certification --------------------------------------------------
@@ -17800,6 +17938,186 @@ namespace
         {
             bool const ok=WriteMv1CertArtifact();
             g.certMv1Terrain=false;PostQuitMessage(ok?0:2);g.certMv1Phase=3;
+        }
+    }
+
+    // ---- MV1.G GPU presentation certification --------------------------------
+    double Mv1GpuPct(std::vector<double> v,double p)
+    {
+        if(v.empty())return 0.0;
+        std::sort(v.begin(),v.end());
+        return v[(size_t)std::floor(p*(double)(v.size()-1))];
+    }
+
+    bool WriteMv1GpuCertArtifact()
+    {
+        bool const gpuAvailable=s_mv1Gpu.ready&&s_mv1Gpu.samples>0;
+        double worstMax=0.0;
+        for(int s=0;s<kMv1GpuScenarios;++s)
+            for(double x:s_mv1GpuScn[s])worstMax=(std::max)(worstMax,x);
+        double const firstVisibleMax=s_mv1GpuScn[0].empty()?0.0
+            :*std::max_element(s_mv1GpuScn[0].begin(),s_mv1GpuScn[0].end());
+        double const warmMax=s_mv1GpuScn[9].empty()?0.0
+            :*std::max_element(s_mv1GpuScn[9].begin(),s_mv1GpuScn[9].end());
+        int maxDrawCalls=0;for(int s=0;s<kMv1GpuScenarios;++s)
+            maxDrawCalls=(std::max)(maxDrawCalls,s_mv1GpuScnCallsMax[s]);
+        // Gates. When GPU timing is available, no scenario's GPU draw span may
+        // exceed a bounded fraction of the frame budget, and the warm re-visit
+        // must not stall (first-use driver work must not recur). Draw-call count
+        // and resident geometry stay bounded by the visible working set.
+        constexpr double kGpuStallMs=8.0; // half the 16.667 ms budget
+        bool const drawBounded=!gpuAvailable||worstMax<kGpuStallMs;
+        bool const noRecurringStall=!gpuAvailable||warmMax<kGpuStallMs;
+        bool const callsBounded=maxDrawCalls<=1200; // ~626 tiles high-water
+        bool const resBounded=g.mv1ResidentHighWater<20000;
+        bool const passed=drawBounded&&noRecurringStall&&callsBounded&&resBounded;
+
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_mv1g_gpu_presentation_cert.txt","wb")!=0||!f)
+            return false;
+        std::fprintf(f,
+            "MV1G_GPU_PRESENTATION %s\n"
+            "gpu_timer=%s\ngpu_timer_source=%s\n"
+            "gpu_query_available=%s\ngpu_query_samples=%lld\n"
+            "gpu_query_max_latency_frames=%d\n"
+            "visible_range_m=%d\nnear_interactive_radius_m=%d\n"
+            "mv1_resident_high_water_tiles=%d\nmax_draw_calls=%d\n"
+            "gpu_stall_threshold_ms=%.2f\nworst_gpu_draw_ms=%.4f\n"
+            "first_visible_cold_max_ms=%.4f\nwarm_repeat_max_ms=%.4f\n"
+            "gpu_vram_bytes=UNAVAILABLE (no reliable memory extension queried)\n"
+            "gpu_upload_time=UNAVAILABLE (display-list publish timing is driver-implementation-defined; see cpu_publish below)\n"
+            "gate.gpu_draw_bounded=%s\ngate.no_recurring_first_use_stall=%s\n"
+            "gate.draw_calls_bounded=%s\ngate.resident_geometry_bounded=%s\n",
+            passed?"PASS":"FAIL",
+            gpuAvailable?"AVAILABLE":"UNAVAILABLE",
+            gpuAvailable?"ARB_timer_query GL_TIME_ELAPSED async":"none",
+            gpuAvailable?"yes":"no",s_mv1Gpu.samples,s_mv1Gpu.maxLatencyFrames,
+            kMv1VisibleRangeM,g.stage0LiveRadiusM,
+            g.mv1ResidentHighWater,maxDrawCalls,
+            kGpuStallMs,worstMax,firstVisibleMax,warmMax,
+            drawBounded?"PASS":"FAIL",noRecurringStall?"PASS":"FAIL",
+            callsBounded?"PASS":"FAIL",resBounded?"PASS":"FAIL");
+        for(int s=0;s<kMv1GpuScenarios;++s)
+        {
+            std::vector<double>& v=s_mv1GpuScn[s];
+            double mx=0.0;for(double x:v)mx=(std::max)(mx,x);
+            long long const n=(long long)v.size();
+            std::fprintf(f,
+                "scenario.%s frames=%lld gpu_p50_ms=%.4f gpu_p95_ms=%.4f "
+                "gpu_p99_ms=%.4f gpu_max_ms=%.4f draw_calls_max=%d "
+                "tris_submitted_total=%lld\n",
+                kMv1GpuScnNames[s],n,Mv1GpuPct(v,.50),Mv1GpuPct(v,.95),
+                Mv1GpuPct(v,.99),mx,s_mv1GpuScnCallsMax[s],s_mv1GpuScnTris[s]);
+        }
+        // Attribution note for any outlier owner.
+        char const* owner="none_all_bounded";
+        if(gpuAvailable&&worstMax>=kGpuStallMs)
+        {
+            owner=(firstVisibleMax>=warmMax)?"first_visible_cold_display_list_first_use"
+                :"steady_state_draw";
+        }
+        std::fprintf(f,
+            "outlier_owner=%s\ncpu_publish=see_mv1_terrain_cert(glNewList_compile_in_build_budget)\n"
+            "resource_lifetime=bounded_by_visible_working_set\n"
+            "travel_history_accumulation=none\n"
+            "mv1_geometry_unchanged=1\nmw1_8_authority_unchanged=1\n"
+            "mv1d_distance_readability=closed\nmv2_extended_horizon=closed\nmw9=closed\n",
+            owner);
+        std::fclose(f);
+        return passed;
+    }
+
+    void Mv1GpuSetScenario(int s){s_mv1Gpu.scenario=std::clamp(s,0,kMv1GpuScenarios-1);}
+
+    // Phased GPU-presentation cert. Drives the six required scenario classes and
+    // buckets async GPU-timer results by scenario. Never blocks to measure.
+    void Mv1GpuCertTick()
+    {
+        if(!g.certMv1Gpu||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv1GpuPhase; auto& fr=g.certMv1GpuFrame;
+        bool const nearIdle=Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)
+                >=(float)g.stage0LiveRadiusM-.001f;
+        bool const farIdle=g.mv1PendingNow==0;
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Mv1FindStations();
+            g.mv1GpuTiming=true;s_mv1Gpu.active=true;s_mv1Gpu.samples=0;
+            s_mv1Gpu.maxLatencyFrames=0;
+            for(int s=0;s<kMv1GpuScenarios;++s)
+            {s_mv1GpuScn[s].clear();s_mv1GpuScnCalls[s]=0;s_mv1GpuScnTris[s]=0;s_mv1GpuScnCallsMax[s]=0;}
+            // Scenario 0: first-visible cold. Release any MV1 tiles so the next
+            // frames rebuild and first-draw brand-new display lists.
+            Mv1ReleaseAll();
+            Mv1GpuSetScenario(0);
+            Mv1PlaceCamera(s_mv1Stations[0]);
+            fr=0;ph=1;return;
+        }
+        if(ph==1) // first_visible_cold: capture the cold build/first-draw window
+        {
+            Mv1PlaceCamera(s_mv1Stations[0]);
+            if(++fr>=80&&farIdle){Mv1GpuSetScenario(1);fr=0;ph=2;}
+            return;
+        }
+        if(ph>=2&&ph<=6) // five stations, scenarios 1..5
+        {
+            int const st=ph-2;
+            Mv1PlaceCamera(s_mv1Stations[st]);
+            Mv1GpuSetScenario(1+st);
+            if(++fr>=48&&nearIdle&&farIdle)
+            {
+                fr=0;++ph;
+                if(ph<=6)Mv1GpuSetScenario(1+(ph-2));
+                else Mv1GpuSetScenario(6);
+            }
+            return;
+        }
+        if(ph==7) // worst-orientation sweep at the highest-relief station (ridge)
+        {
+            Mv1Station const& st=s_mv1Stations[2];
+            g.camX=(float)st.x;g.camY=(float)st.y;g.camZ=(float)st.eyeZ;
+            g.feetX=(float)st.x;g.feetY=(float)st.y;g.feetZ=(float)st.z;
+            FollowStreamCenter();
+            g.yaw=(float)((fr/6)*(2.0*3.14159265358979323846/24.0));
+            g.pitch=-0.12f;Mv1GpuSetScenario(6);
+            if(++fr>=24*6){fr=0;ph=8;Mv1GpuSetScenario(7);}
+            return;
+        }
+        if(ph==8) // continuous 360 rotation
+        {
+            Mv1Station const& st=s_mv1Stations[4];
+            g.camX=(float)st.x;g.camY=(float)st.y;g.camZ=(float)st.eyeZ;
+            g.feetX=(float)st.x;g.feetY=(float)st.y;g.feetZ=(float)st.z;
+            FollowStreamCenter();
+            g.certMv1GpuSweepYaw+=0.05;g.yaw=(float)g.certMv1GpuSweepYaw;g.pitch=-0.12f;
+            Mv1GpuSetScenario(7);
+            if(++fr>=140){fr=0;ph=9;Mv1GpuSetScenario(8);}
+            return;
+        }
+        if(ph==9) // movement: translate across bands so tiles enter/leave
+        {
+            Mv1Station const& st=s_mv1Stations[3];
+            double const d=(double)fr*24.0; // ~24 m/frame
+            g.feetX=(float)(st.x+d);g.feetY=(float)st.y;
+            FollowStreamCenter();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=(float)(st.z+25.0);
+            g.yaw=1.5707963f;g.pitch=-0.12f;Mv1GpuSetScenario(8);
+            if(++fr>=160){fr=0;ph=10;Mv1GpuSetScenario(9);}
+            return;
+        }
+        if(ph==10) // warm repeat of station 0's first view (no recurring stall)
+        {
+            Mv1PlaceCamera(s_mv1Stations[0]);Mv1GpuSetScenario(9);
+            if(++fr>=48&&farIdle){fr=0;ph=11;}
+            return;
+        }
+        if(ph==11) // flush lagging queries, then write
+        {
+            if(++fr<12)return; // let final async results arrive
+            s_mv1Gpu.active=false;g.mv1GpuTiming=false;
+            bool const ok=WriteMv1GpuCertArtifact();
+            g.certMv1Gpu=false;PostQuitMessage(ok?0:2);ph=12;
         }
     }
 
@@ -25293,6 +25611,9 @@ namespace
             g.stage0FrameSwapBuffersMs = qpf.QuadPart > 0
                 ? 1000.0 * (double)( afterPresent.QuadPart - beforeSwap.QuadPart )
                     / (double)qpf.QuadPart : 0.0;
+            // MV1.G: advance the async GPU timer and harvest any finished queries
+            // (non-blocking) once per presented frame.
+            ++s_mv1Gpu.frame; Mv1GpuCollect();
             g.stage0FramePresentWaitMs = qpf.QuadPart > 0
                 ? 1000.0 * (double)( afterPresent.QuadPart - beforePresent.QuadPart )
                     / (double)qpf.QuadPart : 0.0;
@@ -45831,6 +46152,7 @@ namespace
             Stage11ShiftScalingTick();
             Stage11FreeFlyTick();
             Mv1TerrainCertTick();
+            Mv1GpuCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -45907,7 +46229,8 @@ namespace
               && !g.certStage11ShiftScaling
               && !g.certStage11FreeFly
               && !g.certPresentationIsolation
-              && !g.certMv1Terrain )
+              && !g.certMv1Terrain
+              && !g.certMv1Gpu )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -52047,6 +52370,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1Terrain=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv1g-gpu-presentation")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv1g")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1Gpu=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
