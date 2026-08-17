@@ -257,12 +257,32 @@ MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
-MV1     multi-scale terrain view          CERTIFIED (32 km) @ 77aa7767
-MV1.G   GPU presentation cert             CERTIFIED @ 0d39ffcd
-MV1.D   distance / depth readability      NEXT (aerial perspective, not fake fog)
-MV2     extended 100+ km horizon          CLOSED (until MV1.D certified)
+MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residency/fidelity/identity)
+MV1.C   real 32 km raster visibility      PLAYABLE / OPEN NEXT (far bands were clipped at 600 m)
+MV1.G   GPU instrumentation / resources   CERTIFIED @ 0d39ffcd (full-32 km raster timing REVALIDATE after MV1.C)
+MV1.D   distance / depth readability      CLOSED (blocked by MV1.C)
+MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
+
+**MV1 correction (projection audit).** MV1 certified construction, bounded
+residency, adaptive geometric fidelity, geographic identity, and 32 km derived
+terrain *extent*. A subsequent projection audit found the active render far
+plane remained **600 m**, so the earlier claim of 32 km raster-visible terrain
+was overstated: regional/horizon MV1 geometry was built and submitted but
+**clipped before framebuffer contribution**. Empirically confirmed — opening the
+far plane surfaces distant ranges (e.g. the foreland-basin horizon) that 600 m
+clips. **MV1.C** is opened to restore actual 32 km visibility via a two-pass
+depth split (far terrain pass at near≈64–128 m / far≈33 km, depth-only clear,
+then the frozen 0.03–600 m near pass painted over the top) so the certified
+near-depth path is unchanged. **MV1.G qualification:** its display-list
+lifecycle, bounded resources, query mechanism, first-use behavior, and
+submission measurements remain valid; its claim that fully rasterized 32 km
+terrain is GPU-safe **requires revalidation after MV1.C**, because most
+regional/horizon fragments were clipped by the 600 m projection during the
+original test (the 0.53 ms number was real for the path that executed, but does
+not yet certify full 32 km raster cost). Sequence: **MV1.C raster visibility →
+rerun MV1.G → then MV1.D.**
 
 **MV1 forward plan (small cuts, not MW-sized stages):**
 - **MV1.G — GPU visibility performance. CERTIFIED @ `0d39ffcd`.** Async

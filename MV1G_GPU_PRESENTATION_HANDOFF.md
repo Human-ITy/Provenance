@@ -1,5 +1,16 @@
 # MV1.G — GPU Presentation Certification
 
+> **QUALIFICATION (projection audit).** MV1.G's display-list lifecycle, bounded
+> resources, async query mechanism, first-use behavior, and submission
+> measurements below remain valid. However, a later audit found the render far
+> plane was **600 m** during this test, so most regional/horizon fragments were
+> **clipped before rasterization**. The 0.53 ms worst GPU draw was real for the
+> path that executed, but it does **not yet certify full 32 km raster cost**.
+> After **MV1.C** opens true 32 km visibility, these scenarios must be **rerun**:
+> distant triangles that now survive clipping change the fragment/raster
+> workload.
+
+
 MV1.G answers one question the MV1 CPU cert could not: is the frozen 32 km MV1
 terrain renderer genuinely **GPU-safe** across realistic view orientations and
 tile churn, or merely CPU-frame-safe? 65 k triangles should be trivial — but GPU
