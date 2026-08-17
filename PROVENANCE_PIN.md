@@ -258,9 +258,27 @@ MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     multi-scale terrain view          CERTIFIED (32 km) @ 77aa7767
-MV2     extended 100+ km horizon          CLOSED
+MV1.G   GPU timing / resource cert        NEXT (before MV2)
+MV1.D   distance / depth readability      NEXT (aerial perspective, not fake fog)
+MV2     extended 100+ km horizon          CLOSED (until MV1.G + MV1.D certified)
 MW9     flora / fauna                     CLOSED
 ```
+
+**MV1 forward plan (small cuts, not MW-sized stages):**
+- **MV1.G — GPU visibility performance.** CPU is certified; GPU is not. Measure
+  actual GPU terrain-draw time, upload/update time, draw-call count, submitted
+  verts/tris, resident GPU bytes and allocation growth, worst-orientation frame,
+  and full 360° rotation + tile enter/leave through the 32 km field. 65 k tris
+  should be trivial, but GPU behavior is not inferred from geometry counts (cf.
+  the water first-use hitch).
+- **MV1.D — distance / depth readability.** Physically-motivated aerial
+  perspective (near = full contrast; meso/regional/horizon = increasing
+  attenuation/desaturation) so a 2 km ridge, a 10 km ridge and a 25 km massif
+  read as kilometres of depth, not stacked cutouts. Not fake fog. A later,
+  separate cut may drive atmospheric clarity causally from MW6 hydroclimate
+  (dry interior = long visibility, humid valley = stronger attenuation).
+- **MV2** extends the certified 32 km hierarchy toward the Alaska-scale target
+  only after MV1.G (GPU-safe) and MV1.D (depth-readable) pass.
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
 Play: `PLAY_P5B1_TERRAIN_WATER.cmd` / `--play-p5b1-terrain-water`  
