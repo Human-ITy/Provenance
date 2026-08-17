@@ -257,7 +257,7 @@ MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
-MV1     multi-scale terrain view          CERTIFIED (32 km) @ __MV1_SHA__
+MV1     multi-scale terrain view          CERTIFIED (32 km) @ 77aa7767
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
@@ -458,7 +458,7 @@ CLOSED: MW9 flora/fauna, 3C structural collapse, 16C runtime remobilization,
 live P5b / 16D play ownership, live weather, glaciers, groundwater,
 vegetation, ecology simulation.
 
-**MV1 CERTIFIED** @ `__MV1_SHA__` — multi-scale terrain **visibility** to 32 km.
+**MV1 CERTIFIED** @ `77aa7767` — multi-scale terrain **visibility** to 32 km.
 Presentation / scale layer, not new worldgen: derived visible terrain beyond the
 192 m full-interactive residency, sampling the SAME absolute-coordinate MW1–MW8
 composite authority (`ReconstructedZ`). Representation coarsens with distance,
@@ -597,7 +597,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
 **MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
 **MW8 CERTIFIED / FROZEN** @ `e8155fa3` (biomes / ecological regime inferred from MW1–MW7; not a color mask, not vegetation).
-**MV1 CERTIFIED** @ `__MV1_SHA__` (multi-scale terrain visibility to 32 km; derived presentation from the MW1–MW8 composite authority — representation coarsens with distance, geographic truth does not; adaptive error-bounded tessellation, not a new terrain generator).
+**MV1 CERTIFIED** @ `77aa7767` (multi-scale terrain visibility to 32 km; derived presentation from the MW1–MW8 composite authority — representation coarsens with distance, geographic truth does not; adaptive error-bounded tessellation, not a new terrain generator).
 **P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**. **MV2 100+ km horizon CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
