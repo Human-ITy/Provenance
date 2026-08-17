@@ -1,0 +1,21 @@
+PROVENANCE_CAUSAL_REGIONAL_BIOME_V1
+# MW8: compiled ecological potential / biome regime on certified MW1–MW7.
+# Persistent regime inferred from climate, elevation, moisture, soil/regolith,
+# drainage, substrate, and exposure. Not vegetation placement.
+# Off / no-MW8 leaves exact MW7 geometry, HydroclimateId, RegolithId, and bodies.
+world_identity_hash=a31c6e90d4b27f11
+worldgen_id=provenance_regional_biome_v1
+worldgen_version=1
+schema_version=1
+region_key=causal_world_regional_biome_floor
+authority_revision=1
+biome_event_id=4d57380000000001
+chronology=100
+seed=mw8-64km-01
+regional_biome_enabled=1
+grid_step_m=256.0
+alpine_temp_c=1.20
+tundra_depth_m=0.38
+riparian_depth_m=0.85
+wetland_wetness=0.50
+arid_threshold=0.48

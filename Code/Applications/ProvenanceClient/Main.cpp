@@ -42,6 +42,8 @@
 #include "CausalRegionalDeposition.h" // MW5 depositional landscape
 #include "CausalRegionalHydroclimate.h" // MW6 hydroclimate
 #include "CausalRegionalRegolith.h" // MW7 soils / regolith
+#include "CausalRegionalBiome.h" // MW8 biome regime
+#include "CausalRegionalBiome.h" // MW8 biome regime
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -576,7 +578,8 @@ namespace
         RegionalDrainage = 38,
         RegionalDeposition = 39,
         RegionalHydroclimate = 40,
-        RegionalRegolith = 41
+        RegionalRegolith = 41,
+        RegionalBiome = 42
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -941,6 +944,7 @@ namespace
         bool playMw5Launch = false;
         bool playMw6Launch = false;
         bool playMw7Launch = false;
+        bool playMw8Launch = false;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
         int regionalGeologyOverride = -1;
@@ -949,6 +953,7 @@ namespace
         int regionalDepositionOverride = -1;
         int regionalHydroclimateOverride = -1;
         int regionalRegolithOverride = -1;
+        int regionalBiomeOverride = -1;
         bool certStage12Visual = false;
         int certStage12VisualFrames = 0;
         bool certStage13Visual = false;
@@ -1009,6 +1014,8 @@ namespace
         int certMw6VisualFrames = 0;
         bool certMw7Visual = false;
         int certMw7VisualFrames = 0;
+        bool certMw8Visual = false;
+        int certMw8VisualFrames = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1209,6 +1216,8 @@ namespace
         bool regionalHydroclimateCertified = false;
         bool regionalRegolithAuthorityAttempted = false;
         bool regionalRegolithCertified = false;
+        bool regionalBiomeAuthorityAttempted = false;
+        bool regionalBiomeCertified = false;
         bool presentWaterAuthorityAttempted = false;
         bool presentWaterCertified = false;
         bool cutCOccupancyAuthorityAttempted = false;
@@ -1234,6 +1243,7 @@ namespace
         std::string regionalDepositionAuthorityReason = "not_loaded";
         std::string regionalHydroclimateAuthorityReason = "not_loaded";
         std::string regionalRegolithAuthorityReason = "not_loaded";
+        std::string regionalBiomeAuthorityReason = "not_loaded";
         std::string presentWaterAuthorityReason = "not_loaded";
         bool presentWaterBodyAuthorityAttempted = false;
         bool presentWaterBodyCertified = false;
@@ -1300,6 +1310,7 @@ namespace
         std::unique_ptr<CausalRegionalDeposition::Kernel> regionalDepositionRuntime;
         std::unique_ptr<CausalRegionalHydroclimate::Kernel> regionalHydroclimateRuntime;
         std::unique_ptr<CausalRegionalRegolith::Kernel> regionalRegolithRuntime;
+        std::unique_ptr<CausalRegionalBiome::Kernel> regionalBiomeRuntime;
         std::unique_ptr<CausalPresentWater::Kernel> presentWaterRuntime;
         std::unique_ptr<CausalPresentWaterBody::Kernel> presentWaterBodyRuntime;
         std::unique_ptr<CausalPresentWaterEquilibrate::Kernel> presentWaterEquilibrateRuntime;
@@ -3314,12 +3325,18 @@ namespace
         return view == Stage0PlayView::RegionalRegolith;
     }
 
+    bool IsRegionalBiomeView( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::RegionalBiome;
+    }
+
     bool UsesMacroProvincesTerrain( Stage0PlayView view )
     {
         return IsMacroProvincesView(view)||IsRegionalGeologyView(view)
             ||IsRegionalErosionView(view)||IsRegionalDrainageView(view)
             ||IsRegionalDepositionView(view)||IsRegionalHydroclimateView(view)
-            ||IsRegionalRegolithView(view);
+            ||IsRegionalRegolithView(view)
+            ||IsRegionalBiomeView(view);
     }
 
     bool UsesCompiledSedimentTerrain( Stage0PlayView view )
@@ -3547,6 +3564,8 @@ namespace
             "Data\\Worldgen\\causal_world_regional_hydroclimate_floor.chc";
         constexpr char const* kRegionalRegolithPath =
             "Data\\Worldgen\\causal_world_regional_regolith_floor.crr";
+        constexpr char const* kRegionalBiomePath =
+            "Data\\Worldgen\\causal_world_regional_biome_floor.crb";
         constexpr char const* kPresentWaterPath =
             "Data\\Worldgen\\causal_world_present_water_floor.cpw";
         constexpr char const* kPresentWaterBodyPath =
@@ -3887,6 +3906,26 @@ namespace
                 g.presentWaterAuthorityReason=g.presentWaterCertified?"certified":reason;
             }
             return g.presentWaterCertified&&g.presentWaterRuntime!=nullptr;
+        }
+
+        if(IsRegionalBiomeView(view))
+        {
+            if(!g.regionalBiomeAuthorityAttempted)
+            {
+                g.regionalBiomeAuthorityAttempted=true;
+                CausalRegionalBiome::Control control=CausalRegionalBiome::Control::Program;
+                if(g.regionalBiomeOverride==0)
+                    control=CausalRegionalBiome::Control::ForceOff;
+                else if(g.regionalBiomeOverride==1)
+                    control=CausalRegionalBiome::Control::ForceOn;
+                std::string reason;g.regionalBiomeRuntime=
+                    CausalRegionalBiome::LoadKernel(kRegionalBiomePath,kRegionalRegolithPath,
+                        kRegionalHydroclimatePath,kRegionalDepositionPath,kRegionalDrainagePath,
+                        kRegionalErosionPath,kRegionalGeologyPath,kMacroProvincesPath,&reason,control);
+                g.regionalBiomeCertified=g.regionalBiomeRuntime!=nullptr;
+                g.regionalBiomeAuthorityReason=g.regionalBiomeCertified?"certified":reason;
+            }
+            return g.regionalBiomeCertified&&g.regionalBiomeRuntime!=nullptr;
         }
 
         if(IsRegionalRegolithView(view))
@@ -4674,6 +4713,27 @@ namespace
         return kernel.get();
     }
 
+    CausalRegionalBiome::Kernel* ThreadRegionalBiomeKernel()
+    {
+        thread_local std::unique_ptr<CausalRegionalBiome::Kernel> kernel;
+        thread_local bool attempted=false;
+        if(!attempted)
+        {
+            attempted=true;std::string reason;
+            kernel=CausalRegionalBiome::LoadKernel(
+                "Data\\Worldgen\\causal_world_regional_biome_floor.crb",
+                "Data\\Worldgen\\causal_world_regional_regolith_floor.crr",
+                "Data\\Worldgen\\causal_world_regional_hydroclimate_floor.chc",
+                "Data\\Worldgen\\causal_world_regional_deposition_floor.cdp",
+                "Data\\Worldgen\\causal_world_regional_drainage_floor.crd",
+                "Data\\Worldgen\\causal_world_regional_erosion_floor.cre",
+                "Data\\Worldgen\\causal_world_regional_geology_floor.crg",
+                "Data\\Worldgen\\causal_world_macro_provinces_floor.cmp",&reason,
+                CausalRegionalBiome::Control::ForceOn);
+        }
+        return kernel.get();
+    }
+
     void SampleCompiledFluvialWorkerBlockInto(
         CausalBareEarthGeography::Kernel const& geography,
         CausalCompiledFluvialErosion::Kernel const& erosion,int bx,int by,
@@ -4764,6 +4824,16 @@ namespace
     {
         if ( UsesMacroProvincesTerrain( view ) )
         {
+            if(IsRegionalBiomeView(view))
+            {
+                if(!g.regionalBiomeRuntime)return false;
+                if(SampleResidentCausalPackageSurface(x,y,outZ))
+                {
+                    outCap=g.regionalBiomeRuntime->DiagnosticMaterial(x,y);return true;
+                }
+                outZ=(float)g.regionalBiomeRuntime->ReconstructedZ(x,y);
+                outCap=g.regionalBiomeRuntime->DiagnosticMaterial(x,y);return true;
+            }
             if(IsRegionalRegolithView(view))
             {
                 if(!g.regionalRegolithRuntime)return false;
@@ -5040,6 +5110,8 @@ namespace
     CausalWorldGeology::GeoSample CausalGeologyAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsRegionalBiomeView(view)&&g.regionalBiomeRuntime)
+            return g.regionalBiomeRuntime->Query(x,y,z);
         if(IsRegionalRegolithView(view)&&g.regionalRegolithRuntime)
             return g.regionalRegolithRuntime->Query(x,y,z);
         if(IsRegionalHydroclimateView(view)&&g.regionalHydroclimateRuntime)
@@ -5100,6 +5172,8 @@ namespace
     CausalWorldGeology::MaterialSample CausalMaterialAt(
         Stage0PlayView view, double x, double y, double z )
     {
+        if(IsRegionalBiomeView(view)&&g.regionalBiomeRuntime)
+            return g.regionalBiomeRuntime->QueryMaterial(x,y,z);
         if(IsRegionalRegolithView(view)&&g.regionalRegolithRuntime)
             return g.regionalRegolithRuntime->QueryMaterial(x,y,z);
         if(IsRegionalHydroclimateView(view)&&g.regionalHydroclimateRuntime)
@@ -12013,10 +12087,12 @@ namespace
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
           && UsesMacroProvincesTerrain( g.stage0PlayView )
-          && (g.regionalRegolithRuntime||g.regionalHydroclimateRuntime||g.regionalDepositionRuntime||g.regionalDrainageRuntime||g.regionalErosionRuntime||g.regionalGeologyRuntime||g.macroProvincesRuntime) )
+          && (g.regionalBiomeRuntime||g.regionalRegolithRuntime||g.regionalHydroclimateRuntime||g.regionalDepositionRuntime||g.regionalDrainageRuntime||g.regionalErosionRuntime||g.regionalGeologyRuntime||g.macroProvincesRuntime) )
         {
             if(sampleResidentCausalPackage(outZ))return true;
-            outZ=(float)(g.regionalRegolithRuntime
+            outZ=(float)(g.regionalBiomeRuntime
+                ?g.regionalBiomeRuntime->ReconstructedZ(x,y)
+                :(g.regionalRegolithRuntime
                 ?g.regionalRegolithRuntime->ReconstructedZ(x,y)
                 :(g.regionalHydroclimateRuntime
                 ?g.regionalHydroclimateRuntime->ReconstructedZ(x,y)
@@ -12028,7 +12104,7 @@ namespace
                 ?g.regionalErosionRuntime->ReconstructedZ(x,y)
                 :(g.regionalGeologyRuntime
                 ?g.regionalGeologyRuntime->ReconstructedZ(x,y)
-                :g.macroProvincesRuntime->ReconstructedZ(x,y)))))));
+                :g.macroProvincesRuntime->ReconstructedZ(x,y))))))));
             return std::isfinite(outZ);
         }
         if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
@@ -14682,6 +14758,8 @@ namespace
         else if(IsCompiledFluvialErosionView(job.view)&&workerGeography&&g.compiledFluvialRuntime)
         {SampleCompiledFluvialWorkerBlockInto(*workerGeography,
             *g.compiledFluvialRuntime,job.bx,job.by,surfaceSamples);}
+        else if(IsRegionalBiomeView(job.view)&&g.regionalBiomeRuntime)
+        {g.regionalBiomeRuntime->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(IsRegionalRegolithView(job.view)&&g.regionalRegolithRuntime)
         {g.regionalRegolithRuntime->SampleBlockInto(job.bx,job.by,surfaceSamples);}
         else if(IsRegionalHydroclimateView(job.view)&&g.regionalHydroclimateRuntime)
@@ -15190,7 +15268,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.regionalDrainageRuntime && !g.regionalDepositionRuntime && !g.regionalHydroclimateRuntime && !g.regionalRegolithRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.regionalDrainageRuntime && !g.regionalDepositionRuntime && !g.regionalHydroclimateRuntime && !g.regionalRegolithRuntime && !g.regionalBiomeRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -15245,6 +15323,8 @@ namespace
         {surfaceSamples=ActiveCompiledSedimentKernel(g.stage0PlayView)->SampleBlock(bx,by);}
         else if(IsCompiledFluvialErosionView(g.stage0PlayView)&&g.compiledFluvialRuntime)
         {surfaceSamples=g.compiledFluvialRuntime->SampleBlock(bx,by);}
+        else if(IsRegionalBiomeView(g.stage0PlayView)&&g.regionalBiomeRuntime)
+        {g.regionalBiomeRuntime->SampleBlockInto(bx,by,surfaceSamples);}
         else if(IsRegionalRegolithView(g.stage0PlayView)&&g.regionalRegolithRuntime)
         {g.regionalRegolithRuntime->SampleBlockInto(bx,by,surfaceSamples);}
         else if(IsRegionalHydroclimateView(g.stage0PlayView)&&g.regionalHydroclimateRuntime)
@@ -15472,7 +15552,7 @@ namespace
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
           && !g.dryHydrologyRuntime && !g.compiledFluvialRuntime
-          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.regionalDrainageRuntime && !g.regionalDepositionRuntime && !g.regionalHydroclimateRuntime && !g.regionalRegolithRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
+          && !g.compiledSedimentRuntime && !g.compiledDepositClassificationRuntime && !g.macroProvincesRuntime && !g.regionalGeologyRuntime && !g.regionalErosionRuntime && !g.regionalDrainageRuntime && !g.regionalDepositionRuntime && !g.regionalHydroclimateRuntime && !g.regionalRegolithRuntime && !g.regionalBiomeRuntime && !g.presentWaterRuntime && !g.presentWaterBodyRuntime
           && !g.presentWaterEquilibrateRuntime && !g.presentWaterTransferRuntime
           && !g.presentWaterExternalRuntime           && !g.presentWaterTopologyRuntime
           && !g.presentWaterTerrainResponseRuntime
@@ -15684,6 +15764,7 @@ namespace
         if ( IsRegionalDepositionView( view ) ) { return 36; }
         if ( IsRegionalHydroclimateView( view ) ) { return 37; }
         if ( IsRegionalRegolithView( view ) ) { return 38; }
+        if ( IsRegionalBiomeView( view ) ) { return 39; }
         if ( IsPresentWaterBodyView( view ) ) { return 17; }
         if ( IsPresentWaterEquilibrateView( view ) ) { return 18; }
         if ( IsPresentWaterExternalView( view ) ) { return 20; }
@@ -15778,6 +15859,8 @@ namespace
           "MACRO.DEPOSITIONAL_LANDSCAPE", "compiled regional temperature, moisture, orographic, and rain-shadow forcing", Stage0PlayView::RegionalHydroclimate },
         { "GEOLOGY / GEOMORPHOLOGY", "MACRO.SOILS_REGOLITH", "MW7 - Soils / Regolith",
           "MACRO.HYDROCLIMATE", "derived near-surface material profile from geology, deposits, drainage, and hydroclimate", Stage0PlayView::RegionalRegolith },
+        { "GEOLOGY / GEOMORPHOLOGY", "MACRO.BIOMES", "MW8 - Biomes",
+          "MACRO.SOILS_REGOLITH", "ecological potential / biome regime from climate, soils, drainage, substrate, and exposure", Stage0PlayView::RegionalBiome },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -15826,12 +15909,12 @@ namespace
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
         { "3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" },
         { "16C runtime remobilization", "GEOMORPH.16C_RUNTIME_REMOBILIZATION" },
-        { "MW8 biomes", "MACRO.BIOMES" }
+        { "MW9 flora / fauna", "MACRO.FLORA_FAUNA" }
     };
 
     char const* MacroWorldgenCaption()
     {
-        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3 CERTIFIED  MW4 CERTIFIED  MW5 CERTIFIED  MW6 CERTIFIED  MW7 CERTIFIED  MW8 CLOSED";
+        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3 CERTIFIED  MW4 CERTIFIED  MW5 CERTIFIED  MW6 CERTIFIED  MW7 CERTIFIED  MW8 CERTIFIED  MW9 CLOSED";
     }
 
     bool IsRuntimeDepositionChainView( Stage0PlayView view )
@@ -15956,6 +16039,8 @@ namespace
         { attempted = g.regionalHydroclimateAuthorityAttempted; certified = g.regionalHydroclimateCertified; }
         else if ( IsRegionalRegolithView( entry.view ) )
         { attempted = g.regionalRegolithAuthorityAttempted; certified = g.regionalRegolithCertified; }
+        else if ( IsRegionalBiomeView( entry.view ) )
+        { attempted = g.regionalBiomeAuthorityAttempted; certified = g.regionalBiomeCertified; }
         else if ( IsPresentWaterBodyView( entry.view ) )
         { attempted = g.presentWaterBodyAuthorityAttempted; certified = g.presentWaterBodyCertified; }
         else if ( IsPresentWaterEquilibrateView( entry.view ) )
@@ -16062,13 +16147,15 @@ namespace
         int const mw5Board = BrowserIndexForView( Stage0PlayView::RegionalDeposition );
         int const mw6Board = BrowserIndexForView( Stage0PlayView::RegionalHydroclimate );
         int const mw7Board = BrowserIndexForView( Stage0PlayView::RegionalRegolith );
+        int const mw8Board = BrowserIndexForView( Stage0PlayView::RegionalBiome );
         tbl.showMacroCaption = (mw1Board < tbl.lastVisible && mw1Board >= tbl.firstVisible)
             || (mw2Board < tbl.lastVisible && mw2Board >= tbl.firstVisible)
             || (mw3Board < tbl.lastVisible && mw3Board >= tbl.firstVisible)
             || (mw4Board < tbl.lastVisible && mw4Board >= tbl.firstVisible)
             || (mw5Board < tbl.lastVisible && mw5Board >= tbl.firstVisible)
             || (mw6Board < tbl.lastVisible && mw6Board >= tbl.firstVisible)
-            || (mw7Board < tbl.lastVisible && mw7Board >= tbl.firstVisible);
+            || (mw7Board < tbl.lastVisible && mw7Board >= tbl.firstVisible)
+            || (mw8Board < tbl.lastVisible && mw8Board >= tbl.firstVisible);
         if ( tbl.showDepositionCaption )
         {
             constexpr float captionH = 22.f;
@@ -16333,6 +16420,7 @@ namespace
             if ( IsRegionalDepositionView( view ) ) { reason = &g.regionalDepositionAuthorityReason; }
             if ( IsRegionalHydroclimateView( view ) ) { reason = &g.regionalHydroclimateAuthorityReason; }
             if ( IsRegionalRegolithView( view ) ) { reason = &g.regionalRegolithAuthorityReason; }
+            if ( IsRegionalBiomeView( view ) ) { reason = &g.regionalBiomeAuthorityReason; }
             if ( IsPresentWaterBodyView( view ) ) { reason = &g.presentWaterBodyAuthorityReason; }
             if ( IsPresentWaterEquilibrateView( view ) ) { reason = &g.presentWaterEquilibrateAuthorityReason; }
             if ( IsPresentWaterExternalView( view ) ) { reason = &g.presentWaterExternalAuthorityReason; }
@@ -16486,6 +16574,13 @@ namespace
         else if ( IsRegionalRegolithView( view ) && g.regionalRegolithRuntime )
         {
             auto const& authority=g.regionalRegolithRuntime->GetProgram();
+            g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
+            g.generatorId=authority.worldgenId;
+            g.generatorVersion=(int)authority.worldgenVersion;
+        }
+        else if ( IsRegionalBiomeView( view ) && g.regionalBiomeRuntime )
+        {
+            auto const& authority=g.regionalBiomeRuntime->GetProgram();
             g.worldIdentityHash=CausalWorldGeology::Hex64(authority.worldIdentityHash);
             g.generatorId=authority.worldgenId;
             g.generatorVersion=(int)authority.worldgenVersion;
@@ -16676,6 +16771,15 @@ namespace
             RebuildStage0PlayableRuntime();
             g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
             g.statusLine="MW7 - soils / regolith; derived near-surface profile, not vegetation";
+        }
+        if(g.playWorldgenInitialized&&IsRegionalBiomeView(view)&&oldView!=view)
+        {
+            g.feetX=2580.0f;g.feetY=-4860.0f;g.yaw=2.85f;g.pitch=-0.12f;
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;
+            RebuildStage0PlayableRuntime();
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+            g.statusLine="MW8 - biomes; ecological potential from climate / soils / drainage, not vegetation";
         }
         if(g.playWorldgenInitialized&&IsPresentWaterView(view)&&oldView!=view)
         {
@@ -16868,6 +16972,7 @@ namespace
             case Stage0PlayView::RegionalDeposition: return "CERTIFIED MW5 DEPOSITIONAL LANDSCAPE";
             case Stage0PlayView::RegionalHydroclimate: return "CERTIFIED MW6 HYDROCLIMATE";
             case Stage0PlayView::RegionalRegolith: return "CERTIFIED MW7 SOILS / REGOLITH";
+            case Stage0PlayView::RegionalBiome: return "CERTIFIED MW8 BIOMES";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -35006,7 +35111,7 @@ namespace
           &&!g.playP5b2bLaunch&&!g.playP5b2cLaunch&&!g.playP5b3aLaunch&&!g.playP5b3bLaunch
           &&!g.playP5b3b2Launch&&!g.playP5b3b3aLaunch&&!g.playP5b3b3bLaunch
           &&!g.playStage16C1Launch&&!g.playMw1Launch&&!g.playMw2Launch&&!g.playMw3Launch
-          &&!g.playMw4Launch&&!g.playMw5Launch&&!g.playMw6Launch&&!g.playMw7Launch
+          &&!g.playMw4Launch&&!g.playMw5Launch&&!g.playMw6Launch&&!g.playMw7Launch&&!g.playMw8Launch
           &&!g.playCutCLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -35443,6 +35548,25 @@ namespace
                 g.yaw=(float)anchor.yaw;g.pitch=-0.74f;
             }
         }
+        if(g.playMw8Launch)
+        {
+            g.stage0StageMenuOpen=false;
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            if(g.certMw8Visual)
+            {
+                g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+                g.stage0ToolGeologyCutaway=false;g.walkMode=false;g.grounded=false;
+                CausalRegionalBiome::Kernel::VisualAnchor anchor{};
+                if(g.regionalBiomeRuntime)
+                    anchor=g.regionalBiomeRuntime->SuggestVisualAnchor();
+                float const ax=(float)anchor.x,ay=(float)anchor.y;
+                g.feetX=ax;g.feetY=ay;
+                RebuildStage0PlayableRuntime();
+                float ground=0.f;SampleGroundZBase(ax,ay,ground);
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+48.0f;
+                g.yaw=(float)anchor.yaw;g.pitch=-0.74f;
+            }
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -35585,6 +35709,8 @@ namespace
         {g.statusLine="MW6 - HYDROCLIMATE  [M] stages";}
         if(g.playMw7Launch)
         {g.statusLine="MW7 - SOILS / REGOLITH  [M] stages";}
+        if(g.playMw8Launch)
+        {g.statusLine="MW8 - BIOMES  [M] stages";}
         if(g.certWorldgenLaunchContract)
         {
             FILE* f=nullptr;
@@ -38632,9 +38758,10 @@ namespace
         Stage0PlayView::RegionalDeposition,
         Stage0PlayView::RegionalHydroclimate,
         Stage0PlayView::RegionalRegolith,
+        Stage0PlayView::RegionalBiome,
     };
     static char const* const s_boundaryLabels[] = {
-        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1", "mw1", "mw2", "mw3", "mw4", "mw5", "mw6", "mw7"
+        "stage0", "stage5", "stage6", "stage7", "stage8", "stage9", "stage10", "stage11", "stage12", "stage13", "stage14", "stage15", "stage16", "stage16b", "stage16c", "stage16d", "stage16e", "stage16f1", "stage16f2", "stage16f3", "stage16f4", "p5b1", "p5b2a", "p5b2b", "p5b2c", "p5b3a", "p5b3b", "p5b3b2", "p5b3b3a", "p5b3b3b", "stage16c1", "mw1", "mw2", "mw3", "mw4", "mw5", "mw6", "mw7", "mw8"
     };
     static char const* const s_boundaryBearingLabels[] = { "north", "east", "south", "west" };
     constexpr int kBoundaryBearingCount = 4;
@@ -39770,6 +39897,8 @@ namespace
     CausalWorldGeology::GeoSample CardinalSurfaceAuthority(
         Stage0PlayView view, double x, double y, double surfaceZ )
     {
+        if(IsRegionalBiomeView(view)&&g.regionalBiomeRuntime)
+            return g.regionalBiomeRuntime->DiagnosticSample(x,y);
         if(IsRegionalRegolithView(view)&&g.regionalRegolithRuntime)
             return g.regionalRegolithRuntime->DiagnosticSample(x,y);
         if(IsRegionalHydroclimateView(view)&&g.regionalHydroclimateRuntime)
@@ -40038,7 +40167,9 @@ namespace
         bool residencyCompleteAll = passed;
         FILE* file = nullptr;
         char const* certPath="Docs\\provenance_worldgen_cardinal_replacement_cert.txt";
-        if(g.certWorldgenCardinalStageFilter==37)
+        if(g.certWorldgenCardinalStageFilter==38)
+            certPath="Docs\\provenance_mw8_cardinal_replacement_cert.txt";
+        else if(g.certWorldgenCardinalStageFilter==37)
             certPath="Docs\\provenance_mw7_cardinal_replacement_cert.txt";
         else if(g.certWorldgenCardinalStageFilter==36)
             certPath="Docs\\provenance_mw6_cardinal_replacement_cert.txt";
@@ -40228,7 +40359,9 @@ namespace
         if ( !s_cardinalTrace )
         {
             char const* tracePath="Docs\\provenance_worldgen_cardinal_replacement_trace.csv";
-            if(g.certWorldgenCardinalStageFilter==37)
+            if(g.certWorldgenCardinalStageFilter==38)
+                tracePath="Docs\\provenance_mw8_cardinal_replacement_trace.csv";
+            else if(g.certWorldgenCardinalStageFilter==37)
                 tracePath="Docs\\provenance_mw7_cardinal_replacement_trace.csv";
             else if(g.certWorldgenCardinalStageFilter==36)
                 tracePath="Docs\\provenance_mw6_cardinal_replacement_trace.csv";
@@ -41952,6 +42085,13 @@ namespace
         int queries=0;
     };
 
+    struct Mw8SoakTelemetry
+    {
+        int rebuilds=0;
+        int compiles=0;
+        int queries=0;
+    };
+
     struct StreamingSoakRun
     {
         int phase=0;
@@ -42032,6 +42172,7 @@ namespace
         Mw5SoakTelemetry mw5Start{};
         Mw6SoakTelemetry mw6Start{};
         Mw7SoakTelemetry mw7Start{};
+        Mw8SoakTelemetry mw8Start{};
         std::vector<double> frameMs;
         std::vector<double> bucketFrameMs;
         std::vector<SoakOverrunReceipt> overruns;
@@ -42216,6 +42357,17 @@ namespace
         Mw7SoakTelemetry t;
         if(!g.regionalRegolithRuntime)return t;
         auto const& st=g.regionalRegolithRuntime->GetStats();
+        t.rebuilds=(int)st.rebuilds;
+        t.compiles=(int)st.compiles;
+        t.queries=(int)st.queries;
+        return t;
+    }
+
+    Mw8SoakTelemetry CaptureMw8SoakTelemetry()
+    {
+        Mw8SoakTelemetry t;
+        if(!g.regionalBiomeRuntime)return t;
+        auto const& st=g.regionalBiomeRuntime->GetStats();
         t.rebuilds=(int)st.rebuilds;
         t.compiles=(int)st.compiles;
         t.queries=(int)st.queries;
@@ -42990,6 +43142,13 @@ namespace
         if(mw7Rebuilds==0&&mw7Compiles==0)mw7PhysicsVerdict="PASS_idle";
         else mw7PhysicsVerdict="FAIL_accumulating";
         bool const mw7Ok=std::strncmp(mw7PhysicsVerdict,"FAIL",4)!=0;
+        Mw8SoakTelemetry const mw8Now=CaptureMw8SoakTelemetry();
+        int const mw8Rebuilds=SoakDeltaNonneg(mw8Now.rebuilds,run.mw8Start.rebuilds);
+        int const mw8Compiles=SoakDeltaNonneg(mw8Now.compiles,run.mw8Start.compiles);
+        char const* mw8PhysicsVerdict="PASS_idle";
+        if(mw8Rebuilds==0&&mw8Compiles==0)mw8PhysicsVerdict="PASS_idle";
+        else mw8PhysicsVerdict="FAIL_accumulating";
+        bool const mw8Ok=std::strncmp(mw8PhysicsVerdict,"FAIL",4)!=0;
         double sum=0.0,worst=0.0;
         for(double ms:run.frameMs){sum+=ms;worst=(std::max)(worst,ms);}
         double const mean=run.frameMs.empty()?0.0:sum/(double)run.frameMs.size();
@@ -43031,10 +43190,12 @@ namespace
         bool const waterGpuOk=waterGpuReady&&waterGpuBounded&&waterGpuNoTravelGrowth;
         bool const passed=integrity&&complete&&bounded&&traveled&&frameOk
             &&scratchOk&&followStreamCrtOk&&waterGpuOk&&packageScratchOk
-            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok&&mw1Ok&&mw2Ok&&mw3Ok&&mw4Ok&&mw5Ok&&mw6Ok&&mw7Ok;
+            &&workerCacheOk&&crtEightTwelveOk&&p5b2cOk&&p5b3aOk&&p5b3bOk&&p5b3b2Ok&&p5b3b3aOk&&p5b3b3bOk&&stage16c1Ok&&mw1Ok&&mw2Ok&&mw3Ok&&mw4Ok&&mw5Ok&&mw6Ok&&mw7Ok&&mw8Ok;
         char certPathBuf[160];
         char const* certPath="Docs\\provenance_streaming_soak_cert.txt";
-        if(g.certStreamingSoakStageFilter==37)
+        if(g.certStreamingSoakStageFilter==38)
+            certPath="Docs\\provenance_mw8_streaming_soak_cert.txt";
+        else if(g.certStreamingSoakStageFilter==37)
             certPath="Docs\\provenance_mw7_streaming_soak_cert.txt";
         else if(g.certStreamingSoakStageFilter==36)
             certPath="Docs\\provenance_mw6_streaming_soak_cert.txt";
@@ -43403,7 +43564,8 @@ namespace
             "mw4_rebuilds=%d\nmw4_compiles=%d\nmw4_travel_physics=%s\n"
             "mw5_rebuilds=%d\nmw5_compiles=%d\nmw5_travel_physics=%s\n"
             "mw6_rebuilds=%d\nmw6_compiles=%d\nmw6_travel_physics=%s\n"
-            "mw7_rebuilds=%d\nmw7_compiles=%d\nmw7_travel_physics=%s\n",
+            "mw7_rebuilds=%d\nmw7_compiles=%d\nmw7_travel_physics=%s\n"
+            "mw8_rebuilds=%d\nmw8_compiles=%d\nmw8_travel_physics=%s\n",
             stage16c1Runtime,stage16c1Remob,stage16c1Stale,stage16c1Rev,
             stage16c1PhysicsVerdict,stage16c1Now.compileClassifies,
             mw1Rebuilds,mw1Compiles,mw1PhysicsVerdict,
@@ -43412,7 +43574,8 @@ namespace
             mw4Rebuilds,mw4Compiles,mw4PhysicsVerdict,
             mw5Rebuilds,mw5Compiles,mw5PhysicsVerdict,
             mw6Rebuilds,mw6Compiles,mw6PhysicsVerdict,
-            mw7Rebuilds,mw7Compiles,mw7PhysicsVerdict);
+            mw7Rebuilds,mw7Compiles,mw7PhysicsVerdict,
+            mw8Rebuilds,mw8Compiles,mw8PhysicsVerdict);
         {
             int const stations[]={0,1000,2000,4000,8000,12000};
             for(int s:stations)
@@ -43984,7 +44147,9 @@ namespace
             run.maxPrivate=run.startPrivate;
             s_soakPrevPrivate=run.startPrivate;
             char const* tracePath="Docs\\provenance_streaming_soak_trace.csv";
-            if(g.certStreamingSoakStageFilter==37)
+            if(g.certStreamingSoakStageFilter==38)
+                tracePath="Docs\\provenance_mw8_streaming_soak_trace.csv";
+            else if(g.certStreamingSoakStageFilter==37)
                 tracePath="Docs\\provenance_mw7_streaming_soak_trace.csv";
             else if(g.certStreamingSoakStageFilter==36)
                 tracePath="Docs\\provenance_mw6_streaming_soak_trace.csv";
@@ -44085,6 +44250,7 @@ namespace
                 run.mw5Start=CaptureMw5SoakTelemetry();
                 run.mw6Start=CaptureMw6SoakTelemetry();
                 run.mw7Start=CaptureMw7SoakTelemetry();
+                run.mw8Start=CaptureMw8SoakTelemetry();
                 s_soakPrevPrivate=ProcessPrivateBytes();
                 s_soakProbePrivate=s_soakPrevPrivate;
                 s_soakAllocSite="";
@@ -47559,6 +47725,97 @@ namespace
                 PostQuitMessage(passed?0:2);
             }
         }
+        if(g.certMw8Visual)
+        {
+            static ULONGLONG visualStartMsMw8=GetTickCount64();
+            int const pendingPackages=Stage0PendingPackageCount(Stage0PlayView::RegionalBiome);
+            bool const workersIdle=Stage8PackageJobsIdle();
+            float const completeRadius=Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome);
+            bool const settled=workersIdle&&completeRadius>=(float)g.stage0LiveRadiusM-.001f;
+            if(!settled&&GetTickCount64()-visualStartMsMw8>180000ull)
+            {
+                FILE* file=nullptr;if(fopen_s(&file,
+                    "Docs\\provenance_mw8_biomes_visual_cert.txt","wb")==0&&file)
+                {
+                    std::fprintf(file,"MW8_BIOMES_PLAYER_VISUAL FAIL\n"
+                        "reason=residency_settle_timeout\ncomplete_radius_m=%.3f\n"
+                        "resident_packages=%zu\npending_packages=%d\nworkers_idle=%d\n"
+                        "stage=%s\nauthority=%s\ncertified=%d\nruntime=%d\n",
+                        completeRadius,g.stage8TerrainBlocks.size(),pendingPackages,workersIdle?1:0,
+                        Stage0PlayViewName(g.stage0PlayView),
+                        g.regionalBiomeAuthorityReason.c_str(),
+                        g.regionalBiomeCertified?1:0,
+                        g.regionalBiomeRuntime?1:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(2);
+            }
+            if(settled)++g.certMw8VisualFrames;
+            if(g.certMw8VisualFrames==90)
+            {
+                char const* imagePath="Docs\\provenance_mw8_biomes_player_view.ppm";
+                bool const wrote=DumpFramePpm(imagePath);
+                int const lowerSky=wrote?CountLowerPpmSkyPixels(imagePath):INT_MAX;
+                int lowerSamples=0;int const lowerDark=wrote
+                    ?CountLowerPpmDarkPixels(imagePath,&lowerSamples):INT_MAX;
+                auto const q=g.regionalBiomeRuntime
+                    ?g.regionalBiomeRuntime->DiagnosticSample(g.feetX,g.feetY)
+                    :CausalWorldGeology::GeoSample{};
+                CausalRegionalBiome::VisualMetrics vis{};
+                if(g.regionalBiomeRuntime)
+                    vis=CausalRegionalBiome::MeasureVisual(*g.regionalBiomeRuntime);
+                FILE* file=nullptr;bool opened=fopen_s(&file,
+                    "Docs\\provenance_mw8_biomes_visual_cert.txt","wb")==0&&file;
+                bool const passed=wrote&&opened&&lowerSky==0&&lowerSamples>0
+                    &&lowerDark<lowerSamples*3/4&&q.found&&!q.formationId.empty()
+                    &&g.regionalBiomeCertified&&!g.stage0ToolRuler&&!g.stage0ToolPalette
+                    &&!g.stage0ToolGeologyCutaway&&g.stage8TerrainBlocks.size()==2601
+                    &&g.regionalBiomeRuntime
+                    &&g.regionalBiomeRuntime->GetStats().rebuilds==1
+                    &&vis.alpineBarrenCells+vis.alpineTundraCells>=8
+                    &&vis.windwardWetterFrac>vis.leewardWetterFrac
+                    &&vis.riparianCells>=8
+                    &&vis.basinWetlandCells>=8
+                    &&vis.wrapRmsM>40.0
+                    &&vis.dryWoodlandCells+vis.dryRockyCells>=8;
+                if(opened)
+                {
+                    std::fprintf(file,"MW8_BIOMES_PLAYER_VISUAL %s\n"
+                        "frames_settled=%d\nstage=%s\n"
+                        "image=Docs/provenance_mw8_biomes_player_view.ppm\n"
+                        "lower_frame_sky_pixels=%d\nlower_frame_dark_pixels=%d\n"
+                        "lower_frame_sampled_pixels=%d\nresident_packages=%zu\npending_packages=%d\n"
+                        "camera_x=%.3f\ncamera_y=%.3f\ncamera_z=%.3f\nyaw=%.4f\npitch=%.4f\n"
+                        "regime=%s\nmaterial=%s\nbiome_id=%s\n"
+                        "alpine_barren_cells=%d\nalpine_tundra_cells=%d\n"
+                        "subalpine_cells=%d\nmoist_forest_cells=%d\n"
+                        "dry_woodland_cells=%d\nriparian_cells=%d\n"
+                        "wet_meadow_cells=%d\nbasin_wetland_cells=%d\ndry_rocky_cells=%d\n"
+                        "windward_wetter_frac=%.3f\nleeward_wetter_frac=%.3f\n"
+                        "basin_wetland_frac=%.3f\nriparian_vs_slope=%.3f\n"
+                        "wrap_rms_m=%.3f\nrebuilds=%d\nwrap=0\n"
+                        "production_source=absolute_coordinate\n"
+                        "diagnostic_biome_only=1\n"
+                        "mw9=closed\n3c=closed\n16c_remobilization=closed\n",
+                        passed?"PASS":"FAIL",g.certMw8VisualFrames,
+                        Stage0PlayViewName(g.stage0PlayView),lowerSky,lowerDark,lowerSamples,
+                        g.stage8TerrainBlocks.size(),pendingPackages,
+                        g.camX,g.camY,g.camZ,g.yaw,g.pitch,
+                        q.formationId.c_str(),q.material.c_str(),
+                        CausalWorldGeology::Hex64(q.featureId).c_str(),
+                        vis.alpineBarrenCells,vis.alpineTundraCells,
+                        vis.subalpineCells,vis.moistForestCells,
+                        vis.dryWoodlandCells,vis.riparianCells,
+                        vis.wetMeadowCells,vis.basinWetlandCells,vis.dryRockyCells,
+                        vis.windwardWetterFrac,vis.leewardWetterFrac,
+                        vis.basinWetlandFrac,vis.riparianVsSlope,
+                        vis.wrapRmsM,
+                        g.regionalBiomeRuntime?(int)g.regionalBiomeRuntime->GetStats().rebuilds:0);
+                    std::fclose(file);
+                }
+                PostQuitMessage(passed?0:2);
+            }
+        }
         if(g.stage0GeologySnapshotPending)
         {
             bool const wrote=CaptureStage0GeologyXraySnapshot();
@@ -49002,6 +49259,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runRegionalDepositionCert = false;
         bool runRegionalHydroclimateCert = false;
         bool runRegionalRegolithCert = false;
+        bool runRegionalBiomeCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -49059,6 +49317,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             "Data\\Worldgen\\causal_world_regional_hydroclimate_floor.chc";
         char regionalRegolithPath[MAX_PATH] =
             "Data\\Worldgen\\causal_world_regional_regolith_floor.crr";
+        char regionalBiomePath[MAX_PATH] =
+            "Data\\Worldgen\\causal_world_regional_biome_floor.crb";
         char authorityBridgePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_bridge_v1.cgab";
         char authorityOraclePath[MAX_PATH] = "Data\\Worldgen\\fablescript_geology_authority_parity_v1.tsv";
         char cutCOccupancyPath[MAX_PATH] = "Data\\Worldgen\\fablescript_cut_c_occupancy_v1.cocc";
@@ -49221,6 +49481,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-mw7")==0
                   ||_wcsicmp(certArgv[i],L"--cert-soils-regolith")==0)
                 {runRegionalRegolithCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw8-biomes")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-mw8")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-biomes")==0)
+                {runRegionalBiomeCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -49543,6 +49807,18 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 compiledDepositClassificationPath);
             CausalRegionalRegolith::WriteCertArtifact(result,
                 "Docs\\provenance_mw7_soils_regolith_cert.txt");
+            return result.passed?0:1;
+        }
+        if(runRegionalBiomeCert)
+        {
+            auto const result=CausalRegionalBiome::RunCert(regionalBiomePath,regionalRegolithPath,
+                regionalHydroclimatePath,regionalDepositionPath,regionalDrainagePath,
+                regionalErosionPath,regionalGeologyPath,macroProvincesPath,descriptorPath,
+                exposurePath,erosionPath,intrusionPath,mineralizationPath,faultPath,
+                breachPath,geographyPath,hydrologyPath,fluvialErosionPath,sedimentPath,
+                compiledDepositClassificationPath);
+            CausalRegionalBiome::WriteCertArtifact(result,
+                "Docs\\provenance_mw8_biomes_cert.txt");
             return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
@@ -50606,6 +50882,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-mw8")==0
+                  ||_wcsicmp(argv[i],L"--cert-worldgen-cardinal-replacement-stage-mw8")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certWorldgenCardinalReplacement=true;g.certWorldgenCardinalStageFilter=38;
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-semantic-distance")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2b")==0
                   ||_wcsicmp(argv[i],L"--cert-semantic-distance-p5b2c")==0)
@@ -50687,6 +50972,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=37;
                     g.playWorldgenBaseline=true;g.playMw7Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-mw8")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=38;
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
@@ -50968,6 +51261,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--play-mw8-biomes")==0
+                  ||_wcsicmp(argv[i],L"--play-mw8")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--play-mw5-depositional-landscape")==0
                   ||_wcsicmp(argv[i],L"--play-mw5")==0)
                 {
@@ -51126,6 +51426,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playMw7Launch=true;g.certMw7Visual=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mw8-biomes-visual")==0
+                  ||_wcsicmp(argv[i],L"--cert-mw8-visual")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMw8Visual=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

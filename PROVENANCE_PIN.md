@@ -256,7 +256,8 @@ MW4     drainage / valleys                CERTIFIED / FROZEN @ cc7fe436
 MW5     depositional landscape            CERTIFIED / FROZEN @ ba6faf61
 MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
-MW8     biomes                            CLOSED
+MW8     biomes                            CERTIFIED / FROZEN @ __CERTIFY_SHA__
+MW9     flora / fauna                     CLOSED
 ```
 
 `--cert-p5b1` / `--cert-p5b1-terrain-water` → `Docs/provenance_p5b1_terrain_water_cert.txt`  
@@ -434,9 +435,26 @@ deposit retains the body's source ancestry (`D05_BASIN_FILL` / `B03_HOST_UPPER`)
 Handoff: `MW7_SOILS_REGOLITH_HANDOFF.md`.
 Play: `PLAY_MW7_SOILS_REGOLITH.cmd` / `--play-mw7-soils-regolith`.
 Cert: `CERT_MW7_SOILS_REGOLITH.cmd`.
-CLOSED: MW8 biomes, MW9 flora/fauna, 3C structural collapse, 16C runtime
+CLOSED: MW9 flora/fauna, 3C structural collapse, 16C runtime
 remobilization, live P5b / 16D play ownership, live weather, glaciers,
 groundwater, vegetation.
+
+**MW8 CERTIFIED / FROZEN** @ `__CERTIFY_SHA__` — compiled ecological regime /
+biome potential inferred from certified MW1–MW7 (climate, elevation, moisture,
+soils/regolith, drainage, substrate, exposure). A regime, not a color mask and
+not vegetation placement; MW8 publishes ecological potential, MW9 later decides
+occupancy. Off / no-MW8 == exact MW7 present (max |ΔZ| 0) with unchanged
+HydroclimateId, RegolithId, deposit bodies, and FormationId. Mandatory
+counterfactuals bite: neutralizing hydroclimate collapses the wet/dry contrast
+(`hydro_off_contrast` 0.000); neutralizing regolith collapses the
+substrate/drainage contrast. BiomeId is absolute-coordinate (no 4096 m wrap).
+Terminal-branch coverage guard proves the MW6 wet/dry decision cannot silently
+collapse. Handoff: `MW8_BIOMES_HANDOFF.md`.
+Play: `PLAY_MW8_BIOMES.cmd` / `--play-mw8-biomes`.
+Cert: `CERT_MW8_BIOMES.cmd`.
+CLOSED: MW9 flora/fauna, 3C structural collapse, 16C runtime remobilization,
+live P5b / 16D play ownership, live weather, glaciers, groundwater,
+vegetation, ecology simulation.
 
 ```
 TRAVERSAL + STREAMING SOAK (standing matrix)
@@ -553,7 +571,8 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW5 CERTIFIED / FROZEN** @ `ba6faf61` (depositional landscape from MW3/MW4 export; 16C.1 bodies, not host weld).
 **MW6 CERTIFIED / FROZEN** @ `e8704845` (compiled regional hydroclimate on MW1–MW5; forcing only, no terrain carve).
 **MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
-**P5b.3C CLOSED** (structural collapse). **MW8 biomes CLOSED**.
+**MW8 CERTIFIED / FROZEN** @ `__CERTIFY_SHA__` (biomes / ecological regime inferred from MW1–MW7; not a color mask, not vegetation).
+**P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
 **Continued human + agent testing (cold resume):** `PICK_FRACTURE_HANDOFF.md`  
