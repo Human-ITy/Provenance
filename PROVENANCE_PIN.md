@@ -258,14 +258,14 @@ MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     multi-scale terrain view          CERTIFIED (32 km) @ 77aa7767
-MV1.G   GPU presentation cert             CERTIFIED @ __MV1G_SHA__
+MV1.G   GPU presentation cert             CERTIFIED @ 0d39ffcd
 MV1.D   distance / depth readability      NEXT (aerial perspective, not fake fog)
 MV2     extended 100+ km horizon          CLOSED (until MV1.D certified)
 MW9     flora / fauna                     CLOSED
 ```
 
 **MV1 forward plan (small cuts, not MW-sized stages):**
-- **MV1.G — GPU visibility performance. CERTIFIED @ `__MV1G_SHA__`.** Async
+- **MV1.G — GPU visibility performance. CERTIFIED @ `0d39ffcd`.** Async
   `ARB_timer_query` around the MV1 draw span (never blocks to measure). Worst GPU
   draw across all scenarios (five stations, worst-orientation sweep, 360°
   rotation, movement band churn, first-visible cold, warm repeat) **0.53 ms** vs
@@ -620,7 +620,7 @@ unchanged. **16C.1** CERTIFIED / FROZEN @ `047d4304` (last local bridge before m
 **MW7 CERTIFIED / FROZEN** @ `307e92fc` (soils / regolith: derived near-surface profile on MW1–MW6; not vegetation).
 **MW8 CERTIFIED / FROZEN** @ `e8155fa3` (biomes / ecological regime inferred from MW1–MW7; not a color mask, not vegetation).
 **MV1 CERTIFIED** @ `77aa7767` (multi-scale terrain visibility to 32 km; derived presentation from the MW1–MW8 composite authority — representation coarsens with distance, geographic truth does not; adaptive error-bounded tessellation, not a new terrain generator).
-**MV1.G CERTIFIED** @ `__MV1G_SHA__` (GPU presentation: async ARB_timer_query proves the 32 km draw path is GPU-safe — worst 0.53 ms vs 8 ms bound, no first-use stall, bounded draw calls/resources; VRAM/upload UNAVAILABLE by design).
+**MV1.G CERTIFIED** @ `0d39ffcd` (GPU presentation: async ARB_timer_query proves the 32 km draw path is GPU-safe — worst 0.53 ms vs 8 ms bound, no first-use stall, bounded draw calls/resources; VRAM/upload UNAVAILABLE by design).
 **P5b.3C CLOSED** (structural collapse). **MW9 flora / fauna CLOSED**. **MV2 100+ km horizon CLOSED**.
 Certified rainfall / flora / deep groundwater CLOSED.
 
