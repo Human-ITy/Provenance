@@ -1,0 +1,28 @@
+MV1D_DISTANCE_READABILITY PASS
+model=continuous_aerial_perspective
+transmittance=exp(-(rho*d)^2)  rho=4.300e-05 per_m
+atmosphere_color=0.45,0.62,0.88 (== horizon sky)
+applied=far_pass_only  near_0.03_600m=frozen_unfogged
+input=actual_camera_to_surface_distance  band_switch=none
+analytic.monotone_and_continuous=PASS
+analytic.max_step_jump_4m=0.000148
+analytic.max_lod_edge_jump=0.000035
+T(600m)=0.9993 T(2km)=0.9926 T(12km)=0.7662 T(28km)=0.2347
+band.near_128_1500 mean_contrast=0.04241 mean_blend=0.51354 agg_px=900615 stations_seen=5
+band.meso_1500_6000 mean_contrast=0.06620 mean_blend=0.44110 agg_px=243630 stations_seen=5
+band.regional_6000_20000 mean_contrast=0.04892 mean_blend=0.55390 agg_px=152192 stations_seen=5
+band.horizon_20000_33000 mean_contrast=0.02215 mean_blend=0.57058 agg_px=7331 stations_seen=2
+gate.contrast_falls_meso_regional_horizon=PASS
+gate.blend_rises_meso_regional_horizon=PASS
+gate.regional_still_rasterized=PASS
+gate.horizon_still_rasterized=PASS
+gate.analytic_continuity=PASS
+station.0 name=trunk_valley contrast[near/meso/reg/hor]=0.0271/0.0724/0.1072/0.0443 blend[near/meso/reg/hor]=0.3939/0.4719/0.5570/0.8226 image=Docs/provenance_mv1d_station0_trunk_valley.ppm
+station.1 name=mountain_flank contrast[near/meso/reg/hor]=0.0000/0.0025/0.0000/0.0000 blend[near/meso/reg/hor]=0.5521/0.3186/0.3185/0.3185 image=Docs/provenance_mv1d_station1_mountain_flank.ppm
+station.2 name=ridge_shoulder contrast[near/meso/reg/hor]=0.0952/0.0795/0.0291/0.0000 blend[near/meso/reg/hor]=0.6389/0.5825/0.6039/0.0000 image=Docs/provenance_mv1d_station2_ridge_shoulder.ppm
+station.3 name=foreland_basin contrast[near/meso/reg/hor]=0.0517/0.0395/0.1072/0.0000 blend[near/meso/reg/hor]=0.2714/0.2856/0.5516/0.0000 image=Docs/provenance_mv1d_station3_foreland_basin.ppm
+station.4 name=high_divide contrast[near/meso/reg/hor]=0.0380/0.1370/0.0011/0.0000 blend[near/meso/reg/hor]=0.7114/0.5469/0.7385/0.0000 image=Docs/provenance_mv1d_station4_high_divide.ppm
+presentation_only=1 geometry_unchanged=1 depth_split_unchanged=1
+vbo_ownership_unchanged=1 mw1_8_authority_unchanged=1
+alpine_white=diagnostic_not_snow  mv1d_off=reproduces_frozen_mv1c
+mv2_extended_horizon=closed mw9=closed

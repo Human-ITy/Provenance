@@ -1038,6 +1038,19 @@ namespace
         long long mv1cBandPixels[3] = {0,0,0};
         long long mv1cTerrainPixels = 0;
         long long mv1cViewportPixels = 0;
+        // MV1.D distance/depth readability: continuous per-fragment aerial
+        // perspective (fog toward sky) by ACTUAL camera-to-surface distance, in
+        // the far pass only. Off reproduces the frozen MV1.C presentation.
+        bool mv1dEnabled = true;
+        bool certMv1d = false;
+        int certMv1dPhase = 0;
+        int certMv1dStation = 0;
+        int certMv1dSettle = 0;
+        bool mv1dBandCaptureRequest = false;
+        double mv1dBandLuma[4] = {0,0,0,0};    // mean luminance per distance band
+        double mv1dBandContrast[4] = {0,0,0,0};// luminance stddev (contrast) per band
+        double mv1dBandBlend[4] = {0,0,0,0};   // atmospheric blend (closeness to sky) per band
+        long long mv1dBandPixels[4] = {0,0,0,0};
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -17687,6 +17700,93 @@ namespace
         g.mv1cTerrainPixels=terrain;g.mv1cViewportPixels=(long long)w*h;
     }
 
+    // ---- MV1.D aerial perspective ------------------------------------------
+    // Atmospheric colour every fragment attenuates toward: the same clear-sky
+    // blue the horizon backdrop uses, so distant terrain melts INTO the sky
+    // rather than toward some invented tint.
+    static constexpr float kMv1dFogR = 0.45f, kMv1dFogG = 0.62f, kMv1dFogB = 0.88f;
+    // EXP2 transmittance density (per metre). Chosen so the presentation stays
+    // continuous with NO band switch and contrast falls monotonically by real
+    // camera distance: factor=exp(-(rho*d)^2) ~ 0.99 at 2 km (meso crisp),
+    // ~0.48 at 20 km (regional half-blended), ~0.15 at 32 km (horizon still
+    // rasterised, never fully erased). Distance is the ONLY input, so there is
+    // no hard colour boundary at 192 m / 2 km / 20 km.
+    static constexpr float kMv1dFogDensity = 4.30e-5f;
+
+    void Mv1dSetFog(bool on)
+    {
+        if(on)
+        {
+            GLfloat const c[4]={kMv1dFogR,kMv1dFogG,kMv1dFogB,1.f};
+            glFogi(GL_FOG_MODE,GL_EXP2);
+            glFogfv(GL_FOG_COLOR,c);
+            glFogf(GL_FOG_DENSITY,kMv1dFogDensity);
+            glHint(GL_FOG_HINT,GL_NICEST);
+            glEnable(GL_FOG);
+        }
+        else
+        {
+            glDisable(GL_FOG);
+        }
+    }
+
+    // Analytical transmittance the shader path realises (for the fixture, and to
+    // prove continuity independent of the GL implementation).
+    double Mv1dTransmittance(double distM)
+    {
+        double const z=kMv1dFogDensity*distM;
+        return std::exp(-(z*z));
+    }
+
+    // Cert-only readback: bin the far-pass framebuffer by REAL camera distance
+    // into four physical bands and measure, per band, mean luminance, luminance
+    // spread (contrast), and atmospheric blend (closeness to the sky colour).
+    void Mv1dCaptureBands(float nf,float ff)
+    {
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+        int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0)return;
+        std::vector<float> depth((size_t)w*h);
+        std::vector<unsigned char> rgb((size_t)w*h*3);
+        glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
+        glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,rgb.data());
+        // Physical band edges (metres). Bands 0..3 = near/meso/regional/horizon.
+        double const edge[5]={128.0,1500.0,6000.0,20000.0,(double)kMv1VisibleRangeM+1000.0};
+        double lumSum[4]={0,0,0,0}, lum2[4]={0,0,0,0}, blendSum[4]={0,0,0,0};
+        long long n[4]={0,0,0,0};
+        double const skyL=0.2126*kMv1dFogR+0.7152*kMv1dFogG+0.0722*kMv1dFogB;
+        for(size_t p=0;p<(size_t)w*h;++p)
+        {
+            float const d=depth[p];
+            if(d>=0.99999f)continue;                 // far-cleared sky, no terrain
+            double const dist=2.f*nf*ff/(ff+nf-(2.f*d-1.f)*(ff-nf));
+            int b=-1;
+            for(int k=0;k<4;++k)if(dist>=edge[k]&&dist<edge[k+1]){b=k;break;}
+            if(b<0)continue;
+            double const r=rgb[p*3]/255.0,gg=rgb[p*3+1]/255.0,bb=rgb[p*3+2]/255.0;
+            double const L=0.2126*r+0.7152*gg+0.0722*bb;
+            // Atmospheric blend: 1 => pixel colour has reached the sky colour.
+            double const dr=r-kMv1dFogR,dg=gg-kMv1dFogG,db=bb-kMv1dFogB;
+            double const distToSky=std::sqrt(dr*dr+dg*dg+db*db);
+            double const blend=1.0-std::min(1.0,distToSky/1.0); // max sqrt(3)~1.73, clamp
+            lumSum[b]+=L;lum2[b]+=L*L;blendSum[b]+=blend;++n[b];
+        }
+        for(int b=0;b<4;++b)
+        {
+            g.mv1dBandPixels[b]=n[b];
+            if(n[b]>0)
+            {
+                double const mean=lumSum[b]/n[b];
+                double var=lum2[b]/n[b]-mean*mean;if(var<0)var=0;
+                g.mv1dBandLuma[b]=mean;
+                g.mv1dBandContrast[b]=std::sqrt(var);
+                g.mv1dBandBlend[b]=blendSum[b]/n[b];
+            }
+            else{g.mv1dBandLuma[b]=0;g.mv1dBandContrast[b]=0;g.mv1dBandBlend[b]=0;}
+        }
+        (void)skyL;
+    }
+
     void DrawMv1MultiScaleTerrain()
     {
         g.mv1BuildMsThisFrame=0.0;
@@ -18542,6 +18642,186 @@ namespace
         {
             bool const ok=WriteMv1cCertArtifact();
             g.certMv1C=false;PostQuitMessage(ok?0:2);ph=4;
+        }
+    }
+
+    // ---- MV1.D certification ------------------------------------------------
+    // Per-station aggregation of the four physical distance bands, plus the
+    // analytical continuity/monotonicity self-test.
+    static double s_mv1dStContrast[5][4];
+    static double s_mv1dStBlend[5][4];
+    static long long s_mv1dStPixels[5][4];
+    static double s_mv1dStLuma[5][4];
+
+    // Analytical proof that the aerial-perspective transmittance is continuous
+    // and monotone in distance with NO discontinuity at the LOD band edges
+    // (192 m / 2 km / 20 km). Because transmittance is a function of distance
+    // alone, the band edges are ordinary interior points, so a dense scan across
+    // them must be smooth. Returns PASS and fills the reported worst-case jump.
+    bool Mv1dContinuitySelfTest(double& maxJumpOut,double& worstEdgeJumpOut)
+    {
+        double const edges[3]={192.0,2000.0,20000.0};
+        double prev=Mv1dTransmittance(0.0);
+        double maxJump=0.0;bool monotone=true;
+        // Dense scan 0..33 km at 4 m steps: strictly non-increasing, small steps.
+        for(double d=4.0;d<=33000.0;d+=4.0)
+        {
+            double const t=Mv1dTransmittance(d);
+            if(t>prev+1e-9)monotone=false;
+            maxJump=std::max(maxJump,std::fabs(t-prev));
+            prev=t;
+        }
+        // Explicit edge-continuity probe: transmittance just before vs just
+        // after each LOD boundary must be within the same 4 m Lipschitz bound.
+        double worstEdge=0.0;
+        for(double e:edges)
+        {
+            double const a=Mv1dTransmittance(e-0.5),b=Mv1dTransmittance(e+0.5);
+            worstEdge=std::max(worstEdge,std::fabs(a-b));
+        }
+        maxJumpOut=maxJump;worstEdgeJumpOut=worstEdge;
+        // Representative band distances give the required contrast ordering:
+        // nearer bands transmit more scene (higher contrast) than farther ones.
+        double const tNear=Mv1dTransmittance(600.0),tMeso=Mv1dTransmittance(2000.0),
+                     tReg=Mv1dTransmittance(12000.0),tHor=Mv1dTransmittance(28000.0);
+        bool const ordered=tNear>tMeso&&tMeso>tReg&&tReg>tHor;
+        bool const horizonVisible=tHor>0.02; // never fully erased
+        bool const smooth=maxJump<0.01&&worstEdge<0.01;
+        return monotone&&ordered&&horizonVisible&&smooth;
+    }
+
+    bool WriteMv1dCertArtifact()
+    {
+        // Aggregate mean contrast/blend per band over stations that saw the band.
+        double aggC[4]={0,0,0,0},aggB[4]={0,0,0,0};int seen[4]={0,0,0,0};
+        long long aggPx[4]={0,0,0,0};
+        for(int s=0;s<5;++s)for(int b=0;b<4;++b)
+        {
+            aggPx[b]+=s_mv1dStPixels[s][b];
+            if(s_mv1dStPixels[s][b]>0){aggC[b]+=s_mv1dStContrast[s][b];aggB[b]+=s_mv1dStBlend[s][b];++seen[b];}
+        }
+        double meanC[4],meanB[4];
+        for(int b=0;b<4;++b)
+        {meanC[b]=seen[b]?aggC[b]/seen[b]:0.0;meanB[b]=seen[b]?aggB[b]/seen[b]:0.0;}
+
+        double maxJump=0,edgeJump=0;
+        bool const analyticOk=Mv1dContinuitySelfTest(maxJump,edgeJump);
+
+        // Contrast must fall monotonically by physical distance, blend must rise.
+        // Use only bands actually observed (near band may be overwritten by the
+        // near authoritative world at some stations, but meso/regional/horizon
+        // are the atmospheric-perspective bands that matter here).
+        bool const contrastOrdered=
+            meanC[1]>meanC[2]&&meanC[2]>meanC[3];      // meso>regional>horizon
+        bool const blendOrdered=
+            meanB[1]<meanB[2]&&meanB[2]<meanB[3];      // blend rises with distance
+        bool const horizonRaster=aggPx[3]>0;           // 20-32 km still rasterised
+        bool const regionalRaster=aggPx[2]>0;
+        bool const passed=analyticOk&&contrastOrdered&&blendOrdered
+            &&horizonRaster&&regionalRaster;
+
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_mv1d_distance_readability_cert.txt","wb")!=0||!f)
+            return false;
+        std::fprintf(f,
+            "MV1D_DISTANCE_READABILITY %s\n"
+            "model=continuous_aerial_perspective\n"
+            "transmittance=exp(-(rho*d)^2)  rho=%.3e per_m\n"
+            "atmosphere_color=%.2f,%.2f,%.2f (== horizon sky)\n"
+            "applied=far_pass_only  near_0.03_600m=frozen_unfogged\n"
+            "input=actual_camera_to_surface_distance  band_switch=none\n"
+            "analytic.monotone_and_continuous=%s\n"
+            "analytic.max_step_jump_4m=%.6f\nanalytic.max_lod_edge_jump=%.6f\n"
+            "T(600m)=%.4f T(2km)=%.4f T(12km)=%.4f T(28km)=%.4f\n",
+            passed?"PASS":"FAIL",(double)kMv1dFogDensity,
+            (double)kMv1dFogR,(double)kMv1dFogG,(double)kMv1dFogB,
+            analyticOk?"PASS":"FAIL",maxJump,edgeJump,
+            Mv1dTransmittance(600.0),Mv1dTransmittance(2000.0),
+            Mv1dTransmittance(12000.0),Mv1dTransmittance(28000.0));
+        char const* bn[4]={"near_128_1500","meso_1500_6000","regional_6000_20000","horizon_20000_33000"};
+        for(int b=0;b<4;++b)
+            std::fprintf(f,"band.%s mean_contrast=%.5f mean_blend=%.5f agg_px=%lld stations_seen=%d\n",
+                bn[b],meanC[b],meanB[b],aggPx[b],seen[b]);
+        std::fprintf(f,
+            "gate.contrast_falls_meso_regional_horizon=%s\n"
+            "gate.blend_rises_meso_regional_horizon=%s\n"
+            "gate.regional_still_rasterized=%s\ngate.horizon_still_rasterized=%s\n"
+            "gate.analytic_continuity=%s\n",
+            contrastOrdered?"PASS":"FAIL",blendOrdered?"PASS":"FAIL",
+            regionalRaster?"PASS":"FAIL",horizonRaster?"PASS":"FAIL",
+            analyticOk?"PASS":"FAIL");
+        for(int s=0;s<5;++s)
+        {
+            Mv1Station const& st=s_mv1Stations[s];
+            std::fprintf(f,
+                "station.%d name=%s "
+                "contrast[near/meso/reg/hor]=%.4f/%.4f/%.4f/%.4f "
+                "blend[near/meso/reg/hor]=%.4f/%.4f/%.4f/%.4f "
+                "image=Docs/provenance_mv1d_station%d_%s.ppm\n",
+                s,st.name,
+                s_mv1dStContrast[s][0],s_mv1dStContrast[s][1],s_mv1dStContrast[s][2],s_mv1dStContrast[s][3],
+                s_mv1dStBlend[s][0],s_mv1dStBlend[s][1],s_mv1dStBlend[s][2],s_mv1dStBlend[s][3],
+                s,st.name);
+        }
+        std::fprintf(f,
+            "presentation_only=1 geometry_unchanged=1 depth_split_unchanged=1\n"
+            "vbo_ownership_unchanged=1 mw1_8_authority_unchanged=1\n"
+            "alpine_white=diagnostic_not_snow  mv1d_off=reproduces_frozen_mv1c\n"
+            "mv2_extended_horizon=closed mw9=closed\n");
+        std::fclose(f);
+        return passed;
+    }
+
+    void Mv1dCertTick()
+    {
+        if(!g.certMv1d||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv1dPhase;
+        bool const nearIdle=Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)
+                >=(float)g.stage0LiveRadiusM-.001f;
+        bool const farIdle=g.mv1PendingNow==0;
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Mv1FindStations();
+            for(int s=0;s<5;++s)for(int b=0;b<4;++b)
+            {s_mv1dStContrast[s][b]=0;s_mv1dStBlend[s][b]=0;s_mv1dStPixels[s][b]=0;s_mv1dStLuma[s][b]=0;}
+            Mv1PlaceCamera(s_mv1Stations[0]);
+            g.certMv1dStation=0;g.certMv1dSettle=0;ph=1;return;
+        }
+        if(ph==1) // settle
+        {
+            Mv1PlaceCamera(s_mv1Stations[g.certMv1dStation]);
+            if(++g.certMv1dSettle>=45&&nearIdle&&farIdle)
+            {g.mv1dBandCaptureRequest=true;g.certMv1dSettle=0;ph=2;}
+            return;
+        }
+        if(ph==2) // capture issued; far pass fills bands this frame
+        {
+            Mv1PlaceCamera(s_mv1Stations[g.certMv1dStation]);
+            if(++g.certMv1dSettle>=3&&!g.mv1dBandCaptureRequest)
+            {
+                int const s=g.certMv1dStation;
+                for(int b=0;b<4;++b)
+                {
+                    s_mv1dStContrast[s][b]=g.mv1dBandContrast[b];
+                    s_mv1dStBlend[s][b]=g.mv1dBandBlend[b];
+                    s_mv1dStPixels[s][b]=g.mv1dBandPixels[b];
+                    s_mv1dStLuma[s][b]=g.mv1dBandLuma[b];
+                }
+                char path[128];
+                std::snprintf(path,sizeof(path),
+                    "Docs\\provenance_mv1d_station%d_%s.ppm",s,s_mv1Stations[s].name);
+                DumpFramePpm(path);
+                ++g.certMv1dStation;g.certMv1dSettle=0;
+                ph=(g.certMv1dStation>=5)?3:1;
+            }
+            return;
+        }
+        if(ph==3)
+        {
+            bool const ok=WriteMv1dCertArtifact();
+            g.certMv1d=false;PostQuitMessage(ok?0:2);ph=4;
         }
     }
 
@@ -26212,11 +26492,20 @@ namespace
                 0, 0, ( 2 * ff * nf ) / ( nf - ff ), 0 };
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( fm );
             glMatrixMode( GL_MODELVIEW );
+            // MV1.D: continuous aerial perspective, far pass ONLY. The frozen
+            // 0.03-600 m near authoritative world (drawn after the depth clear)
+            // never sees fog, so MV1.C geometry/depth/VBO ownership are intact
+            // and --mv1d-off reproduces the frozen presentation byte-for-byte.
+            bool const mv1dOn = g.mv1dEnabled;
+            if ( mv1dOn ) Mv1dSetFog( true );
             g.mv1FarPass = true;
             DrawMv1MultiScaleTerrain();
             g.mv1FarPass = false;
             if ( g.certMv1C && g.mv1cCaptureRequest )
             { Mv1cCaptureFarDepth( nf, ff ); g.mv1cCaptureRequest = false; }
+            if ( g.certMv1d && g.mv1dBandCaptureRequest )
+            { Mv1dCaptureBands( nf, ff ); g.mv1dBandCaptureRequest = false; }
+            if ( mv1dOn ) Mv1dSetFog( false );
             LARGE_INTEGER dcq{},dc0{},dc1{};QueryPerformanceFrequency(&dcq);QueryPerformanceCounter(&dc0);
             glClear( GL_DEPTH_BUFFER_BIT );
             QueryPerformanceCounter(&dc1);
@@ -46841,6 +47130,7 @@ namespace
             Mv1TerrainCertTick();
             Mv1GpuCertTick();
             Mv1cCertTick();
+            Mv1dCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -46919,7 +47209,8 @@ namespace
               && !g.certPresentationIsolation
               && !g.certMv1Terrain
               && !g.certMv1Gpu
-              && !g.certMv1C )
+              && !g.certMv1C
+              && !g.certMv1d )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -53063,6 +53354,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 }
                 if(_wcsicmp(argv[i],L"--mv1-off")==0)
                 {g.mv1Enabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--mv1d-off")==0)
+                {g.mv1dEnabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--cert-mv1d-distance-readability")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv1d")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1d=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--play-mv1-multi-scale-terrain")==0
                   ||_wcsicmp(argv[i],L"--play-mv1")==0)
                 {

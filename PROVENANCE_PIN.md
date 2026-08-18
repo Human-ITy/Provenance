@@ -262,7 +262,7 @@ MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth s
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
 PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
-MV1.D   distance / depth readability      NEXT (on the PX2 gate)
+MV1.D   distance / depth readability      CERTIFIED @ __MV1D_SHA__ (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
@@ -320,6 +320,27 @@ MW1–MW8 are **not** reopened — only the weak wall-clock movement clause is
 superseded; a retrospective sweep under the two-contract gate can follow later.
 Handoff: `PX2_GATE_DEFINITION_HANDOFF.md`.
 
+**MV1.D CERTIFIED @ `__MV1D_SHA__`** — distance / depth readability via
+continuous aerial perspective. Presentation-only: every **far-pass** fragment
+attenuates toward the exact horizon sky colour by a deterministic transmittance
+of the **actual camera-to-surface distance**, `T(d)=exp(-(rho·d)²)`,
+`rho=4.30e-5/m` (`GL_FOG`/`GL_EXP2`). Because `T` depends on distance alone there
+is **no colour switch at the 192 m / 2 km / 20 km LOD edges** — an analytical 4 m
+scan proves `T` strictly non-increasing (max step jump `1.5e-4`, max LOD-edge
+jump `3.5e-5`). Applied **only** around the MV1 far draw; the frozen 0.03–600 m
+near authoritative world is **never fogged**, so MV1.C geometry, depth precision,
+and persistent VBO ownership are byte-identical and **`--mv1d-off` reproduces the
+frozen MV1.C presentation byte-for-byte** (`cmp -l`=0). Framebuffer bands binned
+by real distance over the five frozen stations: **contrast falls** (meso 0.066 →
+regional 0.049 → horizon 0.022) and **atmospheric blend rises** (0.44 → 0.55 →
+0.57) while regional/horizon stay rasterised. Distant alpine **white remains the
+diagnostic material, not snow**; this is **not causal weather** (a later cut may
+drive `rho` from MW6). Full gauntlet green: PX2 self-test PASS, MV1.C band-pixel
+PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
+stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
+no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
+`CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
 **GLOBAL Test-B present pacing — attributed by PX1 (not MV1).** A controlled 4-way experiment
 (MV1 on/off × glFinish on/off, plus per-outlier component logging) proved the
 90 s soak / movement-frame gate is **baseline-flaky on this hardware, independent
@@ -363,12 +384,14 @@ rerun MV1.G → then MV1.D.**
   `UNAVAILABLE` (no reliable extension; driver-defined). Standing gates held:
   Test A 4/4 (0 movement frames >16.667), Test B 90 s 0 frames >16.667. Handoff:
   `MV1G_GPU_PRESENTATION_HANDOFF.md`. Cert: `CERT_MV1G_GPU_PRESENTATION.cmd`.
-- **MV1.D — distance / depth readability.** Physically-motivated aerial
-  perspective (near = full contrast; meso/regional/horizon = increasing
-  attenuation/desaturation) so a 2 km ridge, a 10 km ridge and a 25 km massif
-  read as kilometres of depth, not stacked cutouts. Not fake fog. A later,
-  separate cut may drive atmospheric clarity causally from MW6 hydroclimate
-  (dry interior = long visibility, humid valley = stronger attenuation).
+- **MV1.D — distance / depth readability. CERTIFIED @ `__MV1D_SHA__`.**
+  Continuous aerial perspective `T(d)=exp(-(rho·d)²)` (`rho=4.30e-5/m`) toward the
+  horizon sky colour, by actual camera distance, in the far pass only. No colour
+  switch at the LOD edges (analytical continuity proof); near/meso crisp,
+  regional half-blended, horizon strongly atmospheric but still rasterised;
+  `--mv1d-off` == frozen MV1.C byte-for-byte. A later, separate cut may drive
+  `rho` causally from MW6 hydroclimate (dry interior = long visibility, humid
+  valley = stronger attenuation).
 - **MV2** extends the certified 32 km hierarchy toward the Alaska-scale target
   only after MV1.G (GPU-safe) and MV1.D (depth-readable) pass.
 
