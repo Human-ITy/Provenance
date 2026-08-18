@@ -263,7 +263,7 @@ MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated afte
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
 PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
-PX3     frozen-cut perf revalidation      CERTIFIED @ __PX3_SHA__ (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
+PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          NEXT (build-scaling + sync-safe batching first)
 MW9     flora / fauna                     CLOSED
 ```
@@ -342,7 +342,7 @@ stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
 
-**PX3 CERTIFIED @ `__PX3_SHA__`** — retrospective frozen-cut performance
+**PX3 CERTIFIED @ `4cd5af4b`** — retrospective frozen-cut performance
 revalidation under the PX2 two-contract gate (semantics/determinism NOT reopened).
 Every frozen cut re-run through its existing harness: Test A cardinal N/E/S/W +
 Test B 90 s NE fly at 24 m/s gameplay speed. **Worldgen ladder (P5b.3B.3B, 16C.1,
