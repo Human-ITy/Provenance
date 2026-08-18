@@ -265,7 +265,7 @@ PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-ove
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
-MV2.A   regional macro authority          CERTIFIED @ __MV2A_SHA__ (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
+MV2.A   regional macro authority          CERTIFIED @ d23f3810 (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
 MV2.B   horizon renderer                  NEXT (consume MV2.A macro pages; bounded ring; two-pass widened to ~128 km; MV1.D recalibrated; seam-free 32 km join; no new world authority)
 MW9     flora / fauna                     CLOSED
 ```
@@ -344,7 +344,7 @@ stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
 
-**MV2.A CERTIFIED @ `__MV2A_SHA__`** — Regional Macro Authority (Python
+**MV2.A CERTIFIED @ `d23f3810`** — Regional Macro Authority (Python
 world-authority lane; NO renderer). Deterministic non-repeating boundary-continuous
 macro pages beyond the frozen ±32 km centre. `macro_z = central_envelope +
 anchor_window·regional_field`: `central_envelope` replicates
