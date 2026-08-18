@@ -260,7 +260,7 @@ MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residency/fidelity/identity)
 MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth split; VBO ownership)
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
-PX1     present-pacing attribution        CERTIFIED @ __PX1_SHA__ (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
+PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
 GLOBAL  Test-B gate definition            PROPOSED (engine_cpu 0-over + presented cadence w/ environmental allowance) — adopt before MV1.D gating
 MV1.D   distance / depth readability      WAITING (on adopting the gate definition)
 MV2     extended 100+ km horizon          CLOSED
@@ -281,7 +281,7 @@ async, no stalls, with the full 32 km now rasterized. Test A correctness PASS 4/
 (exact return digests/geometry/material/collision/image). Handoff:
 `MV1C_RASTER_VISIBILITY_HANDOFF.md`. Cert: `CERT_MV1C_RASTER_VISIBILITY.cmd`.
 
-**PX1 CERTIFIED @ `__PX1_SHA__`** — baseline present-pacing attribution
+**PX1 CERTIFIED @ `dae52665`** — baseline present-pacing attribution
 (instrumentation only; no production behavior change; 16.667 ms standard not
 weakened). Per-frame QPC decomposition (gap / engine_cpu / gpu_finish / swap /
 engine_work / presented) over an MV1-**off** MW8 baseline. Findings: **frame
