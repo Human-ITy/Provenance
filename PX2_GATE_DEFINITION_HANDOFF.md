@@ -22,23 +22,33 @@ PLAYER PRESENTATION CADENCE   (reported + owner-classified)
   every miss recorded; each classified by OWNER
 ```
 
-## Classifier (`Px2ClassifyFrame`)
+## Classifier (`Px2ClassifyFrame`) — hardened
 
 ```
-engine_cpu > 16.667                         -> ENGINE MISS   (hard FAIL)
-presented  <= 16.667                        -> OK
+engine_cpu > 16.667                              -> ENGINE MISS   (hard FAIL, unconditional)
+presented  <= 16.667                             -> OK
 presented  > 16.667 and engine produced in budget:
-    gpu_finish >= 8 ms  OR  swap >= 8 ms     -> STAGE-OWNED   (hard FAIL: this
-                                                stage's GPU/present load caused it)
-    otherwise (gap-dominated, or every
-    producible component tiny/unattributed)  -> OS-GAP        (reported, not charged)
+    (gpu_finish >= 8 or swap >= 8) AND stage_work >= 8   -> STAGE-OWNED         (hard FAIL)
+    (gpu_finish >= 8 or swap >= 8) without stage_work    -> BASELINE-PRESENT    (reported)
+    inter-frame gap owns it / unattributed boundary      -> OS-GAP              (reported)
 ```
 
 `engine_cpu` is the production authority — the terrain/package/MV1 CPU work all
 runs inside the tick, so a bounded `engine_cpu` means production met budget
-*including* stage work. What remains for a presented miss is GPU completion
-(`gpu_finish`), the present call (`swap`), or the inter-frame gap (OS scheduling)
-— the first two are stage-owned, the last is environmental.
+*including* stage work.
+
+**Hardening (PX1 correction):** PX1 proved SwapBuffers jitter occurs with the
+stage completely disabled, so **a large `swap` (or `glFinish`) alone cannot
+establish stage ownership**. A GPU/present miss is stage-owned only when this
+stage's own work (`stage_work`) correlates with it on the frame; otherwise it is
+a **baseline-present miss** (reported, non-regression checked), not a stage FAIL.
+A stage's *GPU* load that raises the present-miss rate **without** per-frame CPU
+stage work is still caught — by the material-regression check below (baseline-
+present misses may not exceed the PX1 baseline). A **regression fixture**
+(`Px2ClassifierSelfTest`, run in the PX1 cert) proves: `swap=53, stage=0` →
+BaselinePresentMiss (not stage-owned); `swap=44, stage=12` → StageMiss;
+`glfinish=30, stage=10` → StageMiss; `gap=82` → OsGapMiss; `engine=47` →
+EngineMiss; bounded → Ok. Reported as `px2_classifier_self_test=PASS`.
 
 ## Non-regression rule (rule 5)
 

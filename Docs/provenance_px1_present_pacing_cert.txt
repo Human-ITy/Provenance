@@ -1,15 +1,16 @@
 PX1_PRESENT_PACING
 config mv1_on=0 glfinish_probe=1 swap_interval=0 refresh_hz=60
-travel_frames=80885
+travel_frames=82267
 engine_cpu_over_16667=0 engine_work_over_16667=0 wall_over_16667=1 presented_over_16667=1
-engine_cpu_ms p50=0.662 p95=0.982 p99=3.275 max=7.266  (pure CPU frame production, excl glFinish/swap)
-engine_work_ms p50=0.728 p95=1.192 p99=3.364 max=7.779
-wall_frame_ms  p50=0.878 p95=1.464 p99=3.577 max=155.898
-presented_frame_ms p50=0.878 p95=1.464 p99=3.577 max=155.894
-gap_ms p95=0.073 max=153.787
-swap_ms p95=0.161 max=1.324
-gpu_finish_ms p95=0.304 max=2.068
+engine_cpu_ms p50=0.653 p95=0.950 p99=1.339 max=7.053  (pure CPU frame production, excl glFinish/swap)
+engine_work_ms p50=0.717 p95=1.204 p99=1.879 max=7.572
+wall_frame_ms  p50=0.860 p95=1.451 p99=2.272 max=29.802
+presented_frame_ms p50=0.860 p95=1.450 p99=2.272 max=29.798
+gap_ms p95=0.078 max=27.897
+swap_ms p95=0.161 max=0.862
+gpu_finish_ms p95=0.385 max=1.579
 owner=interframe_gap_pump_or_pacing
-px2_classifier engine_cpu_over_16667=0 presented_misses=1 stage_owned_misses=0 os_gap_misses=1 os_gap_worst_ms=153.787
+px2_classifier engine_cpu_over_16667=0 presented_misses=1 stage_owned_misses=0 baseline_present_misses=0 os_gap_misses=1 os_gap_worst_ms=27.897 baseline_present_worst_ms=0.000
 px2_engine_production_gate=PASS px2_no_stage_owned_miss=PASS
+px2_classifier_self_test=PASS (all cases correct)
 note=engine_work=tickStart->render_done+glFinish (frame production); wall=frame-start delta (includes inter-frame gap); presented=swap-return delta (player cadence); px2 classifier: engine production must be 0-over; presented misses owner-classified (gap=OS scheduling, else stage-owned=real)
