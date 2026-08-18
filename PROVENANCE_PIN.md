@@ -261,7 +261,7 @@ MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residen
 MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth split; VBO ownership)
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
-PX2     two-contract present gate         CERTIFIED @ __PX2_SHA__ (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
+PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
 MV1.D   distance / depth readability      NEXT (on the PX2 gate)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
@@ -302,7 +302,7 @@ Test A/B failures are the same present-pacing class. Optional future hardening
 (separate cut): clean frame pacing / thread priority to reduce OS-scheduling gaps.
 Handoff: `PX1_PRESENT_PACING_HANDOFF.md`. Cert: `CERT_PX1_PRESENT_PACING.cmd`.
 
-**PX2 CERTIFIED @ `__PX2_SHA__`** — two-contract present-pacing gate
+**PX2 CERTIFIED @ `3a9a9e74`** — two-contract present-pacing gate
 (measurement/classification only; no production behavior change; 16.667 ms
 standard not weakened). Replaces the ambiguous wall-clock movement gate with:
 **(1) engine production gate** — `engine_cpu_ms` (pure CPU frame production,
