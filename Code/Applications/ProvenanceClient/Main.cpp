@@ -17904,23 +17904,52 @@ namespace
         // CPU submission directly.
         bool const gpuSpan=g.mv1GpuTiming&&Mv1GpuBeginSpan();
         LARGE_INTEGER sqpf{},s0{},s1{};QueryPerformanceFrequency(&sqpf);QueryPerformanceCounter(&s0);
-        // Behind-camera cull: never submit tiles clearly behind the view plane.
+        // Horizontal view-frustum cull + canonical submission order. Each tile
+        // keeps its own persistent recycled VBO (stall-free: a build never writes
+        // GPU storage that is still in flight). Off-screen tiles are skipped by a
+        // left/right frustum test as well as the behind-camera plane; the FOV is
+        // clamped to 100 deg (half 50 deg) upstream, so a 62 deg half-cone can
+        // never reject a tile that contributes a pixel (image is unchanged, only
+        // off-screen submissions are dropped). The visible set is then drawn in a
+        // canonical order (band, absolute tile Y, absolute tile X, tile key) so
+        // any equal-depth z-tie between overlapping tiles resolves by a stable
+        // rule, giving deterministic pixels regardless of map iteration order.
         float const fwx=g.pickFwdX, fwy=g.pickFwdY;
+        float const rgx=g.pickRightX, rgy=g.pickRightY;
+        constexpr float kMv1CullTanHalfFovH=1.88f; // ~62 deg, wider than the 50 deg clamp
         int calls=0;long long trisSubmitted=0;
+        struct Mv1Vis{int band;float cy,cx;uint64_t key;GLuint vbo;int vertCount;int tris;};
+        static thread_local std::vector<Mv1Vis> vis;
+        vis.clear();
         if(!g.mv1Tiles.empty()&&s_mv1BufReady)
         {
+            for(auto const& kv:g.mv1Tiles)
+            {
+                if(!kv.second.vbo)continue;
+                float const rx=kv.second.cx-g.camX, ry=kv.second.cy-g.camY;
+                float const slack=kv.second.halfM*1.5f+64.f;
+                float const fdot=rx*fwx+ry*fwy;          // forward distance
+                if(fdot < -slack)continue;               // behind camera
+                float const sdot=rx*rgx+ry*rgy;          // lateral offset
+                if((std::abs)(sdot)-slack > (fdot+slack)*kMv1CullTanHalfFovH)continue;
+                vis.push_back(Mv1Vis{kv.second.band,kv.second.cy,kv.second.cx,kv.first,
+                    kv.second.vbo,kv.second.vertCount,kv.second.tris});
+            }
+            std::sort(vis.begin(),vis.end(),[](Mv1Vis const& a,Mv1Vis const& b){
+                if(a.band!=b.band)return a.band<b.band;
+                if(a.cy!=b.cy)return a.cy<b.cy;
+                if(a.cx!=b.cx)return a.cx<b.cx;
+                return a.key<b.key;});
             glEnableClientState(GL_VERTEX_ARRAY);
             glEnableClientState(GL_COLOR_ARRAY);
             constexpr GLsizei kStride=6*sizeof(float);
-            for(auto const& kv:g.mv1Tiles)if(kv.second.vbo)
+            for(Mv1Vis const& v:vis)
             {
-                float const rx=kv.second.cx-g.camX, ry=kv.second.cy-g.camY;
-                if(rx*fwx+ry*fwy < -(kv.second.halfM*1.5f+64.f))continue; // behind camera
-                s_mv1BindBuffer(GL_ARRAY_BUFFER,kv.second.vbo);
+                s_mv1BindBuffer(GL_ARRAY_BUFFER,v.vbo);
                 glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
                 glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
-                glDrawArrays(GL_TRIANGLES,0,kv.second.vertCount);
-                ++calls;trisSubmitted+=kv.second.tris;
+                glDrawArrays(GL_TRIANGLES,0,v.vertCount);
+                ++calls;trisSubmitted+=v.tris;
             }
             s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
             glDisableClientState(GL_COLOR_ARRAY);

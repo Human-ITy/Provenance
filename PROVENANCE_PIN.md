@@ -263,7 +263,8 @@ MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated afte
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
 PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
-MV2     extended 100+ km horizon          CLOSED
+PX3     frozen-cut perf revalidation      CERTIFIED @ __PX3_SHA__ (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
+MV2     extended 100+ km horizon          NEXT (build-scaling + sync-safe batching first)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -340,6 +341,30 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**PX3 CERTIFIED @ `__PX3_SHA__`** — retrospective frozen-cut performance
+revalidation under the PX2 two-contract gate (semantics/determinism NOT reopened).
+Every frozen cut re-run through its existing harness: Test A cardinal N/E/S/W +
+Test B 90 s NE fly at 24 m/s gameplay speed. **Worldgen ladder (P5b.3B.3B, 16C.1,
+MW1–MW8) GREEN** — engine production 3–7 ms, 0 over, 0 stage-owned, digests exact;
+the historical `wall_clock>16.667` receipts were **merely superseded** by PX2, **no
+historical regression**. MV1.C/MV1.D **green at gameplay speed**. The **240 m/s
+cardinal free-fly** (10× gameplay) is kept exactly as-is and reported as a separate
+**STRESS CEILING** (worst ~16.85 ms vs 16.667 on one case). Its investigation:
+(1) per-tile draw submission → fixed by a **horizontal frustum cull** (kept,
+image-identical); (2) a **shared-slab batching experiment** cut CPU submit 9 ms →
+0.1 ms but was **REJECTED** — `glBufferSubData` into in-flight slabs caused 50–98 ms
+gameplay-frame stalls (4/5 Test B fail) — reverted to per-tile VBO ownership;
+(3) remaining owner = **MW-authority tile construction** (~4–8 ms/tile, unpreemptable),
+an **MV2 scaling constraint**. Also kept: **canonical draw order**
+(band→Y→X→key) with the one deterministic z-tie pixel at `ridge_shoulder`
+re-baselined once (MV1.C+MV1.D station2). **Two contracts now explicit:** gameplay
+PX2 gate hard-green at 24 m/s; 240 m/s a permanently-reported stress ceiling.
+**MV2 requirements:** address tile-construction scaling and use only
+synchronization-safe batching (persistent-mapped/fenced/build-then-promote), never
+CPU writes over GPU-in-flight storage. Receipt:
+`Docs/provenance_px3_retrospective_sweep.txt`. Handoff:
+`PX3_RETROSPECTIVE_PERFORMANCE_SWEEP_HANDOFF.md`.
 
 **GLOBAL Test-B present pacing — attributed by PX1 (not MV1).** A controlled 4-way experiment
 (MV1 on/off × glFinish on/off, plus per-outlier component logging) proved the

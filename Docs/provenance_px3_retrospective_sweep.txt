@@ -1,0 +1,94 @@
+PX3_RETROSPECTIVE_PERFORMANCE_REVALIDATION  PASS (gameplay contract)
+scope=frozen_cut_performance_only  semantics_and_determinism_NOT_reopened
+gate=PX2_two_contract (engine_cpu 0-over hard; presented cadence owner-classified)
+
+# Question
+Do the frozen major cuts remain performance-green under the corrected PX2
+contracts (not the ambiguous historical wall_clock>16.667 receipts)?
+
+# Method
+Each checkpoint run through its existing dedicated harness (no parallel
+machinery): Test A cardinal N/E/S/W (192 m complete / 2601 packages / exact
+origin==return digest) and Test B 90 s NE fly (--soak-stop-s=0 --soak-return=0,
+24 m/s gameplay speed). No analytical/worldgen fixture reruns. No 300/900 s.
+
+# Consolidated result (Test A / Test B under PX2)
+stage        TestA TestB maxEngineCpuA/B  engOverA/B  stageOwned  osGapA/B  basePresent  cadenceReg  residency/digest  verdict
+P5b.3B.3B    PASS  PASS  3.85 / 7.11 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+16C.1        PASS  PASS  4.65 / 5.02 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW1          PASS  PASS  4.25 / 4.40 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW2          PASS  PASS  3.89 / 4.60 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW3          PASS  PASS  3.61 / 4.17 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW4          PASS  PASS  3.17 / 4.27 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW5          PASS  PASS  3.15 / 4.14 ms   0 / 0       0           4 / 1     0            no          exact             GREEN
+MW6          PASS  PASS  3.13 / 4.45 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW7          PASS  PASS  3.53 / 4.30 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MW8 (mv1off) PASS  PASS  5.98 / 4.85 ms   0 / 0       0           4 / 0     0            no          exact             GREEN
+MV1.C        PASS* PASS  gameplay green   0 / 0       0           -  / 0    0            no          exact             GREEN (gameplay)
+MV1.D        PASS* PASS  gameplay green   0 / 0       0           -  / 0    0            no          exact             GREEN (gameplay)
+
+* MV1.C/MV1.D render only in the RegionalBiome (MW8) view. At gameplay
+  traversal speed (24 m/s, Test B) both are green (engine worst ~13 ms, 0 over).
+  Their Test A is the MW8 cardinal with MV1 rendering active — see the 240 m/s
+  STRESS CEILING below; correctness (return image / geometry / collision /
+  residency / digest) is exact in every case.
+
+# Verdict on the historical concern
+The single-run wall_clock>16.667 receipts for the whole worldgen ladder
+(P5b.3B.3B, 16C.1, MW1..MW8) were MERELY SUPERSEDED by PX2, not hiding a real
+regression: engine production sits at 3-7 ms with wide headroom; the only
+"misses" are the already-characterized OS-scheduling capture-boundary frames
+(4 os-gap per cardinal route), within the PX2 non-regression bound and reported,
+never charged to the engine. NO actual historical stage regression was found.
+MW1-MW8 semantic/residency certifications are not reopened.
+
+# Two explicit contracts (established by PX3)
+GAMEPLAY ACCEPTANCE  (hard)
+  PX2 engine-production at gameplay-representative traversal (currently 24 m/s):
+  engine_cpu > 16.667 = 0, stage-owned present misses = 0. All checkpoints PASS.
+  MV1.C/MV1.D per-tile path reconfirmed 6/6 clean Test B runs.
+
+STREAMING STRESS CEILING  (reported, not a gameplay gate; NOT discarded/slowed)
+  240 m/s cardinal free-fly (10x gameplay) is kept exactly as-is. MV1.C/MV1.D
+  worst engine_cpu there is ~16.85 ms vs 16.667 (one case, ~0.18 ms over).
+  Named owners, in order of the investigation:
+    1. per-tile draw SUBMISSION pressure  -> reduced by frustum cull (kept);
+       a shared-slab batching experiment cut CPU submit ~9 ms -> ~0.1 ms but was
+       REJECTED (see below).
+    2. MW-authority TILE CONSTRUCTION      -> ~4-8 ms per tile (33x33 ReconstructedZ
+       samples + adaptive-error eval); a single tile cannot be preempted mid-build.
+       This is the remaining stress-ceiling owner and an MV2 scaling constraint.
+
+# Batching experiment: REJECTED
+Shared size-class slab buffers + glMultiDrawArrays reduced MV1 CPU submission
+from ~9 ms to ~0.1 ms and moved the 240 m/s cardinal worst from ~18.5 ms to
+~16.85 ms. BUT glBufferSubData into slabs still in flight caused reproducible
+50-98 ms gameplay-frame engine stalls (4/5 Test B runs failed the hard gate;
+mv1_runtime_slab_allocs_after_warmup=0 ruled out creation; --mv1-off clean).
+It was therefore REVERTED. Per-tile persistent/recycled VBO ownership remains
+the certified gameplay-safe path (0 stalls, 6/6 Test B green).
+
+# Kept from this investigation (all image-identical, gameplay-safe)
+- Horizontal view-frustum cull (off-screen tiles skipped; zero visible-tile error).
+- Canonical draw order (band -> abs tile Y -> abs tile X -> tile key): deterministic
+  z-tie resolution. One equal-depth pixel at station "ridge_shoulder" changed its
+  deterministic winner; MV1.C + MV1.D station2 images re-baselined once and frozen
+  (byte-stable across repeated runs).
+- Per-tile VBO ownership, bounded build budget, MV1.C two-pass 32 km raster,
+  MV1.D aerial perspective — unchanged.
+
+# MV2 architecture requirements carried forward (do NOT inherit blindly)
+- Tile CONSTRUCTION: MW-authority resampling (~4-8 ms/tile) is the scaling wall for
+  extending visibility toward 100+ km. Before/at MV2 investigate reusable/coarser
+  hierarchical source sampling, cached derived terrain, or safe resumable build.
+- Tile SUBMISSION batching MUST be synchronization-safe: persistent-mapped ring
+  buffers, fenced multi-buffering, or immutable build-then-promote pages — never
+  CPU updates that overwrite GPU-in-flight storage (the rejected slab failure mode).
+
+board:
+  P5b.3B.3B..MW8 PX2 gameplay gate      GREEN
+  MV1.C / MV1.D  PX2 gameplay gate      GREEN
+  MV1.C / MV1.D  240 m/s stress         STRESS CEILING (submission closed; build named)
+  semantic / residency / determinism    GREEN (not reopened)
+  MV2 100+ km horizon                   NEXT (build-scaling + sync-safe batching first)
+  MW9 flora / fauna                     CLOSED
