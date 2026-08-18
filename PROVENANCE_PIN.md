@@ -261,8 +261,8 @@ MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residen
 MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth split; VBO ownership)
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
-GLOBAL  Test-B gate definition            PROPOSED (engine_cpu 0-over + presented cadence w/ environmental allowance) — adopt before MV1.D gating
-MV1.D   distance / depth readability      WAITING (on adopting the gate definition)
+PX2     two-contract present gate         CERTIFIED @ __PX2_SHA__ (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
+MV1.D   distance / depth readability      NEXT (on the PX2 gate)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
@@ -301,6 +301,24 @@ still a real FAIL); never gate on wall-clock-including-glFinish under vsync.
 Test A/B failures are the same present-pacing class. Optional future hardening
 (separate cut): clean frame pacing / thread priority to reduce OS-scheduling gaps.
 Handoff: `PX1_PRESENT_PACING_HANDOFF.md`. Cert: `CERT_PX1_PRESENT_PACING.cmd`.
+
+**PX2 CERTIFIED @ `__PX2_SHA__`** — two-contract present-pacing gate
+(measurement/classification only; no production behavior change; 16.667 ms
+standard not weakened). Replaces the ambiguous wall-clock movement gate with:
+**(1) engine production gate** — `engine_cpu_ms` (pure CPU frame production,
+already contains all stage work) must have **0 travel frames > 16.667 ms**
+(hard); **(2) player presentation cadence** — `presented_frame_ms` (swap-to-swap)
+with every miss recorded and **owner-classified**: `gpu_finish`/`swap` large →
+stage-owned (hard FAIL); gap-dominated or unattributed-boundary → OS-gap
+(reported, not charged); plus a **non-regression rule** (OS-gap misses may not
+materially exceed the PX1 baseline — >10/route or worst >250 ms fails). Raw
+wall-clock frames-over kept in telemetry only. Validated: PX1 classifier tags a
+known 44 ms gap spike as `os_gap` with engine gate PASS; **Test A cardinal PASS
+3/3** (engine 0-over, 0 stage-owned, 4 os-gap capture-boundary frames reported);
+**Test B soak PASS** reliably where the old wall-clock gate was ~50 % flaky.
+MW1–MW8 are **not** reopened — only the weak wall-clock movement clause is
+superseded; a retrospective sweep under the two-contract gate can follow later.
+Handoff: `PX2_GATE_DEFINITION_HANDOFF.md`.
 
 **GLOBAL Test-B present pacing — attributed by PX1 (not MV1).** A controlled 4-way experiment
 (MV1 on/off × glFinish on/off, plus per-outlier component logging) proved the
