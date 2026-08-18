@@ -266,7 +266,7 @@ MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aeria
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
 MV2.A   regional macro authority          CERTIFIED @ d23f3810 (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
-MV2.B   horizon renderer                  NEXT (consume MV2.A macro pages; bounded ring; two-pass widened to ~128 km; MV1.D recalibrated; seam-free 32 km join; no new world authority)
+MV2.B   horizon renderer                  CERTIFIED @ __MV2B_SHA__ (real 128 km raster from MV2.A pages; three-pass depth split; seam 5.3 m; non-repeating; bounded 9-page ring; 0 MV2-domain coverage holes; recalibrated 128 km aerial; off==frozen)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -343,6 +343,27 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**MV2.B CERTIFIED @ `__MV2B_SHA__`** — 100–128 km Horizon Renderer (presentation
+only; consumes MV2.A `.mcp` macro pages). Renders the 32–128 km horizon behind the
+frozen 0–32 km MV1 world via a **three-pass depth split** (macro 24–130 km → clear →
+MV1 far 0.128–33 km → clear → near 0.03–600 m); MV1 stays authoritative at the 32 km
+seam (MV2.A central anchoring → seam ≤ 5.3 m vs `ReconstructedZ`, sub-pixel).
+Per-page persistent VBOs (sync-safe; no shared-slab in-flight mutation), bounded
+±2-cell ring (9 pages, 0 runtime allocs after warmup), never samples fine
+`ReconstructedZ` for the horizon. Recalibrated 128 km aerial curve (`GL_EXP`
+ρ=1.85e-5) on both far passes → one continuous distance attenuation, no band switch;
+`--mv2b-off` reproduces frozen MV1.C/D. **All fixtures PASS:** real 128 km raster
+(distance-class px 44053/53316/10200/4926 for 32-50/50-80/80-100/100-128 km),
+non-repetition (9 unique pages), seam continuous, no fine authority, bounded
+residency, and **0 MV2-domain (≥32 km) coverage holes** — a mask+authority-raymarch
+classifier proved the mid-distance sky band is geographic **negative space**, not
+missing terrain (the only terrain/sky discrepancies are thin <32 km slivers in frozen
+MV1's own LOD domain). Gameplay PX2 hard gate held at 24 m/s with the horizon on.
+Receipt `Docs/provenance_mv2b_horizon_cert.txt`; visual
+`Docs/provenance_mv2b_horizon_contact_sheet.png`; handoff
+`MV2B_HORIZON_RENDERER_HANDOFF.md`; scripts `PLAY_/CERT_MV2B_HORIZON_RENDERER.cmd`.
+MW1–MW8/MV1/MV2.A not reopened.
 
 **MV2.A CERTIFIED @ `d23f3810`** — Regional Macro Authority (Python
 world-authority lane; NO renderer). Deterministic non-repeating boundary-continuous

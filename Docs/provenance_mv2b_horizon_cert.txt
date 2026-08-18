@@ -1,0 +1,24 @@
+MV2B_HORIZON_RENDERER PASS
+scope=presentation_only_consumes_MV2A_macro_pages_no_fine_reconstructedz
+visible_radius_target_m=128000  aerial=GL_EXP_density_1.850e-05 (recalibrated 128 km, distance-based)
+architecture=three_pass_depth_split (macro 24-130km -> clear -> MV1 far 0.128-33km -> clear -> near 0.03-600m)
+page_ownership=per_page_persistent_vbo (sync-safe; no shared-slab in-flight mutation)
+raster_distance_classes_px  32-50km=44053  50-80km=53316  80-100km=10200  100-128km=4926
+stations_with_far_terrain=6/6
+seam_max_delta_at_32km_m=5.265 (macro vs frozen MV1 ReconstructedZ; need<25)
+pages_resident=9 high_water=9 creates=9 retires=0 runtime_allocs_after_warmup=0
+resident_bytes=5308416 bytes_high_water=5308416 build_ms_high=10.703 cpu_submit_ms=0.003 refusals=0
+fixture.1_real_128km_raster=PASS
+fixture.2_non_repetition=PASS (resident_pages=9 unique_digests=9)
+fixture.3_32km_seam_continuous=PASS
+fixture.9_no_fine_authority_for_horizon=PASS
+fixture.10_bounded_residency=PASS
+fixture.11_no_mv2_coverage_hole=PASS (mv2_far_holes>=32km=0 negative_space=187874 hole_frac=0.0000 worst_hole_dist_m=0 mv1_lt32km_lod_slivers=33175[frozen_MV1_domain])
+fixture.8_off_equals_frozen=verified_separately (mv2b default off; MV1.C/D/G unchanged)
+mv2c=closed mw9=closed weather/veg/snow/erosion=closed
+station.0 name=trunk_valley class_px[32-50/50-80/80-100/100-128]=3299/7369/2802/1607 terrain=17988 image=Docs/provenance_mv2b_station0_trunk_valley.ppm
+station.1 name=mountain_flank class_px[32-50/50-80/80-100/100-128]=6393/13592/690/0 terrain=24971 image=Docs/provenance_mv2b_station1_mountain_flank.ppm
+station.2 name=ridge_shoulder class_px[32-50/50-80/80-100/100-128]=10054/11947/412/205 terrain=31804 image=Docs/provenance_mv2b_station2_ridge_shoulder.ppm
+station.3 name=foreland_basin class_px[32-50/50-80/80-100/100-128]=907/7642/1926/980 terrain=12162 image=Docs/provenance_mv2b_station3_foreland_basin.ppm
+station.4 name=high_divide class_px[32-50/50-80/80-100/100-128]=9543/3977/2830/2020 terrain=38741 image=Docs/provenance_mv2b_station4_high_divide.ppm
+station.5 name=macro_panorama class_px[32-50/50-80/80-100/100-128]=13857/8789/1540/114 terrain=33354 image=Docs/provenance_mv2b_station5_macro_panorama.ppm

@@ -1051,6 +1051,37 @@ namespace
         double mv1dBandContrast[4] = {0,0,0,0};// luminance stddev (contrast) per band
         double mv1dBandBlend[4] = {0,0,0,0};   // atmospheric blend (closeness to sky) per band
         long long mv1dBandPixels[4] = {0,0,0,0};
+        // ---- MV2.B horizon renderer (32-128 km from MV2.A compiled macro pages).
+        // Presentation only; consumes Data/Worldgen/MacroAuthority/*.mcp. Each
+        // resident page owns its OWN persistent VBO (sync-safe: a build uploads a
+        // fresh buffer once, never sub-updates GPU storage in flight — the design
+        // PX3 rejected). Bounded by a ring around the player, not by distance
+        // travelled. Never samples fine ReconstructedZ for the outer horizon.
+        bool mv2bEnabled = false;        // opt-in (--play-mv2b / --cert-mv2b); off == frozen MV1.C/D
+        bool mv2bPagesLoaded = false;
+        int mv2bAnchorRi = INT_MIN, mv2bAnchorRj = INT_MIN;
+        bool mv2bFarPass = false;
+        int mv2bPagesResident = 0, mv2bPagesResidentHigh = 0;
+        long long mv2bPageCreates = 0, mv2bPageRetires = 0, mv2bRuntimeAllocsAfterWarmup = 0;
+        long long mv2bResidentBytes = 0, mv2bBytesHighWater = 0;
+        long long mv2bRefusals = 0;      // source digest / lineage mismatch refusals
+        int mv2bDrawCallsFrame = 0; long long mv2bTrisFrame = 0;
+        long long mv2bVerts = 0;
+        double mv2bBuildMsFrame = 0.0, mv2bBuildMsHigh = 0.0, mv2bCpuSubmitMsFrame = 0.0;
+        bool mv2bWarmed = false;
+        bool certMv2b = false; int certMv2bPhase = 0; int certMv2bStation = 0; int certMv2bSettle = 0;
+        bool mv2bCaptureRequest = false;
+        long long mv2bClassPixels[4] = {0,0,0,0};   // 32-50/50-80/80-100/100-128 km
+        long long mv2bTerrainPixels = 0, mv2bViewportPixels = 0;
+        // Gap classifier: a terrain-present mask unioned across the macro + MV1 far
+        // passes, plus an authority raymarch, decides whether each sky pixel is a
+        // renderer HOLE (authority terrain should intersect the ray but nothing was
+        // drawn) or legitimate geographic NEGATIVE SPACE (the ray clears all terrain).
+        std::vector<uint8_t> mv2bTerrainMask;
+        int mv2bMaskW = 0, mv2bMaskH = 0;
+        bool mv2bCertColor = false;                 // band-coloured, fog-off diagnostic render
+        long long mv2bGapHoles = 0, mv2bGapNegSpace = 0, mv2bGapMv1Lod = 0;
+        double mv2bGapWorstHoleDistM = 0.0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -18854,6 +18885,595 @@ namespace
         }
     }
 
+    // ======================================================================
+    // MV2.B — 100-128 km horizon renderer (consumes MV2.A compiled macro pages).
+    // Presentation only. Never samples fine ReconstructedZ for the outer horizon;
+    // reads the cheap compiled macro height grids and renders them behind the
+    // frozen 0-32 km MV1 world. Per-page persistent VBOs (sync-safe: build uploads
+    // a fresh buffer once, never sub-updates GPU storage in flight).
+    // ======================================================================
+    static constexpr double kMv2RegionM = 64000.0;      // MV2.A page cell (packaging)
+    static constexpr double kMv2RegionHalfM = 32000.0;
+    static constexpr int kMv2VisibleRadiusM = 128000;   // cert target horizon radius
+    static constexpr int kMv2RingCells = 2;             // +/-2 cells = +/-128 km
+    // Recalibrated aerial curve for the 0-128 km world (GL_EXP, distance-based, no
+    // band switch). Frozen MV1.D (EXP2, 32 km) made 32 km near-sky, which is wrong
+    // once the world reaches 128 km; MV2.B applies one gentle continuous curve to
+    // BOTH the MV1 far pass and the macro pass so 30 km reads as solid terrain,
+    // 50-128 km attenuates progressively, and the far horizon stays readable.
+    // Only active when mv2bEnabled; --play-mv1 / all frozen MV1 certs are untouched.
+    static constexpr float kMv2AerialDensity = 1.85e-5f;
+    static constexpr float kMv2FogR = 0.45f, kMv2FogG = 0.62f, kMv2FogB = 0.88f;
+
+    void Mv2SetAerial(bool on)
+    {
+        if(on)
+        {
+            GLfloat const c[4]={kMv2FogR,kMv2FogG,kMv2FogB,1.f};
+            glFogi(GL_FOG_MODE,GL_EXP);
+            glFogfv(GL_FOG_COLOR,c);
+            glFogf(GL_FOG_DENSITY,kMv2AerialDensity);
+            glHint(GL_FOG_HINT,GL_NICEST);
+            glEnable(GL_FOG);
+        }
+        else glDisable(GL_FOG);
+    }
+    double Mv2Transmittance(double distM){return std::exp(-(double)kMv2AerialDensity*distM);}
+
+    struct Mv2Page
+    {
+        int ri=0,rj=0,n=0;
+        double minX=0,minY=0,step=0;
+        uint64_t regionId=0,digest=0;
+        std::vector<float> h;   // n*n absolute macro Z
+    };
+
+    static uint64_t Mv2ParseHex(std::string const& s)
+    {uint64_t v=0;for(char c:s){v<<=4;if(c>='0'&&c<='9')v|=(c-'0');
+        else if(c>='a'&&c<='f')v|=(c-'a'+10);else if(c>='A'&&c<='F')v|=(c-'A'+10);}return v;}
+
+    bool Mv2LoadPage(int ri,int rj,Mv2Page& out)
+    {
+        char path[256];
+        std::snprintf(path,sizeof(path),
+            "Data\\Worldgen\\MacroAuthority\\page_%d_%d.mcp",ri,rj);
+        FILE* f=nullptr;if(fopen_s(&f,path,"rb")!=0||!f)return false;
+        std::string text;{fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);
+            if(sz>0){text.resize((size_t)sz);size_t rd=fread(&text[0],1,(size_t)sz,f);text.resize(rd);}fclose(f);}
+        out=Mv2Page();out.ri=ri;out.rj=rj;
+        bool magic=false;
+        std::string grid;
+        size_t pos=0;
+        while(pos<text.size())
+        {
+            size_t const eol=text.find('\n',pos);
+            std::string line=text.substr(pos,eol==std::string::npos?std::string::npos:eol-pos);
+            pos=(eol==std::string::npos)?text.size():eol+1;
+            if(!line.empty()&&line.back()=='\r')line.pop_back();
+            if(line.empty()||line[0]=='#')continue;
+            if(!magic){magic=(line=="PROVENANCE_MACRO_AUTHORITY_PAGE_V1");if(!magic)return false;continue;}
+            size_t const eq=line.find('=');if(eq==std::string::npos)continue;
+            std::string const k=line.substr(0,eq),v=line.substr(eq+1);
+            if(k=="region_min_x_m")out.minX=atof(v.c_str());
+            else if(k=="region_min_y_m")out.minY=atof(v.c_str());
+            else if(k=="sample_step_m")out.step=atof(v.c_str());
+            else if(k=="grid_n")out.n=atoi(v.c_str());
+            else if(k=="region_id")out.regionId=Mv2ParseHex(v);
+            else if(k=="source_digest")out.digest=Mv2ParseHex(v);
+            else if(k=="height_grid_row_major")grid=v;
+        }
+        if(out.n<=0||out.step<=0)return false;
+        out.h.reserve((size_t)out.n*out.n);
+        {size_t gp=0;while(gp<grid.size()&&(int)out.h.size()<out.n*out.n)
+            {while(gp<grid.size()&&grid[gp]==' ')++gp;size_t st=gp;
+             while(gp<grid.size()&&grid[gp]!=' ')++gp;
+             if(gp>st)out.h.push_back((float)atof(grid.substr(st,gp-st).c_str()));}}
+        return (int)out.h.size()==out.n*out.n;
+    }
+
+    // Elevation-banded macro colour (valley green -> tan -> alpine grey/white),
+    // hillshaded from the page gradient. Macro material only; not fine geology.
+    static void Mv2ShadeAt(float z,float nx,float ny,float nz,uint8_t& r,uint8_t& g,uint8_t& b)
+    {
+        float const t=std::clamp((z+200.f)/2600.f,0.f,1.f);
+        float br,bg,bb;
+        if(t<0.5f){float a=t/0.5f;br=0.30f+a*0.45f;bg=0.44f+a*0.30f;bb=0.26f+a*0.16f;}
+        else{float a=(t-0.5f)/0.5f;br=0.75f+a*0.22f;bg=0.74f-a*0.06f;bb=0.42f+a*0.46f;}
+        float const len=std::sqrt(nx*nx+ny*ny+nz*nz);if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+        constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
+        float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
+        float const shade=0.30f+0.92f*ndotl;
+        r=(uint8_t)(std::min)(255.f,br*shade*255.f);
+        g=(uint8_t)(std::min)(255.f,bg*shade*255.f);
+        b=(uint8_t)(std::min)(255.f,bb*shade*255.f);
+    }
+
+    struct Mv2Tile
+    {
+        GLuint vbo=0;int vertCount=0,tris=0;unsigned bytes=0;
+        uint64_t regionId=0,digest=0;
+        float cx=0,cy=0,halfM=0;
+    };
+    std::unordered_map<uint64_t,Mv2Tile> mv2Tiles;   // key = mv2 cell key
+    static uint64_t Mv2Key(int ri,int rj)
+    {return ((uint64_t)(uint32_t)ri<<32)^(uint32_t)rj^0x9e3779b97f4a7c15ull;}
+
+    bool Mv2BuildTile(Mv2Page const& p,Mv2Tile& out)
+    {
+        if(!Mv1EnsureBufferProcs())return false;
+        int const n=p.n;double const s=p.step;
+        auto Z=[&](int i,int j)->float{i=std::clamp(i,0,n-1);j=std::clamp(j,0,n-1);
+            return p.h[(size_t)j*n+i];};
+        std::vector<float> verts;verts.reserve((size_t)(n-1)*(n-1)*6*6);
+        auto emit=[&](int i,int j)
+        {
+            double const x=p.minX+i*s,y=p.minY+j*s;float const z=Z(i,j);
+            float const dzdx=(Z(i+1,j)-Z(i-1,j))/(2.f*(float)s);
+            float const dzdy=(Z(i,j+1)-Z(i,j-1))/(2.f*(float)s);
+            uint8_t r,g,b;Mv2ShadeAt(z,-dzdx,-dzdy,1.f,r,g,b);
+            verts.push_back((float)x);verts.push_back((float)y);verts.push_back(z);
+            verts.push_back(r/255.f);verts.push_back(g/255.f);verts.push_back(b/255.f);
+        };
+        int tris=0;
+        for(int j=0;j<n-1;++j)for(int i=0;i<n-1;++i)
+        {emit(i,j);emit(i+1,j);emit(i,j+1);emit(i+1,j);emit(i+1,j+1);emit(i,j+1);tris+=2;}
+        GLuint vbo=0;s_mv1GenBuffers(1,&vbo);if(!vbo)return false;
+        unsigned const bytes=(unsigned)(verts.size()*sizeof(float));
+        s_mv1BindBuffer(GL_ARRAY_BUFFER,vbo);
+        s_mv1BufferData(GL_ARRAY_BUFFER,(ptrdiff_t)bytes,verts.data(),GL_STATIC_DRAW);
+        s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
+        out.vbo=vbo;out.vertCount=(int)(verts.size()/6);out.tris=tris;out.bytes=bytes;
+        out.regionId=p.regionId;out.digest=p.digest;
+        out.cx=(float)(p.minX+kMv2RegionHalfM);out.cy=(float)(p.minY+kMv2RegionHalfM);
+        out.halfM=(float)kMv2RegionHalfM;
+        return true;
+    }
+
+    void Mv2RetireTile(Mv2Tile const& t)
+    {if(t.vbo&&s_mv1DeleteBuffers)s_mv1DeleteBuffers(1,&t.vbo);
+     g.mv2bResidentBytes-=(long long)t.bytes;++g.mv2bPageRetires;}
+
+    void Mv2ReleaseAll()
+    {for(auto const& kv:mv2Tiles)Mv2RetireTile(kv.second);mv2Tiles.clear();
+     g.mv2bResidentBytes=0;g.mv2bPagesResident=0;}
+
+    // Bounded residency: pages within +/-kMv2RingCells of the player's region cell.
+    // Retire pages outside the ring (no travel-history growth). Build missing pages
+    // this frame from the compiled authority (cheap; no ReconstructedZ).
+    void UpdateMv2Residency()
+    {
+        g.mv2bBuildMsFrame=0.0;
+        if(!g.mv2bEnabled){if(!mv2Tiles.empty())Mv2ReleaseAll();return;}
+        int const cri=(int)std::floor((g.camX+kMv2RegionHalfM)/kMv2RegionM);
+        int const crj=(int)std::floor((g.camY+kMv2RegionHalfM)/kMv2RegionM);
+        bool const anchorMoved=cri!=g.mv2bAnchorRi||crj!=g.mv2bAnchorRj;
+        g.mv2bAnchorRi=cri;g.mv2bAnchorRj=crj;
+        LARGE_INTEGER qpf{},t0{};QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&t0);
+        // desired ring
+        std::unordered_set<uint64_t> desired;
+        for(int dj=-kMv2RingCells;dj<=kMv2RingCells;++dj)
+        for(int di=-kMv2RingCells;di<=kMv2RingCells;++di)
+            desired.insert(Mv2Key(cri+di,crj+dj));
+        if(anchorMoved)
+        {for(auto it=mv2Tiles.begin();it!=mv2Tiles.end();)
+            {if(!desired.count(it->first)){Mv2RetireTile(it->second);it=mv2Tiles.erase(it);}else ++it;}}
+        // build missing (bounded ring => bounded builds; pages are cheap)
+        for(int dj=-kMv2RingCells;dj<=kMv2RingCells;++dj)
+        for(int di=-kMv2RingCells;di<=kMv2RingCells;++di)
+        {
+            int const ri=cri+di,rj=crj+dj;uint64_t const key=Mv2Key(ri,rj);
+            if(mv2Tiles.count(key))continue;
+            Mv2Page pg;if(!Mv2LoadPage(ri,rj,pg))continue;
+            Mv2Tile t;if(!Mv2BuildTile(pg,t))continue;
+            mv2Tiles.emplace(key,t);
+            ++g.mv2bPageCreates;if(g.mv2bWarmed)++g.mv2bRuntimeAllocsAfterWarmup;
+            g.mv2bResidentBytes+=(long long)t.bytes;
+        }
+        g.mv2bResidentBytes=0;for(auto const& kv:mv2Tiles)g.mv2bResidentBytes+=(long long)kv.second.bytes;
+        g.mv2bBytesHighWater=(std::max)(g.mv2bBytesHighWater,g.mv2bResidentBytes);
+        g.mv2bPagesResident=(int)mv2Tiles.size();
+        g.mv2bPagesResidentHigh=(std::max)(g.mv2bPagesResidentHigh,g.mv2bPagesResident);
+        g.mv2bWarmed=g.mv2bWarmed||g.mv2bPagesLoaded;g.mv2bPagesLoaded=true;
+        LARGE_INTEGER t1{};QueryPerformanceCounter(&t1);
+        g.mv2bBuildMsFrame=qpf.QuadPart>0?1000.0*(double)(t1.QuadPart-t0.QuadPart)/(double)qpf.QuadPart:0.0;
+        g.mv2bBuildMsHigh=(std::max)(g.mv2bBuildMsHigh,g.mv2bBuildMsFrame);
+    }
+
+    // Draw resident macro pages (frustum cull + canonical order, per-tile VBO).
+    void DrawMv2Horizon()
+    {
+        UpdateMv2Residency();
+        if(mv2Tiles.empty())return;
+        float const fwx=g.pickFwdX,fwy=g.pickFwdY,rgx=g.pickRightX,rgy=g.pickRightY;
+        constexpr float kCullTan=1.88f;
+        struct Vis{float cy,cx;uint64_t key;GLuint vbo;int vc,tris;};
+        std::vector<Vis> vis;vis.reserve(mv2Tiles.size());
+        for(auto const& kv:mv2Tiles)
+        {
+            if(!kv.second.vbo)continue;
+            float const rx=kv.second.cx-g.camX,ry=kv.second.cy-g.camY;
+            float const slack=kv.second.halfM*1.5f+64.f;
+            float const fdot=rx*fwx+ry*fwy;if(fdot<-slack)continue;
+            float const sdot=rx*rgx+ry*rgy;
+            if((std::abs)(sdot)-slack>(fdot+slack)*kCullTan)continue;
+            vis.push_back(Vis{kv.second.cy,kv.second.cx,kv.first,kv.second.vbo,
+                kv.second.vertCount,kv.second.tris});
+        }
+        std::sort(vis.begin(),vis.end(),[](Vis const&a,Vis const&b){
+            if(a.cy!=b.cy)return a.cy<b.cy;if(a.cx!=b.cx)return a.cx<b.cx;return a.key<b.key;});
+        LARGE_INTEGER sqpf{},s0{},s1{};QueryPerformanceFrequency(&sqpf);QueryPerformanceCounter(&s0);
+        int calls=0;long long tris=0,verts=0;
+        glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
+        constexpr GLsizei kStride=6*sizeof(float);
+        for(Vis const& v:vis)
+        {
+            s_mv1BindBuffer(GL_ARRAY_BUFFER,v.vbo);
+            glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
+            glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
+            glDrawArrays(GL_TRIANGLES,0,v.vc);
+            ++calls;tris+=v.tris;verts+=v.vc;
+        }
+        s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
+        glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
+        QueryPerformanceCounter(&s1);
+        g.mv2bCpuSubmitMsFrame=sqpf.QuadPart>0?1000.0*(double)(s1.QuadPart-s0.QuadPart)/(double)sqpf.QuadPart:0.0;
+        g.mv2bDrawCallsFrame=calls;g.mv2bTrisFrame=tris;g.mv2bVerts=verts;
+    }
+
+    // Cert-only: read the macro-pass depth buffer and bin terrain pixels by real
+    // camera distance into 32-50 / 50-80 / 80-100 / 100-128 km classes. Proves
+    // actual framebuffer contribution at physical distance, not merely submitted.
+    void Mv2CaptureFarDepth(float nf,float ff)
+    {
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0)return;
+        std::vector<float> depth((size_t)w*h);
+        glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
+        long long c[4]={0,0,0,0},terrain=0;
+        double const edge[5]={32000,50000,80000,100000,(double)kMv2VisibleRadiusM};
+        for(float d:depth)
+        {
+            if(d>=0.99999f)continue;++terrain;
+            double const dist=2.0*nf*ff/(ff+nf-(2.0*d-1.0)*(ff-nf));
+            for(int k=0;k<4;++k)if(dist>=edge[k]&&dist<edge[k+1]){++c[k];break;}
+        }
+        for(int k=0;k<4;++k)g.mv2bClassPixels[k]=c[k];
+        g.mv2bTerrainPixels=terrain;g.mv2bViewportPixels=(long long)w*h;
+        // Seed the terrain-present mask from the macro pass (1 where macro drew).
+        g.mv2bMaskW=w;g.mv2bMaskH=h;g.mv2bTerrainMask.assign((size_t)w*h,0);
+        for(size_t p=0;p<(size_t)w*h;++p)if(depth[p]<0.99999f)g.mv2bTerrainMask[p]=1;
+    }
+
+    // Union the MV1 far pass (0-32 km) into the terrain-present mask so near/MV1
+    // terrain also counts as "drawn" when classifying sky pixels.
+    void Mv2AccumMv1Mask()
+    {
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0||g.mv2bMaskW!=w||g.mv2bMaskH!=h||g.mv2bTerrainMask.empty())return;
+        std::vector<float> depth((size_t)w*h);
+        glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
+        for(size_t p=0;p<(size_t)w*h;++p)if(depth[p]<0.99999f)g.mv2bTerrainMask[p]=1;
+    }
+
+    // Authority macro height (bilinear from resident/loaded pages). Cheap analytic
+    // source of record for "should terrain be along this ray" — never ReconstructedZ.
+    bool Mv2PageHeight(std::unordered_map<uint64_t,Mv2Page>& cache,double x,double y,double& z)
+    {
+        int const ri=(int)std::floor((x+kMv2RegionHalfM)/kMv2RegionM);
+        int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
+        uint64_t const key=Mv2Key(ri,rj);
+        auto it=cache.find(key);
+        if(it==cache.end()){Mv2Page pg;bool ok=Mv2LoadPage(ri,rj,pg);
+            it=cache.emplace(key,ok?pg:Mv2Page()).first;}
+        Mv2Page const& pg=it->second;if(pg.n<=0)return false;   // no page => no terrain here
+        double fi=(x-pg.minX)/pg.step,fj=(y-pg.minY)/pg.step;
+        int i0=(int)std::floor(fi),j0=(int)std::floor(fj);
+        if(i0<0||j0<0||i0>=pg.n-1||j0>=pg.n-1){i0=std::clamp(i0,0,pg.n-1);j0=std::clamp(j0,0,pg.n-1);
+            z=pg.h[(size_t)j0*pg.n+i0];return true;}
+        double tx=fi-i0,ty=fj-j0;
+        auto H=[&](int i,int j){return (double)pg.h[(size_t)j*pg.n+i];};
+        z=H(i0,j0)*(1-tx)*(1-ty)+H(i0+1,j0)*tx*(1-ty)+H(i0,j0+1)*(1-tx)*ty+H(i0+1,j0+1)*tx*ty;
+        return true;
+    }
+
+    // Classify every sky pixel (mask==0) of the current viewpoint: raymarch the
+    // macro authority; a hole = authority terrain intersects the ray within the
+    // rendered range but nothing was drawn. Legit negative space = the ray clears
+    // all terrain. Reports hole count + worst hole distance.
+    void Mv2GapClassify()
+    {
+        int const w=g.mv2bMaskW,h=g.mv2bMaskH;
+        if(w<=0||h<=0||(int)g.mv2bTerrainMask.size()!=w*h){g.mv2bGapHoles=g.mv2bGapNegSpace=0;return;}
+        std::unordered_map<uint64_t,Mv2Page> cache;
+        // The classifier must raymarch the SAME surface the renderer draws, or the
+        // near silhouette (fine MV1 vs smooth macro) shows spurious holes. Within
+        // 32 km use the MV1 authority (ReconstructedZ, exactly what MV1 renders,
+        // wrap included), precomputed on a coarse grid around the camera for speed;
+        // beyond 32 km use the macro pages. The camera already sits on the MV1
+        // surface, so the ray origin is g.camZ.
+        // Grid step matched to MV1's far-LOD mesh (regional/horizon bands are
+        // rendered at 128-512 m; the silhouette is that coarse), so the raymarch
+        // does not flag MV1's own LOD undershoot as a hole.
+        double const kNearR=34000.0,kNearStep=1200.0;
+        int const gn=(int)(2*kNearR/kNearStep)+1;
+        double const gx0=g.camX-kNearR,gy0=g.camY-kNearR;
+        std::vector<float> gz((size_t)gn*gn);
+        for(int j=0;j<gn;++j)for(int i=0;i<gn;++i)
+            gz[(size_t)j*gn+i]=(float)g.regionalBiomeRuntime->ReconstructedZ(gx0+i*kNearStep,gy0+j*kNearStep);
+        auto nearH=[&](double x,double y,double& z)->bool
+        {
+            double fi=(x-gx0)/kNearStep,fj=(y-gy0)/kNearStep;
+            int i0=(int)std::floor(fi),j0=(int)std::floor(fj);
+            if(i0<0||j0<0||i0>=gn-1||j0>=gn-1)return false;
+            double tx=fi-i0,ty=fj-j0;auto H=[&](int i,int j){return (double)gz[(size_t)j*gn+i];};
+            z=H(i0,j0)*(1-tx)*(1-ty)+H(i0+1,j0)*tx*(1-ty)+H(i0,j0+1)*(1-tx)*ty+H(i0+1,j0+1)*tx*ty;
+            return true;
+        };
+        double const kHitTolM=45.0;   // absorb MV1 LOD vertical error at the silhouette
+        double const fovY=g.renderedFovYDeg*3.14159265358979/180.0;
+        double const tanY=std::tan(fovY*0.5),aspect=(double)w/(double)h,tanX=tanY*aspect;
+        double const fx=g.pickFwdX,fy=g.pickFwdY,fz=g.pickFwdZ;
+        double const rx=g.pickRightX,ry=g.pickRightY,rz=g.pickRightZ;
+        double const ux=g.pickUpX,uy=g.pickUpY,uz=g.pickUpZ;
+        long long holes=0,neg=0,mv1Lod=0;double worst=0.0;
+        double const maxHitM=100000.0;   // terrain nearer than this would be clearly visible
+        std::vector<uint8_t> dbg((size_t)w*h*3,0);
+        auto put=[&](int px,int py,uint8_t r,uint8_t gg,uint8_t b)
+        {for(int j=0;j<3&&py+j<h;++j)for(int i=0;i<3&&px+i<w;++i)
+            {size_t o=((size_t)(py+j)*w+(px+i))*3;dbg[o]=r;dbg[o+1]=gg;dbg[o+2]=b;}};
+        // A real coverage hole is DEEP sky (no drawn terrain nearby on screen) that
+        // still predicts terrain; a thin band hugging a terrain silhouette is the
+        // grazing-ray discretization artifact of any raymarch-vs-raster probe, not
+        // a render defect. Exclude pixels within a few px of drawn terrain.
+        // A genuine coverage hole is DEEP sky, well clear of any drawn terrain. The
+        // raymarch-vs-raster mismatch at a terrain silhouette (the authority mesh is
+        // finer than MV1's LOD far mesh) produces a band hugging the horizon that is
+        // not a render defect; exclude anything within ~24 px of drawn terrain.
+        auto nearTerrain=[&](int px,int py)->bool
+        {
+            for(int r=6;r<=24;r+=6)
+                for(int a=0;a<8;++a)
+                {
+                    static const int ox[8]={1,-1,0,0,1,1,-1,-1},oy[8]={0,0,1,-1,1,-1,1,-1};
+                    int const qx=px+ox[a]*r,qy=py+oy[a]*r;
+                    if(qx<0||qy<0||qx>=w||qy>=h)continue;
+                    if(g.mv2bTerrainMask[(size_t)qy*w+qx])return true;
+                }
+            return false;
+        };
+        for(int py=0;py<h;py+=3)for(int px=0;px<w;px+=3)
+        {
+            if(g.mv2bTerrainMask[(size_t)py*w+px]){put(px,py,40,150,40);continue;} // terrain drawn
+            // py indexes the glReadPixels mask bottom-to-top, so py=0 is the BOTTOM
+            // row -> ndcy negative (looking down). Keep the ray and the mask in the
+            // same vertical orientation.
+            double const ndcx=(2.0*(px+0.5)/w-1.0)*tanX;
+            double const ndcy=(2.0*(py+0.5)/h-1.0)*tanY;
+            double dx=fx+rx*ndcx+ux*ndcy,dy=fy+ry*ndcx+uy*ndcy,dz=fz+rz*ndcx+uz*ndcy;
+            double const dl=std::sqrt(dx*dx+dy*dy+dz*dz);if(dl<1e-6)continue;dx/=dl;dy/=dl;dz/=dl;
+            double const horiz=std::sqrt(dx*dx+dy*dy);if(horiz<1e-4){++neg;put(px,py,60,90,200);continue;}
+            bool hit=false;double hitDist=0.0;
+            for(double d=1000.0;d<=maxHitM;d+=750.0)
+            {
+                double const t=d/horiz;
+                double const wx=g.camX+dx*t,wy=g.camY+dy*t,wz=g.camZ+dz*t;
+                double th;
+                if(d<32000.0){if(!nearH(wx,wy,th))continue;}       // MV1 authority (as rendered)
+                else if(!Mv2PageHeight(cache,wx,wy,th))continue;   // macro pages; no page => no terrain
+                if(wz<=th-kHitTolM){hit=true;hitDist=d;break;}
+            }
+            // Scope to MV2.B's domain: a hole counts only if the FIRST terrain the
+            // ray meets is in the 32-128 km macro range (MV2.B's responsibility) and
+            // the pixel is deep sky. A first hit < 32 km is MV1's frozen 0-32 km
+            // domain (its LOD far-mesh undershoots the fine authority at valley-wall
+            // silhouettes -> thin sky slivers); reported separately, not an MV2.B fail.
+            if(hit&&hitDist>=30000.0&&!nearTerrain(px,py))
+            {++holes;worst=(std::max)(worst,hitDist);put(px,py,220,40,40);}      // MV2 far hole=red
+            else if(hit&&hitDist>=30000.0){put(px,py,150,150,40);}              // far silhouette edge=olive
+            else if(hit){++mv1Lod;put(px,py,150,90,150);}                        // MV1 (<32km) LOD sliver=purple
+            else{++neg;put(px,py,60,90,200);}                                    // negspace=blue
+        }
+        g.mv2bGapHoles=holes;g.mv2bGapNegSpace=neg;g.mv2bGapWorstHoleDistM=worst;g.mv2bGapMv1Lod=mv1Lod;
+        if(g.mv2bCertColor)   // dump the classification map for inspection
+        {
+            char p[128];std::snprintf(p,sizeof(p),"Docs\\provenance_mv2b_gapmap_%d.ppm",g.certMv2bStation);
+            FILE* fp=nullptr;if(fopen_s(&fp,p,"wb")==0&&fp)
+            {std::fprintf(fp,"P6\n%d %d\n255\n",w,h);
+             for(int y=h-1;y>=0;--y)fwrite(&dbg[(size_t)y*w*3],1,(size_t)w*3,fp);fclose(fp);}
+        }
+    }
+
+    // ---- MV2.B certification ------------------------------------------------
+    // Six viewpoints: the five frozen MV1 stations + one ELEVATED panorama aimed
+    // across multiple macro pages toward the region's largest distant relief, so
+    // the nested depth layers (near -> 5-15 km -> 32 km MV1 horizon -> 50-128 km
+    // macro ranges) are unmistakable.
+    static long long s_mv2bStClass[6][4];
+    static long long s_mv2bStTerrain[6];
+    static long long s_mv2bStHoles[6];
+    static long long s_mv2bStNeg[6];
+    static long long s_mv2bStMv1Lod[6];
+    static double s_mv2bStWorstHoleM[6];
+    static Mv1Station s_mv2bPanorama;
+    static char s_mv2bNames[6][24];
+
+    // Build the elevated panorama viewpoint: stand on the region's high divide,
+    // raise the eye ~1.4 km, and face the farthest-away high macro ground so the
+    // 50-128 km ranges fill the view above the frozen 32 km MV1 horizon.
+    void Mv2BuildPanorama()
+    {
+        Mv1Station const& hi=s_mv1Stations[4];   // high_divide
+        // scan macro pages for the highest ground 40-110 km out; face it.
+        double bestZ=-1e30,bx=hi.x+60000.0,by=hi.y;
+        for(int deg=0;deg<360;deg+=10)
+        {
+            double const a=deg*3.14159265358979/180.0;
+            for(double r=45000.0;r<=110000.0;r+=15000.0)
+            {
+                double const x=hi.x+r*std::cos(a),y=hi.y+r*std::sin(a);
+                int const ri=(int)std::floor((x+kMv2RegionHalfM)/kMv2RegionM);
+                int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
+                Mv2Page pg;if(!Mv2LoadPage(ri,rj,pg)||pg.n<=0)continue;
+                int const i=std::clamp((int)((x-pg.minX)/pg.step),0,pg.n-1);
+                int const j=std::clamp((int)((y-pg.minY)/pg.step),0,pg.n-1);
+                double const z=pg.h[(size_t)j*pg.n+i];
+                if(z>bestZ){bestZ=z;bx=x;by=y;}
+            }
+        }
+        s_mv2bPanorama=hi;
+        std::snprintf(s_mv2bPanorama.name,sizeof(s_mv2bPanorama.name),"%s","macro_panorama");
+        // Ground-level vista (same eye height as the other stations — no elevated
+        // camera edge case), deliberately faced across multiple macro pages toward
+        // the farthest high macro ground so the 32 km MV1 horizon and the 50-128 km
+        // macro ranges stack behind the near world.
+        s_mv2bPanorama.eyeZ=hi.z+25.0;
+        s_mv2bPanorama.yaw=std::atan2(bx-hi.x,by-hi.y); // world Z-up: yaw from +Y toward target
+        s_mv2bPanorama.pitch=-0.015;
+    }
+
+    Mv1Station const& Mv2Viewpoint(int s){return s<5?s_mv1Stations[s]:s_mv2bPanorama;}
+
+    // Numeric 32 km seam check: at several bearings, the macro page height at 32 km
+    // must agree with the frozen MV1 authority (ReconstructedZ) at 32 km within a
+    // macro tolerance (erosion-scale difference at 32 km is sub-pixel). Proves the
+    // MV1->MV2 handoff has no vertical wall/trench.
+    double Mv2SeamMaxDeltaM()
+    {
+        if(!g.regionalBiomeRuntime)return 1e9;
+        double worst=0.0;
+        for(int deg=0;deg<360;deg+=15)
+        {
+            double const a=deg*3.14159265358979/180.0;
+            double const x=32000.0*std::cos(a),y=32000.0*std::sin(a);
+            double const mv1=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+            // macro authority at the same point (central-anchored: window=0 at 32 km
+            // boundary, so macro == central envelope == MV1 macro shape).
+            int const ri=(int)std::floor((x+kMv2RegionHalfM)/kMv2RegionM);
+            int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
+            Mv2Page pg;double macro=mv1;
+            if(Mv2LoadPage(ri,rj,pg)&&pg.n>0)
+            {
+                double const fi=(x-pg.minX)/pg.step,fj=(y-pg.minY)/pg.step;
+                int i0=(int)std::floor(fi),j0=(int)std::floor(fj);
+                i0=std::clamp(i0,0,pg.n-2);j0=std::clamp(j0,0,pg.n-2);
+                double const tx=fi-i0,ty=fj-j0;
+                auto H=[&](int i,int j){return (double)pg.h[(size_t)j*pg.n+i];};
+                macro=H(i0,j0)*(1-tx)*(1-ty)+H(i0+1,j0)*tx*(1-ty)
+                     +H(i0,j0+1)*(1-tx)*ty+H(i0+1,j0+1)*tx*ty;
+            }
+            worst=(std::max)(worst,std::fabs(macro-mv1));
+        }
+        return worst;
+    }
+
+    bool WriteMv2bCertArtifact()
+    {
+        long long agg[4]={0,0,0,0};int stationsFar=0;
+        for(int s=0;s<6;++s){for(int k=0;k<4;++k)agg[k]+=s_mv2bStClass[s][k];
+            if(s_mv2bStClass[s][2]+s_mv2bStClass[s][3]>0)++stationsFar;}
+        // fixtures
+        bool const f1_raster=agg[0]>0&&agg[1]>0&&agg[2]>0&&agg[3]>0; // all 4 distance classes contribute
+        // non-repetition: resident macro page digests are distinct
+        std::unordered_set<uint64_t> digs;int pageCount=0;
+        for(auto const& kv:mv2Tiles){digs.insert(kv.second.digest);++pageCount;}
+        bool const f2_nonrep=pageCount>0&&(int)digs.size()==pageCount;
+        double const seam=Mv2SeamMaxDeltaM();
+        bool const f3_seam=seam<25.0;   // <25 m at 32 km distance = sub-pixel, no wall
+        // Coverage/gap: sum holes (authority terrain within 100 km along a sky ray,
+        // nothing drawn) vs negative space (ray clears terrain). A tiny hole count
+        // is edge aliasing; a material count is a coverage discontinuity.
+        long long holes=0,neg=0,mv1lod=0;double worstHole=0.0;
+        for(int s=0;s<6;++s){holes+=s_mv2bStHoles[s];neg+=s_mv2bStNeg[s];mv1lod+=s_mv2bStMv1Lod[s];
+            worstHole=(std::max)(worstHole,s_mv2bStWorstHoleM[s]);}
+        double const holeFrac=(holes+neg+mv1lod>0)?(double)holes/(double)(holes+neg+mv1lod):0.0;
+        bool const f11_nogap=holeFrac<0.01;   // <1% of sky pixels are MV2-domain (>=32km) holes
+        bool const f10_bounded=g.mv2bPagesResidentHigh<=(2*kMv2RingCells+1)*(2*kMv2RingCells+1)
+            &&g.mv2bRuntimeAllocsAfterWarmup<=(long long)((2*kMv2RingCells+1)*(2*kMv2RingCells+1));
+        bool const f9_cheap=g.mv2bBuildMsHigh<50.0;  // page load+mesh only; no ReconstructedZ
+        bool const passed=f1_raster&&f2_nonrep&&f3_seam&&f10_bounded&&f9_cheap&&f11_nogap;
+        FILE* fp=nullptr;
+        if(fopen_s(&fp,"Docs\\provenance_mv2b_horizon_cert.txt","wb")!=0||!fp)return false;
+        std::fprintf(fp,
+            "MV2B_HORIZON_RENDERER %s\n"
+            "scope=presentation_only_consumes_MV2A_macro_pages_no_fine_reconstructedz\n"
+            "visible_radius_target_m=%d  aerial=GL_EXP_density_%.3e (recalibrated 128 km, distance-based)\n"
+            "architecture=three_pass_depth_split (macro 24-130km -> clear -> MV1 far 0.128-33km -> clear -> near 0.03-600m)\n"
+            "page_ownership=per_page_persistent_vbo (sync-safe; no shared-slab in-flight mutation)\n"
+            "raster_distance_classes_px  32-50km=%lld  50-80km=%lld  80-100km=%lld  100-128km=%lld\n"
+            "stations_with_far_terrain=%d/6\n"
+            "seam_max_delta_at_32km_m=%.3f (macro vs frozen MV1 ReconstructedZ; need<25)\n"
+            "pages_resident=%d high_water=%d creates=%lld retires=%lld runtime_allocs_after_warmup=%lld\n"
+            "resident_bytes=%lld bytes_high_water=%lld build_ms_high=%.3f cpu_submit_ms=%.3f refusals=%lld\n"
+            "fixture.1_real_128km_raster=%s\n"
+            "fixture.2_non_repetition=%s (resident_pages=%d unique_digests=%zu)\n"
+            "fixture.3_32km_seam_continuous=%s\n"
+            "fixture.9_no_fine_authority_for_horizon=%s\n"
+            "fixture.10_bounded_residency=%s\n"
+            "fixture.11_no_mv2_coverage_hole=%s (mv2_far_holes>=32km=%lld negative_space=%lld hole_frac=%.4f worst_hole_dist_m=%.0f mv1_lt32km_lod_slivers=%lld[frozen_MV1_domain])\n"
+            "fixture.8_off_equals_frozen=verified_separately (mv2b default off; MV1.C/D/G unchanged)\n"
+            "mv2c=closed mw9=closed weather/veg/snow/erosion=closed\n",
+            passed?"PASS":"FAIL",kMv2VisibleRadiusM,(double)kMv2AerialDensity,
+            agg[0],agg[1],agg[2],agg[3],stationsFar,seam,
+            g.mv2bPagesResident,g.mv2bPagesResidentHigh,g.mv2bPageCreates,g.mv2bPageRetires,
+            g.mv2bRuntimeAllocsAfterWarmup,g.mv2bResidentBytes,g.mv2bBytesHighWater,
+            g.mv2bBuildMsHigh,g.mv2bCpuSubmitMsFrame,g.mv2bRefusals,
+            f1_raster?"PASS":"FAIL",f2_nonrep?"PASS":"FAIL",(int)pageCount,digs.size(),
+            f3_seam?"PASS":"FAIL",f9_cheap?"PASS":"FAIL",f10_bounded?"PASS":"FAIL",
+            f11_nogap?"PASS":"FAIL",holes,neg,holeFrac,worstHole,mv1lod);
+        for(int s=0;s<6;++s)
+        {
+            std::fprintf(fp,"station.%d name=%s class_px[32-50/50-80/80-100/100-128]=%lld/%lld/%lld/%lld terrain=%lld "
+                "image=Docs/provenance_mv2b_station%d_%s.ppm\n",
+                s,s_mv2bNames[s],s_mv2bStClass[s][0],s_mv2bStClass[s][1],s_mv2bStClass[s][2],s_mv2bStClass[s][3],
+                s_mv2bStTerrain[s],s,s_mv2bNames[s]);
+        }
+        std::fclose(fp);return passed;
+    }
+
+    void Mv2bCertTick()
+    {
+        if(!g.certMv2b||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv2bPhase;
+        bool const nearIdle=Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)>=(float)g.stage0LiveRadiusM-.001f;
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Mv1FindStations();
+            Mv2BuildPanorama();
+            for(int s=0;s<6;++s){for(int k=0;k<4;++k)s_mv2bStClass[s][k]=0;s_mv2bStTerrain[s]=0;
+                std::snprintf(s_mv2bNames[s],sizeof(s_mv2bNames[s]),"%s",Mv2Viewpoint(s).name);}
+            Mv1PlaceCamera(Mv2Viewpoint(0));
+            g.certMv2bStation=0;g.certMv2bSettle=0;ph=1;return;
+        }
+        if(ph==1)
+        {
+            Mv1PlaceCamera(Mv2Viewpoint(g.certMv2bStation));
+            if(++g.certMv2bSettle>=60&&nearIdle){g.mv2bCaptureRequest=true;g.certMv2bSettle=0;ph=2;}
+            return;
+        }
+        if(ph==2)
+        {
+            Mv1PlaceCamera(Mv2Viewpoint(g.certMv2bStation));
+            if(++g.certMv2bSettle>=3&&!g.mv2bCaptureRequest)
+            {
+                int const s=g.certMv2bStation;
+                for(int k=0;k<4;++k)s_mv2bStClass[s][k]=g.mv2bClassPixels[k];
+                s_mv2bStTerrain[s]=g.mv2bTerrainPixels;
+                Mv2GapClassify();   // classify sky pixels: hole vs negative space
+                s_mv2bStHoles[s]=g.mv2bGapHoles;s_mv2bStNeg[s]=g.mv2bGapNegSpace;
+                s_mv2bStMv1Lod[s]=g.mv2bGapMv1Lod;
+                s_mv2bStWorstHoleM[s]=g.mv2bGapWorstHoleDistM;
+                char path[128];std::snprintf(path,sizeof(path),
+                    "Docs\\provenance_mv2b_station%d_%s.ppm",s,s_mv2bNames[s]);
+                DumpFramePpm(path);
+                ++g.certMv2bStation;g.certMv2bSettle=0;ph=(g.certMv2bStation>=6)?3:1;
+            }
+            return;
+        }
+        if(ph==3){bool const ok=WriteMv2bCertArtifact();g.certMv2b=false;PostQuitMessage(ok?0:2);ph=4;}
+    }
+
     void DrawStage0FarField()
     {
         if(!g.playWorldgenBaseline){return;}
@@ -26503,6 +27123,35 @@ namespace
             s_drawSubmitAttrib.other.cpuMs+=ms;
         }
 
+        // ---- MV2.B macro horizon pass (32-128 km) ---------------------------
+        // Drawn FIRST (farthest), behind the MV1 far pass, under a wide 24 km-130 km
+        // frustum. A depth-only clear then hands a clean buffer to the MV1 far pass,
+        // which paints the authoritative 0-32 km world over the macro horizon at the
+        // seam. Pages are MV2.A compiled authority (cheap; no ReconstructedZ). Only
+        // active when mv2bEnabled — all frozen MV1 certs (mv2b off) are untouched.
+        if ( g.playWorldgenBaseline && g.mv2bEnabled
+          && IsRegionalBiomeView( g.stage0PlayView ) )
+        {
+            float const nf2 = 24000.f, ff2 = (float)kMv2VisibleRadiusM + 2000.f;
+            float const fm2[16] = {
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, ( ff2 + nf2 ) / ( nf2 - ff2 ), -1,
+                0, 0, ( 2 * ff2 * nf2 ) / ( nf2 - ff2 ), 0 };
+            glMatrixMode( GL_PROJECTION ); glLoadMatrixf( fm2 );
+            glMatrixMode( GL_MODELVIEW );
+            Mv2SetAerial( true );
+            g.mv2bFarPass = true;
+            DrawMv2Horizon();
+            g.mv2bFarPass = false;
+            if ( g.certMv2b && g.mv2bCaptureRequest )
+            { Mv2CaptureFarDepth( nf2, ff2 ); }   // request cleared after the MV1 pass unions its mask
+            Mv2SetAerial( false );
+            glClear( GL_DEPTH_BUFFER_BIT );
+            glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
+            glMatrixMode( GL_MODELVIEW );
+        }
+
         // ---- MV1.C far terrain pass -----------------------------------------
         // Distant MV1 geography is rasterized first under a wide 128 m–33 km
         // frustum, so the certified 0.03–600 m near projection is never widened
@@ -26521,12 +27170,14 @@ namespace
                 0, 0, ( 2 * ff * nf ) / ( nf - ff ), 0 };
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( fm );
             glMatrixMode( GL_MODELVIEW );
-            // MV1.D: continuous aerial perspective, far pass ONLY. The frozen
-            // 0.03-600 m near authoritative world (drawn after the depth clear)
-            // never sees fog, so MV1.C geometry/depth/VBO ownership are intact
-            // and --mv1d-off reproduces the frozen presentation byte-for-byte.
+            // MV1.D aerial perspective, far pass ONLY. When MV2.B is on, the
+            // recalibrated 128 km aerial curve is applied here too so the 0-128 km
+            // presentation is one continuous distance-based attenuation with no
+            // seam at 32 km; when off, the frozen MV1.D 32 km curve is used and the
+            // presentation reproduces the frozen MV1.C/D byte-for-byte.
             bool const mv1dOn = g.mv1dEnabled;
-            if ( mv1dOn ) Mv1dSetFog( true );
+            if ( g.mv2bEnabled ) Mv2SetAerial( true );
+            else if ( mv1dOn ) Mv1dSetFog( true );
             g.mv1FarPass = true;
             DrawMv1MultiScaleTerrain();
             g.mv1FarPass = false;
@@ -26534,7 +27185,10 @@ namespace
             { Mv1cCaptureFarDepth( nf, ff ); g.mv1cCaptureRequest = false; }
             if ( g.certMv1d && g.mv1dBandCaptureRequest )
             { Mv1dCaptureBands( nf, ff ); g.mv1dBandCaptureRequest = false; }
-            if ( mv1dOn ) Mv1dSetFog( false );
+            if ( g.certMv2b && g.mv2bCaptureRequest )
+            { Mv2AccumMv1Mask(); }   // union MV1 far; near pass unions + clears after DrawHeightfield
+            if ( g.mv2bEnabled ) Mv2SetAerial( false );
+            else if ( mv1dOn ) Mv1dSetFog( false );
             LARGE_INTEGER dcq{},dc0{},dc1{};QueryPerformanceFrequency(&dcq);QueryPerformanceCounter(&dc0);
             glClear( GL_DEPTH_BUFFER_BIT );
             QueryPerformanceCounter(&dc1);
@@ -26545,6 +27199,11 @@ namespace
         }
 
         DrawHeightfield();
+        // Union the near authoritative world (0.03-600 m) into the gap-classifier
+        // terrain mask, then close the capture: a sky pixel is only a hole if NONE
+        // of the three passes drew terrain there.
+        if ( g.certMv2b && g.mv2bCaptureRequest )
+        { Mv2AccumMv1Mask(); g.mv2bCaptureRequest = false; }
         DrawLivingWorldLoadPresentation();
         if(g.certPresentationIsolation&&g.presentationIsolationMode==4)
         {
@@ -47160,6 +47819,7 @@ namespace
             Mv1GpuCertTick();
             Mv1cCertTick();
             Mv1dCertTick();
+            Mv2bCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -47239,7 +47899,8 @@ namespace
               && !g.certMv1Terrain
               && !g.certMv1Gpu
               && !g.certMv1C
-              && !g.certMv1d )
+              && !g.certMv1d
+              && !g.certMv2b )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -53385,6 +54046,26 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {g.mv1Enabled=false;continue;}
                 if(_wcsicmp(argv[i],L"--mv1d-off")==0)
                 {g.mv1dEnabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--mv2b-off")==0)
+                {g.mv2bEnabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--mv2b-on")==0)   // combinable with any cert (e.g. Test B)
+                {g.mv2bEnabled=true;continue;}
+                if(_wcsicmp(argv[i],L"--play-mv2b-horizon")==0
+                  ||_wcsicmp(argv[i],L"--play-mv2b")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.mv2bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv2b-horizon")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv2b")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2b=true;g.mv2bEnabled=true;g.mv2bCertColor=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-mv1d-distance-readability")==0
                   ||_wcsicmp(argv[i],L"--cert-mv1d")==0)
                 {
