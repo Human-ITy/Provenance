@@ -258,7 +258,7 @@ MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residency/fidelity/identity)
-MV1.C   real 32 km raster visibility      CERTIFIED @ __MV1C_SHA__ (two-pass depth split; VBO ownership)
+MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth split; VBO ownership)
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
 GLOBAL  Test-B present pacing             OPEN (baseline SwapBuffers jitter, not MV1 — see below)
 MV1.D   distance / depth readability      WAITING (on present pacing)
@@ -266,7 +266,7 @@ MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
 
-**MV1.C CERTIFIED @ `__MV1C_SHA__`** — real 32 km raster visibility. A projection
+**MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were
 built and submitted but **clipped before framebuffer contribution**. MV1.C adds a
 **two-pass depth split** (far pass near≈128 m / far≈33 km → depth-only clear →
