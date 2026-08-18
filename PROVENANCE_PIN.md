@@ -265,7 +265,8 @@ PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-ove
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
-MV2.A   regional macro authority          NEXT (continuous absolute-coord macro field; central-region anchored; non-repeating; no WrapIntoRegion; Python-compiled pages)
+MV2.A   regional macro authority          CERTIFIED @ __MV2A_SHA__ (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
+MV2.B   horizon renderer                  NEXT (consume MV2.A macro pages; bounded ring; two-pass widened to ~128 km; MV1.D recalibrated; seam-free 32 km join; no new world authority)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -342,6 +343,28 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**MV2.A CERTIFIED @ `__MV2A_SHA__`** — Regional Macro Authority (Python
+world-authority lane; NO renderer). Deterministic non-repeating boundary-continuous
+macro pages beyond the frozen ±32 km centre. `macro_z = central_envelope +
+anchor_window·regional_field`: `central_envelope` replicates
+`CausalMacroProvinces::SampleForcing().surfaceZ` (centre IS frozen authority);
+`anchor_window=smoothstep(32,64 km, max|x|,|y|)` is 0 with zero slope on the centre
+boundary → **position+slope continuity by construction**; `regional_field` is a
+continuous absolute-coordinate field (tectonic base + 6 belts 400–900 km + basins +
+massifs) seeded/hashed from the world seed, wavelengths **independent of the 64 km
+cell** (a belt runs 874 km across ~13 cells). 9-page set (center+N/S/E/W+NE/NW/SE/SW),
+each carrying region_id/world_seed/generator_version/bounds/source_digest/8-way
+neighbor lineage/no-wrap. **All 8 fixtures + cheap-source PASS:** determinism
+(0 bytes cross-process), non-repetition (period-64 RMS 675 m), boundary continuity
+(0.046 m / slope 1e-4), cross-page crest continuity, central anchor (exact 0),
+no-square-signature, feature >64 km (874 km belt), no `WrapIntoRegion`/`ReconstructedZ`,
+cheap (9 pages / 0.48 s). Tool: `Tools/Worldgen/{macro_authority,cert_macro_authority}.py`;
+pages `Data/Worldgen/MacroAuthority/*.mcp`; receipt
+`Docs/provenance_mv2a_macro_authority_cert.txt`; visual
+`Docs/provenance_mv2a_macro_footprint.png`; handoff
+`MV2A_REGIONAL_MACRO_AUTHORITY_HANDOFF.md`. MW1–MW8/MV1 not reopened; frozen centre
+untouched. Next = MV2.B horizon renderer (consume pages; no new world authority).
 
 **MV2 DESIGN LOCKED** (design only; no code) — `MV2_HORIZON_ARCHITECTURE_DESIGN.md`.
 Two grounded findings decide the architecture: (A1) the MW authority is a **single
