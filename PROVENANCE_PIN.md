@@ -262,7 +262,7 @@ MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth s
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
 PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
 PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
-MV1.D   distance / depth readability      CERTIFIED @ __MV1D_SHA__ (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
+MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
@@ -320,7 +320,7 @@ MW1–MW8 are **not** reopened — only the weak wall-clock movement clause is
 superseded; a retrospective sweep under the two-contract gate can follow later.
 Handoff: `PX2_GATE_DEFINITION_HANDOFF.md`.
 
-**MV1.D CERTIFIED @ `__MV1D_SHA__`** — distance / depth readability via
+**MV1.D CERTIFIED @ `fa9c048f`** — distance / depth readability via
 continuous aerial perspective. Presentation-only: every **far-pass** fragment
 attenuates toward the exact horizon sky colour by a deterministic transmittance
 of the **actual camera-to-surface distance**, `T(d)=exp(-(rho·d)²)`,
@@ -384,7 +384,7 @@ rerun MV1.G → then MV1.D.**
   `UNAVAILABLE` (no reliable extension; driver-defined). Standing gates held:
   Test A 4/4 (0 movement frames >16.667), Test B 90 s 0 frames >16.667. Handoff:
   `MV1G_GPU_PRESENTATION_HANDOFF.md`. Cert: `CERT_MV1G_GPU_PRESENTATION.cmd`.
-- **MV1.D — distance / depth readability. CERTIFIED @ `__MV1D_SHA__`.**
+- **MV1.D — distance / depth readability. CERTIFIED @ `fa9c048f`.**
   Continuous aerial perspective `T(d)=exp(-(rho·d)²)` (`rho=4.30e-5/m`) toward the
   horizon sky colour, by actual camera distance, in the far pass only. No colour
   switch at the LOD edges (analytical continuity proof); near/meso crisp,
