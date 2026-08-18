@@ -59,7 +59,8 @@ viewpoints (five frozen MV1 stations + a ground-level vista aimed across pages).
 | 8 MV2.B off == frozen | PASS — default off; MV1.C re-run **PASS** unchanged |
 | 9 no fine authority | PASS — horizon from macro pages only; no `ReconstructedZ`/erosion; build 10.7 ms one-time |
 | 10 bounded residency | PASS — 9 pages high-water, 0 runtime allocs after warmup, 0 retires standing |
-| 11 no MV2 coverage hole | PASS — terrain-present mask (macro+MV1+near) + authority raymarch: **0** sky pixels ≥32 km are holes (187874 negative space) |
+| 11 no MV2 coverage hole | PASS — terrain-present mask (macro+MV1+near) + authority raymarch: **0** sky pixels ≥32 km are holes (377457 negative space) |
+| 12 cardinal 128 km coverage (MV2.A2) | PASS — N/E/S/W each contribute far ≥80 km pixels; 100-128 km class N=4929 E=7813 S=6389 W=1871; full radial 128 km, not just the 3×3 diagonal |
 
 **The 32 km "sky band" question (resolved rigorously).** A cert-only classifier
 raymarches the authority for every sky pixel and unions a terrain-present mask across
@@ -111,11 +112,22 @@ MV2.B 100-128 km horizon         CERTIFIED (real 128 km raster, seam-free, non-r
                                  bounded, cheap; 0 MV2-domain coverage holes)
 ```
 
-## Note for later
+## MV2.A2 — full 128 km radial authority (closed)
 
-MV2.A currently ships 9 pages (cells −1..+1 = ±96 km square; corners reach ~135 km),
-so full-disc coverage in cardinal directions runs to ~96 km. Extending MV2.A to the
-±2 ring (25 pages, same deterministic field — no authority change) would fill the
-128 km disc in all directions. Macro relief also reads modestly at the 1 km page step
-from central viewpoints; a finer macro step or taller feature amplitudes are a tuning
-lever for a future pass. Neither blocks MV2.B certification.
+The initial cut shipped 9 pages (±1 / ±96 km square; 128 km only on the diagonal).
+**MV2.A2** extends the same continuous deterministic field to the **±2 ring — 25
+pages** (`Tools/Worldgen/cert_macro_authority.py`), giving neighbouring authority to
+128 km+ in every direction. No new macro-generation semantics; just more compiled
+pages. Authority cert (`Docs/provenance_mv2a_macro_authority_cert.txt`): all 25 page
+IDs/digests deterministic + unique; continuity across the new ±96 km ring seams
+(0.0 m anomalous step); no square-world signature over ±160 km; cardinal ±2 reaches
+160 km with real relief (N 4544 m, S 2537 m, W 835 m, E 398 m); features cross the
+±2 ring; cheap (25 pages / 1.3 s). The renderer's ±2-cell ring now loads all 25
+pages (bounded: 25 high-water, 0 runtime allocs after warmup) and the horizon cert's
+**fixture 12** proves 100-128 km framebuffer pixels in N/E/S/W as well as diagonal.
+
+Remaining for later (not blocking): macro relief reads modestly at the 1 km page step
+from central viewpoints; and surface appearance is still a diagnostic elevation
+palette — a coarse long-distance **semantic** presentation (rock / vegetated / desert
+/ wetland / snow-when-authorized, derived consistently across MV1 and MV2) is the
+natural follow-on, deferred by decision.

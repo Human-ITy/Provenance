@@ -19288,14 +19288,19 @@ namespace
     // across multiple macro pages toward the region's largest distant relief, so
     // the nested depth layers (near -> 5-15 km -> 32 km MV1 horizon -> 50-128 km
     // macro ranges) are unmistakable.
-    static long long s_mv2bStClass[6][4];
-    static long long s_mv2bStTerrain[6];
-    static long long s_mv2bStHoles[6];
-    static long long s_mv2bStNeg[6];
-    static long long s_mv2bStMv1Lod[6];
-    static double s_mv2bStWorstHoleM[6];
+    // 10 viewpoints: 5 frozen MV1 stations + 1 elevated-vista panorama + 4 CARDINAL
+    // horizon views (from the origin looking N/E/S/W), so the +/-2 ring's 100-128 km
+    // coverage is proven in the cardinal directions, not only on the 3x3 diagonal.
+    static constexpr int kMv2bViews=10;
+    static long long s_mv2bStClass[kMv2bViews][4];
+    static long long s_mv2bStTerrain[kMv2bViews];
+    static long long s_mv2bStHoles[kMv2bViews];
+    static long long s_mv2bStNeg[kMv2bViews];
+    static long long s_mv2bStMv1Lod[kMv2bViews];
+    static double s_mv2bStWorstHoleM[kMv2bViews];
     static Mv1Station s_mv2bPanorama;
-    static char s_mv2bNames[6][24];
+    static Mv1Station s_mv2bCardinal[4];   // N,E,S,W
+    static char s_mv2bNames[kMv2bViews][24];
 
     // Build the elevated panorama viewpoint: stand on the region's high divide,
     // raise the eye ~1.4 km, and face the farthest-away high macro ground so the
@@ -19331,7 +19336,24 @@ namespace
         s_mv2bPanorama.pitch=-0.015;
     }
 
-    Mv1Station const& Mv2Viewpoint(int s){return s<5?s_mv1Stations[s]:s_mv2bPanorama;}
+    // Four cardinal horizon views from the origin, looking N/E/S/W and pitched to
+    // the distant +/-2-ring ranges, so 100-128 km framebuffer coverage is proven in
+    // every cardinal direction (yaw convention: forward = (sin yaw, cos yaw)).
+    void Mv2BuildCardinals()
+    {
+        double const g0=g.regionalBiomeRuntime->ReconstructedZ(0.0,0.0);
+        double const yaws[4]={0.0,3.14159265358979/2.0,3.14159265358979,3.0*3.14159265358979/2.0};
+        char const* nm[4]={"cardinal_north","cardinal_east","cardinal_south","cardinal_west"};
+        for(int i=0;i<4;++i)
+        {
+            Mv1Station& st=s_mv2bCardinal[i];st=s_mv1Stations[0];
+            st.x=0.0;st.y=0.0;st.z=g0;st.eyeZ=g0+60.0;
+            st.yaw=yaws[i];st.pitch=0.005;
+            std::snprintf(st.name,sizeof(st.name),"%s",nm[i]);
+        }
+    }
+    Mv1Station const& Mv2Viewpoint(int s)
+    {return s<5?s_mv1Stations[s]:(s==5?s_mv2bPanorama:s_mv2bCardinal[s-6]);}
 
     // Numeric 32 km seam check: at several bearings, the macro page height at 32 km
     // must agree with the frozen MV1 authority (ReconstructedZ) at 32 km within a
@@ -19369,8 +19391,14 @@ namespace
     bool WriteMv2bCertArtifact()
     {
         long long agg[4]={0,0,0,0};int stationsFar=0;
-        for(int s=0;s<6;++s){for(int k=0;k<4;++k)agg[k]+=s_mv2bStClass[s][k];
+        for(int s=0;s<kMv2bViews;++s){for(int k=0;k<4;++k)agg[k]+=s_mv2bStClass[s][k];
             if(s_mv2bStClass[s][2]+s_mv2bStClass[s][3]>0)++stationsFar;}
+        // Cardinal coverage: each of the 4 cardinal views (indices 6-9 = N/E/S/W)
+        // must contribute FAR (>=80 km) framebuffer pixels, proving the +/-2 ring
+        // reaches 128 km in every cardinal direction, not only the 3x3 diagonal.
+        int cardinalsFar=0;
+        for(int s=6;s<10;++s)if(s_mv2bStClass[s][2]+s_mv2bStClass[s][3]>0)++cardinalsFar;
+        bool const f12_cardinal=cardinalsFar==4;
         // fixtures
         bool const f1_raster=agg[0]>0&&agg[1]>0&&agg[2]>0&&agg[3]>0; // all 4 distance classes contribute
         // non-repetition: resident macro page digests are distinct
@@ -19383,14 +19411,14 @@ namespace
         // nothing drawn) vs negative space (ray clears terrain). A tiny hole count
         // is edge aliasing; a material count is a coverage discontinuity.
         long long holes=0,neg=0,mv1lod=0;double worstHole=0.0;
-        for(int s=0;s<6;++s){holes+=s_mv2bStHoles[s];neg+=s_mv2bStNeg[s];mv1lod+=s_mv2bStMv1Lod[s];
+        for(int s=0;s<kMv2bViews;++s){holes+=s_mv2bStHoles[s];neg+=s_mv2bStNeg[s];mv1lod+=s_mv2bStMv1Lod[s];
             worstHole=(std::max)(worstHole,s_mv2bStWorstHoleM[s]);}
         double const holeFrac=(holes+neg+mv1lod>0)?(double)holes/(double)(holes+neg+mv1lod):0.0;
         bool const f11_nogap=holeFrac<0.01;   // <1% of sky pixels are MV2-domain (>=32km) holes
         bool const f10_bounded=g.mv2bPagesResidentHigh<=(2*kMv2RingCells+1)*(2*kMv2RingCells+1)
             &&g.mv2bRuntimeAllocsAfterWarmup<=(long long)((2*kMv2RingCells+1)*(2*kMv2RingCells+1));
         bool const f9_cheap=g.mv2bBuildMsHigh<50.0;  // page load+mesh only; no ReconstructedZ
-        bool const passed=f1_raster&&f2_nonrep&&f3_seam&&f10_bounded&&f9_cheap&&f11_nogap;
+        bool const passed=f1_raster&&f2_nonrep&&f3_seam&&f10_bounded&&f9_cheap&&f11_nogap&&f12_cardinal;
         FILE* fp=nullptr;
         if(fopen_s(&fp,"Docs\\provenance_mv2b_horizon_cert.txt","wb")!=0||!fp)return false;
         std::fprintf(fp,
@@ -19400,7 +19428,7 @@ namespace
             "architecture=three_pass_depth_split (macro 24-130km -> clear -> MV1 far 0.128-33km -> clear -> near 0.03-600m)\n"
             "page_ownership=per_page_persistent_vbo (sync-safe; no shared-slab in-flight mutation)\n"
             "raster_distance_classes_px  32-50km=%lld  50-80km=%lld  80-100km=%lld  100-128km=%lld\n"
-            "stations_with_far_terrain=%d/6\n"
+            "stations_with_far_terrain=%d/10  cardinal_directions_with_far_terrain=%d/4\n"
             "seam_max_delta_at_32km_m=%.3f (macro vs frozen MV1 ReconstructedZ; need<25)\n"
             "pages_resident=%d high_water=%d creates=%lld retires=%lld runtime_allocs_after_warmup=%lld\n"
             "resident_bytes=%lld bytes_high_water=%lld build_ms_high=%.3f cpu_submit_ms=%.3f refusals=%lld\n"
@@ -19410,17 +19438,19 @@ namespace
             "fixture.9_no_fine_authority_for_horizon=%s\n"
             "fixture.10_bounded_residency=%s\n"
             "fixture.11_no_mv2_coverage_hole=%s (mv2_far_holes>=32km=%lld negative_space=%lld hole_frac=%.4f worst_hole_dist_m=%.0f mv1_lt32km_lod_slivers=%lld[frozen_MV1_domain])\n"
+            "fixture.12_cardinal_128km_coverage=%s (cardinal N/E/S/W with far>=80km terrain=%d/4; full radial 128 km, not just diagonal)\n"
             "fixture.8_off_equals_frozen=verified_separately (mv2b default off; MV1.C/D/G unchanged)\n"
             "mv2c=closed mw9=closed weather/veg/snow/erosion=closed\n",
             passed?"PASS":"FAIL",kMv2VisibleRadiusM,(double)kMv2AerialDensity,
-            agg[0],agg[1],agg[2],agg[3],stationsFar,seam,
+            agg[0],agg[1],agg[2],agg[3],stationsFar,cardinalsFar,seam,
             g.mv2bPagesResident,g.mv2bPagesResidentHigh,g.mv2bPageCreates,g.mv2bPageRetires,
             g.mv2bRuntimeAllocsAfterWarmup,g.mv2bResidentBytes,g.mv2bBytesHighWater,
             g.mv2bBuildMsHigh,g.mv2bCpuSubmitMsFrame,g.mv2bRefusals,
             f1_raster?"PASS":"FAIL",f2_nonrep?"PASS":"FAIL",(int)pageCount,digs.size(),
             f3_seam?"PASS":"FAIL",f9_cheap?"PASS":"FAIL",f10_bounded?"PASS":"FAIL",
-            f11_nogap?"PASS":"FAIL",holes,neg,holeFrac,worstHole,mv1lod);
-        for(int s=0;s<6;++s)
+            f11_nogap?"PASS":"FAIL",holes,neg,holeFrac,worstHole,mv1lod,
+            f12_cardinal?"PASS":"FAIL",cardinalsFar);
+        for(int s=0;s<kMv2bViews;++s)
         {
             std::fprintf(fp,"station.%d name=%s class_px[32-50/50-80/80-100/100-128]=%lld/%lld/%lld/%lld terrain=%lld "
                 "image=Docs/provenance_mv2b_station%d_%s.ppm\n",
@@ -19441,7 +19471,8 @@ namespace
             SelectStage0PlayView(Stage0PlayView::RegionalBiome);
             Mv1FindStations();
             Mv2BuildPanorama();
-            for(int s=0;s<6;++s){for(int k=0;k<4;++k)s_mv2bStClass[s][k]=0;s_mv2bStTerrain[s]=0;
+            Mv2BuildCardinals();
+            for(int s=0;s<kMv2bViews;++s){for(int k=0;k<4;++k)s_mv2bStClass[s][k]=0;s_mv2bStTerrain[s]=0;
                 std::snprintf(s_mv2bNames[s],sizeof(s_mv2bNames[s]),"%s",Mv2Viewpoint(s).name);}
             Mv1PlaceCamera(Mv2Viewpoint(0));
             g.certMv2bStation=0;g.certMv2bSettle=0;ph=1;return;
@@ -19467,7 +19498,7 @@ namespace
                 char path[128];std::snprintf(path,sizeof(path),
                     "Docs\\provenance_mv2b_station%d_%s.ppm",s,s_mv2bNames[s]);
                 DumpFramePpm(path);
-                ++g.certMv2bStation;g.certMv2bSettle=0;ph=(g.certMv2bStation>=6)?3:1;
+                ++g.certMv2bStation;g.certMv2bSettle=0;ph=(g.certMv2bStation>=kMv2bViews)?3:1;
             }
             return;
         }

@@ -1,36 +1,42 @@
 MV2A_REGIONAL_MACRO_AUTHORITY PASS
 scope=macro_forcing_only_no_renderer_no_fine_causal_stack
+authority_ring=+/-2_cells  pages_compiled=25  (full 128 km radial authority)
 world_seed=mw1-64km-01
 generator_version=1
 central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
-pages_compiled=9  set=center+N/S/E/W+NE/NW/SE/SW
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=0.471
+compile_seconds=1.377
 
-fixture.determinism_same_seed_same_digest=PASS  all 9 pages reproduce digest+region_id
-fixture.non_repetition_no_64km_tiling=PASS  unique_ids=9/9 unique_digests=9/9 period64_rms=674.9m worst=2003.9m (need rms>40)
-fixture.boundary_continuity_4_edges=PASS  max_position_step=0.0461m (need<0.5) max_slope_step=0.0001 (need<0.05)
-fixture.central_anchor_matches_frozen_macro=PASS  max|center_page - frozen_envelope|=0.00000m (need<0.01; anchor window=0 inside)
+fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
+fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=674.9m worst=2003.9m (need rms>40)
+fixture.boundary_continuity_4_center_edges=PASS  max_position_step=0.0461m (need<0.5) max_slope_step=0.0001 (need<0.05)
+fixture.boundary_continuity_ring2_96km_seams=PASS  max_anomalous_step_vs_interior=0.0000m (need<0.10) max_slope_step=0.0007 (need<0.05)
+fixture.cardinal_ring2_reaches_128km=PASS  E:reach=160km relief=398m distinct=True  W:reach=160km relief=835m distinct=True  N:reach=160km relief=4544m distinct=True  S:reach=160km relief=2537m distinct=True
+fixture.central_anchor_matches_frozen_macro=PASS  max|center_page - frozen_envelope|=0.00000m (need<0.01)
 fixture.feature_scale_independence_gt_64km=PASS  longest_belt_extent=874.0km (belt#0; need>64km)
 fixture.cross_page_landform_continuity=PASS  belt crest crosses x=-96km page boundary; jump=0.712m crest_above_base=1885m
-fixture.no_square_world_signature=PASS  max_step_on_page_boundary=5.23m max_step_interior=225.60m (boundary must not exceed interior*1.25)
+fixture.no_square_world_signature=PASS  max_step_on_page_boundary=5.23m max_step_interior=225.60m
 fixture.no_wrap_no_fine_authority=PASS  pages_declare_no_wrap=True forbidden_tokens=none
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 9 pages (4225 samples each) in 0.47s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 1.38s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
-page_ids:
-  center=(0,0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]
-  north=(0,1) region_id=174c5174da3a0667 digest=c8de86463527aefc bounds=[-32000,32000]x[32000,96000]
-  south=(0,-1) region_id=de46b38e475061de digest=c7e8c527d9dbbc54 bounds=[-32000,32000]x[-96000,-32000]
-  east=(1,0) region_id=a28d3b6dbebf86cf digest=9f990a253157e9c3 bounds=[32000,96000]x[-32000,32000]
-  west=(-1,0) region_id=861e8b3f32a04f56 digest=788f8d2cea52d417 bounds=[-96000,-32000]x[-32000,32000]
-  ne=(1,1) region_id=a2909f6dbec26692 digest=5dfd43b531b4b322 bounds=[32000,96000]x[32000,96000]
-  nw=(-1,1) region_id=861b673f329ddc53 digest=f46fd6cc269d6753 bounds=[-96000,-32000]x[32000,96000]
-  se=(1,-1) region_id=95ab9e7ae9009965 digest=c6406d419f560787 bounds=[32000,96000]x[-96000,-32000]
-  sw=(-1,-1) region_id=d1809e62a0629d0a digest=9322cfc563c07701 bounds=[-96000,-32000]x[-96000,-32000]
+page_ids (named subset of the 25-page ring):
+  center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]
+  north=(0, 1) region_id=174c5174da3a0667 digest=c8de86463527aefc bounds=[-32000,32000]x[32000,96000]
+  south=(0, -1) region_id=de46b38e475061de digest=c7e8c527d9dbbc54 bounds=[-32000,32000]x[-96000,-32000]
+  east=(1, 0) region_id=a28d3b6dbebf86cf digest=9f990a253157e9c3 bounds=[32000,96000]x[-32000,32000]
+  west=(-1, 0) region_id=861e8b3f32a04f56 digest=788f8d2cea52d417 bounds=[-96000,-32000]x[-32000,32000]
+  ne=(1, 1) region_id=a2909f6dbec26692 digest=5dfd43b531b4b322 bounds=[32000,96000]x[32000,96000]
+  nw=(-1, 1) region_id=861b673f329ddc53 digest=f46fd6cc269d6753 bounds=[-96000,-32000]x[32000,96000]
+  se=(1, -1) region_id=95ab9e7ae9009965 digest=c6406d419f560787 bounds=[32000,96000]x[-96000,-32000]
+  sw=(-1, -1) region_id=d1809e62a0629d0a digest=9322cfc563c07701 bounds=[-96000,-32000]x[-96000,-32000]
+  east2=(2, 0) region_id=f7e58d8672e0ce6c digest=20db04f15f960830 bounds=[96000,160000]x[-32000,32000]
+  west2=(-2, 0) region_id=f669c147fef2c135 digest=31cff7dd433bd80b bounds=[-160000,-96000]x[-32000,32000]
+  north2=(0, 2) region_id=17563174da42248c digest=c1b311b91c59539e bounds=[-32000,32000]x[96000,160000]
+  south2=(0, -2) region_id=de49db8e4752dbad digest=ccff90768e54577b bounds=[-32000,32000]x[-160000,-96000]
+  ne2=(2, 2) region_id=f7de918672dab68a digest=558a40126762a0b4 bounds=[96000,160000]x[96000,160000]
+  sw2=(-2, -2) region_id=181e7e56757910e4 digest=a87a6c9346fffe1f bounds=[-160000,-96000]x[-160000,-96000]
 
-mv2b_renderer=closed
-mv2c=closed
-mw9=closed
-no_reopen=MW1-MW8/MV1/PX1-PX3
+mv2c=closed mw9=closed presentation_diversity=closed
+no_reopen=MW1-MW8/MV1/MV2.B/PX1-PX3

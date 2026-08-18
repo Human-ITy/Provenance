@@ -265,8 +265,9 @@ PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-ove
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
-MV2.A   regional macro authority          CERTIFIED @ d23f3810 (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
-MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster from MV2.A pages; three-pass depth split; seam 5.3 m; non-repeating; bounded 9-page ring; 0 MV2-domain coverage holes; recalibrated 128 km aerial; off==frozen)
+MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ __MV2A2_SHA__ extends to ±2 ring = 25 pages (full 128 km radial authority; continuity across ±96 km seams; cardinal ±2 reaches 160 km; same field, more pages)
+MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster; three-pass depth split; seam 5.3 m; non-repeating; bounded 25-page ring; 0 MV2-domain holes; recalibrated 128 km aerial; off==frozen; MV2.A2 fixture: cardinal N/E/S/W 100-128 km coverage)
+MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ __MV2A2_SHA__
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -343,6 +344,22 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**MV2.A2 @ `__MV2A2_SHA__`** — full 128 km **radial** authority. The initial MV2.A/MV2.B
+cut proved 128 km on the 3×3 diagonal only (±96 km square). MV2.A2 extends the same
+continuous deterministic field to the **±2 ring = 25 pages** (no new generation
+semantics), so neighbouring authority reaches 128 km+ in every direction. Authority
+cert (25 pages): all IDs/digests deterministic + unique; continuity across the new
+±96 km ring seams (0.0 m anomalous step); no square-world signature over ±160 km;
+cardinal ±2 reaches 160 km with real relief (N 4544 m); features cross the ±2 ring;
+cheap (1.3 s). Renderer loads all 25 pages, bounded (25 high-water, 0 runtime allocs
+after warmup); horizon **fixture 12** proves 100-128 km framebuffer pixels in N/E/S/W
+(N=4929 E=7813 S=6389 W=1871) — full radial 128 km, not just diagonal. Test B 24 m/s
+hard gate green with the 25-page ring (engine 0-over, 0 stage-owned, cadence
+no-regression). `Tools/Worldgen/cert_macro_authority.py`,
+`Data/Worldgen/MacroAuthority/*.mcp` (25), receipt
+`Docs/provenance_mv2a_macro_authority_cert.txt`. Deferred (by decision): coarse
+long-distance semantic presentation (rock/vegetated/desert/wetland/snow) across MV1+MV2.
 
 **MV2.B CERTIFIED @ `40272156`** — 100–128 km Horizon Renderer (presentation
 only; consumes MV2.A `.mcp` macro pages). Renders the 32–128 km horizon behind the
