@@ -260,8 +260,9 @@ MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residency/fidelity/identity)
 MV1.C   real 32 km raster visibility      CERTIFIED @ 331f94ff (two-pass depth split; VBO ownership)
 MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
-GLOBAL  Test-B present pacing             OPEN (baseline SwapBuffers jitter, not MV1 — see below)
-MV1.D   distance / depth readability      WAITING (on present pacing)
+PX1     present-pacing attribution        CERTIFIED @ __PX1_SHA__ (owner = OS-scheduling inter-frame gap; engine production always < 16.667 ms)
+GLOBAL  Test-B gate definition            PROPOSED (engine_cpu 0-over + presented cadence w/ environmental allowance) — adopt before MV1.D gating
+MV1.D   distance / depth readability      WAITING (on adopting the gate definition)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
@@ -280,7 +281,28 @@ async, no stalls, with the full 32 km now rasterized. Test A correctness PASS 4/
 (exact return digests/geometry/material/collision/image). Handoff:
 `MV1C_RASTER_VISIBILITY_HANDOFF.md`. Cert: `CERT_MV1C_RASTER_VISIBILITY.cmd`.
 
-**GLOBAL Test-B present pacing — OPEN (not MV1).** A controlled 4-way experiment
+**PX1 CERTIFIED @ `__PX1_SHA__`** — baseline present-pacing attribution
+(instrumentation only; no production behavior change; 16.667 ms standard not
+weakened). Per-frame QPC decomposition (gap / engine_cpu / gpu_finish / swap /
+engine_work / presented) over an MV1-**off** MW8 baseline. Findings: **frame
+production (engine_cpu) is always ~0.5–0.7 ms (max ~7 ms), 0 over 16.667 in every
+config including vsync** — the engine never takes 20–80 ms to produce a frame.
+The intermittent 20–82 ms spikes are **100 % inter-frame `gap`** (OS thread
+scheduling / message pump between SwapBuffers return and the next tick; the
+worldgen loop is a tight `PeekMessage`+`TickFrame` busy loop with no Sleep), with
+engine_cpu / gpu_finish / swap all tiny on every spike. vsync pacing (when on)
+lands in glFinish or SwapBuffers and pins frames to a steady 16.67 ms 60 Hz
+cadence (smooth `presented`), which a naive wall-clock gate would misread as an
+overrun; the pre-present glFinish is protective. **Proposed standing gate:**
+(1) engine_cpu 0-over-16.667 as the engine production contract (always green,
+uncontaminated); (2) presented_frame cadence with an environmental allowance for
+rare gap-dominated OS-scheduling outliers (a sustained/frequent presented miss is
+still a real FAIL); never gate on wall-clock-including-glFinish under vsync.
+Test A/B failures are the same present-pacing class. Optional future hardening
+(separate cut): clean frame pacing / thread priority to reduce OS-scheduling gaps.
+Handoff: `PX1_PRESENT_PACING_HANDOFF.md`. Cert: `CERT_PX1_PRESENT_PACING.cmd`.
+
+**GLOBAL Test-B present pacing — attributed by PX1 (not MV1).** A controlled 4-way experiment
 (MV1 on/off × glFinish on/off, plus per-outlier component logging) proved the
 90 s soak / movement-frame gate is **baseline-flaky on this hardware, independent
 of MV1**: the stock MW8 travel gate fails ~3/5 runs with MV1 **disabled**

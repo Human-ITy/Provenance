@@ -1115,6 +1115,16 @@ namespace
         double stage0FrameCollisionMs = 0.0;
         bool stage0SwapControlAvailable = false;
         int stage0SwapInterval = -1;
+        // PX1 present-pacing instrumentation. Distinguishes the work of producing
+        // a frame from the compositor/present wait the CPU is forced to absorb.
+        bool certPx1PresentPacing = false;
+        int px1RequestedSwapInterval = -2;   // -2 = leave production default (0)
+        long long px1PrevAfterPresentQpc = 0;
+        long long px1TickStartQpc = 0;
+        double px1GapMs = 0.0;               // afterPresent(prev) -> tickStart(this): pump/OS/pacing
+        double px1EngineCpuMs = 0.0;         // tickStart -> beforePresent: sim+terrain+submit
+        double px1PresentedFrameMs = 0.0;    // afterPresent(prev) -> afterPresent(this): player cadence
+        int px1RefreshHz = 0;
         Stage0PlayView stage0PlayView = Stage0PlayView::Clean;
         bool stage0StageMenuOpen = false;
         bool stage0ToolDrawerOpen = false;
@@ -11267,10 +11277,19 @@ namespace
             if ( setSwapInterval )
             {
                 g.stage0SwapControlAvailable = true;
-                int const requested=(g.certPresentationIsolation
+                int requested=(g.certPresentationIsolation
                     &&g.presentationIsolationMode==5)?1:0;
+                // PX1 diagnostic override of the swap interval (0=off,1=vsync).
+                if ( g.px1RequestedSwapInterval >= 0 )
+                { requested = g.px1RequestedSwapInterval; }
                 if ( setSwapInterval( requested ) ) { g.stage0SwapInterval = requested; }
             }
+        }
+        // Display refresh rate for present-pacing attribution.
+        {
+            DEVMODEW dm{}; dm.dmSize = sizeof( dm );
+            if ( EnumDisplaySettingsW( nullptr, ENUM_CURRENT_SETTINGS, &dm ) )
+            { g.px1RefreshHz = (int)dm.dmDisplayFrequency; }
         }
 
         glEnable( GL_DEPTH_TEST );
@@ -25895,6 +25914,20 @@ namespace
             g.stage0FrameSwapBuffersMs = qpf.QuadPart > 0
                 ? 1000.0 * (double)( afterPresent.QuadPart - beforeSwap.QuadPart )
                     / (double)qpf.QuadPart : 0.0;
+            // PX1: engine CPU = tick start -> render done (sim + terrain + submit),
+            // excluding glFinish and present. Presented-frame = swap-return to
+            // swap-return, i.e. the cadence the player actually receives.
+            if ( qpf.QuadPart > 0 && g.px1TickStartQpc != 0 )
+            {
+                g.px1EngineCpuMs = 1000.0 * (double)( beforePresent.QuadPart
+                    - g.px1TickStartQpc ) / (double)qpf.QuadPart;
+            }
+            if ( qpf.QuadPart > 0 && g.px1PrevAfterPresentQpc != 0 )
+            {
+                g.px1PresentedFrameMs = 1000.0 * (double)( afterPresent.QuadPart
+                    - g.px1PrevAfterPresentQpc ) / (double)qpf.QuadPart;
+            }
+            g.px1PrevAfterPresentQpc = afterPresent.QuadPart;
             // MV1.G: advance the async GPU timer and harvest any finished queries
             // (non-blocking) once per presented frame.
             ++s_mv1Gpu.frame; Mv1GpuCollect();
@@ -43581,6 +43614,64 @@ namespace
     };
     StreamingSoakRun s_streamingSoak;
 
+    // PX1 present-pacing distributions (travel frames only).
+    struct Px1Accum
+    {
+        long long frames = 0;
+        int engineWorkOver16 = 0, wallOver16 = 0, presentedOver16 = 0;
+        std::vector<double> engineCpu, gpuFinish, swap, gap, engineWork, presented, wall;
+    };
+    Px1Accum s_px1;
+
+    double Px1Pct(std::vector<double> v,double p)
+    {
+        if(v.empty())return 0.0;
+        std::sort(v.begin(),v.end());
+        return v[(size_t)std::floor(p*(double)(v.size()-1))];
+    }
+
+    void WritePx1Artifact()
+    {
+        if(!g.certPx1PresentPacing||s_px1.frames==0)return;
+        auto mx=[](std::vector<double> const& v){double m=0;for(double x:v)m=(std::max)(m,x);return m;};
+        double const engMax=mx(s_px1.engineWork), wallMax=mx(s_px1.wall), presMax=mx(s_px1.presented);
+        double const gapMax=mx(s_px1.gap), swapMax=mx(s_px1.swap), finMax=mx(s_px1.gpuFinish);
+        // Owner classification: is the wall-clock overrun engine work, or pacing
+        // (gap/swap) the CPU is forced to absorb while the frame itself is cheap?
+        char const* owner="engine_work";
+        if(s_px1.engineWorkOver16==0&&s_px1.wallOver16>0)
+            owner=(swapMax>=gapMax)?"present_swapbuffers_wait":"interframe_gap_pump_or_pacing";
+        else if(s_px1.engineWorkOver16>0)owner="engine_work";
+        else owner="none_all_bounded";
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_px1_present_pacing_cert.txt","wb")!=0||!f)return;
+        std::fprintf(f,
+            "PX1_PRESENT_PACING\n"
+            "config mv1_on=%d glfinish_probe=%d swap_interval=%d refresh_hz=%d\n"
+            "travel_frames=%lld\n"
+            "engine_cpu_over_16667=%d engine_work_over_16667=%d wall_over_16667=%d presented_over_16667=%d\n"
+            "engine_cpu_ms p50=%.3f p95=%.3f p99=%.3f max=%.3f  (pure CPU frame production, excl glFinish/swap)\n"
+            "engine_work_ms p50=%.3f p95=%.3f p99=%.3f max=%.3f\n"
+            "wall_frame_ms  p50=%.3f p95=%.3f p99=%.3f max=%.3f\n"
+            "presented_frame_ms p50=%.3f p95=%.3f p99=%.3f max=%.3f\n"
+            "gap_ms p95=%.3f max=%.3f\nswap_ms p95=%.3f max=%.3f\ngpu_finish_ms p95=%.3f max=%.3f\n"
+            "owner=%s\n"
+            "note=engine_work=tickStart->render_done+glFinish (frame production); "
+            "wall=frame-start delta (includes inter-frame gap); "
+            "presented=swap-return delta (player cadence)\n",
+            g.mv1Enabled?1:0,g.soakDisablePrePresentGlFinish?0:1,g.stage0SwapInterval,g.px1RefreshHz,
+            s_px1.frames,
+            [&]{int c=0;for(double x:s_px1.engineCpu)if(x>16.667)++c;return c;}(),
+            s_px1.engineWorkOver16,s_px1.wallOver16,s_px1.presentedOver16,
+            Px1Pct(s_px1.engineCpu,.50),Px1Pct(s_px1.engineCpu,.95),Px1Pct(s_px1.engineCpu,.99),mx(s_px1.engineCpu),
+            Px1Pct(s_px1.engineWork,.50),Px1Pct(s_px1.engineWork,.95),Px1Pct(s_px1.engineWork,.99),engMax,
+            Px1Pct(s_px1.wall,.50),Px1Pct(s_px1.wall,.95),Px1Pct(s_px1.wall,.99),wallMax,
+            Px1Pct(s_px1.presented,.50),Px1Pct(s_px1.presented,.95),Px1Pct(s_px1.presented,.99),presMax,
+            Px1Pct(s_px1.gap,.95),gapMax,Px1Pct(s_px1.swap,.95),swapMax,
+            Px1Pct(s_px1.gpuFinish,.95),finMax,owner);
+        std::fclose(f);
+    }
+
     P5b2cSoakTelemetry CaptureP5b2cSoakTelemetry()
     {
         P5b2cSoakTelemetry t;
@@ -45769,6 +45860,7 @@ namespace
                 run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
                 run.endWorkingSet=ProcessWorkingSetBytes();
                 run.endPrivate=ProcessPrivateBytes();
+                WritePx1Artifact();
                 bool const ok=WriteStreamingSoakArtifact();
                 g.certStreamingSoak=false;
                 PostQuitMessage(ok?0:2);
@@ -45807,6 +45899,7 @@ namespace
                 run.endResidentPackages=(int)CardinalPackageMap(g.stage0PlayView).size();
                 run.endWorkingSet=ProcessWorkingSetBytes();
                 run.endPrivate=ProcessPrivateBytes();
+                WritePx1Artifact();
                 bool const ok=WriteStreamingSoakArtifact();
                 g.certStreamingSoak=false;
                 PostQuitMessage(ok?0:2);
@@ -45846,6 +45939,53 @@ namespace
                         g.mv1DepthClearMsFrame,g.mv1DrawCallsFrame,g.mv1TrisSubmittedFrame,
                         g.mv1Enabled?1:0,g.soakDisablePrePresentGlFinish?0:1,
                         g.mv1ResidentBytes,g.mv1VboCreates,g.mv1VboReuses,g.mv1VboRetires);
+                    std::fclose(d);
+                }
+            }
+        }
+        // PX1: for every travel frame, tally the engine-work vs presented-frame
+        // distributions and log outliers with the full timeline breakdown, so a
+        // spike can be attributed to gap(pump/OS/pacing) / engine-CPU / GPU-finish
+        // / SwapBuffers rather than one opaque wall-clock number.
+        if(g.certPx1PresentPacing&&run.phase==2)
+        {
+            if(!s_mv1Gpu.active){g.mv1GpuTiming=true;s_mv1Gpu.active=true;}
+            HWND const fg=GetForegroundWindow();
+            bool const foreground=(fg==g.hwnd);
+            ++s_px1.frames;
+            s_px1.engineCpu.push_back(g.px1EngineCpuMs);
+            s_px1.gpuFinish.push_back(g.stage0FrameGpuFinishMs);
+            s_px1.swap.push_back(g.stage0FrameSwapBuffersMs);
+            s_px1.gap.push_back(g.px1GapMs);
+            double const engineWork=g.px1EngineCpuMs+g.stage0FrameGpuFinishMs;
+            s_px1.engineWork.push_back(engineWork);
+            s_px1.presented.push_back(g.px1PresentedFrameMs);
+            s_px1.wall.push_back(frameMs);
+            if(engineWork>16.667)++s_px1.engineWorkOver16;
+            if(frameMs>16.667)++s_px1.wallOver16;
+            if(g.px1PresentedFrameMs>16.667)++s_px1.presentedOver16;
+            if(frameMs>16.667)
+            {
+                FILE* d=nullptr;
+                if(fopen_s(&d,"Docs\\provenance_px1_present_outliers.csv","ab")==0&&d)
+                {
+                    if(ftell(d)==0)std::fprintf(d,
+                        "elapsed_s,wall_frame_ms,gap_ms,engine_cpu_ms,gpu_finish_ms,swap_ms,"
+                        "engine_work_ms,presented_frame_ms,async_gpu_ms,dominant,"
+                        "swap_interval,refresh_hz,glfinish_probe,foreground,mv1_on,"
+                        "pending_packages\n");
+                    char const* dom="gap";
+                    double mx=g.px1GapMs;
+                    if(g.px1EngineCpuMs>mx){mx=g.px1EngineCpuMs;dom="engine_cpu";}
+                    if(g.stage0FrameGpuFinishMs>mx){mx=g.stage0FrameGpuFinishMs;dom="gpu_finish";}
+                    if(g.stage0FrameSwapBuffersMs>mx){mx=g.stage0FrameSwapBuffersMs;dom="swap";}
+                    std::fprintf(d,
+                        "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%s,%d,%d,%d,%d,%d,%d\n",
+                        run.elapsedS,frameMs,g.px1GapMs,g.px1EngineCpuMs,g.stage0FrameGpuFinishMs,
+                        g.stage0FrameSwapBuffersMs,engineWork,g.px1PresentedFrameMs,g.mv1LastGpuMs,
+                        dom,g.stage0SwapInterval,g.px1RefreshHz,
+                        g.soakDisablePrePresentGlFinish?0:1,foreground?1:0,g.mv1Enabled?1:0,
+                        Stage0PendingPackageCount(g.stage0PlayView));
                     std::fclose(d);
                 }
             }
@@ -46400,6 +46540,16 @@ namespace
             QueryPerformanceFrequency( &stage0Qpf );
             QueryPerformanceCounter( &stage0TickQpc );
             g.stage0TickStartQpc = stage0TickQpc.QuadPart;
+            // PX1: the inter-frame gap is the time the CPU spent OUTSIDE frame
+            // production (message pump, OS scheduling, present pacing) between the
+            // previous SwapBuffers return and this tick — where a spike that is
+            // not render/glFinish/swap actually hides.
+            g.px1TickStartQpc = stage0TickQpc.QuadPart;
+            if ( g.px1PrevAfterPresentQpc != 0 && stage0Qpf.QuadPart > 0 )
+            {
+                g.px1GapMs = 1000.0 * (double)( stage0TickQpc.QuadPart
+                    - g.px1PrevAfterPresentQpc ) / (double)stage0Qpf.QuadPart;
+            }
             g.stage0FrameCpuMs = 0.0;
             g.stage0FrameSimulationMs = 0.0;
             g.stage0FrameResidencyMs = 0.0;
@@ -52423,6 +52573,18 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 }
                 if(_wcsicmp(argv[i],L"--soak-no-glfinish")==0)
                 {g.soakDisablePrePresentGlFinish=true;continue;}
+                if(_wcsnicmp(argv[i],L"--px1-swap-interval=",20)==0)
+                {g.px1RequestedSwapInterval=_wtoi(argv[i]+20);continue;}
+                if(_wcsicmp(argv[i],L"--cert-px1-present-pacing")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    // MV1-off frozen MW8 baseline so PX1 cannot blame far terrain.
+                    g.certStreamingSoak=true;g.certStreamingSoakStageFilter=38;
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certPx1PresentPacing=true;g.mv1Enabled=false;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3a")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
