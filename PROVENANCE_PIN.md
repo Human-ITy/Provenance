@@ -265,9 +265,9 @@ PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-ove
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
-MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ __MV2A2_SHA__ extends to ±2 ring = 25 pages (full 128 km radial authority; continuity across ±96 km seams; cardinal ±2 reaches 160 km; same field, more pages)
+MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ 7c344ca1 extends to ±2 ring = 25 pages (full 128 km radial authority; continuity across ±96 km seams; cardinal ±2 reaches 160 km; same field, more pages)
 MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster; three-pass depth split; seam 5.3 m; non-repeating; bounded 25-page ring; 0 MV2-domain holes; recalibrated 128 km aerial; off==frozen; MV2.A2 fixture: cardinal N/E/S/W 100-128 km coverage)
-MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ __MV2A2_SHA__
+MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ 7c344ca1
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -345,7 +345,7 @@ stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
 
-**MV2.A2 @ `__MV2A2_SHA__`** — full 128 km **radial** authority. The initial MV2.A/MV2.B
+**MV2.A2 @ `7c344ca1`** — full 128 km **radial** authority. The initial MV2.A/MV2.B
 cut proved 128 km on the 3×3 diagonal only (±96 km square). MV2.A2 extends the same
 continuous deterministic field to the **±2 ring = 25 pages** (no new generation
 semantics), so neighbouring authority reaches 128 km+ in every direction. Authority
