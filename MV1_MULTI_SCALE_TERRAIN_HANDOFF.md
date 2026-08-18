@@ -1,15 +1,17 @@
 # MV1 — Multi-Scale Terrain Visibility
 
-> **CORRECTION (projection audit).** This document certified MV1 *construction*,
-> bounded residency, adaptive geometric fidelity, geographic identity, and 32 km
-> derived terrain *extent* — all valid. A later projection audit found the active
-> render far plane remained **600 m**, so the "32 km raster-visible" / "effective
-> visible range 32 km" claims below were **overstated**: regional/horizon geometry
-> was built and submitted but **clipped before framebuffer contribution** (only
-> ~600 m actually rendered; the readable station images were near/meso terrain
-> inside 600 m). **MV1.C** restores true 32 km visibility via a two-pass depth
-> split without touching the frozen near-depth path. Read the numbers below as
-> *built/derived* extent, not rendered visibility, pending MV1.C.
+> **CORRECTION (projection audit) — RESOLVED by MV1.C.** This document certified
+> MV1 *construction*, bounded residency, adaptive geometric fidelity, geographic
+> identity, and 32 km derived terrain *extent* — all valid. A later projection
+> audit found the active render far plane remained **600 m**, so the "32 km
+> raster-visible" / "effective visible range 32 km" claims below were
+> **overstated**: regional/horizon geometry was built and submitted but **clipped
+> before framebuffer contribution** (only ~600 m actually rendered). **MV1.C
+> (CERTIFIED)** restored true 32 km visibility via a two-pass depth split without
+> touching the frozen near-depth path, proven by far-pass framebuffer pixel
+> binning (`agg_regional_px=328769`, `agg_horizon_px=7331`, both were 0/clipped
+> before). See `MV1C_RASTER_VISIBILITY_HANDOFF.md`. Read the numbers below as
+> *built/derived* extent; actual rendered 32 km visibility is certified by MV1.C.
 
 
 MV1 answers one question: can a player inside the certified 192 m interactive

@@ -258,12 +258,40 @@ MW6     hydroclimate                      CERTIFIED / FROZEN @ e8704845
 MW7     soils / regolith                  CERTIFIED / FROZEN @ 307e92fc
 MW8     biomes                            CERTIFIED / FROZEN @ e8155fa3
 MV1     32 km terrain derivation          CERTIFIED @ 77aa7767 (geometry/residency/fidelity/identity)
-MV1.C   real 32 km raster visibility      PLAYABLE / OPEN NEXT (far bands were clipped at 600 m)
-MV1.G   GPU instrumentation / resources   CERTIFIED @ 0d39ffcd (full-32 km raster timing REVALIDATE after MV1.C)
-MV1.D   distance / depth readability      CLOSED (blocked by MV1.C)
+MV1.C   real 32 km raster visibility      CERTIFIED @ __MV1C_SHA__ (two-pass depth split; VBO ownership)
+MV1.G   full-raster GPU presentation      CERTIFIED @ 0d39ffcd (revalidated after MV1.C; ~0.47 ms, no stalls)
+GLOBAL  Test-B present pacing             OPEN (baseline SwapBuffers jitter, not MV1 — see below)
+MV1.D   distance / depth readability      WAITING (on present pacing)
 MV2     extended 100+ km horizon          CLOSED
 MW9     flora / fauna                     CLOSED
 ```
+
+**MV1.C CERTIFIED @ `__MV1C_SHA__`** — real 32 km raster visibility. A projection
+audit found the render far plane was 600 m, so MV1's regional/horizon bands were
+built and submitted but **clipped before framebuffer contribution**. MV1.C adds a
+**two-pass depth split** (far pass near≈128 m / far≈33 km → depth-only clear →
+frozen 0.03–600 m near pass painted over the top) so the certified near-depth path
+is unchanged. Proof is far-pass depth-buffer pixel binning by real distance:
+`agg_regional_px=328769`, `agg_horizon_px=7331` (both were 0/clipped before).
+Far tiles moved from display lists to **persistent pooled VBOs** (explicit GPU
+byte accounting ~4.7 MB, bounded, no display-list finalization lifecycle); build
+cap + behind-camera cull kept. **MV1.G revalidated** after MV1.C — still ~0.47 ms
+async, no stalls, with the full 32 km now rasterized. Test A correctness PASS 4/4
+(exact return digests/geometry/material/collision/image). Handoff:
+`MV1C_RASTER_VISIBILITY_HANDOFF.md`. Cert: `CERT_MV1C_RASTER_VISIBILITY.cmd`.
+
+**GLOBAL Test-B present pacing — OPEN (not MV1).** A controlled 4-way experiment
+(MV1 on/off × glFinish on/off, plus per-outlier component logging) proved the
+90 s soak / movement-frame gate is **baseline-flaky on this hardware, independent
+of MV1**: the stock MW8 travel gate fails ~3/5 runs with MV1 **disabled**
+(worst 61 ms), vs 2/5 with MV1 on (worst 51 ms); every spike frame does zero MV1
+work; the pre-present `glFinish` is *protective* (removing it worsens SwapBuffers
+pileups to 58–98 ms). So the historical zero-overrun 90 s gate is not
+reproducibly met even by the frozen baseline here — a present-path / vsync /
+driver-pacing / frame-time-definition infrastructure issue that must be repaired
+as its own item before it is used to gate MV1.D and later cuts. **The 16.667 ms
+standard is not weakened** — the baseline gate is what needs repair. Test A's
+movement sub-gate inherits the same jitter (correctness always exact).
 
 **MV1 correction (projection audit).** MV1 certified construction, bounded
 residency, adaptive geometric fidelity, geographic identity, and 32 km derived

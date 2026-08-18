@@ -1,0 +1,38 @@
+MV1C_RASTER_VISIBILITY PASS
+architecture=two_pass_depth_split
+far_pass_frustum_m=128..33000
+near_pass_frustum_m=0.03..600 (frozen, unchanged)
+visible_range_m=32000
+near_interactive_radius_m=192
+proof=far_pass_depth_buffer_pixel_binning_by_real_distance
+agg_meso_px=967668
+agg_regional_px=328769
+agg_horizon_px=7331
+stations_with_meso=5
+stations_with_regional=5
+stations_with_horizon=2
+gate.meso_rasterized=PASS
+gate.regional_rasterized=PASS
+gate.horizon_rasterized=PASS
+station.0 name=trunk_valley x=20500.0 y=2000.0 z=20.5 meso_px=350670 regional_px=30633 horizon_px=267 terrain_px=381570 regional_frac=0.0803 horizon_frac=0.0007 image=Docs/provenance_mv1c_station0_trunk_valley.ppm
+station.1 name=mountain_flank x=7500.0 y=-3500.0 z=857.8 meso_px=431 regional_px=58137 horizon_px=7064 terrain_px=65632 regional_frac=0.8858 horizon_frac=0.1076 image=Docs/provenance_mv1c_station1_mountain_flank.ppm
+station.2 name=ridge_shoulder x=6500.0 y=-3000.0 z=1481.8 meso_px=133122 regional_px=68268 horizon_px=0 terrain_px=201390 regional_frac=0.3390 horizon_frac=0.0000 image=Docs/provenance_mv1c_station2_ridge_shoulder.ppm
+station.3 name=foreland_basin x=10000.0 y=-11500.0 z=-204.4 meso_px=176227 regional_px=132720 horizon_px=0 terrain_px=308947 regional_frac=0.4296 horizon_frac=0.0000 image=Docs/provenance_mv1c_station3_foreland_basin.ppm
+station.4 name=high_divide x=2000.0 y=5500.0 z=1607.8 meso_px=307218 regional_px=39011 horizon_px=0 terrain_px=346229 regional_frac=0.1127 horizon_frac=0.0000 image=Docs/provenance_mv1c_station4_high_divide.ppm
+viewport_px=961904
+near_depth_precision=unchanged (0.03..600 m frozen pass)
+tile_ownership=persistent_pooled_vbo (no display-list finalization lifecycle)
+vbo_creates=642
+vbo_reuses=1325
+vbo_retires=1346
+vbo_resident_bytes=4700160
+vbo_bytes_high_water=4700160
+vbo_runtime_allocs_after_warmup=16
+free_pool=21
+retired_pool=0
+mv1_geometry_unchanged=1
+mw1_8_authority_unchanged=1
+mv1g_revalidation=required_and_run_separately
+mv1d_distance_readability=closed
+mv2_extended_horizon=closed
+mw9=closed

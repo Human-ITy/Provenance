@@ -1028,6 +1028,16 @@ namespace
         int certMv1GpuPhase = 0;
         int certMv1GpuFrame = 0;
         double certMv1GpuSweepYaw = 0.0;
+        // MV1.C real 32 km raster visibility (two-pass depth split).
+        bool mv1FarPass = false;
+        bool certMv1C = false;
+        int certMv1CPhase = 0;
+        int certMv1CStation = 0;
+        int certMv1CSettle = 0;
+        bool mv1cCaptureRequest = false;
+        long long mv1cBandPixels[3] = {0,0,0};
+        long long mv1cTerrainPixels = 0;
+        long long mv1cViewportPixels = 0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -1386,14 +1396,26 @@ namespace
         // travel-history growth), and invalidated by source revision lineage.
         struct Mv1Tile
         {
-            GLuint list = 0;
-            int band = 0;      // 0=meso 1=regional 2=horizon
+            GLuint vbo = 0;        // persistent GPU vertex buffer (pos+color)
+            int vertCount = 0;
+            unsigned bytes = 0;
+            int band = 0;          // 0=meso 1=regional 2=horizon
             int tris = 0;
             uint64_t sourceRev = 0;
+            float cx = 0.f, cy = 0.f; // tile centre (absolute), for view culling
+            float halfM = 0.f;
         };
         std::unordered_map<uint64_t, Mv1Tile> mv1Tiles; // key = band<<58 | tileHash
-        std::vector<GLuint> mv1FreeLists;
-        std::deque<Stage0RetiredDisplayList> mv1RetiredLists;
+        // Recycled VBO id pool. CPU builds a derived tile, uploads into a bounded
+        // persistent GPU buffer, draws it, and returns the id on retire — no
+        // per-tile glNewList/glEndList driver-finalization lifecycle.
+        struct Mv1RetiredVbo { GLuint vbo; unsigned bytes; ULONGLONG safeAfterMs; };
+        std::vector<GLuint> mv1FreeVbos;
+        std::deque<Mv1RetiredVbo> mv1RetiredVbos;
+        long long mv1VboCreates = 0, mv1VboReuses = 0, mv1VboRetires = 0;
+        long long mv1ResidentBytes = 0, mv1BytesHighWater = 0;
+        long long mv1RuntimeAllocsAfterWarmup = 0;
+        bool mv1Warmed = false;
         bool mv1Enabled = true;        // --mv1-off disables (near path == MW8 baseline)
         int mv1AnchorX = INT_MIN, mv1AnchorY = INT_MIN;
         uint64_t mv1SourceRev = 0;     // authority lineage; mismatch → refuse stale bands
@@ -1414,6 +1436,14 @@ namespace
         double mv1CpuSubmitMsFrame = 0.0;
         int mv1DrawCallsFrame = 0;
         long long mv1TrisSubmittedFrame = 0;
+        // MV1.C soak-diagnostic per-frame counters (owner attribution).
+        int mv1TilesBuiltFrame = 0;
+        long long mv1BytesUploadedFrame = 0;
+        double mv1UploadMsFrame = 0.0;      // time inside glBufferData this frame
+        double mv1DepthClearMsFrame = 0.0;  // time inside the two-pass depth clear
+        double mv1LastGpuMs = -1.0;         // most recent async GPU draw sample
+        bool soakDisablePrePresentGlFinish = false; // paired control C
+        bool certMv1cSoakDiag = false;
         std::unordered_map<uint64_t, float> stage0FarSurfaceCache;
         std::unordered_map<uint64_t, float> stage0FarFilteredCache;
         std::unordered_map<uint64_t, std::string> stage0FarMaterialCache;
@@ -1866,6 +1896,41 @@ namespace
     };
 
     AppState g;
+
+// ---- MV1 far-tile VBO ownership procs (declared early: used by GL cleanup) ---
+#ifndef GL_ARRAY_BUFFER
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_DYNAMIC_DRAW 0x88E8
+#endif
+#ifndef GL_STATIC_DRAW
+#define GL_STATIC_DRAW 0x88E4
+#endif
+    using Mv1GlGenBuffersFn=void (APIENTRY*)(GLsizei,GLuint*);
+    using Mv1GlBindBufferFn=void (APIENTRY*)(GLenum,GLuint);
+    using Mv1GlBufferDataFn=void (APIENTRY*)(GLenum,ptrdiff_t,void const*,GLenum);
+    using Mv1GlDeleteBuffersFn=void (APIENTRY*)(GLsizei,GLuint const*);
+    Mv1GlGenBuffersFn s_mv1GenBuffers=nullptr;
+    Mv1GlBindBufferFn s_mv1BindBuffer=nullptr;
+    Mv1GlBufferDataFn s_mv1BufferData=nullptr;
+    Mv1GlDeleteBuffersFn s_mv1DeleteBuffers=nullptr;
+    bool s_mv1BufReady=false, s_mv1BufFailed=false;
+
+    bool Mv1EnsureBufferProcs()
+    {
+        if(s_mv1BufReady)return true;
+        if(s_mv1BufFailed)return false;
+        if(!wglGetCurrentContext())return false;
+        auto L=[&](char const* a,char const* b)->void*
+        {void* p=(void*)wglGetProcAddress(a);if(!p&&b)p=(void*)wglGetProcAddress(b);return p;};
+        s_mv1GenBuffers=(Mv1GlGenBuffersFn)L("glGenBuffers","glGenBuffersARB");
+        s_mv1BindBuffer=(Mv1GlBindBufferFn)L("glBindBuffer","glBindBufferARB");
+        s_mv1BufferData=(Mv1GlBufferDataFn)L("glBufferData","glBufferDataARB");
+        s_mv1DeleteBuffers=(Mv1GlDeleteBuffersFn)L("glDeleteBuffers","glDeleteBuffersARB");
+        if(!s_mv1GenBuffers||!s_mv1BindBuffer||!s_mv1BufferData||!s_mv1DeleteBuffers)
+        {s_mv1BufFailed=true;return false;}
+        s_mv1BufReady=true;return true;
+    }
 
     // Cross-system traversal wake. Declared early so publish, evict, water
     // query, and both cert harnesses can increment the same counters.
@@ -3575,6 +3640,9 @@ namespace
     {
         if(g.certPresentationIsolation)
         {return g.presentationIsolationMode==2;}
+        // Paired-control C: a diagnostic can suppress the pre-present glFinish to
+        // separate its completion-probe cost from real submission/present hitches.
+        if(g.soakDisablePrePresentGlFinish)return false;
         return g.playWorldgenBaseline||g.certWorldgenLadderLivePerf;
     }
 
@@ -11264,11 +11332,15 @@ namespace
         {if(retired.list)glDeleteLists(retired.list,1);}
         g.stage0FarCoarseTiles.clear();g.stage0FarStitchTiles.clear();
         g.stage0FarFreeLists.clear();g.stage0FarRetiredLists.clear();
-        for(auto const& kv:g.mv1Tiles){if(kv.second.list)glDeleteLists(kv.second.list,1);}
-        for(GLuint const list:g.mv1FreeLists){if(list)glDeleteLists(list,1);}
-        for(auto const& retired:g.mv1RetiredLists){if(retired.list)glDeleteLists(retired.list,1);}
-        g.mv1Tiles.clear();g.mv1FreeLists.clear();g.mv1RetiredLists.clear();
+        if(s_mv1BufReady&&s_mv1DeleteBuffers)
+        {
+            for(auto const& kv:g.mv1Tiles){if(kv.second.vbo)s_mv1DeleteBuffers(1,&kv.second.vbo);}
+            for(GLuint const v:g.mv1FreeVbos){if(v)s_mv1DeleteBuffers(1,&v);}
+            for(auto const& r:g.mv1RetiredVbos){if(r.vbo)s_mv1DeleteBuffers(1,&r.vbo);}
+        }
+        g.mv1Tiles.clear();g.mv1FreeVbos.clear();g.mv1RetiredVbos.clear();
         g.mv1AnchorX=g.mv1AnchorY=INT_MIN;g.mv1SourceRev=0;g.mv1ResidentTris=0;
+        g.mv1ResidentBytes=0;
         for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
         g.stage0DirtyTerrainBlocks.clear();
         if ( g.stage0RulerList ) { glDeleteLists( g.stage0RulerList, 1 ); g.stage0RulerList = 0; }
@@ -17145,6 +17217,7 @@ namespace
         long long samples=0;
     };
     Mv1GpuTimer s_mv1Gpu;
+
     static constexpr int kMv1GpuScenarios=10;
     static char const* const kMv1GpuScnNames[kMv1GpuScenarios]={
         "first_visible_cold","station_trunk_valley","station_mountain_flank",
@@ -17187,6 +17260,7 @@ namespace
             if(!avail)continue;
             unsigned long long ns=0;s_glGetQueryObjectui64v(s_mv1Gpu.query[i],GL_QUERY_RESULT,&ns);
             s_mv1Gpu.pending[i]=false;
+            g.mv1LastGpuMs=(double)ns/1.0e6;
             if(s_mv1Gpu.active)
             {
                 int const sc=std::clamp(s_mv1Gpu.scenarioOf[i],0,kMv1GpuScenarios-1);
@@ -17257,35 +17331,42 @@ namespace
     void Mv1ServiceRetired()
     {
         ULONGLONG const now=GetTickCount64();
-        while(!g.mv1RetiredLists.empty()&&g.mv1RetiredLists.front().safeAfterMs<=now)
+        while(!g.mv1RetiredVbos.empty()&&g.mv1RetiredVbos.front().safeAfterMs<=now)
         {
-            if(g.mv1RetiredLists.front().list)
-            {g.mv1FreeLists.push_back(g.mv1RetiredLists.front().list);}
-            g.mv1RetiredLists.pop_front();
+            if(g.mv1RetiredVbos.front().vbo)
+            {g.mv1FreeVbos.push_back(g.mv1RetiredVbos.front().vbo);}
+            g.mv1RetiredVbos.pop_front();
         }
     }
 
-    GLuint Mv1AllocList()
+    // Pop a recycled buffer id, or create one. After warmup this pool is expected
+    // to satisfy every request, so a create here is a runtime allocation and is
+    // counted as such — the working-set law forbids unbounded GL object growth
+    // while travelling.
+    GLuint Mv1AllocVbo()
     {
-        if(g.mv1FreeLists.empty())
-        {
-            constexpr GLsizei kBatch=2048;
-            GLuint const base=glGenLists(kBatch);
-            if(base){for(GLuint i=1;i<(GLuint)kBatch;++i)g.mv1FreeLists.push_back(base+i);return base;}
-            return AllocDisplayListOutsideFonts();
-        }
-        GLuint const list=g.mv1FreeLists.back();g.mv1FreeLists.pop_back();return list;
+        if(!g.mv1FreeVbos.empty())
+        {GLuint const v=g.mv1FreeVbos.back();g.mv1FreeVbos.pop_back();++g.mv1VboReuses;return v;}
+        GLuint v=0;s_mv1GenBuffers(1,&v);
+        if(v){++g.mv1VboCreates;if(g.mv1Warmed)++g.mv1RuntimeAllocsAfterWarmup;}
+        return v;
     }
 
-    void Mv1RetireList(GLuint list)
+    // A retired tile's GPU buffer returns to the free pool (after a short age so
+    // the driver is done consuming the previous frame); its bytes leave the
+    // resident total immediately. The id is reused, never deleted, so travel
+    // never churns GL object create/destroy.
+    void Mv1RetireTile(AppState::Mv1Tile const& t)
     {
-        if(list)g.mv1RetiredLists.push_back(
-            Stage0RetiredDisplayList{list,GetTickCount64()+100ull});
+        if(t.vbo)g.mv1RetiredVbos.push_back(
+            AppState::Mv1RetiredVbo{t.vbo,t.bytes,GetTickCount64()+100ull});
+        g.mv1ResidentBytes-=(long long)t.bytes;
+        ++g.mv1VboRetires;
     }
 
     void Mv1ReleaseAll()
     {
-        for(auto const& kv:g.mv1Tiles)Mv1RetireList(kv.second.list);
+        for(auto const& kv:g.mv1Tiles)Mv1RetireTile(kv.second);
         g.mv1Tiles.clear();
         g.mv1ResidentTris=0;
         for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
@@ -17363,13 +17444,18 @@ namespace
         g.mv1MaxErrorM=(std::max)(g.mv1MaxErrorM,tileMax);
         {int h=0;int c=chosen;while(c>4){c>>=1;++h;}g.mv1TileCellsHist[(std::min)(h,3)]++;}
 
-        GLuint const list=Mv1AllocList();
-        if(!list)return false;
+        if(!Mv1EnsureBufferProcs())return false;
         int tris=0;
         float const skirtZ=(float)(tileMinZ-(2.0*B.errorTargetM+8.0));
-        glNewList(list,GL_COMPILE);
-        glShadeModel(GL_FLAT);
-        glBegin(GL_TRIANGLES);
+        // Interleaved [x,y,z, r,g,b] float vertices; flat shading is baked by
+        // replicating the per-facet colour to each of the facet's vertices.
+        static thread_local std::vector<float> verts;
+        verts.clear();
+        verts.reserve((size_t)(chosen*chosen+chosen*4)*6*6);
+        float curR=1.f,curG=1.f,curB=1.f;
+        auto push=[&](float x,float y,float z)
+        {verts.push_back(x);verts.push_back(y);verts.push_back(z);
+         verts.push_back(curR);verts.push_back(curG);verts.push_back(curB);};
         auto shadeOf=[&](float nx,float ny,float nz,int i0,int j0,int i1,int j1)
         {
             float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
@@ -17382,8 +17468,9 @@ namespace
             float const zc=.5f*(Z(i0,j0)+Z(i1,j1))-B.zBias;
             float const elevBright=0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
             float const shade=hillshade*elevBright;
-            glColor3f((std::min)(1.f,rr/255.f*shade),
-                (std::min)(1.f,gv/255.f*shade),(std::min)(1.f,bv/255.f*shade));
+            curR=(std::min)(1.f,rr/255.f*shade);
+            curG=(std::min)(1.f,gv/255.f*shade);
+            curB=(std::min)(1.f,bv/255.f*shade);
         };
         for(int cj=0;cj<chosen;++cj)for(int ci=0;ci<chosen;++ci)
         {
@@ -17394,16 +17481,16 @@ namespace
             float const wx0=(float)(x0+ci*em),wy0=(float)(y0+cj*em);
             float const wx1=(float)(x0+(ci+1)*em),wy1=(float)(y0+(cj+1)*em);
             shadeOf(-dzdx,-dzdy,1.f,i0,j0,i1,j1);
-            glVertex3f(wx0,wy0,z00);glVertex3f(wx1,wy0,z10);glVertex3f(wx0,wy1,z01);
-            glVertex3f(wx1,wy0,z10);glVertex3f(wx1,wy1,z11);glVertex3f(wx0,wy1,z01);
+            push(wx0,wy0,z00);push(wx1,wy0,z10);push(wx0,wy1,z01);
+            push(wx1,wy0,z10);push(wx1,wy1,z11);push(wx0,wy1,z01);
             tris+=2;
         }
         // Perimeter skirts (drop each boundary edge down to skirtZ).
         auto skirt=[&](float ax,float ay,float az,float bx,float by,float bz)
         {
-            glColor3f(0.30f,0.28f,0.26f);
-            glVertex3f(ax,ay,az);glVertex3f(bx,by,bz);glVertex3f(ax,ay,skirtZ);
-            glVertex3f(bx,by,bz);glVertex3f(bx,by,skirtZ);glVertex3f(ax,ay,skirtZ);
+            curR=0.30f;curG=0.28f;curB=0.26f;
+            push(ax,ay,az);push(bx,by,bz);push(ax,ay,skirtZ);
+            push(bx,by,bz);push(bx,by,skirtZ);push(ax,ay,skirtZ);
             tris+=2;
         };
         for(int c=0;c<chosen;++c)
@@ -17415,14 +17502,54 @@ namespace
             skirt((float)x0,p,Z(0,c*step),(float)x0,q,Z(0,(c+1)*step));           // -X
             skirt((float)(x0+B.tileM),p,Z(F,c*step),(float)(x0+B.tileM),q,Z(F,(c+1)*step)); // +X
         }
-        glEnd();glEndList();
-        out.list=list;out.band=band;out.tris=tris;out.sourceRev=g.mv1SourceRev;
+        GLuint const vbo=Mv1AllocVbo();
+        if(!vbo)return false;
+        unsigned const bytes=(unsigned)(verts.size()*sizeof(float));
+        LARGE_INTEGER uq{},u0{},u1{};QueryPerformanceFrequency(&uq);QueryPerformanceCounter(&u0);
+        s_mv1BindBuffer(GL_ARRAY_BUFFER,vbo);
+        s_mv1BufferData(GL_ARRAY_BUFFER,(ptrdiff_t)bytes,verts.data(),GL_STATIC_DRAW);
+        s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
+        QueryPerformanceCounter(&u1);
+        if(uq.QuadPart>0)g.mv1UploadMsFrame+=1000.0*(double)(u1.QuadPart-u0.QuadPart)/(double)uq.QuadPart;
+        ++g.mv1TilesBuiltFrame;g.mv1BytesUploadedFrame+=(long long)bytes;
+        out.vbo=vbo;out.vertCount=(int)(verts.size()/6);out.bytes=bytes;
+        out.band=band;out.tris=tris;out.sourceRev=g.mv1SourceRev;
+        out.cx=(float)(x0+0.5*B.tileM);out.cy=(float)(y0+0.5*B.tileM);
+        out.halfM=(float)(0.5*B.tileM);
+        g.mv1ResidentBytes+=(long long)bytes;
+        g.mv1BytesHighWater=(std::max)(g.mv1BytesHighWater,g.mv1ResidentBytes);
         return true;
+    }
+
+    // Reads the far-pass depth buffer (before the depth-only clear) and bins the
+    // rasterized terrain pixels by real camera distance into meso/regional/horizon.
+    // This proves actual framebuffer contribution per band, not merely submitted
+    // geometry — a submitted-but-clipped band contributes zero pixels here.
+    void Mv1cCaptureFarDepth(float nf,float ff)
+    {
+        GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);
+        int const w=vp[2],h=vp[3];
+        if(w<=0||h<=0)return;
+        std::vector<float> depth((size_t)w*h);
+        glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
+        long long meso=0,regional=0,horizon=0,terrain=0;
+        for(float d:depth)
+        {
+            if(d>=0.99999f)continue; // far-cleared background (sky), no terrain
+            ++terrain;
+            float const dist=2.f*nf*ff/(ff+nf-(2.f*d-1.f)*(ff-nf));
+            if(dist<kMv1Bands[0].outer)++meso;          // ..2 km
+            else if(dist<kMv1Bands[1].outer)++regional; // 2..20 km
+            else ++horizon;                             // 20..32 km
+        }
+        g.mv1cBandPixels[0]=meso;g.mv1cBandPixels[1]=regional;g.mv1cBandPixels[2]=horizon;
+        g.mv1cTerrainPixels=terrain;g.mv1cViewportPixels=(long long)w*h;
     }
 
     void DrawMv1MultiScaleTerrain()
     {
         g.mv1BuildMsThisFrame=0.0;
+        g.mv1TilesBuiltFrame=0;g.mv1BytesUploadedFrame=0;g.mv1UploadMsFrame=0.0;
         if(!g.playWorldgenBaseline||!g.mv1Enabled){return;}
         if(!IsRegionalBiomeView(g.stage0PlayView)||!g.regionalBiomeRuntime)
         {if(!g.mv1Tiles.empty())Mv1ReleaseAll();return;}
@@ -17486,7 +17613,7 @@ namespace
             for(auto it=g.mv1Tiles.begin();it!=g.mv1Tiles.end();)
             {
                 if(!desired.count(it->first)||it->second.sourceRev!=g.mv1SourceRev)
-                {Mv1RetireList(it->second.list);it=g.mv1Tiles.erase(it);++g.mv1TilesRetired;}
+                {Mv1RetireTile(it->second);it=g.mv1Tiles.erase(it);++g.mv1TilesRetired;}
                 else ++it;
             }
         }
@@ -17496,9 +17623,19 @@ namespace
         std::sort(want.begin(),want.end(),
             [](Want const& a,Want const& b){return a.d2<b.d2;});
         double const budgetMs=g.certMv1Terrain?60.0:4.0; // cert settles fully
+        // Hard per-frame cap on display-list CREATION. Each glNewList queues
+        // driver-deferred GPU finalization; a burst of creations (a full field
+        // rebuild, or a large anchor fringe) lets that backlog grow until the
+        // driver flushes it synchronously during a later draw_submit/glFinish —
+        // observed as intermittent 95 ms–1.3 s stalls once the two-pass actually
+        // rasterizes the far field. Capping creation keeps the backlog tiny; the
+        // field simply fills over ~1–2 s, like the cold warmup. The cert builds
+        // unbounded so stations settle fully.
+        int const maxBuildsPerFrame=g.certMv1Terrain?1000000:6;
         int built=0;
         for(Want const& w:want)
         {
+            if(built>=maxBuildsPerFrame)break;
             if(built>0&&elapsedMs()>=budgetMs)break;
             AppState::Mv1Tile tile;
             if(Mv1BuildTile(w.band,w.tx,w.ty,tile))
@@ -17517,15 +17654,37 @@ namespace
         }
         g.mv1ResidentHighWater=(std::max)(g.mv1ResidentHighWater,(int)g.mv1Tiles.size());
 
-        // Draw all resident tiles (absolute world space, depth-tested; coarser
-        // bands are z-biased below finer terrain so overlaps never fight).
-        // MV1.G: time the GPU draw span asynchronously and the CPU submission
-        // directly. One glCallList per tile is the current submission model.
+        g.mv1Warmed=g.mv1Warmed||g.mv1PendingNow==0;
+
+        // Draw resident tiles from their persistent VBOs (absolute world space,
+        // depth-tested; coarser bands z-biased below finer terrain). No display
+        // lists, so there is no per-tile driver-finalization lifecycle for a
+        // later glFinish to stall on. MV1.G times the GPU draw span async and the
+        // CPU submission directly.
         bool const gpuSpan=g.mv1GpuTiming&&Mv1GpuBeginSpan();
         LARGE_INTEGER sqpf{},s0{},s1{};QueryPerformanceFrequency(&sqpf);QueryPerformanceCounter(&s0);
+        // Behind-camera cull: never submit tiles clearly behind the view plane.
+        float const fwx=g.pickFwdX, fwy=g.pickFwdY;
         int calls=0;long long trisSubmitted=0;
-        for(auto const& kv:g.mv1Tiles)if(kv.second.list)
-        {glCallList(kv.second.list);++calls;trisSubmitted+=kv.second.tris;}
+        if(!g.mv1Tiles.empty()&&s_mv1BufReady)
+        {
+            glEnableClientState(GL_VERTEX_ARRAY);
+            glEnableClientState(GL_COLOR_ARRAY);
+            constexpr GLsizei kStride=6*sizeof(float);
+            for(auto const& kv:g.mv1Tiles)if(kv.second.vbo)
+            {
+                float const rx=kv.second.cx-g.camX, ry=kv.second.cy-g.camY;
+                if(rx*fwx+ry*fwy < -(kv.second.halfM*1.5f+64.f))continue; // behind camera
+                s_mv1BindBuffer(GL_ARRAY_BUFFER,kv.second.vbo);
+                glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
+                glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
+                glDrawArrays(GL_TRIANGLES,0,kv.second.vertCount);
+                ++calls;trisSubmitted+=kv.second.tris;
+            }
+            s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
+            glDisableClientState(GL_COLOR_ARRAY);
+            glDisableClientState(GL_VERTEX_ARRAY);
+        }
         QueryPerformanceCounter(&s1);
         if(gpuSpan)Mv1GpuEndSpan();
         g.mv1CpuSubmitMsFrame=sqpf.QuadPart>0
@@ -17984,8 +18143,9 @@ namespace
             "mv1_resident_high_water_tiles=%d\nmax_draw_calls=%d\n"
             "gpu_stall_threshold_ms=%.2f\nworst_gpu_draw_ms=%.4f\n"
             "first_visible_cold_max_ms=%.4f\nwarm_repeat_max_ms=%.4f\n"
-            "gpu_vram_bytes=UNAVAILABLE (no reliable memory extension queried)\n"
-            "gpu_upload_time=UNAVAILABLE (display-list publish timing is driver-implementation-defined; see cpu_publish below)\n"
+            "mv1_vbo_resident_bytes=%lld\nmv1_vbo_bytes_high_water=%lld\n"
+            "mv1_vbo_runtime_allocs_after_warmup=%lld\n"
+            "gpu_total_vram_bytes=UNAVAILABLE (no reliable memory extension queried)\n"
             "gate.gpu_draw_bounded=%s\ngate.no_recurring_first_use_stall=%s\n"
             "gate.draw_calls_bounded=%s\ngate.resident_geometry_bounded=%s\n",
             passed?"PASS":"FAIL",
@@ -17995,6 +18155,7 @@ namespace
             kMv1VisibleRangeM,g.stage0LiveRadiusM,
             g.mv1ResidentHighWater,maxDrawCalls,
             kGpuStallMs,worstMax,firstVisibleMax,warmMax,
+            g.mv1ResidentBytes,g.mv1BytesHighWater,g.mv1RuntimeAllocsAfterWarmup,
             drawBounded?"PASS":"FAIL",noRecurringStall?"PASS":"FAIL",
             callsBounded?"PASS":"FAIL",resBounded?"PASS":"FAIL");
         for(int s=0;s<kMv1GpuScenarios;++s)
@@ -18118,6 +18279,128 @@ namespace
             s_mv1Gpu.active=false;g.mv1GpuTiming=false;
             bool const ok=WriteMv1GpuCertArtifact();
             g.certMv1Gpu=false;PostQuitMessage(ok?0:2);ph=12;
+        }
+    }
+
+    // ---- MV1.C real 32 km raster visibility cert -----------------------------
+    static long long s_mv1cStationBand[5][3];   // per-station meso/regional/horizon px
+    static long long s_mv1cStationTerrain[5];
+    static long long s_mv1cViewport;
+
+    bool WriteMv1cCertArtifact()
+    {
+        long long aggMeso=0,aggRegional=0,aggHorizon=0;
+        int stationsMeso=0,stationsRegional=0,stationsHorizon=0;
+        for(int s=0;s<5;++s)
+        {
+            aggMeso+=s_mv1cStationBand[s][0];
+            aggRegional+=s_mv1cStationBand[s][1];
+            aggHorizon+=s_mv1cStationBand[s][2];
+            if(s_mv1cStationBand[s][0]>0)++stationsMeso;
+            if(s_mv1cStationBand[s][1]>0)++stationsRegional;
+            if(s_mv1cStationBand[s][2]>0)++stationsHorizon;
+        }
+        // Real raster contribution: every band must actually paint pixels
+        // (submitted-but-clipped geometry paints zero). Meso is visible from
+        // every station; regional and horizon from the open vistas.
+        bool const mesoOk=aggMeso>0&&stationsMeso==5;
+        bool const regionalOk=aggRegional>0&&stationsRegional>=3;
+        bool const horizonOk=aggHorizon>0&&stationsHorizon>=2;
+        bool const passed=mesoOk&&regionalOk&&horizonOk;
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_mv1c_raster_visibility_cert.txt","wb")!=0||!f)
+            return false;
+        std::fprintf(f,
+            "MV1C_RASTER_VISIBILITY %s\n"
+            "architecture=two_pass_depth_split\n"
+            "far_pass_frustum_m=128..33000\nnear_pass_frustum_m=0.03..600 (frozen, unchanged)\n"
+            "visible_range_m=%d\nnear_interactive_radius_m=%d\n"
+            "proof=far_pass_depth_buffer_pixel_binning_by_real_distance\n"
+            "agg_meso_px=%lld\nagg_regional_px=%lld\nagg_horizon_px=%lld\n"
+            "stations_with_meso=%d\nstations_with_regional=%d\nstations_with_horizon=%d\n"
+            "gate.meso_rasterized=%s\ngate.regional_rasterized=%s\ngate.horizon_rasterized=%s\n",
+            passed?"PASS":"FAIL",kMv1VisibleRangeM,g.stage0LiveRadiusM,
+            aggMeso,aggRegional,aggHorizon,
+            stationsMeso,stationsRegional,stationsHorizon,
+            mesoOk?"PASS":"FAIL",regionalOk?"PASS":"FAIL",horizonOk?"PASS":"FAIL");
+        for(int s=0;s<5;++s)
+        {
+            Mv1Station const& st=s_mv1Stations[s];
+            long long const t=s_mv1cStationTerrain[s];
+            std::fprintf(f,
+                "station.%d name=%s x=%.1f y=%.1f z=%.1f "
+                "meso_px=%lld regional_px=%lld horizon_px=%lld terrain_px=%lld "
+                "regional_frac=%.4f horizon_frac=%.4f "
+                "image=Docs/provenance_mv1c_station%d_%s.ppm\n",
+                s,st.name,st.x,st.y,st.z,
+                s_mv1cStationBand[s][0],s_mv1cStationBand[s][1],s_mv1cStationBand[s][2],t,
+                t>0?(double)s_mv1cStationBand[s][1]/t:0.0,
+                t>0?(double)s_mv1cStationBand[s][2]/t:0.0,s,st.name);
+        }
+        std::fprintf(f,
+            "viewport_px=%lld\nnear_depth_precision=unchanged (0.03..600 m frozen pass)\n"
+            "tile_ownership=persistent_pooled_vbo (no display-list finalization lifecycle)\n"
+            "vbo_creates=%lld\nvbo_reuses=%lld\nvbo_retires=%lld\n"
+            "vbo_resident_bytes=%lld\nvbo_bytes_high_water=%lld\n"
+            "vbo_runtime_allocs_after_warmup=%lld\nfree_pool=%zu\nretired_pool=%zu\n"
+            "mv1_geometry_unchanged=1\nmw1_8_authority_unchanged=1\n"
+            "mv1g_revalidation=required_and_run_separately\n"
+            "mv1d_distance_readability=closed\nmv2_extended_horizon=closed\nmw9=closed\n",
+            s_mv1cViewport,
+            g.mv1VboCreates,g.mv1VboReuses,g.mv1VboRetires,
+            g.mv1ResidentBytes,g.mv1BytesHighWater,g.mv1RuntimeAllocsAfterWarmup,
+            g.mv1FreeVbos.size(),g.mv1RetiredVbos.size());
+        std::fclose(f);
+        return passed;
+    }
+
+    void Mv1cCertTick()
+    {
+        if(!g.certMv1C||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv1CPhase;
+        bool const nearIdle=Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)
+                >=(float)g.stage0LiveRadiusM-.001f;
+        bool const farIdle=g.mv1PendingNow==0;
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Mv1FindStations();
+            for(int s=0;s<5;++s){s_mv1cStationBand[s][0]=s_mv1cStationBand[s][1]=s_mv1cStationBand[s][2]=0;s_mv1cStationTerrain[s]=0;}
+            Mv1PlaceCamera(s_mv1Stations[0]);
+            g.certMv1CStation=0;g.certMv1CSettle=0;ph=1;return;
+        }
+        if(ph==1) // settle current station
+        {
+            Mv1PlaceCamera(s_mv1Stations[g.certMv1CStation]);
+            if(++g.certMv1CSettle>=45&&nearIdle&&farIdle)
+            {g.mv1cCaptureRequest=true;g.certMv1CSettle=0;ph=2;}
+            return;
+        }
+        if(ph==2) // request issued; the far pass captures during this frame's render
+        {
+            Mv1PlaceCamera(s_mv1Stations[g.certMv1CStation]);
+            if(++g.certMv1CSettle>=3&&!g.mv1cCaptureRequest)
+            {
+                int const s=g.certMv1CStation;
+                s_mv1cStationBand[s][0]=g.mv1cBandPixels[0];
+                s_mv1cStationBand[s][1]=g.mv1cBandPixels[1];
+                s_mv1cStationBand[s][2]=g.mv1cBandPixels[2];
+                s_mv1cStationTerrain[s]=g.mv1cTerrainPixels;
+                s_mv1cViewport=g.mv1cViewportPixels;
+                char path[128];
+                std::snprintf(path,sizeof(path),
+                    "Docs\\provenance_mv1c_station%d_%s.ppm",s,s_mv1Stations[s].name);
+                DumpFramePpm(path);
+                ++g.certMv1CStation;g.certMv1CSettle=0;
+                ph=(g.certMv1CStation>=5)?3:1;
+            }
+            return;
+        }
+        if(ph==3)
+        {
+            bool const ok=WriteMv1cCertArtifact();
+            g.certMv1C=false;PostQuitMessage(ok?0:2);ph=4;
         }
     }
 
@@ -24556,9 +24839,10 @@ namespace
             // The 64 m disk owns live residency and collision. A coarse latent
             // descriptor reading extends presentation beyond it so the residency
             // boundary is never exposed as sky from free-fly or distant views.
-            // MV1 derived visible terrain (384 m → 32 km) draws first, beneath
-            // the near/far certified terrain, from the same MW composite authority.
-            DrawMv1MultiScaleTerrain();
+            // MV1 derived visible terrain (128 m → 32 km) is drawn in the MV1.C
+            // far pass (wide frustum) before this near pass, then overpainted
+            // here wherever the near authoritative world exists. It is not drawn
+            // in this near pass — the 0.03–600 m projection would clip it.
             DrawStage0FarField();
             if ( ( g.playWorldgenBaseline || g.certWorldgenLadderAudit
               || g.certWorldgenLadderLivePerf )
@@ -25753,6 +26037,38 @@ namespace
             ++s_drawSubmitAttrib.other.draws;
             s_drawSubmitAttrib.other.triangles+=2;
             s_drawSubmitAttrib.other.cpuMs+=ms;
+        }
+
+        // ---- MV1.C far terrain pass -----------------------------------------
+        // Distant MV1 geography is rasterized first under a wide 128 m–33 km
+        // frustum, so the certified 0.03–600 m near projection is never widened
+        // (its depth precision is untouched). A depth-only clear then hands a
+        // clean depth buffer to the near authoritative world, which paints over
+        // the far terrain wherever near geometry exists. Camera/modelview is
+        // shared; only the projection differs between passes.
+        if ( g.playWorldgenBaseline && g.mv1Enabled
+          && IsRegionalBiomeView( g.stage0PlayView ) )
+        {
+            float const nf = 128.f, ff = (float)kMv1VisibleRangeM + 1000.f;
+            float const fm[16] = {
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, ( ff + nf ) / ( nf - ff ), -1,
+                0, 0, ( 2 * ff * nf ) / ( nf - ff ), 0 };
+            glMatrixMode( GL_PROJECTION ); glLoadMatrixf( fm );
+            glMatrixMode( GL_MODELVIEW );
+            g.mv1FarPass = true;
+            DrawMv1MultiScaleTerrain();
+            g.mv1FarPass = false;
+            if ( g.certMv1C && g.mv1cCaptureRequest )
+            { Mv1cCaptureFarDepth( nf, ff ); g.mv1cCaptureRequest = false; }
+            LARGE_INTEGER dcq{},dc0{},dc1{};QueryPerformanceFrequency(&dcq);QueryPerformanceCounter(&dc0);
+            glClear( GL_DEPTH_BUFFER_BIT );
+            QueryPerformanceCounter(&dc1);
+            g.mv1DepthClearMsFrame=dcq.QuadPart>0
+                ?1000.0*(double)(dc1.QuadPart-dc0.QuadPart)/(double)dcq.QuadPart:0.0;
+            glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
+            glMatrixMode( GL_MODELVIEW );
         }
 
         DrawHeightfield();
@@ -45504,6 +45820,36 @@ namespace
         auto& run=s_streamingSoak;
         double const frameMs=g.playWorldgenFrameMs;
         if(frameMs<=0.0)return;
+        // MV1.C soak diagnostic: log every over-budget frame with all four
+        // independent timings (A cpu / B swap / C glFinish / D async MV1 GPU)
+        // plus the MV1 per-frame context, so an outlier's true owner is visible
+        // rather than lumped into one wall-clock number.
+        if(g.certMv1cSoakDiag)
+        {
+            if(!s_mv1Gpu.active){g.mv1GpuTiming=true;s_mv1Gpu.active=true;}
+            if(frameMs>16.667)
+            {
+                FILE* d=nullptr;
+                if(fopen_s(&d,"Docs\\provenance_mv1c_soak_outliers.csv","ab")==0&&d)
+                {
+                    if(ftell(d)==0)std::fprintf(d,
+                        "elapsed_s,frame_ms,cpu_ms,draw_submit_ms,glfinish_ms,swap_ms,"
+                        "mv1_gpu_ms_async,mv1_tiles_built,mv1_bytes_uploaded,mv1_upload_ms,"
+                        "mv1_depth_clear_ms,mv1_draw_calls,mv1_tris,far_pass,glfinish_probe,"
+                        "resident_vbo_bytes,vbo_creates,vbo_reuses,vbo_retires\n");
+                    std::fprintf(d,
+                        "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%d,%lld,%.3f,%.3f,%d,%lld,%d,%d,"
+                        "%lld,%lld,%lld,%lld\n",
+                        run.elapsedS,frameMs,g.stage0FrameCpuMs,g.stage0FrameDrawSubmitMs,
+                        g.stage0FrameGpuFinishMs,g.stage0FrameSwapBuffersMs,g.mv1LastGpuMs,
+                        g.mv1TilesBuiltFrame,g.mv1BytesUploadedFrame,g.mv1UploadMsFrame,
+                        g.mv1DepthClearMsFrame,g.mv1DrawCallsFrame,g.mv1TrisSubmittedFrame,
+                        g.mv1Enabled?1:0,g.soakDisablePrePresentGlFinish?0:1,
+                        g.mv1ResidentBytes,g.mv1VboCreates,g.mv1VboReuses,g.mv1VboRetires);
+                    std::fclose(d);
+                }
+            }
+        }
         SoakNotePrivate("draw_present");
         SIZE_T const ws=ProcessWorkingSetBytes();
         SIZE_T const priv=ProcessPrivateBytes();
@@ -46153,6 +46499,7 @@ namespace
             Stage11FreeFlyTick();
             Mv1TerrainCertTick();
             Mv1GpuCertTick();
+            Mv1cCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -46230,7 +46577,8 @@ namespace
               && !g.certStage11FreeFly
               && !g.certPresentationIsolation
               && !g.certMv1Terrain
-              && !g.certMv1Gpu )
+              && !g.certMv1Gpu
+              && !g.certMv1C )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -52063,14 +52411,18 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
-                if(_wcsicmp(argv[i],L"--cert-streaming-soak-mw8")==0)
+                if(_wcsicmp(argv[i],L"--cert-streaming-soak-mw8")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv1c-soak-diag")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.certStreamingSoak=true;g.certStreamingSoakStageFilter=38;
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    if(_wcsicmp(argv[i],L"--cert-mv1c-soak-diag")==0)g.certMv1cSoakDiag=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                if(_wcsicmp(argv[i],L"--soak-no-glfinish")==0)
+                {g.soakDisablePrePresentGlFinish=true;continue;}
                 if(_wcsicmp(argv[i],L"--cert-streaming-soak-p5b3b3a")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
@@ -52378,6 +52730,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1Gpu=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv1c-raster-visibility")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv1c")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.certMv1C=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

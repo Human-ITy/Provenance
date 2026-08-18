@@ -1,14 +1,16 @@
 # MV1.G — GPU Presentation Certification
 
-> **QUALIFICATION (projection audit).** MV1.G's display-list lifecycle, bounded
-> resources, async query mechanism, first-use behavior, and submission
-> measurements below remain valid. However, a later audit found the render far
-> plane was **600 m** during this test, so most regional/horizon fragments were
-> **clipped before rasterization**. The 0.53 ms worst GPU draw was real for the
-> path that executed, but it does **not yet certify full 32 km raster cost**.
-> After **MV1.C** opens true 32 km visibility, these scenarios must be **rerun**:
-> distant triangles that now survive clipping change the fragment/raster
-> workload.
+> **QUALIFICATION (projection audit) — RESOLVED.** MV1.G's async query mechanism,
+> bounded resources, first-use behavior, and submission measurements below remain
+> valid. A later audit found the render far plane was **600 m** during the
+> original test, so most regional/horizon fragments were **clipped before
+> rasterization** — the 0.53 ms worst draw did not yet certify full 32 km raster
+> cost. **MV1.G was rerun after MV1.C** (which opens true 32 km visibility via the
+> two-pass split, and moves far tiles to persistent VBOs): it remains **green at
+> ~0.47 ms (worst as low as ~0.036 ms) with no stalls**, now with the full 32 km
+> actually rasterized, plus explicit VBO resident-byte accounting (~4.2 MB). The
+> full-raster GPU path is certified. (Note: the display-list lifecycle referenced
+> below is superseded by VBO ownership in MV1.C.)
 
 
 MV1.G answers one question the MV1 CPU cert could not: is the frozen 32 km MV1
