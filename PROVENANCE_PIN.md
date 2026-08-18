@@ -266,7 +266,7 @@ MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aeria
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
 MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
 MV2.A   regional macro authority          CERTIFIED @ d23f3810 (9 pages center+8 neighbors; 8 fixtures green; continuous absolute-coord macro field; central-anchored; non-repeating; cheap; no WrapIntoRegion)
-MV2.B   horizon renderer                  CERTIFIED @ __MV2B_SHA__ (real 128 km raster from MV2.A pages; three-pass depth split; seam 5.3 m; non-repeating; bounded 9-page ring; 0 MV2-domain coverage holes; recalibrated 128 km aerial; off==frozen)
+MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster from MV2.A pages; three-pass depth split; seam 5.3 m; non-repeating; bounded 9-page ring; 0 MV2-domain coverage holes; recalibrated 128 km aerial; off==frozen)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -344,7 +344,7 @@ stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
 
-**MV2.B CERTIFIED @ `__MV2B_SHA__`** — 100–128 km Horizon Renderer (presentation
+**MV2.B CERTIFIED @ `40272156`** — 100–128 km Horizon Renderer (presentation
 only; consumes MV2.A `.mcp` macro pages). Renders the 32–128 km horizon behind the
 frozen 0–32 km MV1 world via a **three-pass depth split** (macro 24–130 km → clear →
 MV1 far 0.128–33 km → clear → near 0.03–600 m); MV1 stays authoritative at the 32 km
