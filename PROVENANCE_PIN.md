@@ -264,7 +264,8 @@ PX1     present-pacing attribution        CERTIFIED @ dae52665 (owner = OS-sched
 PX2     two-contract present gate         CERTIFIED @ 3a9a9e74 (engine_cpu 0-over + presented cadence owner-classified; wall-clock kept as telemetry)
 MV1.D   distance / depth readability      CERTIFIED @ fa9c048f (continuous aerial perspective; far pass only; --mv1d-off == frozen MV1.C)
 PX3     frozen-cut perf revalidation      CERTIFIED @ 4cd5af4b (worldgen ladder GREEN under PX2 gameplay gate; wall-clock merely superseded, no historical regression; 240 m/s kept as a named STRESS CEILING)
-MV2     extended 100+ km horizon          NEXT (build-scaling + sync-safe batching first)
+MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTURE_DESIGN.md); NEXT cut = MV2.A regional macro authority (Python), renderer MV2.B after
+MV2.A   regional macro authority          NEXT (continuous absolute-coord macro field; central-region anchored; non-repeating; no WrapIntoRegion; Python-compiled pages)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -341,6 +342,30 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**MV2 DESIGN LOCKED** (design only; no code) — `MV2_HORIZON_ARCHITECTURE_DESIGN.md`.
+Two grounded findings decide the architecture: (A1) the MW authority is a **single
+64 km region** (`kRegionHalfM=32000`) tiled by `WrapIntoRegion`; MV1's 32 km horizon
+reaches exactly its edge, so sampling at 100 km **repeats** the 64 km world — MV2
+needs a **new non-repeating macro-source**, not "MV1 farther"; (A2) the ~4–8 ms/tile
+is fine `ReconstructedZ` erosion/geology, while the macro silhouette (massif/belt/
+basin/structural envelope) is **cheap analytic** — MV2 samples that coarsely and
+caches it. Locked §G: (1) deterministic **continuous absolute-coordinate** macro
+field (seeded control lattice, interpolated → boundary continuity by construction;
+no per-region random programs); (2) **Python** macro compiler is authority, Esoterica
+consumes compiled pages (carry WorldSeed/GeneratorVersion/MacroRegionId/bounds/
+revision/neighbor-lineage), renderer derives presentation only; (3) **64 km = cache/
+ownership cell, NOT feature cadence** — feature wavelengths independent and much
+larger; (4) authority conceptually **unbounded**, resident ring **bounded**, cert
+target **100–128 km**; (5) the certified central 64 km region is an **anchored**
+constraint the new field must continue across (four-boundary continuity cert; no
+`WrapIntoRegion` beyond it); (6) no deep `ReconstructedZ`/`QueryMaterial` resampling,
+cacheable pages, build-then-promote/fenced GPU, never write GPU-in-flight memory.
+Extra hard reqs: **no square-world signature** (region boundary ≠ terrain boundary).
+Sequenced as two cuts: **MV2.A regional macro authority** (Python + client consume,
+certified non-repeating + anchored + boundary-continuous, NO horizon render) FIRST,
+then **MV2.B horizon renderer** (bounded ring, widened two-pass to ~128 km, MV1.D
+recalibrated, seam-free join). MW1–MW8 not rebuilt.
 
 **PX3 CERTIFIED @ `4cd5af4b`** — retrospective frozen-cut performance
 revalidation under the PX2 two-contract gate (semantics/determinism NOT reopened).
