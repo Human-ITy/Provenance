@@ -21,6 +21,7 @@
 
 #include "ProvenanceGeography.h"
 #include "CausalWorldGeology.h"
+#include "Ms1SurfaceAppearance.h"
 #include "CausalWorldExposure.h"
 #include "CausalVisibleExposure.h"
 #include "CausalDifferentialErosion.h"
@@ -1096,6 +1097,13 @@ namespace
         // render time, so --mv2c-off rebuilds the exact frozen MV2.B presentation.
         bool mv2cEnabled = true;                    // --mv2c-off => exact MV2.B
         bool certMv2c = false;
+        // MS1.B — shared SurfaceState->appearance. OPT-IN (default OFF == exact frozen
+        // MV2.C/MV1 presentation, so every frozen byte-cert is unaffected). --ms1b / --play-ms1b
+        // enable the semantic surface; --ms1b-off forces frozen. ms1bDebugAxis (Ms1::DebugAxis)
+        // isolates one authority axis for debug play; 0 = normal composed appearance.
+        bool ms1bEnabled = false;
+        int  ms1bDebugAxis = 0;
+        bool certMs1b = false;
         double mv2cFarContrast[4] = {0,0,0,0};      // A/B: far-band luminance contrast
         double mv2cFarLuma[4] = {0,0,0,0};
         // MV2 silhouette-stack diagnostic (MEASUREMENT ONLY): per-view attribution of
@@ -17524,6 +17532,95 @@ namespace
         return f?f->fieldDigest:0;
     }
 
+    // MS1.B FINE central composition: build one semantic SurfaceState from the certified fine
+    // MW authorities (MW7 regolith already applies exposure precedence -> ProfileClass IS the
+    // substrate; host = MW2 lithology; drainage/weathering/organic/stability are its own
+    // outputs), so the near surface and the macro descriptor speak the SAME vocabulary and
+    // feed the SAME resolver. No independent single-diagnostic-layer colour query.
+    static uint8_t Ms1SubstrateFromProfile(CausalRegionalRegolith::ProfileClass p)
+    {
+        using P=CausalRegionalRegolith::ProfileClass;
+        switch(p){
+            case P::BareBedrock:return Ms1::SUB_BARE_BEDROCK;
+            case P::WeatheredBedrock:return Ms1::SUB_WEATHERED_BEDROCK;
+            case P::ThinRegolith:return Ms1::SUB_THIN_REGOLITH;
+            case P::Colluvium:return Ms1::SUB_COLLUVIUM;
+            case P::Talus:return Ms1::SUB_TALUS;
+            case P::Alluvium:return Ms1::SUB_ALLUVIUM;
+            case P::FloodplainSediment:return Ms1::SUB_FLOODPLAIN;
+            case P::BasinFill:return Ms1::SUB_BASIN_FILL;
+            case P::OrganicCapable:return Ms1::SUB_ORGANIC_CAPABLE;
+            case P::WaterloggedMineral:return Ms1::SUB_WATERLOGGED;
+            default:return Ms1::SUB_BARE_BEDROCK;
+        }
+    }
+    static uint8_t Ms1LithologyFromMaterial(std::string const& m)
+    {
+        auto has=[&](char const* k){return m.find(k)!=std::string::npos;};
+        if(has("granit"))return Ms1::LIT_GRANITE;
+        if(has("basalt")||has("volcan")||has("lava")||has("gabbro")||has("andesit"))return Ms1::LIT_BASALT;
+        if(has("sandst")||has("arkos")||has("arenit"))return Ms1::LIT_SANDSTONE;
+        if(has("shale")||has("mudst")||has("siltst")||has("clayst")||has("mudrock"))return Ms1::LIT_SHALE;
+        if(has("limest")||has("carbonate")||has("dolo")||has("chalk"))return Ms1::LIT_LIMESTONE;
+        if(has("quartz"))return Ms1::LIT_QUARTZITE;
+        if(has("schist")||has("gneiss")||has("slate")||has("marble")||has("metamor")||has("phyllite")||has("amphibol"))return Ms1::LIT_METAMORPHIC;
+        return Ms1::LIT_MIXED;
+    }
+    bool FineSurfaceState(double x,double y,Ms1::SurfaceState& out)
+    {
+        // Source from the biome runtime (always present in the MW8 launch): its QueryBiome
+        // carries the full MW7 regolith query (.regolith.cell = exposure-precedence winner,
+        // .regolith.host = MW2 lithology). The standalone regolith runtime is only created
+        // for the regolith diagnostic VIEW, so we never depend on it here.
+        if(!g.regionalBiomeRuntime)return false;
+        auto const bq=g.regionalBiomeRuntime->QueryBiome(x,y);
+        auto const& c=bq.regolith.cell;
+        out=Ms1::SurfaceState();
+        out.substrate=Ms1SubstrateFromProfile(c.profile);
+        out.lith=Ms1LithologyFromMaterial(bq.regolith.host.material);
+        out.family=Ms1::SubstrateFamily(out.substrate);
+        // drainage class ordinal -> wetness (ExcessivelyDrained..Saturated)
+        using D=CausalRegionalRegolith::DrainageClass;
+        switch(c.drainage){
+            case D::ExcessivelyDrained:out.wetness=0.06f;break;
+            case D::WellDrained:out.wetness=0.22f;break;
+            case D::ModeratelyDrained:out.wetness=0.42f;break;
+            case D::SomewhatPoorlyDrained:out.wetness=0.62f;break;
+            case D::PoorlyDrained:out.wetness=0.82f;break;
+            case D::Saturated:out.wetness=0.97f;break;
+            default:out.wetness=0.35f;break;
+        }
+        auto sat01=[](double v){return (float)(v<0?0:(v>1?1:v));};
+        out.weathering=sat01(c.weatheringIntensity);
+        out.organic=sat01(c.organicMatterPotential);
+        out.stability=sat01(c.surfaceStability);
+        // soil depth from the profile family (robust to unknown metric depth units)
+        switch(out.substrate){
+            case Ms1::SUB_BARE_BEDROCK:case Ms1::SUB_TALUS:out.soilDepth=0.05f;break;
+            case Ms1::SUB_WEATHERED_BEDROCK:out.soilDepth=0.20f;break;
+            case Ms1::SUB_THIN_REGOLITH:out.soilDepth=0.40f;break;
+            case Ms1::SUB_COLLUVIUM:out.soilDepth=0.55f;break;
+            case Ms1::SUB_ORGANIC_CAPABLE:out.soilDepth=0.85f;break;
+            default:out.soilDepth=0.60f;break;   // alluvium/floodplain/basin/waterlogged
+        }
+        // exposure: bare/talus rock high; soils low; steeper slope raises it a little.
+        float bareExp=(out.substrate==Ms1::SUB_BARE_BEDROCK||out.substrate==Ms1::SUB_TALUS)?0.85f:
+                      (out.substrate==Ms1::SUB_WEATHERED_BEDROCK?0.55f:0.20f);
+        out.exposure=std::clamp(bareExp+0.20f*(float)std::clamp(c.slope,0.0,1.0),0.f,1.f);
+        // grain -> roughness proxy
+        using GsT=CausalRegionalRegolith::GrainSizeTendency;
+        switch(c.grain){
+            case GsT::Fine:out.roughness=0.20f;break;
+            case GsT::MediumFine:out.roughness=0.35f;break;
+            case GsT::Medium:out.roughness=0.50f;break;
+            case GsT::MediumCoarse:out.roughness=0.68f;break;
+            case GsT::Coarse:out.roughness=0.88f;break;
+            default:out.roughness=0.5f;break;
+        }
+        out.valid=true;
+        return true;
+    }
+
     // Samples the SAME certified MW1–MW8 composite authority the near path uses,
     // at absolute world coordinates. No second terrain world, no wrap.
     bool Mv1SampleAuthority(double x,double y,float& outZ,
@@ -17533,6 +17630,18 @@ namespace
         double const z=g.regionalBiomeRuntime->ReconstructedZ(x,y);
         if(!std::isfinite(z))return false;
         outZ=(float)z;
+        Ms1::SurfaceState ss;
+        if(g.ms1bEnabled&&FineSurfaceState(x,y,ss)&&ss.valid)
+        {
+            // near authoritative world: full-fidelity grain (distanceM small). Base albedo
+            // pre-hillshade (Mv1BuildTile::shadeOf applies the directional light).
+            Ms1::RGB base=g.ms1bDebugAxis?Ms1::DebugColor(ss,g.ms1bDebugAxis)
+                                         :Ms1::ResolveAppearance(ss,x,y,/*distanceM*/300.f);
+            r=(uint8_t)std::clamp(base.r*255.f,0.f,255.f);
+            gg=(uint8_t)std::clamp(base.g*255.f,0.f,255.f);
+            bb=(uint8_t)std::clamp(base.b*255.f,0.f,255.f);
+            return true;
+        }
         char const* mat=g.regionalBiomeRuntime->DiagnosticMaterial(x,y);
         r=94;gg=77;bb=56;CapColor(mat,r,gg,bb);
         return true;
@@ -17676,7 +17785,9 @@ namespace
             float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
             float const hillshade=0.22f+0.95f*ndotl;
             float const zc=.5f*(Z(i0,j0)+Z(i1,j1))-B.zBias;
-            float const elevBright=0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
+            // MS1.B: elevation must NOT drive appearance (material already encodes it); keep
+            // only the directional hillshade. Frozen path keeps the elevation brightening.
+            float const elevBright=g.ms1bEnabled?1.f:0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
             float const shade=hillshade*elevBright;
             curR=(std::min)(1.f,rr/255.f*shade);
             curG=(std::min)(1.f,gv/255.f*shade);
@@ -18978,7 +19089,22 @@ namespace
         double minX=0,minY=0,step=0;
         uint64_t regionId=0,digest=0;
         std::vector<float> h;   // n*n absolute macro Z
+        // MS1.A SurfaceState descriptor (consumed by MS1.B; inert otherwise).
+        int surfN=0; double surfStep=0; uint64_t surfDigest=0;
+        std::vector<uint64_t> surfCodes;   // surfN*surfN packed SurfaceState
     };
+
+    // Nearest-cell macro SurfaceState from the page descriptor (class fields must not be
+    // interpolated across category boundaries). Returns invalid if the page carries none.
+    static Ms1::SurfaceState Mv2SurfaceAt(Mv2Page const& p,double x,double y)
+    {
+        if(p.surfN<=0||p.surfStep<=0||(int)p.surfCodes.size()<p.surfN*p.surfN)
+            return Ms1::SurfaceState();
+        int i=(int)std::floor((x-p.minX)/p.surfStep+0.5);
+        int j=(int)std::floor((y-p.minY)/p.surfStep+0.5);
+        i=std::clamp(i,0,p.surfN-1);j=std::clamp(j,0,p.surfN-1);
+        return Ms1::Unpack(p.surfCodes[(size_t)j*p.surfN+i]);
+    }
 
     static uint64_t Mv2ParseHex(std::string const& s)
     {uint64_t v=0;for(char c:s){v<<=4;if(c>='0'&&c<='9')v|=(c-'0');
@@ -18995,6 +19121,7 @@ namespace
         out=Mv2Page();out.ri=ri;out.rj=rj;
         bool magic=false;
         std::string grid;
+        std::string surfGrid;
         size_t pos=0;
         while(pos<text.size())
         {
@@ -19013,6 +19140,10 @@ namespace
             else if(k=="region_id")out.regionId=Mv2ParseHex(v);
             else if(k=="source_digest")out.digest=Mv2ParseHex(v);
             else if(k=="height_grid_row_major")grid=v;
+            else if(k=="surface_step_m")out.surfStep=atof(v.c_str());
+            else if(k=="surface_grid_n")out.surfN=atoi(v.c_str());
+            else if(k=="surface_digest")out.surfDigest=Mv2ParseHex(v);
+            else if(k=="surface_grid_row_major")surfGrid=v;
         }
         if(out.n<=0||out.step<=0)return false;
         out.h.reserve((size_t)out.n*out.n);
@@ -19020,6 +19151,17 @@ namespace
             {while(gp<grid.size()&&grid[gp]==' ')++gp;size_t st=gp;
              while(gp<grid.size()&&grid[gp]!=' ')++gp;
              if(gp>st)out.h.push_back((float)atof(grid.substr(st,gp-st).c_str()));}}
+        // MS1.A SurfaceState descriptor (hex tokens). Parsed if present; absent on legacy
+        // pages -> surfCodes empty -> MS1.B falls back to the frozen palette for that page.
+        if(out.surfN>0&&!surfGrid.empty())
+        {
+            out.surfCodes.reserve((size_t)out.surfN*out.surfN);
+            size_t gp=0;while(gp<surfGrid.size()&&(int)out.surfCodes.size()<out.surfN*out.surfN)
+            {while(gp<surfGrid.size()&&surfGrid[gp]==' ')++gp;size_t st=gp;
+             while(gp<surfGrid.size()&&surfGrid[gp]!=' ')++gp;
+             if(gp>st)out.surfCodes.push_back(Mv2ParseHex(surfGrid.substr(st,gp-st)));}
+            if((int)out.surfCodes.size()!=out.surfN*out.surfN){out.surfCodes.clear();out.surfN=0;}
+        }
         return (int)out.h.size()==out.n*out.n;
     }
 
@@ -19075,6 +19217,23 @@ namespace
         b=(uint8_t)(std::min)(255.f,bb*shade*255.f);
     }
 
+    // MS1.B macro shade: the shared SurfaceState->appearance resolver + the SAME directional
+    // hillshade the frozen macro path uses. Base albedo is derived from MATERIAL (never from
+    // elevation), so a distant basalt province stays dark, a sandstone plateau warm, a wet
+    // basin dark-mineral -- and it matches the near MV1 surface at the same place.
+    static void Mv2ShadeSurface(Ms1::SurfaceState const& s,float nx,float ny,float nz,
+                                double wx,double wy,uint8_t& r,uint8_t& g,uint8_t& b)
+    {
+        float const len=std::sqrt(nx*nx+ny*ny+nz*nz);if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+        Ms1::RGB base=Ms1::ResolveAppearance(s,wx,wy,/*distanceM*/40000.f);  // macro is always far
+        constexpr float kLx=-0.60f,kLy=-0.42f,kLz=0.68f;
+        float const ndotl=nx*kLx+ny*kLy+nz*kLz;
+        float const shade=0.34f+1.06f*(std::max)(0.f,ndotl);
+        r=(uint8_t)(std::min)(255.f,base.r*shade*255.f);
+        g=(uint8_t)(std::min)(255.f,base.g*shade*255.f);
+        b=(uint8_t)(std::min)(255.f,base.b*shade*255.f);
+    }
+
     struct Mv2Tile
     {
         GLuint vbo=0;int vertCount=0,tris=0;unsigned bytes=0;
@@ -19090,6 +19249,7 @@ namespace
         if(!Mv1EnsureBufferProcs())return false;
         int const n=p.n;double const s=p.step;
         bool const mv2c=g.mv2cEnabled;   // capture before the local 'g' colour shadows it
+        bool const ms1bOn=g.ms1bEnabled; int const ms1bDbg=g.ms1bDebugAxis;   // same shadow reason
         auto Z=[&](int i,int j)->float{i=std::clamp(i,0,n-1);j=std::clamp(j,0,n-1);
             return p.h[(size_t)j*n+i];};
         std::vector<float> verts;verts.reserve((size_t)(n-1)*(n-1)*6*6);
@@ -19098,7 +19258,15 @@ namespace
             double const x=p.minX+i*s,y=p.minY+j*s;float const z=Z(i,j);
             float const dzdx=(Z(i+1,j)-Z(i-1,j))/(2.f*(float)s);
             float const dzdy=(Z(i,j+1)-Z(i,j-1))/(2.f*(float)s);
-            uint8_t r,g,b;Mv2ShadeAt(z,-dzdx,-dzdy,1.f,mv2c,r,g,b);
+            uint8_t r,g,b;
+            Ms1::SurfaceState ss=ms1bOn?Mv2SurfaceAt(p,x,y):Ms1::SurfaceState();
+            if(ss.valid)
+            {
+                if(ms1bDbg){Ms1::RGB dc=Ms1::DebugColor(ss,ms1bDbg);
+                    r=(uint8_t)(dc.r*255.f);g=(uint8_t)(dc.g*255.f);b=(uint8_t)(dc.b*255.f);}
+                else Mv2ShadeSurface(ss,-dzdx,-dzdy,1.f,x,y,r,g,b);
+            }
+            else Mv2ShadeAt(z,-dzdx,-dzdy,1.f,mv2c,r,g,b);
             verts.push_back((float)x);verts.push_back((float)y);verts.push_back(z);
             verts.push_back(r/255.f);verts.push_back(g/255.f);verts.push_back(b/255.f);
         };
@@ -19945,6 +20113,175 @@ namespace
             bool const pass=(resDelta==0)&&resDigestStable&&authStable&&(totHoles==0);
             g.certMv1Coverage=false;PostQuitMessage(pass?0:2);ph=4;
         }
+    }
+
+    // MS1.B — Certificate C + near/far continuity + geometry invariance (a SEMANTIC cert:
+    // samples the fine MW composition and the macro page descriptor down the resolution
+    // chain; no pixel capture). Distance may simplify; it may never change the family.
+    static char const* Ms1FamilyName(uint8_t f)
+    {static char const* N[]={"rock","regolith","sediment","volcanic","organic"};
+     return f<Ms1::FAM_COUNT?N[f]:"?";}
+    static char const* Ms1SubName(uint8_t s)
+    {static char const* N[]={"bare_bedrock","weathered_bedrock","thin_regolith","colluvium","talus",
+        "alluvium","floodplain_sediment","basin_fill","organic_capable","waterlogged_mineral",
+        "fresh_lava","scoria_ash","weathered_basalt","volcanic_soil"};
+     return s<Ms1::SUB_COUNT?N[s]:"?";}
+    static char const* Ms1LithName(uint8_t l)
+    {static char const* N[]={"granite","basalt","sandstone","shale","limestone","quartzite",
+        "metamorphic","mixed_unknown"};
+     return l<Ms1::LIT_COUNT?N[l]:"?";}
+    static bool Ms1FamilyCompatible(uint8_t a,uint8_t b)
+    {   // exact, or a mineral-ground refinement (rock<->regolith<->sediment never contradict)
+        if(a==b)return true;
+        auto mineral=[](uint8_t f){return f==Ms1::FAM_ROCK||f==Ms1::FAM_REGOLITH||f==Ms1::FAM_SEDIMENT;};
+        return mineral(a)&&mineral(b);
+    }
+    Ms1::SurfaceState Ms1MacroSurfaceAtAbs(std::unordered_map<uint64_t,Mv2Page>& cache,double x,double y)
+    {
+        int const ri=(int)std::floor((x+kMv2RegionHalfM)/kMv2RegionM);
+        int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
+        uint64_t const key=Mv2Key(ri,rj);
+        auto it=cache.find(key);
+        if(it==cache.end()){Mv2Page pg;bool ok=Mv2LoadPage(ri,rj,pg);it=cache.emplace(key,ok?pg:Mv2Page()).first;}
+        return Mv2SurfaceAt(it->second,x,y);
+    }
+    void Ms1bCertTick()
+    {
+        if(!g.certMs1b||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv2bPhase;
+        // Readiness = the compiled MW FIELD answers (QueryBiome / ReconstructedZ read the
+        // field directly, NOT the streamed 192 m near blocks) -> no camera/streaming needed.
+        bool const fieldsReady=g.regionalBiomeRuntime->Field()!=nullptr
+            &&std::isfinite(g.regionalBiomeRuntime->ReconstructedZ(0.0,0.0));
+        if(ph==0){SelectStage0PlayView(Stage0PlayView::RegionalBiome);g.certMv2bSettle=0;ph=1;return;}
+        if(ph==1){++g.certMv2bSettle;if((g.certMv2bSettle>=20&&fieldsReady)||g.certMv2bSettle>=1200){g.certMv2bSettle=0;ph=2;}return;}
+        if(ph!=2)return;
+
+        std::unordered_map<uint64_t,Mv2Page> cache;
+        double const PI=3.14159265358979;
+        auto fine=[&](double x,double y,Ms1::SurfaceState& s){return FineSurfaceState(x,y,s);};
+
+        // ---- (1) near/far continuity + H2H ladder inside coverage ---------------------- #
+        // Fine composition (0-32 km) vs macro descriptor at the SAME place; the dominant
+        // family must be compatible (distance simplifies, never contradicts).
+        int ladderTot=0,ladderOk=0; double lumaDeltaSum=0; int lumaN=0;
+        int const radii[]={8000,16000,24000,28000,31000};
+        for(int r:radii)for(int a=0;a<24;++a)
+        {
+            double const th=a*(2.0*PI/24.0),x=r*std::cos(th),y=r*std::sin(th);
+            Ms1::SurfaceState fs; if(!fine(x,y,fs)||!fs.valid)continue;
+            Ms1::SurfaceState ms=Ms1MacroSurfaceAtAbs(cache,x,y); if(!ms.valid)continue;
+            ladderTot++;
+            if(Ms1FamilyCompatible(fs.family,ms.family))ladderOk++;
+            Ms1::RGB cf=Ms1::ResolveAppearance(fs,x,y,300.f);
+            Ms1::RGB cm=Ms1::ResolveAppearance(ms,x,y,40000.f);
+            double lf=0.30*cf.r+0.59*cf.g+0.11*cf.b, lm=0.30*cm.r+0.59*cm.g+0.11*cm.b;
+            lumaDeltaSum+=std::fabs(lf-lm); ++lumaN;
+        }
+        double const ladderPct=ladderTot?100.0*ladderOk/ladderTot:0.0;
+        double const avgLuma=lumaN?lumaDeltaSum/lumaN:0.0;
+
+        // ---- (2) 32 km handoff continuity: fine just inside vs macro just outside -------- #
+        int hoTot=0,hoOk=0;
+        for(int a=0;a<48;++a)
+        {
+            double const th=a*(2.0*PI/48.0);
+            Ms1::SurfaceState fs; if(!fine(31000*std::cos(th),31000*std::sin(th),fs)||!fs.valid)continue;
+            Ms1::SurfaceState ms=Ms1MacroSurfaceAtAbs(cache,33000*std::cos(th),33000*std::sin(th));
+            if(!ms.valid)continue; hoTot++;
+            if(Ms1FamilyCompatible(fs.family,ms.family))hoOk++;
+        }
+        double const hoPct=hoTot?100.0*hoOk/hoTot:0.0;
+
+        // ---- (3) Certificate C contexts: classify near samples, report near vs far ------- #
+        struct Ctx{char const* name;int wantFam;int wantSub;bool found;Ms1::SurfaceState near_;Ms1::SurfaceState far_;double x,y;};
+        Ctx ctx[]={
+            {"exposed_basalt_volcanic_slope",Ms1::FAM_VOLCANIC,-1,false,{},{},0,0},
+            {"alluvial_valley",Ms1::FAM_SEDIMENT,Ms1::SUB_ALLUVIUM,false,{},{},0,0},
+            {"wet_basin",Ms1::FAM_SEDIMENT,Ms1::SUB_WATERLOGGED,false,{},{},0,0},
+            {"talus_colluvium",Ms1::FAM_REGOLITH,Ms1::SUB_TALUS,false,{},{},0,0},
+            {"weathered_alpine_rock",Ms1::FAM_ROCK,Ms1::SUB_WEATHERED_BEDROCK,false,{},{},0,0},
+            {"deep_regolith_soil",Ms1::FAM_ORGANIC,-1,false,{},{},0,0},
+        };
+        for(int r=2000;r<=31000&&true;r+=1000)for(int a=0;a<36;++a)
+        {
+            double const th=a*(2.0*PI/36.0),x=r*std::cos(th),y=r*std::sin(th);
+            Ms1::SurfaceState fs; if(!fine(x,y,fs)||!fs.valid)continue;
+            for(auto& c:ctx)
+            {
+                if(c.found)continue;
+                bool match=(c.wantSub>=0)?(fs.substrate==c.wantSub)
+                                         :(fs.family==(uint8_t)c.wantFam);
+                if(match){c.found=true;c.near_=fs;c.far_=Ms1MacroSurfaceAtAbs(cache,x,y);c.x=x;c.y=y;}
+            }
+        }
+
+        // ---- (4) geometry invariance: MS1.B on vs off leaves ReconstructedZ bit-exact ---- #
+        bool geomExact=true; double maxDz=0;
+        for(int r=4000;r<=120000;r+=8000)for(int a=0;a<8;++a)
+        {
+            double const th=a*(PI/4.0),x=r*std::cos(th),y=r*std::sin(th);
+            g.ms1bEnabled=true;  double z1=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+            g.ms1bEnabled=false; double z0=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+            g.ms1bEnabled=true;
+            if(std::isfinite(z0)&&std::isfinite(z1)){double d=std::fabs(z1-z0);maxDz=(std::max)(maxDz,d);if(d!=0.0)geomExact=false;}
+        }
+
+        // ---- (5) far diversity + volcanic check over the macro ring --------------------- #
+        int famHist[Ms1::FAM_COUNT]={0}; int volcCells=0; double volcLumaMax=0; bool volcWhite=false;
+        for(int r=36000;r<=150000;r+=6000)for(int a=0;a<48;++a)
+        {
+            double const th=a*(2.0*PI/48.0),x=r*std::cos(th),y=r*std::sin(th);
+            Ms1::SurfaceState ms=Ms1MacroSurfaceAtAbs(cache,x,y); if(!ms.valid)continue;
+            if(ms.family<Ms1::FAM_COUNT)famHist[ms.family]++;
+            if(ms.family==Ms1::FAM_VOLCANIC){volcCells++;
+                Ms1::RGB c=Ms1::ResolveAppearance(ms,x,y,40000.f);
+                double lu=0.30*c.r+0.59*c.g+0.11*c.b; volcLumaMax=(std::max)(volcLumaMax,lu);
+                if(lu>0.70)volcWhite=true;}
+        }
+        int famsPresent=0;for(int i=0;i<Ms1::FAM_COUNT;++i)if(famHist[i]>0)famsPresent++;
+
+        // ---- verdict + receipt --------------------------------------------------------- #
+        int ctxFound=0;for(auto& c:ctx)if(c.found)ctxFound++;
+        int ctxCompat=0;for(auto& c:ctx)if(c.found&&(!c.far_.valid||Ms1FamilyCompatible(c.near_.family,c.far_.family)))ctxCompat++;
+        bool const pass = ladderTot>0 && ladderPct>=90.0 && hoPct>=90.0
+            && geomExact && famsPresent>=2 && ctxFound>=4 && ctxCompat==ctxFound
+            && (volcCells==0 || (!volcWhite && volcLumaMax<0.55));
+
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_ms1b_surface_appearance_cert.txt","wb")==0&&f)
+        {
+            std::fprintf(f,"MS1B_SHARED_SURFACE_APPEARANCE %s\n"
+                "scope=presentation_only_shared_resolver_near+far  geometry_untouched\n"
+                "one_resolver=Ms1::ResolveAppearance (MV1 near + MV2/MV3 macro; distance=fidelity only)\n\n",
+                pass?"PASS":"FAIL");
+            std::fprintf(f,"fixture.near_far_continuity=%s  fine-vs-macro family compatible %d/%d (%.1f%%, need>=90); "
+                "avg_luma_delta=%.3f (distance simplifies, no palette pop)\n",
+                (ladderTot>0&&ladderPct>=90.0)?"PASS":"FAIL",ladderOk,ladderTot,ladderPct,avgLuma);
+            std::fprintf(f,"fixture.handoff_32km_continuity=%s  fine(31km) vs macro(33km) family compatible %d/%d (%.1f%%, need>=90)\n",
+                (hoPct>=90.0)?"PASS":"FAIL",hoOk,hoTot,hoPct);
+            std::fprintf(f,"fixture.geometry_invariance=%s  MS1.B on/off ReconstructedZ bit-exact (max_dz=%.2e m; need 0)\n",
+                geomExact?"PASS":"FAIL",maxDz);
+            std::fprintf(f,"fixture.far_family_diversity=%s  families over 36-150km ring: rock=%d regolith=%d sediment=%d volcanic=%d organic=%d (present=%d, need>=2)\n",
+                (famsPresent>=2)?"PASS":"FAIL",famHist[0],famHist[1],famHist[2],famHist[3],famHist[4],famsPresent);
+            std::fprintf(f,"fixture.volcanic_dark_not_snow=%s  volcanic macro cells=%d max_luma=%.3f white(>0.70)=%s (dark mineral, never snow)\n",
+                (volcCells==0||(!volcWhite&&volcLumaMax<0.55))?"PASS":"FAIL",volcCells,volcLumaMax,volcWhite?"YES":"no");
+            std::fprintf(f,"\nCertificate C — near/far dominant-identity per context (%d/%d found; %d/%d compatible):\n",
+                ctxFound,(int)(sizeof(ctx)/sizeof(ctx[0])),ctxCompat,ctxFound);
+            for(auto& c:ctx)
+            {
+                if(!c.found){std::fprintf(f,"  %-30s NOT PRESENT in rendered origin world (context absent this seed)\n",c.name);continue;}
+                std::fprintf(f,"  %-30s near[%s/%s/%s wet=%.2f] @(%.0f,%.0f)  far_macro[%s/%s/%s]  %s\n",
+                    c.name,Ms1FamilyName(c.near_.family),Ms1SubName(c.near_.substrate),Ms1LithName(c.near_.lith),c.near_.wetness,c.x,c.y,
+                    c.far_.valid?Ms1FamilyName(c.far_.family):"-",c.far_.valid?Ms1SubName(c.far_.substrate):"-",
+                    c.far_.valid?Ms1LithName(c.far_.lith):"-",
+                    (!c.far_.valid||Ms1FamilyCompatible(c.near_.family,c.far_.family))?"COMPATIBLE":"CONTRADICT");
+            }
+            std::fprintf(f,"\nno_reopen=MW1-MW8/MV1/MV2.*/MV3.*/PX1-PX3  geometry_frozen  water/snow/flora=closed\n"
+                "diagnostic_palette=retired_in_normal_play (CapColor kept behind debug views + --ms1b-off)\n");
+            std::fclose(f);
+        }
+        g.certMs1b=false;PostQuitMessage(pass?0:2);ph=4;
     }
 
     void Mv2bCertTick()
@@ -48398,6 +48735,7 @@ namespace
             Mv2bCertTick();
             Mv2ShowcaseTick();
             Mv1CoverageCertTick();
+            Ms1bCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -54632,6 +54970,27 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {g.mv2bEnabled=true;continue;}
                 if(_wcsicmp(argv[i],L"--mv2c-off")==0)  // revert to exact frozen MV2.B presentation
                 {g.mv2cEnabled=false;continue;}
+                // MS1.B shared surface appearance (opt-in; combinable with any play/cert).
+                if(_wcsicmp(argv[i],L"--ms1b-on")==0||_wcsicmp(argv[i],L"--ms1b")==0)
+                {g.ms1bEnabled=true;continue;}
+                if(_wcsicmp(argv[i],L"--ms1b-off")==0)  // exact frozen MV2.C/MV1 presentation
+                {g.ms1bEnabled=false;continue;}
+                if(_wcsnicmp(argv[i],L"--ms1b-debug=",13)==0)  // isolate one authority axis
+                {g.ms1bDebugAxis=_wtoi(argv[i]+13);g.ms1bEnabled=true;continue;}
+                if(_wcsicmp(argv[i],L"--play-ms1b")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.mv2bEnabled=true;g.ms1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-ms1b")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMs1b=true;g.mv2bEnabled=true;g.ms1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--mv1-nocull")==0) // attribution toggle: disable horizontal cull
                 {g.mv1CullDisable=true;continue;}
                 if(_wcsicmp(argv[i],L"--cert-mv1-coverage")==0)

@@ -1,0 +1,20 @@
+MS1B_SHARED_SURFACE_APPEARANCE PASS
+scope=presentation_only_shared_resolver_near+far  geometry_untouched
+one_resolver=Ms1::ResolveAppearance (MV1 near + MV2/MV3 macro; distance=fidelity only)
+
+fixture.near_far_continuity=PASS  fine-vs-macro family compatible 120/120 (100.0%, need>=90); avg_luma_delta=0.098 (distance simplifies, no palette pop)
+fixture.handoff_32km_continuity=PASS  fine(31km) vs macro(33km) family compatible 48/48 (100.0%, need>=90)
+fixture.geometry_invariance=PASS  MS1.B on/off ReconstructedZ bit-exact (max_dz=0.00e+00 m; need 0)
+fixture.far_family_diversity=PASS  families over 36-150km ring: rock=237 regolith=89 sediment=13 volcanic=621 organic=0 (present=4, need>=2)
+fixture.volcanic_dark_not_snow=PASS  volcanic macro cells=621 max_luma=0.244 white(>0.70)=no (dark mineral, never snow)
+
+Certificate C — near/far dominant-identity per context (4/6 found; 4/4 compatible):
+  exposed_basalt_volcanic_slope  NOT PRESENT in rendered origin world (context absent this seed)
+  alluvial_valley                near[sediment/alluvium/sandstone wet=0.82] @(-1216,-6894)  far_macro[regolith/talus/granite]  COMPATIBLE
+  wet_basin                      near[sediment/waterlogged_mineral/granite wet=0.97] @(4000,-6928)  far_macro[rock/bare_bedrock/shale]  COMPATIBLE
+  talus_colluvium                near[regolith/talus/shale wet=0.82] @(-1026,2819)  far_macro[rock/bare_bedrock/granite]  COMPATIBLE
+  weathered_alpine_rock          near[rock/weathered_bedrock/shale wet=0.82] @(2000,0)  far_macro[rock/bare_bedrock/granite]  COMPATIBLE
+  deep_regolith_soil             NOT PRESENT in rendered origin world (context absent this seed)
+
+no_reopen=MW1-MW8/MV1/MV2.*/MV3.*/PX1-PX3  geometry_frozen  water/snow/flora=closed
+diagnostic_palette=retired_in_normal_play (CapColor kept behind debug views + --ms1b-off)

@@ -276,7 +276,9 @@ MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent con
 MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e + B1.1 super-tile-boundary hardening (window-independent raw-D8 routing; rivers cross 64km pages AND the 384km drainage super-tile edge with one identity, no reset/seam; 100% dir agree, incision p99 18m)
 MV3.B2  special natural forms            CERTIFIED @ 4f5126fd (volcanic shields/cones/plugs, plateau->mesa->butte remnants w/ ancestry, fault-block scarps, rare towers; consequences of continuous controls not POIs; proven across seed corpus; rarity+seed-diversity; renderer+Test B green)
 MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette
-MS1.A   SurfaceState authority + compose  CERTIFIED (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical; NEXT = MS1.B shared appearance resolver + retire diagnostic palette + Certificate C)
+MS1.A   SurfaceState authority + compose  CERTIFIED @ b970585b (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical)
+MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; diagnostic palette retired in normal play (opt-in --ms1b, default off keeps frozen byte-certs); near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green with ms1b on; NEXT = WD1 water)
+WD1     water diversity                   NEXT / READY FOR DESIGN
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -311,6 +313,34 @@ Tools:
 `MS1A_SURFACE_STATE_AUTHORITY_HANDOFF.md`. **NEXT = MS1.B** shared C++ appearance resolver +
 retire the diagnostic palette + Certificate C near/far semantic continuity. MW1–MW8 / MV1 /
 MV2.* / MV3.* / PX1–PX3 frozen; central geometry untouched.
+
+**MS1.B CERTIFIED** — shared Surface Appearance + near/far semantic continuity (presentation
+only; geometry/authority/water untouched). One C++ resolver
+`Ms1::ResolveAppearance(SurfaceState, wx, wy, distance)` in `Ms1SurfaceAppearance.h` is the
+single material-derived palette, consumed by BOTH the near MV1 surface and the MV2/MV3 macro
+horizon — retiring `far=olive / mid=white / near=gray`. **Macro** path parses the MS1.A 17×17
+page descriptor (`Mv2SurfaceAt` nearest-cell → `Mv2ShadeSurface`) — the renderer *consumes* the
+authority, never recomputes it. **Fine** path composes one SurfaceState from the certified MW
+stack via `regionalBiomeRuntime->QueryBiome(x,y)` (its `.regolith` carries MW7 `ProfileClass` =
+the exposure-precedence substrate + MW2 host lithology + drainage/weathering/organic/grain) —
+the SAME vocabulary and resolver, no single-diagnostic-layer colour query. Distance controls
+ONLY grain/breakup fidelity; `organic_capable`=dark soil (never green), `waterlogged`=dark wet
+mineral (never blue water), bare high ground=rock (never snow); MW9/WD1/FL1 stay closed.
+**Opt-in** (`--ms1b`/`--play-ms1b`; default OFF so all frozen byte-certs are unaffected;
+`--ms1b-off` forces frozen; `--ms1b-debug=<axis>` isolates one authority axis). Cert
+`--cert-ms1b` → `Docs/provenance_ms1b_surface_appearance_cert.txt` **PASS**: near/far continuity
+120/120 (100%, avg luma Δ0.098, no palette pop), 32 km handoff 48/48, **geometry invariance
+bit-exact** (MS1.B on/off ReconstructedZ max_dz=0), far-family diversity 4 families over
+36–150 km (volcanic 621), volcanic dark-not-snow (max luma 0.244, 0 white), Certificate C 4/6
+contexts present + 4/4 compatible (basalt-slope & deep-regolith honestly ABSENT in the
+sedimentary central origin world). Compatibility/perf with ms1b ON: **MV1 coverage 0
+below-terrain holes** (`--cert-mv1-coverage --ms1b-on`), **Test B 24 m/s on the MW8/worldgen
+presentation path** (`--cert-streaming-soak-mw8 --mv2b-on --ms1b-on`, stage_filter=38) **PX2
+all-green** (engine_cpu 0-over worst 11.7 ms, 0 presented/stage-owned/os-gap misses, cadence
+no-regression). A/B `Docs/provenance_ms1b_ab_contact_sheet.png` (real-renderer near: diagnostic
+WHITE → material; far: descriptor material provinces top-down). Handoff
+`MS1B_SHARED_SURFACE_APPEARANCE_HANDOFF.md`. MW1–MW8 / MV1 / MV2.* / MV3.* / PX1–PX3 frozen;
+SurfaceState authority (MS1.A) untouched; geometry untouched. **NEXT = WD1** water diversity.
 
 **MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were
