@@ -1,0 +1,20 @@
+MV2_SILHOUETTE_STACK_ANALYSIS (measurement/attribution only; renderer unchanged)
+question=is the mid-distance sky band genuine open basin (A) or lost intermediate ridges (B)
+method=per-column authority terrain elevation-angle envelope by distance band vs rendered mask
+bands=0-32km(MV1 ReconstructedZ) 32-50 50-80 80-128km(macro pages)
+class per column with a distant range: LAYERED(mid>near, drawn) / LOST_B(mid>near in authority, render sky) / BASIN_A(mid<=near)
+
+view.0 name=trunk_valley     far_cols=316  auth_band_max_deg[near/32-50/50-80/80-128]=14.38/0.98/0.70/-0.01  frac[basin/lost/layered]=0.96/0.00/0.04  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_0_trunk_valley.csv
+view.1 name=mountain_flank   far_cols=316  auth_band_max_deg[near/32-50/50-80/80-128]=28.11/-0.70/-0.14/-0.34  frac[basin/lost/layered]=1.00/0.00/0.00  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_1_mountain_flank.csv
+view.2 name=ridge_shoulder   far_cols=104  auth_band_max_deg[near/32-50/50-80/80-128]=0.14/-1.49/0.23/0.12  frac[basin/lost/layered]=0.42/0.00/0.58  verdict=LAYERED_OK  csv=Docs/provenance_mv2_silhouette_2_ridge_shoulder.csv
+view.3 name=foreland_basin   far_cols=241  auth_band_max_deg[near/32-50/50-80/80-128]=7.55/0.84/0.92/0.38  frac[basin/lost/layered]=1.00/0.00/0.00  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_3_foreland_basin.csv
+view.4 name=high_divide      far_cols=12  auth_band_max_deg[near/32-50/50-80/80-128]=-0.95/-1.81/-1.21/-0.77  frac[basin/lost/layered]=1.00/0.00/0.00  verdict=INSUFFICIENT_FAR_TERRAIN  csv=Docs/provenance_mv2_silhouette_4_high_divide.csv
+view.5 name=macro_panorama   far_cols=66  auth_band_max_deg[near/32-50/50-80/80-128]=-0.71/-0.93/0.55/0.08  frac[basin/lost/layered]=0.29/0.00/0.71  verdict=LAYERED_OK  csv=Docs/provenance_mv2_silhouette_5_macro_panorama.csv
+view.6 name=cardinal_north   far_cols=248  auth_band_max_deg[near/32-50/50-80/80-128]=4.98/-1.08/-0.62/-0.71  frac[basin/lost/layered]=1.00/0.00/0.00  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_6_cardinal_north.csv
+view.7 name=cardinal_east    far_cols=43  auth_band_max_deg[near/32-50/50-80/80-128]=6.22/-1.36/-1.37/-1.28  frac[basin/lost/layered]=1.00/0.00/0.00  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_7_cardinal_east.csv
+view.8 name=cardinal_south   far_cols=40  auth_band_max_deg[near/32-50/50-80/80-128]=0.08/-1.31/-0.10/0.48  frac[basin/lost/layered]=0.85/0.00/0.15  verdict=A_GENUINE_BASIN_NEGATIVE_SPACE  csv=Docs/provenance_mv2_silhouette_8_cardinal_south.csv
+view.9 name=cardinal_west    far_cols=34  auth_band_max_deg[near/32-50/50-80/80-128]=0.47/-1.14/1.17/1.20  frac[basin/lost/layered]=0.00/0.00/1.00  verdict=LAYERED_OK  csv=Docs/provenance_mv2_silhouette_9_cardinal_west.csv
+
+AGGREGATE (views with far terrain): frac_basin=0.72 frac_lost=0.00 frac_layered=0.28
+OWNER=A_authority_genuine_negative_space (mid-ground below sightline; far massif above a real basin)
+interpretation=If BASIN dominates, the 32-80 km mid-ground genuinely sits below the near silhouette (the near/elevated ground occludes a low mid-distance); the far range rises above real negative space -> presentation depth-cue question, not a lost-terrain bug. If LOST dominates, authority mid-band ridges exceed the near silhouette but are not rasterised -> a representation fix (preserve intermediate ridge maxima) is warranted.

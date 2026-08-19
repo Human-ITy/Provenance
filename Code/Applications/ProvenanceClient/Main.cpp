@@ -1092,6 +1092,13 @@ namespace
         bool certMv2c = false;
         double mv2cFarContrast[4] = {0,0,0,0};      // A/B: far-band luminance contrast
         double mv2cFarLuma[4] = {0,0,0,0};
+        // MV2 silhouette-stack diagnostic (MEASUREMENT ONLY): per-view attribution of
+        // the mid-distance sky band as (A) genuine low basin below the sightline or
+        // (B) intermediate ridges present in authority but not rendered.
+        bool certMv2Silhouette = false;
+        double mv2SilNearDeg=0, mv2SilMid3250Deg=0, mv2SilMid5080Deg=0, mv2SilFar80Deg=0;
+        double mv2SilBasinFrac=0, mv2SilLostFrac=0, mv2SilLayeredFrac=0;
+        int mv2SilColumns=0;
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -19357,6 +19364,107 @@ namespace
         }
     }
 
+    // ---- MV2 silhouette-stack diagnostic (MEASUREMENT ONLY) -----------------
+    // For each screen column, measure the AUTHORITY terrain elevation-angle envelope
+    // per distance band (0-32 km MV1 ReconstructedZ, 32-50 / 50-80 / 80-128 km macro
+    // pages) and the RENDERED silhouette (terrain-present mask, py->elevation angle).
+    // Classify each column that has a distant range:
+    //   LAYERED : mid bands (32-80) rise above the near (0-32) silhouette AND are drawn
+    //   LOST(B) : mid bands rise above the near silhouette in AUTHORITY but the render
+    //             shows sky there -> intermediate ridges under-represented
+    //   BASIN(A): mid bands stay at/below the near silhouette -> the far massif floats
+    //             above a genuinely low mid-ground (real negative space)
+    // Writes per-column CSV + a verdict. Changes nothing about the renderer.
+    void Mv2SilhouetteProbe(int viewIdx,char const* viewName)
+    {
+        int const w=g.mv2bMaskW,h=g.mv2bMaskH;
+        if(w<=0||h<=0||(int)g.mv2bTerrainMask.size()!=w*h||!g.regionalBiomeRuntime)return;
+        std::unordered_map<uint64_t,Mv2Page> cache;
+        double const kNearR=34000.0,kNearStep=1200.0;
+        int const gn=(int)(2*kNearR/kNearStep)+1;
+        double const gx0=g.camX-kNearR,gy0=g.camY-kNearR;
+        std::vector<float> gz((size_t)gn*gn);
+        for(int j=0;j<gn;++j)for(int i=0;i<gn;++i)
+            gz[(size_t)j*gn+i]=(float)g.regionalBiomeRuntime->ReconstructedZ(gx0+i*kNearStep,gy0+j*kNearStep);
+        auto nearH=[&](double x,double y,double& z)->bool
+        {double fi=(x-gx0)/kNearStep,fj=(y-gy0)/kNearStep;int i0=(int)std::floor(fi),j0=(int)std::floor(fj);
+         if(i0<0||j0<0||i0>=gn-1||j0>=gn-1)return false;double tx=fi-i0,ty=fj-j0;
+         auto H=[&](int i,int j){return (double)gz[(size_t)j*gn+i];};
+         z=H(i0,j0)*(1-tx)*(1-ty)+H(i0+1,j0)*tx*(1-ty)+H(i0,j0+1)*(1-tx)*ty+H(i0+1,j0+1)*tx*ty;return true;};
+        double const fovY=g.renderedFovYDeg*3.14159265358979/180.0;
+        double const tanY=std::tan(fovY*0.5),aspect=(double)w/(double)h,tanX=tanY*aspect;
+        double const fx=g.pickFwdX,fy=g.pickFwdY,fz=g.pickFwdZ;
+        double const rx=g.pickRightX,ry=g.pickRightY,rz=g.pickRightZ;
+        double const ux=g.pickUpX,uy=g.pickUpY,uz=g.pickUpZ;
+        double const R2D=180.0/3.14159265358979;
+        double const edge[4]={32000,50000,80000,(double)kMv2VisibleRadiusM};
+        // elevation angle of a pixel row (ray dir.z), column-centre ndcx
+        auto rowAngle=[&](double ndcx,int py)->double
+        {double ndcy=(2.0*(py+0.5)/h-1.0)*tanY;
+         double dx=fx+rx*ndcx+ux*ndcy,dy=fy+ry*ndcx+uy*ndcy,dz=fz+rz*ndcx+uz*ndcy;
+         double dl=std::sqrt(dx*dx+dy*dy+dz*dz);return dl>1e-9?std::asin(dz/dl):0.0;};
+        FILE* csv=nullptr;char cp[160];
+        std::snprintf(cp,sizeof(cp),"Docs\\provenance_mv2_silhouette_%d_%s.csv",viewIdx,viewName);
+        if(fopen_s(&csv,cp,"wb")==0&&csv)
+            std::fprintf(csv,"col,auth_near_deg,auth_32_50_deg,auth_50_80_deg,auth_80_128_deg,"
+                             "render_near_top_deg,render_far_bottom_deg,render_gap_deg,class\n");
+        long long basin=0,lost=0,layered=0,farCols=0;
+        double sumNear=0,sumMid1=0,sumMid2=0,sumFar=0;int sumN=0;
+        for(int px=0;px<w;px+=4)
+        {
+            double const ndcx=(2.0*(px+0.5)/w-1.0)*tanX;
+            // horizontal azimuth direction for this column (ndcy=0)
+            double dhx=fx+rx*ndcx,dhy=fy+ry*ndcx;
+            double const dhl=std::sqrt(dhx*dhx+dhy*dhy);if(dhl<1e-6)continue;dhx/=dhl;dhy/=dhl;
+            double aMax[4]={-9,-9,-9,-9};
+            for(double d=500.0;d<=(double)kMv2VisibleRadiusM;d+=500.0)
+            {
+                double const wx=g.camX+dhx*d,wy=g.camY+dhy*d;
+                double z;if(d<32000.0){if(!nearH(wx,wy,z))continue;}
+                else if(!Mv2PageHeight(cache,wx,wy,z))continue;
+                int b=0;for(int k=0;k<4;++k)if(d<edge[k]){b=k;break;}
+                double const ang=std::atan2(z-g.camZ,d);
+                if(ang>aMax[b])aMax[b]=ang;
+            }
+            double const aNear=aMax[0],aMid=(std::max)(aMax[1],aMax[2]),aFar=aMax[3];
+            // rendered silhouette from the mask column: lower terrain block top, and
+            // whether an upper terrain block exists above a sky gap.
+            int lowerTop=-1;bool inLower=false;int upperBottom=-1,upperTop=-1;
+            for(int py=0;py<h;++py)
+            {
+                bool const t=g.mv2bTerrainMask[(size_t)py*w+px]!=0;
+                if(py<h*0.60&&t){lowerTop=py;inLower=true;}          // lower block (near/mid)
+                if(inLower&&py>lowerTop+2&&t){if(upperBottom<0)upperBottom=py;upperTop=py;}
+            }
+            double const rNearTop=lowerTop>=0?rowAngle(ndcx,lowerTop)*R2D:-99;
+            double const rFarBot=upperBottom>=0?rowAngle(ndcx,upperBottom)*R2D:-99;
+            double const rGap=(upperBottom>=0&&lowerTop>=0)?rFarBot-rNearTop:0.0;
+            // only analyse columns that actually have a distant range
+            bool const hasFar=(aFar> aNear+0.0009)||(upperBottom>=0);
+            char const* cls="no_far";
+            if(hasFar)
+            {
+                ++farCols;
+                sumNear+=aNear*R2D;sumMid1+=aMax[1]*R2D;sumMid2+=aMax[2]*R2D;sumFar+=aFar*R2D;++sumN;
+                double const kMargDeg=0.35;
+                bool const midAboveNear=(aMid-aNear)*R2D>kMargDeg;
+                bool const renderGap=upperBottom>=0&&rGap>0.8;   // visible sky band
+                if(midAboveNear&&renderGap){++lost;cls="LOST_B";}
+                else if(midAboveNear){++layered;cls="LAYERED";}
+                else{++basin;cls="BASIN_A";}
+            }
+            if(csv)std::fprintf(csv,"%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s\n",px,
+                aNear*R2D,aMax[1]*R2D,aMax[2]*R2D,aFar*R2D,rNearTop,rFarBot,rGap,cls);
+        }
+        if(csv)std::fclose(csv);
+        g.mv2SilColumns=(int)farCols;
+        g.mv2SilBasinFrac=farCols>0?(double)basin/farCols:0;
+        g.mv2SilLostFrac=farCols>0?(double)lost/farCols:0;
+        g.mv2SilLayeredFrac=farCols>0?(double)layered/farCols:0;
+        g.mv2SilNearDeg=sumN>0?sumNear/sumN:0;g.mv2SilMid3250Deg=sumN>0?sumMid1/sumN:0;
+        g.mv2SilMid5080Deg=sumN>0?sumMid2/sumN:0;g.mv2SilFar80Deg=sumN>0?sumFar/sumN:0;
+    }
+
     // ---- MV2.B certification ------------------------------------------------
     // Six viewpoints: the five frozen MV1 stations + one ELEVATED panorama aimed
     // across multiple macro pages toward the region's largest distant relief, so
@@ -19374,6 +19482,10 @@ namespace
     static double s_mv2bStWorstHoleM[kMv2bViews];
     static double s_mv2cStContrast[kMv2bViews][4];   // MV2.C A/B: far-band luminance contrast
     static double s_mv2cStLuma[kMv2bViews][4];
+    // silhouette diagnostic per view: near/mid/far band angles + basin/lost/layered frac
+    static double s_mv2SilNear[kMv2bViews],s_mv2SilMid1[kMv2bViews],s_mv2SilMid2[kMv2bViews],s_mv2SilFar[kMv2bViews];
+    static double s_mv2SilBasin[kMv2bViews],s_mv2SilLost[kMv2bViews],s_mv2SilLayered[kMv2bViews];
+    static int s_mv2SilCols[kMv2bViews];
     static Mv1Station s_mv2bPanorama;
     static Mv1Station s_mv2bCardinal[4];   // N,E,S,W
     static char s_mv2bNames[kMv2bViews][24];
@@ -19565,6 +19677,48 @@ namespace
         std::fclose(fp);return passed;
     }
 
+    void WriteMv2SilhouetteAnalysis()
+    {
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_mv2_silhouette_analysis.txt","wb")!=0||!f)return;
+        std::fprintf(f,
+            "MV2_SILHOUETTE_STACK_ANALYSIS (measurement/attribution only; renderer unchanged)\n"
+            "question=is the mid-distance sky band genuine open basin (A) or lost intermediate ridges (B)\n"
+            "method=per-column authority terrain elevation-angle envelope by distance band vs rendered mask\n"
+            "bands=0-32km(MV1 ReconstructedZ) 32-50 50-80 80-128km(macro pages)\n"
+            "class per column with a distant range: LAYERED(mid>near, drawn) / LOST_B(mid>near in authority, render sky) / BASIN_A(mid<=near)\n\n");
+        // Aggregate verdict across the flagged elevated views + all.
+        double aggLost=0,aggBasin=0,aggLayer=0;int aggN=0;
+        for(int s=0;s<kMv2bViews;++s)
+        {
+            char const* name=s_mv2bNames[s];
+            char const* verdict;
+            if(s_mv2SilCols[s]<20)verdict="INSUFFICIENT_FAR_TERRAIN";
+            else if(s_mv2SilLost[s]>0.15)verdict="B_LOST_INTERMEDIATE_STRUCTURE";
+            else if(s_mv2SilLayered[s]>0.30)verdict="LAYERED_OK";
+            else verdict="A_GENUINE_BASIN_NEGATIVE_SPACE";
+            std::fprintf(f,
+                "view.%d name=%-16s far_cols=%d  auth_band_max_deg[near/32-50/50-80/80-128]=%.2f/%.2f/%.2f/%.2f  "
+                "frac[basin/lost/layered]=%.2f/%.2f/%.2f  verdict=%s  csv=Docs/provenance_mv2_silhouette_%d_%s.csv\n",
+                s,name,s_mv2SilCols[s],s_mv2SilNear[s],s_mv2SilMid1[s],s_mv2SilMid2[s],s_mv2SilFar[s],
+                s_mv2SilBasin[s],s_mv2SilLost[s],s_mv2SilLayered[s],verdict,s,name);
+            if(s_mv2SilCols[s]>=20){aggLost+=s_mv2SilLost[s];aggBasin+=s_mv2SilBasin[s];aggLayer+=s_mv2SilLayered[s];++aggN;}
+        }
+        if(aggN>0){aggLost/=aggN;aggBasin/=aggN;aggLayer/=aggN;}
+        char const* owner=(aggLost>0.15)?"B_representation_loses_intermediate_ridges (MV1->MV2 handoff)"
+            :"A_authority_genuine_negative_space (mid-ground below sightline; far massif above a real basin)";
+        std::fprintf(f,
+            "\nAGGREGATE (views with far terrain): frac_basin=%.2f frac_lost=%.2f frac_layered=%.2f\n"
+            "OWNER=%s\n"
+            "interpretation=If BASIN dominates, the 32-80 km mid-ground genuinely sits below the near "
+            "silhouette (the near/elevated ground occludes a low mid-distance); the far range rises above "
+            "real negative space -> presentation depth-cue question, not a lost-terrain bug. If LOST "
+            "dominates, authority mid-band ridges exceed the near silhouette but are not rasterised -> a "
+            "representation fix (preserve intermediate ridge maxima) is warranted.\n",
+            aggBasin,aggLost,aggLayer,owner);
+        std::fclose(f);
+    }
+
     void Mv2bCertTick()
     {
         if(!g.certMv2b||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
@@ -19601,6 +19755,14 @@ namespace
                 s_mv2bStMv1Lod[s]=g.mv2bGapMv1Lod;
                 s_mv2bStWorstHoleM[s]=g.mv2bGapWorstHoleDistM;
                 for(int k=0;k<4;++k){s_mv2cStContrast[s][k]=g.mv2cFarContrast[k];s_mv2cStLuma[s][k]=g.mv2cFarLuma[k];}
+                if(g.certMv2Silhouette)
+                {
+                    Mv2SilhouetteProbe(s,s_mv2bNames[s]);
+                    s_mv2SilNear[s]=g.mv2SilNearDeg;s_mv2SilMid1[s]=g.mv2SilMid3250Deg;
+                    s_mv2SilMid2[s]=g.mv2SilMid5080Deg;s_mv2SilFar[s]=g.mv2SilFar80Deg;
+                    s_mv2SilBasin[s]=g.mv2SilBasinFrac;s_mv2SilLost[s]=g.mv2SilLostFrac;
+                    s_mv2SilLayered[s]=g.mv2SilLayeredFrac;s_mv2SilCols[s]=g.mv2SilColumns;
+                }
                 char path[128];std::snprintf(path,sizeof(path),
                     g.certMv2c?"Docs\\provenance_mv2c_station%d_%s.ppm":"Docs\\provenance_mv2b_station%d_%s.ppm",
                     s,s_mv2bNames[s]);
@@ -19609,7 +19771,8 @@ namespace
             }
             return;
         }
-        if(ph==3){bool const ok=WriteMv2bCertArtifact();g.certMv2b=false;PostQuitMessage(ok?0:2);ph=4;}
+        if(ph==3){if(g.certMv2Silhouette)WriteMv2SilhouetteAnalysis();
+                  bool const ok=WriteMv2bCertArtifact();g.certMv2b=false;PostQuitMessage(ok?0:2);ph=4;}
     }
 
     void DrawStage0FarField()
@@ -54204,6 +54367,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
                     g.certMv2b=true;g.mv2bEnabled=true;g.mv2bCertColor=true;
                     g.mv2cEnabled=false;   // MV2.B baseline cert: pure frozen presentation
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv2-silhouette")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2b=true;g.certMv2Silhouette=true;g.mv2bEnabled=true;g.mv2bCertColor=true;
+                    // measure the presentation as shipped (MV2.C); attribution is geometric,
+                    // independent of palette/aerial, so the verdict holds either way.
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
