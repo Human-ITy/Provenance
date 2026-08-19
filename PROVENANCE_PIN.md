@@ -272,7 +272,7 @@ MV2.C   distant-terrain presence          CERTIFIED @ 48ccf496 (presentation onl
 MV1     live-terrain coverage             FIXED+CERTIFIED @ 779611bc (band-boundary LOD-ring underlap -> AABB desired-set; rotation-invariant resident set; 0 below-terrain holes; skirts no longer exposed; frozen certs + Test B green)
 WORLD   seed-deterministic + UNBOUNDED     DOCTRINE (128 km = player horizon, NOT world extent; pages=cache units; new seed=new world; 4 coupled causal grammars landform/surface/water/living)
 MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DESIGN.md)
-MV3.A   morphology control fields + ops    CERTIFIED @ __MV3A_SHA__ (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
+MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
 MW9     flora / fauna                     CLOSED
 ```
 
