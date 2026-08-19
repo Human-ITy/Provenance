@@ -268,7 +268,7 @@ MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTUR
 MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ 7c344ca1 extends to ±2 ring = 25 pages (full 128 km radial authority; continuity across ±96 km seams; cardinal ±2 reaches 160 km; same field, more pages)
 MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster; three-pass depth split; seam 5.3 m; non-repeating; bounded 25-page ring; 0 MV2-domain holes; recalibrated 128 km aerial; off==frozen; MV2.A2 fixture: cardinal N/E/S/W 100-128 km coverage)
 MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ 7c344ca1
-MV2.C   distant-terrain presence          CERTIFIED @ __MV2C_SHA__ (presentation only; far ranges read as terrain ~7x more separated from sky; gentler aerial + land-cover palette + hillshade; authority/relief/step UNTOUCHED; off==frozen MV2.B)
+MV2.C   distant-terrain presence          CERTIFIED @ 48ccf496 (presentation only; far ranges read as terrain ~7x more separated from sky; gentler aerial + land-cover palette + hillshade; authority/relief/step UNTOUCHED; off==frozen MV2.B)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -346,7 +346,7 @@ stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
 
-**MV2.C @ `__MV2C_SHA__`** — distant-terrain **presence** (presentation ONLY; authority,
+**MV2.C @ `48ccf496`** — distant-terrain **presence** (presentation ONLY; authority,
 macro relief, region cadence, and 1 km page step all untouched). The far MV2 ranges were
 technically visible but washed to near-sky, reading as a thin floating strip above the
 legitimate negative-space band. MV2.C fixes the *presentation*: (1) gentler 32–128 km
