@@ -275,6 +275,7 @@ MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DE
 MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
 MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e + B1.1 super-tile-boundary hardening (window-independent raw-D8 routing; rivers cross 64km pages AND the 384km drainage super-tile edge with one identity, no reset/seam; 100% dir agree, incision p99 18m)
 MV3.B2  special natural forms            CERTIFIED @ 4f5126fd (volcanic shields/cones/plugs, plateau->mesa->butte remnants w/ ancestry, fault-block scarps, rare towers; consequences of continuous controls not POIs; proven across seed corpus; rarity+seed-diversity; renderer+Test B green)
+MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette; NEXT cut = MS1.A
 MW9     flora / fauna                     CLOSED
 ```
 
