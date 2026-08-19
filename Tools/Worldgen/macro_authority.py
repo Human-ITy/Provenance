@@ -468,9 +468,13 @@ import heapq
 
 DRAIN_RES_M = 2000.0                 # coarse macro drainage cell (1-4 km band; cheapest defensible)
 SUPER_M = 384000.0                   # super-tile core (absolute, origin-aligned; != 64 km pages)
-SUPER_HALO_M = 96000.0               # halo so edge basins route correctly
+SUPER_HALO_M = 152000.0              # halo >> max upstream reach so boundary cells' capped
+                                     # upstream is captured by BOTH neighbours (magnitude agrees)
 CHANNEL_ACCUM_CELLS = 220            # >= this upstream area (cells, 1 cell=4 km2) is a trunk channel
-DRAIN_GENERATOR_VERSION = 1
+R_CARVE = 12                         # pit breach search radius (cells, 24 km) -- << halo (window-independent)
+ACCUM_CAP = 1700.0                   # accumulation ceiling: major trunks saturate in BOTH neighbours
+                                     # (still ~8x the channel threshold), so incision agrees at the seam
+DRAIN_GENERATOR_VERSION = 2          # window-independent raw-D8 routing (super-tile boundary safe)
 
 
 def _super_index(x: float, y: float):
@@ -532,49 +536,45 @@ def compile_drainage(central: "CentralProgram", fieldf: "MacroField",
             age[k] = c.age
             sub[k] = c.substrate
             plat[k] = c.w_plateau
-    # 2. Priority-flood depression handling (Barnes 2014): fill pits to their spill level
-    #    so every cell has a downhill path to the tile boundary; genuine deep closed basins
-    #    keep an explicit spill outlet (the rim saddle they filled to).
-    # Priority-Flood + epsilon (Barnes 2014): fill pits AND give filled flats a tiny
-    # monotone gradient back to the spill, so D8 always finds a strict descent (no flats
-    # left un-routed -> no spurious terminals). eps is negligible vs real relief.
-    EPS = 1e-3
-    filled = list(Z)
-    visited = bytearray(nn)
-    pq = []
-    for i in range(n):
-        for k in (i, (n - 1) * n + i, i * n, i * n + (n - 1)):
-            if not visited[k]:
-                visited[k] = 1
-                heapq.heappush(pq, (filled[k], k))
-    while pq:
-        e, k = heapq.heappop(pq)
-        kx, ky = k % n, k // n
-        for dx, dy in _D8:
-            nx, ny = kx + dx, ky + dy
-            if 0 <= nx < n and 0 <= ny < n:
-                m = ny * n + nx
-                if not visited[m]:
-                    visited[m] = 1
-                    if filled[m] <= e:
-                        filled[m] = e + EPS      # raise to spill + eps => strict descent to k
-                    heapq.heappush(pq, (filled[m], m))
-    # 3. D8 steepest descent on the filled surface (guaranteed downhill or flat-to-spill).
+    # 2-3. WINDOW-INDEPENDENT routing. down[k] is D8 steepest descent on the RAW macro
+    #      surface (NOT a windowed priority-flood fill), so it is a pure function of the
+    #      absolute Z field in a fixed local neighbourhood of k. Two adjacent super-tiles
+    #      therefore compute IDENTICAL routing in their shared halo -> the drainage graph
+    #      crosses the 384 km super-tile boundary with no seam and no reset (the unbounded-
+    #      world invariant). Small pits are breached by a BOUNDED local carve: jump to the
+    #      lowest cell strictly below the pit within R_CARVE cells (still a pure local
+    #      function). A genuine closed basin with no lower cell in reach stays an endorheic
+    #      sink (down=-1). Z strictly decreases along every edge, so there are no cycles.
     down = [-1] * nn
     for k in range(nn):
         kx, ky = k % n, k // n
+        e = Z[k]
         best, bj = 0.0, -1
-        e = filled[k]
         for dx, dy in _D8:
             nx, ny = kx + dx, ky + dy
             if 0 <= nx < n and 0 <= ny < n:
                 m = ny * n + nx
                 dist = 1.41421356 if (dx and dy) else 1.0
-                drop = (e - filled[m]) / dist
+                drop = (e - Z[m]) / dist
                 if drop > best:
                     best, bj = drop, m
-        down[k] = bj                              # -1 => terminal (boundary spill / basin outlet)
-    # routing validity: count ascending edges (should be 0) and classify terminals.
+        if bj < 0:                                # pit: bounded local carve to a lower cell
+            lo, lm = e, -1
+            for dy in range(-R_CARVE, R_CARVE + 1):
+                ny = ky + dy
+                if ny < 0 or ny >= n:
+                    continue
+                rown = ny * n
+                for dx in range(-R_CARVE, R_CARVE + 1):
+                    nx = kx + dx
+                    if nx < 0 or nx >= n or (dx == 0 and dy == 0):
+                        continue
+                    zm = Z[rown + nx]
+                    if zm < lo:
+                        lo, lm = zm, rown + nx
+            bj = lm
+        down[k] = bj
+    # routing validity: raw-D8/carve descends by construction; classify terminals.
     ascending = 0
     interior_basins = 0
     boundary_terminals = 0
@@ -585,16 +585,19 @@ def compile_drainage(central: "CentralProgram", fieldf: "MacroField",
             if kx == 0 or ky == 0 or kx == n - 1 or ky == n - 1:
                 boundary_terminals += 1
             else:
-                interior_basins += 1          # a real closed basin with a spill outlet here
-        elif filled[d] > filled[k] + 2.0 * EPS:
+                interior_basins += 1          # a genuine endorheic closed basin
+        elif Z[d] > Z[k] + 1e-6:
             ascending += 1
-    # 4. Flow accumulation: process cells high->low, push unit area downstream.
+    # 4. Flow accumulation over the RAW-elevation order (down always goes strictly lower).
+    #    Capped so a cross-boundary trunk's magnitude is dominated by nearby upstream that
+    #    both super-tiles' halos contain (magnitude agrees across the boundary, not just
+    #    direction); the cap is far above any channel threshold.
     accum = [1.0] * nn
-    order = sorted(range(nn), key=lambda k: filled[k], reverse=True)
+    order = sorted(range(nn), key=lambda k: Z[k], reverse=True)
     for k in order:
         d = down[k]
         if d >= 0:
-            accum[d] += accum[k]
+            accum[d] = min(ACCUM_CAP, accum[d] + accum[k])
     # 5. Watershed label = the terminal outlet each cell drains to (path compression).
     wshed = [-1] * nn
     for start in range(nn):
@@ -621,8 +624,9 @@ def compile_drainage(central: "CentralProgram", fieldf: "MacroField",
         d = down[k]
         slope = 0.0
         if d >= 0:
-            dd = 1.41421356 if (abs(d % n - kx) and abs(d // n - ky)) else 1.0
-            slope = max(0.0, (filled[k] - filled[d]) / (dd * DRAIN_RES_M))
+            ddx, ddy = (d % n) - kx, (d // n) - ky
+            dl = math.sqrt(ddx * ddx + ddy * ddy) * DRAIN_RES_M      # true (possibly carved) reach
+            slope = max(0.0, (Z[k] - Z[d]) / dl) if dl > 0 else 0.0
         a = accum[k]
         # stream power incision; resistant substrate cuts deeper (steep-walled), young keeps
         # relief so canyons stay prominent, plateau context favours box canyons.

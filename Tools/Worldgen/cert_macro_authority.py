@@ -433,6 +433,52 @@ def main() -> int:
     checks.append(("drain_h2h_center_frozen_mw4_not_overwritten", h2h_ok,
                    f"max|incised-MV3.A| inside +/-32km center={center_untouched:.2e}m (need~0; MW4 untouched)"))
 
+    # B1.1 SUPER-TILE BOUNDARY CONTINUITY — the unbounded-world invariant. Rivers must ignore
+    # the 384 km drainage super-tile edge as well as the 64 km pages: two neighbouring
+    # super-tiles must AGREE in their shared halo (routing, accumulation, incision) so a
+    # player crossing the edge sees no watershed reset, accumulation reset, or terrain seam.
+    # Same seed+coords -> identical result regardless of which super-tile compilation answered.
+    solA = sol                                       # super-tile (0,0)
+    solB = compile_drainage(central, fieldf, 1, 0)   # super-tile (1,0); cores meet at x=+192 km
+    dir_agree = dir_tot = 0
+    inc_diff = []
+    acc_ratio = []
+    for yi in range(-150000, 150001, 6000):
+        for xi in range(100000, 285001, 4000):       # the shared-halo overlap band
+            def at(s):
+                fx = int(round((xi - s.x0) / s.res)); fy = int(round((yi - s.y0) / s.res))
+                if not (0 <= fx < s.n and 0 <= fy < s.n):
+                    return None
+                k = fy * s.n + fx; d = s.down[k]
+                dv = ((d % s.n) - fx, (d // s.n) - fy) if d >= 0 else None
+                return s.incision[k], s.accum[k], dv
+            a = at(solA); b = at(solB)
+            if not a or not b:
+                continue
+            dir_tot += 1
+            if a[2] == b[2]:
+                dir_agree += 1
+            inc_diff.append(abs(a[0] - b[0]))
+            if a[1] > 0:
+                acc_ratio.append(b[1] / a[1])
+    inc_diff.sort()
+    dir_pct = 100.0 * dir_agree / max(1, dir_tot)
+    p99 = inc_diff[int(len(inc_diff) * 0.99)] if inc_diff else 0.0
+    inc_max = inc_diff[-1] if inc_diff else 0.0
+    # a trunk crossing the +192 km super-tile edge keeps one MacroChannel/MacroWatershed id.
+    xedge = SUPER_M * 0.5
+    tw, tc = None, None
+    for yy in range(-120000, 120001, 2000):
+        wa, ca, aa, _ = drainage_query(central, fieldf, xedge - 6000.0, float(yy))
+        wb, cb, ab, _ = drainage_query(central, fieldf, xedge + 6000.0, float(yy))
+        if ca != "none" and ca == cb and aa > 400 and ab > 400:
+            tw, tc = (wa == wb), (ca, cb); break
+    trunk_id_ok = tw is True
+    boundary_ok = dir_pct >= 99.5 and p99 < 30.0 and trunk_id_ok
+    checks.append(("drain_supertile_boundary_continuity", boundary_ok,
+                   f"halo-overlap: D8_dir_agree={dir_pct:.1f}% (need>=99.5) incision_p99={p99:.1f}m "
+                   f"max={inc_max:.0f}m (p99 need<30) trunk_crossing_384km_edge_same_channel={trunk_id_ok}"))
+
     # ---- cheap-source evidence ------------------------------------------- #
     cheap_ok = compile_s < 120.0 and not forbidden
     checks.append(("cheap_source_no_deep_reconstructedz", cheap_ok,

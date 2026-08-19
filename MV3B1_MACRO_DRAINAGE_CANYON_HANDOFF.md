@@ -14,23 +14,32 @@ water.
 ```
 MV3.A macro surface  (macro_z; the source the graph routes on)
  → coarse 2 km absolute-coordinate sampling over an origin-aligned SUPER-TILE
-   (384 km core + 96 km halo; independent of the 64 km pages)
- → Priority-Flood + epsilon depression handling (fill pits, give flats a monotone
-   gradient to their spill → guaranteed strict descent, no un-routed flats)
- → D8 steepest-descent routing
- → flow accumulation (upstream area)  +  watershed labelling (outlet per cell)
+   (384 km core + 152 km halo; independent of the 64 km pages)
+ → WINDOW-INDEPENDENT routing: D8 steepest descent on the RAW macro surface (a pure
+   function of the absolute field in a fixed local neighbourhood) + a bounded local
+   carve (breach small pits by jumping to the lowest cell within 24 km); genuine
+   closed basins with no lower cell in reach stay endorheic sinks
+ → flow accumulation (upstream area, capped at 1700 cells)  +  watershed labelling
  → trunk channels (accum ≥ 220 cells = 880 km²)  +  MacroWatershedId / MacroChannelId
  → analytic incision around the certified thalwegs, cross-section shaped by
    substrate competence + erosional maturity (+ plateau context)
  → baked into pages as macro_z − anchor_window·incision  (incision = 0 in frozen centre)
 ```
 
-Ownership is keyed to fixed **absolute super-tiles**, so a trunk crossing pages
-`(-1,0)→(0,0)→(1,0)` keeps one identity/ancestry. The 25-page ±160 km render ring lies
-entirely inside super-tile `(0,0)`, so no super-tile seam enters the rendered world;
-long-distance samples land in other super-tiles (each self-consistent, non-periodic).
-The graph is compiled/cached **once per super-tile**; page emission and horizon sampling
-just read the baked incision.
+**Why raw-surface D8, not a windowed priority-flood?** A per-super-tile priority-flood
+is window-dependent (its fill propagates from the window edge), so two neighbouring
+super-tiles disagreed in their shared halo (measured: D8 direction agreed only 45.9 %,
+incision differed up to 600 m across the 384 km edge) — a river crossing that edge would
+reset its watershed and kink its canyon. Raw-surface D8 + bounded carve is a **pure
+function of absolute coordinates**, so adjacent super-tiles compute IDENTICAL routing in
+the overlap (**100 %** direction agreement, incision p99 **18 m**). The accumulation cap
+makes major trunks saturate in both neighbours so incision magnitude agrees at the seam.
+
+Ownership is keyed to fixed **absolute super-tiles**, so a trunk crossing pages *or the
+384 km super-tile edge* keeps one identity/ancestry. The 25-page ±160 km render ring lies
+inside super-tile `(0,0)`; when the player travels past it, neighbouring super-tiles join
+seam-free by construction. The graph is compiled/cached **once per super-tile**; page
+emission and horizon sampling just read the baked incision.
 
 ## First-class outputs
 
@@ -56,15 +65,17 @@ Preserved MV2.A/A2 + MV3.A invariants, **plus** the 10 MV3.B1 fixtures:
 | long-distance world | PASS — super-tile(0,0) ≠ super-tile(5,0)@1920 km (non-periodic, page-independent) |
 | no square signature | PASS — channel density on 64 km lines 0.022 vs interior 0.028 |
 | H2H — centre frozen | PASS — `max|incised−MV3.A|` inside ±32 km = **0** (MW4 not overwritten) |
+| **B1.1 super-tile boundary continuity** | PASS — across the 384 km super-tile edge: **100 %** D8 direction agreement, incision **p99 18 m**, a trunk crossing the edge keeps one MacroChannel identity (the unbounded-world invariant: rivers ignore the drainage-tile edge too) |
 
 Renderer green with the incised v3 pages: MV2.B 128 km raster / 32 km seam / **0
 MV2-domain coverage holes**, MV2.C presence, and **Test B 24 m/s gameplay hard gate**
 (engine 0-over, 0 stage-owned, cadence no-regression, 0 movement frames > 16.667). PX3
 240 m/s stress ceiling not chased; pages are pre-baked so gameplay cost is unchanged.
 
-Evidence: `Docs/provenance_mv3b1_drainage_canyons.png` — dendritic watershed network
-(coloured by watershed), confluences, trunks crossing 64 km page lines, valleys/canyons
-carved into the hillshaded surface.
+Evidence: `Docs/provenance_mv3b1_drainage_canyons.png` — dendritic watershed network,
+confluences, trunks crossing 64 km page lines, valleys/canyons in the hillshaded surface;
+`Docs/provenance_mv3b11_supertile_boundary.png` — a channel crossing the 384 km super-tile
+edge with one watershed identity and a continuous incised valley (no reset/seam).
 
 ## Honest notes / limits
 
@@ -74,8 +85,9 @@ carved into the hillshaded surface.
   approaches (H2H compatibility, not replacement). MW4 is not overwritten.
 - **Incision coverage ≈16 %** of the ring at the current trunk threshold — major valleys,
   not every rivulet.
-- Accumulation is bounded by the super-tile+halo window (basins > ~576 km are truncated);
-  ample for macro canyon forcing.
+- Accumulation is capped (1700 cells) so magnitude agrees across super-tile edges; ample
+  for macro canyon forcing. The single largest cross-edge trunk can still differ by up to
+  ~180 m at the exact 384 km seam (p99 is 18 m); refined by MW4 detail on approach.
 
 ## HARD CLOSED (deferred to MV3.B2 or later)
 

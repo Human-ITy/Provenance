@@ -7,13 +7,13 @@ central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=38.694
+compile_seconds=46.091
 
 fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
 fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=674.4m worst=2114.9m (need rms>40)
 fixture.boundary_continuity_4_center_edges=PASS  max_position_step=0.0461m (need<0.5) max_slope_step=0.0001 (need<0.05)
 fixture.boundary_continuity_ring2_96km_seams=PASS  max_anomalous_step_vs_interior=0.0003m (need<0.10) max_slope_step=0.0040 (need<0.05)
-fixture.cardinal_ring2_reaches_128km=PASS  E:reach=160km relief=796m distinct=True  W:reach=160km relief=884m distinct=True  N:reach=160km relief=2800m distinct=True  S:reach=160km relief=2643m distinct=True
+fixture.cardinal_ring2_reaches_128km=PASS  E:reach=160km relief=695m distinct=True  W:reach=160km relief=779m distinct=True  N:reach=160km relief=3086m distinct=True  S:reach=160km relief=2993m distinct=True
 fixture.central_anchor_matches_frozen_macro=PASS  max|center_page - frozen_envelope|=0.00000m (need<0.01)
 fixture.feature_scale_independence_gt_64km=PASS  longest_belt_extent=880.0km (belt#0; need>64km)
 fixture.cross_page_landform_continuity=PASS  belt crest crosses x=-96km page boundary; jump=0.007m crest_above_base=1243m
@@ -21,34 +21,35 @@ fixture.no_square_world_signature=PASS  max_step_on_page_boundary=4.27m max_step
 fixture.no_wrap_no_fine_authority=PASS  pages_declare_no_wrap=True forbidden_tokens=none
 fixture.morphology_diversity=PASS  families_present=3/4 dist={'belt': 349, 'plateau': 244, 'volcanic': 0, 'cratonic': 83} age_spread=0.50 relief_spread=0.71 (need >=3 families, spreads>0.4)
 fixture.seed_diversity_unbounded_world=PASS  same_seed_deterministic=True diff_seed_mean_delta=0.760 (need>0.15) long_distance_0-2000km_relief_var=1535m (need>200)
-fixture.drain_downhill_routing=PASS  ascending_edges=0 (need 0) terminals=61 (interior_basins=0 boundary=61)
-fixture.drain_confluence_hierarchy=PASS  confluence at accum=578 of 2 channel tributaries (sum=513); downstream>=sum, hierarchy stable
-fixture.drain_cross_page_continuity=PASS  main stem (330 cells) crosses 15 of the 64 km page boundaries with 1 watershed identity (need 1, seam-free)
-fixture.drain_plateau_canyon_and_counterfactual=PASS  plateau(w=0.35) canyon at (-44000,-178000) incision=183m on the graph; incise_off==MV3.A_surface (max_delta=0.00e+00m)
-fixture.drain_maturity_substrate_response=PASS  resistant/young mean canyon width=5110m vs weak/old valley width=7217m (ratio 1.41x, need>1.25 -> materially different cross-section, not one universal)
-fixture.drain_closed_basin_spill_no_page_hack=PASS  depressions_resolved(ascending=0)=True interior_endorheic_basins=0 spill_terminals=61 terminals_on_64km_page_lines=0 (need 0 -> no page-edge drain hack)
+fixture.drain_downhill_routing=PASS  ascending_edges=0 (need 0) terminals=44 (interior_basins=33 boundary=11)
+fixture.drain_confluence_hierarchy=PASS  confluence at accum=552 of 2 channel tributaries (sum=551); downstream>=sum, hierarchy stable
+fixture.drain_cross_page_continuity=PASS  main stem (57 cells) crosses 3 of the 64 km page boundaries with 1 watershed identity (need 1, seam-free)
+fixture.drain_plateau_canyon_and_counterfactual=PASS  plateau(w=0.39) canyon at (46000,-162000) incision=275m on the graph; incise_off==MV3.A_surface (max_delta=0.00e+00m)
+fixture.drain_maturity_substrate_response=PASS  resistant/young mean canyon width=5076m vs weak/old valley width=7142m (ratio 1.41x, need>1.25 -> materially different cross-section, not one universal)
+fixture.drain_closed_basin_spill_no_page_hack=PASS  depressions_resolved(ascending=0)=True interior_endorheic_basins=33 spill_terminals=11 terminals_on_64km_page_lines=0 (need 0 -> no page-edge drain hack)
 fixture.drain_seed_semantics=PASS  same_seed_digest=match diff_seed_digest=differs
-fixture.drain_long_distance_nonperiodic=PASS  supertile(0,0).digest=5e69d1fcd3a60a80 != supertile(5,0)@1920km.digest=1a6e3898bf9a4d38 (non-periodic, page-independent)
-fixture.drain_no_square_signature=PASS  channel_density_on_64km_lines=0.0218 interior=0.0280 (line<=interior*1.35)
+fixture.drain_long_distance_nonperiodic=PASS  supertile(0,0).digest=1f552f69cefadb56 != supertile(5,0)@1920km.digest=09a10e0cc305d605 (non-periodic, page-independent)
+fixture.drain_no_square_signature=PASS  channel_density_on_64km_lines=0.0209 interior=0.0235 (line<=interior*1.35)
 fixture.drain_h2h_center_frozen_mw4_not_overwritten=PASS  max|incised-MV3.A| inside +/-32km center=0.00e+00m (need~0; MW4 untouched)
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 38.69s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.drain_supertile_boundary_continuity=PASS  halo-overlap: D8_dir_agree=100.0% (need>=99.5) incision_p99=18.1m max=181m (p99 need<30) trunk_crossing_384km_edge_same_channel=True
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 46.09s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
 page_ids (named subset of the 25-page ring):
   center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]
-  north=(0, 1) region_id=174c5174da3a0667 digest=9a7118f948ca2fa3 bounds=[-32000,32000]x[32000,96000]
-  south=(0, -1) region_id=de46b38e475061de digest=ad8d885f632fbcb4 bounds=[-32000,32000]x[-96000,-32000]
-  east=(1, 0) region_id=a28d3b6dbebf86cf digest=6bc9e93a15b7078d bounds=[32000,96000]x[-32000,32000]
-  west=(-1, 0) region_id=861e8b3f32a04f56 digest=6d2e1d09f667d3e3 bounds=[-96000,-32000]x[-32000,32000]
-  ne=(1, 1) region_id=a2909f6dbec26692 digest=5e27def7ee2d3f0c bounds=[32000,96000]x[32000,96000]
-  nw=(-1, 1) region_id=861b673f329ddc53 digest=e503f39550e1b8b0 bounds=[-96000,-32000]x[32000,96000]
-  se=(1, -1) region_id=95ab9e7ae9009965 digest=bc8fc2e29ea3080c bounds=[32000,96000]x[-96000,-32000]
-  sw=(-1, -1) region_id=d1809e62a0629d0a digest=c8237783a8f128d7 bounds=[-96000,-32000]x[-96000,-32000]
-  east2=(2, 0) region_id=f7e58d8672e0ce6c digest=2aac419babeb3e4d bounds=[96000,160000]x[-32000,32000]
-  west2=(-2, 0) region_id=f669c147fef2c135 digest=265e5c526fb488f7 bounds=[-160000,-96000]x[-32000,32000]
-  north2=(0, 2) region_id=17563174da42248c digest=186697a0fbd94a55 bounds=[-32000,32000]x[96000,160000]
-  south2=(0, -2) region_id=de49db8e4752dbad digest=770f305246cbb444 bounds=[-32000,32000]x[-160000,-96000]
-  ne2=(2, 2) region_id=f7de918672dab68a digest=c363aa492e8d6166 bounds=[96000,160000]x[96000,160000]
-  sw2=(-2, -2) region_id=181e7e56757910e4 digest=24384018004dbc09 bounds=[-160000,-96000]x[-160000,-96000]
+  north=(0, 1) region_id=174c5174da3a0667 digest=e009389dcf3e66ef bounds=[-32000,32000]x[32000,96000]
+  south=(0, -1) region_id=de46b38e475061de digest=fdecef10e9a3710a bounds=[-32000,32000]x[-96000,-32000]
+  east=(1, 0) region_id=a28d3b6dbebf86cf digest=a94f709639b7c40d bounds=[32000,96000]x[-32000,32000]
+  west=(-1, 0) region_id=861e8b3f32a04f56 digest=bb9a94155841c85c bounds=[-96000,-32000]x[-32000,32000]
+  ne=(1, 1) region_id=a2909f6dbec26692 digest=a38e7c1837dcee2a bounds=[32000,96000]x[32000,96000]
+  nw=(-1, 1) region_id=861b673f329ddc53 digest=ce221c411a05f0d5 bounds=[-96000,-32000]x[32000,96000]
+  se=(1, -1) region_id=95ab9e7ae9009965 digest=290e0200a8e1778f bounds=[32000,96000]x[-96000,-32000]
+  sw=(-1, -1) region_id=d1809e62a0629d0a digest=4331807862c916ed bounds=[-96000,-32000]x[-96000,-32000]
+  east2=(2, 0) region_id=f7e58d8672e0ce6c digest=17520c4b5d34ba08 bounds=[96000,160000]x[-32000,32000]
+  west2=(-2, 0) region_id=f669c147fef2c135 digest=136a9ab85aa91909 bounds=[-160000,-96000]x[-32000,32000]
+  north2=(0, 2) region_id=17563174da42248c digest=87be2a821463cb92 bounds=[-32000,32000]x[96000,160000]
+  south2=(0, -2) region_id=de49db8e4752dbad digest=f8b46ec1b0e560bf bounds=[-32000,32000]x[-160000,-96000]
+  ne2=(2, 2) region_id=f7de918672dab68a digest=908db161aede809f bounds=[96000,160000]x[96000,160000]
+  sw2=(-2, -2) region_id=181e7e56757910e4 digest=758413cc1e571ba1 bounds=[-160000,-96000]x[-160000,-96000]
 
 mv2c=closed mw9=closed presentation_diversity=closed
 no_reopen=MW1-MW8/MV1/MV2.B/PX1-PX3
