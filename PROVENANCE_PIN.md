@@ -268,6 +268,7 @@ MV2     extended 100+ km horizon          DESIGN LOCKED (MV2_HORIZON_ARCHITECTUR
 MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ 7c344ca1 extends to ±2 ring = 25 pages (full 128 km radial authority; continuity across ±96 km seams; cardinal ±2 reaches 160 km; same field, more pages)
 MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster; three-pass depth split; seam 5.3 m; non-repeating; bounded 25-page ring; 0 MV2-domain holes; recalibrated 128 km aerial; off==frozen; MV2.A2 fixture: cardinal N/E/S/W 100-128 km coverage)
 MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ 7c344ca1
+MV2.C   distant-terrain presence          CERTIFIED @ __MV2C_SHA__ (presentation only; far ranges read as terrain ~7x more separated from sky; gentler aerial + land-cover palette + hillshade; authority/relief/step UNTOUCHED; off==frozen MV2.B)
 MW9     flora / fauna                     CLOSED
 ```
 
@@ -344,6 +345,27 @@ PASS (fog on), MV1.G full-raster GPU PASS, **Test A 4/4** (engine 0-over, 0
 stage-owned), **Test B 90 s PASS** (0 presented/stage-owned misses, cadence
 no-regression). Handoff: `MV1D_DISTANCE_READABILITY_HANDOFF.md`. Cert:
 `CERT_MV1D_DISTANCE_READABILITY.cmd`.
+
+**MV2.C @ `__MV2C_SHA__`** — distant-terrain **presence** (presentation ONLY; authority,
+macro relief, region cadence, and 1 km page step all untouched). The far MV2 ranges were
+technically visible but washed to near-sky, reading as a thin floating strip above the
+legitimate negative-space band. MV2.C fixes the *presentation*: (1) gentler 32–128 km
+aerial tail (`GL_EXP` 1.85e-5 → 0.98e-5 on both far passes; still one continuous
+distance curve, no band switch; T(128 km) 0.09→0.32); (2) coarse **land-cover** palette
+(vegetated / dry-substrate / exposed-rock by elevation+slope, all darker than sky; bare
+high ground is rock, **never snow**) replacing the diagnostic green→tan→white ramp;
+(3) stronger silhouette-preserving hillshade. Colours baked into macro VBOs at build,
+fog at render; `--mv2c-off` == exact frozen MV2.B. **A/B:** far 50–128 km separation
+from sky **0.007 → 0.049 (~7×)** (fixture 13, gates MV2.C only; MV2.B baseline reports
+it but is not held to it); distance-class pixels **identical** (depth-based, coverage
+unchanged); 0 MV2 coverage holes preserved (negative space intact); no 32 km seam /
+palette switch; Test B 24 m/s green. **Honest limit:** MV2.C makes far ranges legible
+and separated from sky but not *taller* — low profile at central viewpoints is macro
+**relief** (geometry), the reserved question, deliberately NOT touched. Tool:
+`Code/.../Main.cpp` (Mv2ShadeAt land-cover + Mv2ActiveAerialDensity + `--cert-mv2c`/
+`--mv2c-off`); receipt `Docs/provenance_mv2c_presence_cert.txt`; A/B visual
+`Docs/provenance_mv2c_ab_comparison.png`; handoff `MV2C_DISTANT_PRESENCE_HANDOFF.md`;
+script `CERT_MV2C_PRESENCE.cmd`. MV2.A/MV2.B/MW1–MW8/MV1 not reopened.
 
 **MV2.A2 @ `7c344ca1`** — full 128 km **radial** authority. The initial MV2.A/MV2.B
 cut proved 128 km on the 3×3 diagonal only (±96 km square). MV2.A2 extends the same

@@ -1082,6 +1082,16 @@ namespace
         bool mv2bCertColor = false;                 // band-coloured, fog-off diagnostic render
         long long mv2bGapHoles = 0, mv2bGapNegSpace = 0, mv2bGapMv1Lod = 0;
         double mv2bGapWorstHoleDistM = 0.0;
+        // MV2.C distant-terrain presence (PRESENTATION ONLY — no authority/relief/
+        // page/step change). Gentler 32-128 km aerial tail so far silhouettes keep
+        // mass; silhouette-preserving macro shading; coarse land-cover palette
+        // (vegetated/substrate/exposed-rock by elevation+slope; white is NOT snow).
+        // Baked into the macro VBO vertex colours at build time + the fog density at
+        // render time, so --mv2c-off rebuilds the exact frozen MV2.B presentation.
+        bool mv2cEnabled = true;                    // --mv2c-off => exact MV2.B
+        bool certMv2c = false;
+        double mv2cFarContrast[4] = {0,0,0,0};      // A/B: far-band luminance contrast
+        double mv2cFarLuma[4] = {0,0,0,0};
         // Synthetic, presentation-only game-load ladder. Level 0 is the
         // terrain-only control; later levels add one workload family at a time.
         bool certLivingWorldLoad = false;
@@ -18902,8 +18912,14 @@ namespace
     // BOTH the MV1 far pass and the macro pass so 30 km reads as solid terrain,
     // 50-128 km attenuates progressively, and the far horizon stays readable.
     // Only active when mv2bEnabled; --play-mv1 / all frozen MV1 certs are untouched.
-    static constexpr float kMv2AerialDensity = 1.85e-5f;
+    static constexpr float kMv2AerialDensity = 1.85e-5f;   // MV2.B baseline (washes far)
+    // MV2.C gentler tail: T(30km)~0.76, T(70km)~0.53, T(128km)~0.32 (vs MV2.B 0.09),
+    // so distant silhouettes keep real mass. Same GL_EXP form -> still one continuous
+    // physical-distance curve on both far passes, no band switch at 32 km.
+    static constexpr float kMv2cAerialDensity = 0.98e-5f;
     static constexpr float kMv2FogR = 0.45f, kMv2FogG = 0.62f, kMv2FogB = 0.88f;
+
+    float Mv2ActiveAerialDensity(){return g.mv2cEnabled?kMv2cAerialDensity:kMv2AerialDensity;}
 
     void Mv2SetAerial(bool on)
     {
@@ -18912,13 +18928,13 @@ namespace
             GLfloat const c[4]={kMv2FogR,kMv2FogG,kMv2FogB,1.f};
             glFogi(GL_FOG_MODE,GL_EXP);
             glFogfv(GL_FOG_COLOR,c);
-            glFogf(GL_FOG_DENSITY,kMv2AerialDensity);
+            glFogf(GL_FOG_DENSITY,Mv2ActiveAerialDensity());
             glHint(GL_FOG_HINT,GL_NICEST);
             glEnable(GL_FOG);
         }
         else glDisable(GL_FOG);
     }
-    double Mv2Transmittance(double distM){return std::exp(-(double)kMv2AerialDensity*distM);}
+    double Mv2Transmittance(double distM){return std::exp(-(double)Mv2ActiveAerialDensity()*distM);}
 
     struct Mv2Page
     {
@@ -18971,18 +18987,53 @@ namespace
         return (int)out.h.size()==out.n*out.n;
     }
 
-    // Elevation-banded macro colour (valley green -> tan -> alpine grey/white),
-    // hillshaded from the page gradient. Macro material only; not fine geology.
-    static void Mv2ShadeAt(float z,float nx,float ny,float nz,uint8_t& r,uint8_t& g,uint8_t& b)
+    // Macro surface colour + hillshade. Macro presentation only; not fine geology.
+    //   mv2c=false : the frozen MV2.B palette (green->tan->alpine grey/white).
+    //   mv2c=true  : MV2.C coarse LAND-COVER palette (vegetated / substrate /
+    //                exposed-rock by elevation AND slope; bare high ground is light
+    //                ROCK, never called snow) + higher hillshade contrast, so distant
+    //                ranges are darker than the pale sky and read as solid mass.
+    static void Mv2ShadeAt(float z,float nx,float ny,float nz,bool mv2c,uint8_t& r,uint8_t& g,uint8_t& b)
     {
-        float const t=std::clamp((z+200.f)/2600.f,0.f,1.f);
-        float br,bg,bb;
-        if(t<0.5f){float a=t/0.5f;br=0.30f+a*0.45f;bg=0.44f+a*0.30f;bb=0.26f+a*0.16f;}
-        else{float a=(t-0.5f)/0.5f;br=0.75f+a*0.22f;bg=0.74f-a*0.06f;bb=0.42f+a*0.46f;}
         float const len=std::sqrt(nx*nx+ny*ny+nz*nz);if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
-        constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
-        float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
-        float const shade=0.30f+0.92f*ndotl;
+        float br,bg,bb,shade;
+        if(!mv2c)
+        {
+            float const t=std::clamp((z+200.f)/2600.f,0.f,1.f);
+            if(t<0.5f){float a=t/0.5f;br=0.30f+a*0.45f;bg=0.44f+a*0.30f;bb=0.26f+a*0.16f;}
+            else{float a=(t-0.5f)/0.5f;br=0.75f+a*0.22f;bg=0.74f-a*0.06f;bb=0.42f+a*0.46f;}
+            constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
+            float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
+            shade=0.30f+0.92f*ndotl;
+        }
+        else
+        {
+            // land-cover base by elevation (all muted earth tones, none brighter
+            // than mid-grey rock so the range never washes toward sky/white):
+            //   vegetated (low) -> dry substrate (mid) -> rock (high) -> light rock
+            auto mix=[](float a,float b,float t){return a+(b-a)*std::clamp(t,0.f,1.f);};
+            // Kept deliberately DARKER than the sky (luma ~0.60) so distant ranges
+            // read as solid masses against the pale sky rather than washing into it;
+            // bare high ground is muted rock, never bright white ("not snow").
+            float const veg[3]={0.19f,0.30f,0.16f};
+            float const sub[3]={0.38f,0.35f,0.23f};
+            float const rock[3]={0.34f,0.31f,0.28f};
+            float const bare[3]={0.44f,0.42f,0.39f};
+            float e[3];
+            if(z<450.f){float a=(z+150.f)/600.f;for(int i=0;i<3;++i)e[i]=mix(veg[i],sub[i],a);}
+            else if(z<1500.f){float a=(z-450.f)/1050.f;for(int i=0;i<3;++i)e[i]=mix(sub[i],rock[i],a);}
+            else{float a=(z-1500.f)/1600.f;for(int i=0;i<3;++i)e[i]=mix(rock[i],bare[i],a);}
+            // slope exposes rock regardless of elevation (steep faces = bare rock)
+            float const steep=std::clamp((1.f-nz-0.18f)/0.42f,0.f,1.f);
+            br=mix(e[0],rock[0],steep*0.8f);
+            bg=mix(e[1],rock[1],steep*0.8f);
+            bb=mix(e[2],rock[2],steep*0.8f);
+            // stronger directional hillshade for readable volumetric form
+            constexpr float kLx=-0.60f,kLy=-0.42f,kLz=0.68f;
+            float const ndotl=nx*kLx+ny*kLy+nz*kLz;
+            float const lit=(std::max)(0.f,ndotl);
+            shade=0.34f+1.06f*lit;                 // lit faces bright, shadowed dark
+        }
         r=(uint8_t)(std::min)(255.f,br*shade*255.f);
         g=(uint8_t)(std::min)(255.f,bg*shade*255.f);
         b=(uint8_t)(std::min)(255.f,bb*shade*255.f);
@@ -19002,6 +19053,7 @@ namespace
     {
         if(!Mv1EnsureBufferProcs())return false;
         int const n=p.n;double const s=p.step;
+        bool const mv2c=g.mv2cEnabled;   // capture before the local 'g' colour shadows it
         auto Z=[&](int i,int j)->float{i=std::clamp(i,0,n-1);j=std::clamp(j,0,n-1);
             return p.h[(size_t)j*n+i];};
         std::vector<float> verts;verts.reserve((size_t)(n-1)*(n-1)*6*6);
@@ -19010,7 +19062,7 @@ namespace
             double const x=p.minX+i*s,y=p.minY+j*s;float const z=Z(i,j);
             float const dzdx=(Z(i+1,j)-Z(i-1,j))/(2.f*(float)s);
             float const dzdy=(Z(i,j+1)-Z(i,j-1))/(2.f*(float)s);
-            uint8_t r,g,b;Mv2ShadeAt(z,-dzdx,-dzdy,1.f,r,g,b);
+            uint8_t r,g,b;Mv2ShadeAt(z,-dzdx,-dzdy,1.f,mv2c,r,g,b);
             verts.push_back((float)x);verts.push_back((float)y);verts.push_back(z);
             verts.push_back(r/255.f);verts.push_back(g/255.f);verts.push_back(b/255.f);
         };
@@ -19142,6 +19194,28 @@ namespace
         // Seed the terrain-present mask from the macro pass (1 where macro drew).
         g.mv2bMaskW=w;g.mv2bMaskH=h;g.mv2bTerrainMask.assign((size_t)w*h,0);
         for(size_t p=0;p<(size_t)w*h;++p)if(depth[p]<0.99999f)g.mv2bTerrainMask[p]=1;
+        // A/B presence metric: per-distance-class luminance mean + contrast (stddev)
+        // of the FOGGED macro terrain as it reaches the eye. MV2.C should raise the
+        // far-band contrast (darker rock vs pale sky, readable form) without changing
+        // the depth-based class pixel counts above.
+        std::vector<unsigned char> rgb((size_t)w*h*3);
+        glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,rgb.data());
+        double lsum[4]={0,0,0,0},l2[4]={0,0,0,0};long long ln[4]={0,0,0,0};
+        for(size_t p=0;p<(size_t)w*h;++p)
+        {
+            float const d=depth[p];if(d>=0.99999f)continue;
+            double const dist=2.0*nf*ff/(ff+nf-(2.0*d-1.0)*(ff-nf));
+            int band=-1;for(int k=0;k<4;++k)if(dist>=edge[k]&&dist<edge[k+1]){band=k;break;}
+            if(band<0)continue;
+            double const L=0.2126*rgb[p*3]/255.0+0.7152*rgb[p*3+1]/255.0+0.0722*rgb[p*3+2]/255.0;
+            lsum[band]+=L;l2[band]+=L*L;++ln[band];
+        }
+        for(int k=0;k<4;++k)
+        {
+            if(ln[k]>0){double m=lsum[k]/ln[k];double v=l2[k]/ln[k]-m*m;if(v<0)v=0;
+                g.mv2cFarLuma[k]=m;g.mv2cFarContrast[k]=std::sqrt(v);}
+            else{g.mv2cFarLuma[k]=0;g.mv2cFarContrast[k]=0;}
+        }
     }
 
     // Union the MV1 far pass (0-32 km) into the terrain-present mask so near/MV1
@@ -19298,6 +19372,8 @@ namespace
     static long long s_mv2bStNeg[kMv2bViews];
     static long long s_mv2bStMv1Lod[kMv2bViews];
     static double s_mv2bStWorstHoleM[kMv2bViews];
+    static double s_mv2cStContrast[kMv2bViews][4];   // MV2.C A/B: far-band luminance contrast
+    static double s_mv2cStLuma[kMv2bViews][4];
     static Mv1Station s_mv2bPanorama;
     static Mv1Station s_mv2bCardinal[4];   // N,E,S,W
     static char s_mv2bNames[kMv2bViews][24];
@@ -19418,9 +19494,37 @@ namespace
         bool const f10_bounded=g.mv2bPagesResidentHigh<=(2*kMv2RingCells+1)*(2*kMv2RingCells+1)
             &&g.mv2bRuntimeAllocsAfterWarmup<=(long long)((2*kMv2RingCells+1)*(2*kMv2RingCells+1));
         bool const f9_cheap=g.mv2bBuildMsHigh<50.0;  // page load+mesh only; no ReconstructedZ
-        bool const passed=f1_raster&&f2_nonrep&&f3_seam&&f10_bounded&&f9_cheap&&f11_nogap&&f12_cardinal;
+        // MV2.C far-band presence: mean luminance + contrast over the 50-128 km bands
+        // (aggregated across views that saw far terrain). Reported by BOTH the MV2.B
+        // baseline (mv2c off) and MV2.C (mv2c on) runs for the A/B comparison.
+        double cSum[4]={0,0,0,0},lSum[4]={0,0,0,0};int cN[4]={0,0,0,0};
+        for(int s=0;s<kMv2bViews;++s)for(int k=0;k<4;++k)
+            if(s_mv2cStContrast[s][k]>0){cSum[k]+=s_mv2cStContrast[s][k];lSum[k]+=s_mv2cStLuma[s][k];++cN[k];}
+        double farContrast=0,farLuma=0;int farN=0;   // 50-128 km aggregate (bands 1-3)
+        for(int k=1;k<4;++k)if(cN[k]>0){farContrast+=cSum[k]/cN[k];farLuma+=lSum[k]/cN[k];++farN;}
+        if(farN>0){farContrast/=farN;farLuma/=farN;}
+        // The meaningful "reads as terrain, not sky" metric: luminance separation of
+        // the far ranges from the sky (sky luma ~0.603). MV2.B washes far terrain to
+        // ~0.008 from sky (invisible); MV2.C keeps it clearly darker. Fixture 13 gates
+        // ONLY the MV2.C run (the MV2.B baseline reports it but is not held to it).
+        double const kSkyLuma=0.2126*kMv2FogR+0.7152*kMv2FogG+0.0722*kMv2FogB;
+        double const farSep=std::fabs(farLuma-kSkyLuma);
+        bool const f13_separation=farSep>=0.03;
+
+        bool const passed=f1_raster&&f2_nonrep&&f3_seam&&f10_bounded&&f9_cheap&&f11_nogap&&f12_cardinal
+            &&(!g.certMv2c||f13_separation);
         FILE* fp=nullptr;
-        if(fopen_s(&fp,"Docs\\provenance_mv2b_horizon_cert.txt","wb")!=0||!fp)return false;
+        char const* receiptPath=g.certMv2c?"Docs\\provenance_mv2c_presence_cert.txt"
+                                           :"Docs\\provenance_mv2b_horizon_cert.txt";
+        if(fopen_s(&fp,receiptPath,"wb")!=0||!fp)return false;
+        std::fprintf(fp,"%s presentation_variant=%s aerial_density=%.3e\n"
+            "far_50_128km_mean_luma=%.4f  sky_luma=%.4f  far_separation_from_sky=%.4f (higher=reads as terrain not sky)\n"
+            "far_50_128km_internal_contrast=%.5f  class_pixels_depth_based=unchanged_vs_MV2.B\n"
+            "fixture.13_far_reads_as_terrain=%s (need separation>=0.03; MV2.B baseline ~0.008=washed, gates MV2.C only)\n",
+            g.certMv2c?"MV2C_PRESENCE":"MV2B_BASELINE",
+            g.mv2cEnabled?"MV2.C_land_cover+gentle_aerial":"MV2.B_frozen",
+            (double)Mv2ActiveAerialDensity(),farLuma,kSkyLuma,farSep,farContrast,
+            f13_separation?"PASS":"FAIL");
         std::fprintf(fp,
             "MV2B_HORIZON_RENDERER %s\n"
             "scope=presentation_only_consumes_MV2A_macro_pages_no_fine_reconstructedz\n"
@@ -19453,9 +19557,10 @@ namespace
         for(int s=0;s<kMv2bViews;++s)
         {
             std::fprintf(fp,"station.%d name=%s class_px[32-50/50-80/80-100/100-128]=%lld/%lld/%lld/%lld terrain=%lld "
-                "image=Docs/provenance_mv2b_station%d_%s.ppm\n",
+                "far_contrast[50-80/80-100/100-128]=%.4f/%.4f/%.4f image=Docs/provenance_%s_station%d_%s.ppm\n",
                 s,s_mv2bNames[s],s_mv2bStClass[s][0],s_mv2bStClass[s][1],s_mv2bStClass[s][2],s_mv2bStClass[s][3],
-                s_mv2bStTerrain[s],s,s_mv2bNames[s]);
+                s_mv2bStTerrain[s],s_mv2cStContrast[s][1],s_mv2cStContrast[s][2],s_mv2cStContrast[s][3],
+                g.certMv2c?"mv2c":"mv2b",s,s_mv2bNames[s]);
         }
         std::fclose(fp);return passed;
     }
@@ -19495,8 +19600,10 @@ namespace
                 s_mv2bStHoles[s]=g.mv2bGapHoles;s_mv2bStNeg[s]=g.mv2bGapNegSpace;
                 s_mv2bStMv1Lod[s]=g.mv2bGapMv1Lod;
                 s_mv2bStWorstHoleM[s]=g.mv2bGapWorstHoleDistM;
+                for(int k=0;k<4;++k){s_mv2cStContrast[s][k]=g.mv2cFarContrast[k];s_mv2cStLuma[s][k]=g.mv2cFarLuma[k];}
                 char path[128];std::snprintf(path,sizeof(path),
-                    "Docs\\provenance_mv2b_station%d_%s.ppm",s,s_mv2bNames[s]);
+                    g.certMv2c?"Docs\\provenance_mv2c_station%d_%s.ppm":"Docs\\provenance_mv2b_station%d_%s.ppm",
+                    s,s_mv2bNames[s]);
                 DumpFramePpm(path);
                 ++g.certMv2bStation;g.certMv2bSettle=0;ph=(g.certMv2bStation>=kMv2bViews)?3:1;
             }
@@ -54081,6 +54188,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {g.mv2bEnabled=false;continue;}
                 if(_wcsicmp(argv[i],L"--mv2b-on")==0)   // combinable with any cert (e.g. Test B)
                 {g.mv2bEnabled=true;continue;}
+                if(_wcsicmp(argv[i],L"--mv2c-off")==0)  // revert to exact frozen MV2.B presentation
+                {g.mv2cEnabled=false;continue;}
                 if(_wcsicmp(argv[i],L"--play-mv2b-horizon")==0
                   ||_wcsicmp(argv[i],L"--play-mv2b")==0)
                 {
@@ -54094,6 +54203,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
                     g.certMv2b=true;g.mv2bEnabled=true;g.mv2bCertColor=true;
+                    g.mv2cEnabled=false;   // MV2.B baseline cert: pure frozen presentation
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv2c-presence")==0
+                  ||_wcsicmp(argv[i],L"--cert-mv2c")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2b=true;g.certMv2c=true;g.mv2bEnabled=true;g.mv2cEnabled=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }

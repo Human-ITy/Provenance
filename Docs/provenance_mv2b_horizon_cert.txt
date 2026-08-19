@@ -1,3 +1,7 @@
+MV2B_BASELINE presentation_variant=MV2.B_frozen aerial_density=1.850e-05
+far_50_128km_mean_luma=0.5958  sky_luma=0.6026  far_separation_from_sky=0.0069 (higher=reads as terrain not sky)
+far_50_128km_internal_contrast=0.04874  class_pixels_depth_based=unchanged_vs_MV2.B
+fixture.13_far_reads_as_terrain=FAIL (need separation>=0.03; MV2.B baseline ~0.008=washed, gates MV2.C only)
 MV2B_HORIZON_RENDERER PASS
 scope=presentation_only_consumes_MV2A_macro_pages_no_fine_reconstructedz
 visible_radius_target_m=128000  aerial=GL_EXP_density_1.850e-05 (recalibrated 128 km, distance-based)
@@ -7,23 +11,23 @@ raster_distance_classes_px  32-50km=79388  50-80km=68898  80-100km=34664  100-12
 stations_with_far_terrain=10/10  cardinal_directions_with_far_terrain=4/4
 seam_max_delta_at_32km_m=5.265 (macro vs frozen MV1 ReconstructedZ; need<25)
 pages_resident=25 high_water=25 creates=25 retires=0 runtime_allocs_after_warmup=0
-resident_bytes=14745600 bytes_high_water=14745600 build_ms_high=34.681 cpu_submit_ms=0.005 refusals=0
+resident_bytes=14745600 bytes_high_water=14745600 build_ms_high=29.387 cpu_submit_ms=0.005 refusals=0
 fixture.1_real_128km_raster=PASS
 fixture.2_non_repetition=PASS (resident_pages=25 unique_digests=25)
 fixture.3_32km_seam_continuous=PASS
 fixture.9_no_fine_authority_for_horizon=PASS
 fixture.10_bounded_residency=PASS
-fixture.11_no_mv2_coverage_hole=PASS (mv2_far_holes>=32km=0 negative_space=377457 hole_frac=0.0000 worst_hole_dist_m=0 mv1_lt32km_lod_slivers=31761[frozen_MV1_domain])
+fixture.11_no_mv2_coverage_hole=PASS (mv2_far_holes>=32km=0 negative_space=377457 hole_frac=0.0000 worst_hole_dist_m=0 mv1_lt32km_lod_slivers=31160[frozen_MV1_domain])
 fixture.12_cardinal_128km_coverage=PASS (cardinal N/E/S/W with far>=80km terrain=4/4; full radial 128 km, not just diagonal)
 fixture.8_off_equals_frozen=verified_separately (mv2b default off; MV1.C/D/G unchanged)
 mv2c=closed mw9=closed weather/veg/snow/erosion=closed
-station.0 name=trunk_valley class_px[32-50/50-80/80-100/100-128]=3299/7369/2927/3008 terrain=19791 image=Docs/provenance_mv2b_station0_trunk_valley.ppm
-station.1 name=mountain_flank class_px[32-50/50-80/80-100/100-128]=6393/13799/2830/1386 terrain=28704 image=Docs/provenance_mv2b_station1_mountain_flank.ppm
-station.2 name=ridge_shoulder class_px[32-50/50-80/80-100/100-128]=10054/12060/3401/3962 terrain=38795 image=Docs/provenance_mv2b_station2_ridge_shoulder.ppm
-station.3 name=foreland_basin class_px[32-50/50-80/80-100/100-128]=907/7642/3075/4031 terrain=16549 image=Docs/provenance_mv2b_station3_foreland_basin.ppm
-station.4 name=high_divide class_px[32-50/50-80/80-100/100-128]=9543/4101/5067/8982 terrain=48706 image=Docs/provenance_mv2b_station4_high_divide.ppm
-station.5 name=macro_panorama class_px[32-50/50-80/80-100/100-128]=13857/8789/4824/4995 terrain=41838 image=Docs/provenance_mv2b_station5_macro_panorama.ppm
-station.6 name=cardinal_north class_px[32-50/50-80/80-100/100-128]=9721/6056/1383/4929 terrain=30718 image=Docs/provenance_mv2b_station6_cardinal_north.ppm
-station.7 name=cardinal_east class_px[32-50/50-80/80-100/100-128]=1497/657/4996/7813 terrain=27577 image=Docs/provenance_mv2b_station7_cardinal_east.ppm
-station.8 name=cardinal_south class_px[32-50/50-80/80-100/100-128]=5948/4643/5983/6389 terrain=37060 image=Docs/provenance_mv2b_station8_cardinal_south.ppm
-station.9 name=cardinal_west class_px[32-50/50-80/80-100/100-128]=18169/3782/178/1871 terrain=31431 image=Docs/provenance_mv2b_station9_cardinal_west.ppm
+station.0 name=trunk_valley class_px[32-50/50-80/80-100/100-128]=3299/7369/2927/3008 terrain=19791 far_contrast[50-80/80-100/100-128]=0.0260/0.0051/0.0045 image=Docs/provenance_mv2b_station0_trunk_valley.ppm
+station.1 name=mountain_flank class_px[32-50/50-80/80-100/100-128]=6393/13799/2830/1386 terrain=28704 far_contrast[50-80/80-100/100-128]=0.0000/0.0000/0.0000 image=Docs/provenance_mv2b_station1_mountain_flank.ppm
+station.2 name=ridge_shoulder class_px[32-50/50-80/80-100/100-128]=10054/12060/3401/3962 terrain=38795 far_contrast[50-80/80-100/100-128]=0.0444/0.0185/0.0124 image=Docs/provenance_mv2b_station2_ridge_shoulder.ppm
+station.3 name=foreland_basin class_px[32-50/50-80/80-100/100-128]=907/7642/3075/4031 terrain=16549 far_contrast[50-80/80-100/100-128]=0.0955/0.1386/0.1066 image=Docs/provenance_mv2b_station3_foreland_basin.ppm
+station.4 name=high_divide class_px[32-50/50-80/80-100/100-128]=9543/4101/5067/8982 terrain=48706 far_contrast[50-80/80-100/100-128]=0.0095/0.0076/0.0065 image=Docs/provenance_mv2b_station4_high_divide.ppm
+station.5 name=macro_panorama class_px[32-50/50-80/80-100/100-128]=13857/8789/4824/4995 terrain=41838 far_contrast[50-80/80-100/100-128]=0.0431/0.0124/0.0095 image=Docs/provenance_mv2b_station5_macro_panorama.ppm
+station.6 name=cardinal_north class_px[32-50/50-80/80-100/100-128]=9721/6056/1383/4929 terrain=30718 far_contrast[50-80/80-100/100-128]=0.0942/0.0020/0.0536 image=Docs/provenance_mv2b_station6_cardinal_north.ppm
+station.7 name=cardinal_east class_px[32-50/50-80/80-100/100-128]=1497/657/4996/7813 terrain=27577 far_contrast[50-80/80-100/100-128]=0.0128/0.0367/0.0329 image=Docs/provenance_mv2b_station7_cardinal_east.ppm
+station.8 name=cardinal_south class_px[32-50/50-80/80-100/100-128]=5948/4643/5983/6389 terrain=37060 far_contrast[50-80/80-100/100-128]=0.0780/0.1292/0.1747 image=Docs/provenance_mv2b_station8_cardinal_south.ppm
+station.9 name=cardinal_west class_px[32-50/50-80/80-100/100-128]=18169/3782/178/1871 terrain=31431 far_contrast[50-80/80-100/100-128]=0.0675/0.0403/0.1478 image=Docs/provenance_mv2b_station9_cardinal_west.ppm
