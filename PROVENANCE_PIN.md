@@ -269,6 +269,7 @@ MV2.A   regional macro authority          CERTIFIED @ d23f3810; MV2.A2 @ 7c344ca
 MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km raster; three-pass depth split; seam 5.3 m; non-repeating; bounded 25-page ring; 0 MV2-domain holes; recalibrated 128 km aerial; off==frozen; MV2.A2 fixture: cardinal N/E/S/W 100-128 km coverage)
 MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ 7c344ca1
 MV2.C   distant-terrain presence          CERTIFIED @ 48ccf496 (presentation only; far ranges read as terrain ~7x more separated from sky; gentler aerial + land-cover palette + hillshade; authority/relief/step UNTOUCHED; off==frozen MV2.B)
+MV1     live-terrain coverage             FIXED+CERTIFIED @ __MV1COV_SHA__ (band-boundary LOD-ring underlap -> AABB desired-set; rotation-invariant resident set; 0 below-terrain holes; skirts no longer exposed; frozen certs + Test B green)
 MW9     flora / fauna                     CLOSED
 ```
 

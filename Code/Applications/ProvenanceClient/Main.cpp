@@ -1096,6 +1096,7 @@ namespace
         // the mid-distance sky band as (A) genuine low basin below the sightline or
         // (B) intermediate ridges present in authority but not rendered.
         bool certMv2Silhouette = false;
+        bool certMv1Coverage = false;   // elevated free-fly below-horizon hole diagnostic
         double mv2SilNearDeg=0, mv2SilMid3250Deg=0, mv2SilMid5080Deg=0, mv2SilFar80Deg=0;
         double mv2SilBasinFrac=0, mv2SilLostFrac=0, mv2SilLayeredFrac=0;
         int mv2SilColumns=0;
@@ -1488,6 +1489,7 @@ namespace
         long long mv1RuntimeAllocsAfterWarmup = 0;
         bool mv1Warmed = false;
         bool mv1Enabled = true;        // --mv1-off disables (near path == MW8 baseline)
+        bool mv1CullDisable = false;   // --mv1-nocull: attribution toggle for the horizontal cull
         int mv1AnchorX = INT_MIN, mv1AnchorY = INT_MIN;
         uint64_t mv1SourceRev = 0;     // authority lineage; mismatch → refuse stale bands
         int mv1ResidentTris = 0;
@@ -17869,27 +17871,45 @@ namespace
 
         if(anchorChanged){g.mv1AnchorX=anchorX;g.mv1AnchorY=anchorY;}
 
-        // Desired set = per-band ring of tiles whose centre lies within the
-        // band's [inner,outer). Recomputed every frame (cheap) so pending tiles
-        // continue to build after the anchor stops moving; the resident set is
-        // bounded by the view working set, never by distance travelled.
+        // Desired set = per-band ring of tiles whose AABB OVERLAPS the band's
+        // [inner,outer) annulus (not merely whose centre does). The center-in-ring
+        // test left a coverage GAP at each band boundary: a point near the boundary
+        // could fall in a finer-band tile whose centre was just beyond `outer`
+        // (excluded) AND a coarser-band tile whose centre was just inside `inner`
+        // (excluded), leaving it owned by neither band -> a sky hole exposed from an
+        // elevated view (with the coarser tile's skirt showing). Testing the tile
+        // AABB includes any tile that overlaps the annulus, so a boundary-straddling
+        // tile is resident in BOTH adjacent bands; z-bias layers the coarser under
+        // the finer in the overlap, so coverage is gap-free with no z-fight. Loop
+        // bounds padded by one tile to catch tiles whose centre is beyond `outer`
+        // but whose near edge is inside it.
         std::unordered_set<uint64_t> desired;
         struct Want{int band,tx,ty;double d2;};
         std::vector<Want> want;
         for(int band=0;band<3;++band)
         {
             Mv1Band const& B=kMv1Bands[band];
-            int const t0x=(int)std::floor((double)(anchorX-B.outer)/B.tileM);
-            int const t1x=(int)std::floor((double)(anchorX+B.outer)/B.tileM);
-            int const t0y=(int)std::floor((double)(anchorY-B.outer)/B.tileM);
-            int const t1y=(int)std::floor((double)(anchorY+B.outer)/B.tileM);
+            int const t0x=(int)std::floor((double)(anchorX-B.outer)/B.tileM)-1;
+            int const t1x=(int)std::floor((double)(anchorX+B.outer)/B.tileM)+1;
+            int const t0y=(int)std::floor((double)(anchorY-B.outer)/B.tileM)-1;
+            int const t1y=(int)std::floor((double)(anchorY+B.outer)/B.tileM)+1;
             double const inner2=(double)B.inner*B.inner, outer2=(double)B.outer*B.outer;
             for(int ty=t0y;ty<=t1y;++ty)for(int tx=t0x;tx<=t1x;++tx)
             {
+                // tile AABB relative to the anchor
+                double const ax0=(double)tx*B.tileM-anchorX, ax1=ax0+B.tileM;
+                double const ay0=(double)ty*B.tileM-anchorY, ay1=ay0+B.tileM;
+                double const nx=(ax0>0.0)?ax0:(ax1<0.0)?ax1:0.0;   // nearest point
+                double const ny=(ay0>0.0)?ay0:(ay1<0.0)?ay1:0.0;
+                double const nearD2=nx*nx+ny*ny;
+                if(nearD2>=outer2)continue;                        // entirely beyond outer
+                double const fx=((std::abs)(ax0)>(std::abs)(ax1))?ax0:ax1; // farthest corner
+                double const fy=((std::abs)(ay0)>(std::abs)(ay1))?ay0:ay1;
+                double const farD2=fx*fx+fy*fy;
+                if(farD2<inner2)continue;                          // entirely inside inner (finer band owns it)
                 double const cx=((double)tx+.5)*B.tileM-anchorX;
                 double const cy=((double)ty+.5)*B.tileM-anchorY;
                 double const d2=cx*cx+cy*cy;
-                if(d2<inner2||d2>=outer2)continue;
                 uint64_t const key=Mv1TileKey(band,tx,ty);
                 desired.insert(key);
                 if(!g.mv1Tiles.count(key))want.push_back(Want{band,tx,ty,d2});
@@ -17976,10 +17996,13 @@ namespace
                 if(!kv.second.vbo)continue;
                 float const rx=kv.second.cx-g.camX, ry=kv.second.cy-g.camY;
                 float const slack=kv.second.halfM*1.5f+64.f;
-                float const fdot=rx*fwx+ry*fwy;          // forward distance
-                if(fdot < -slack)continue;               // behind camera
-                float const sdot=rx*rgx+ry*rgy;          // lateral offset
-                if((std::abs)(sdot)-slack > (fdot+slack)*kMv1CullTanHalfFovH)continue;
+                if(!g.mv1CullDisable)
+                {
+                    float const fdot=rx*fwx+ry*fwy;          // forward distance
+                    if(fdot < -slack)continue;               // behind camera
+                    float const sdot=rx*rgx+ry*rgy;          // lateral offset
+                    if((std::abs)(sdot)-slack > (fdot+slack)*kMv1CullTanHalfFovH)continue;
+                }
                 vis.push_back(Mv1Vis{kv.second.band,kv.second.cy,kv.second.cx,kv.first,
                     kv.second.vbo,kv.second.vertCount,kv.second.tris});
             }
@@ -19152,9 +19175,12 @@ namespace
             if(!kv.second.vbo)continue;
             float const rx=kv.second.cx-g.camX,ry=kv.second.cy-g.camY;
             float const slack=kv.second.halfM*1.5f+64.f;
-            float const fdot=rx*fwx+ry*fwy;if(fdot<-slack)continue;
-            float const sdot=rx*rgx+ry*rgy;
-            if((std::abs)(sdot)-slack>(fdot+slack)*kCullTan)continue;
+            if(!g.mv1CullDisable)
+            {
+                float const fdot=rx*fwx+ry*fwy;if(fdot<-slack)continue;
+                float const sdot=rx*rgx+ry*rgy;
+                if((std::abs)(sdot)-slack>(fdot+slack)*kCullTan)continue;
+            }
             vis.push_back(Vis{kv.second.cy,kv.second.cx,kv.first,kv.second.vbo,
                 kv.second.vertCount,kv.second.tris});
         }
@@ -19230,7 +19256,11 @@ namespace
     void Mv2AccumMv1Mask()
     {
         GLint vp[4]={};glGetIntegerv(GL_VIEWPORT,vp);int const w=vp[2],h=vp[3];
-        if(w<=0||h<=0||g.mv2bMaskW!=w||g.mv2bMaskH!=h||g.mv2bTerrainMask.empty())return;
+        if(w<=0||h<=0)return;
+        // Seed the mask here if the macro pass did not (e.g. --mv2b-off), so the
+        // coverage diagnostic works with or without the MV2.B macro pass.
+        if(g.mv2bMaskW!=w||g.mv2bMaskH!=h||(int)g.mv2bTerrainMask.size()!=w*h)
+        {g.mv2bMaskW=w;g.mv2bMaskH=h;g.mv2bTerrainMask.assign((size_t)w*h,0);}
         std::vector<float> depth((size_t)w*h);
         glReadPixels(0,0,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,depth.data());
         for(size_t p=0;p<(size_t)w*h;++p)if(depth[p]<0.99999f)g.mv2bTerrainMask[p]=1;
@@ -19410,6 +19440,8 @@ namespace
                              "render_near_top_deg,render_far_bottom_deg,render_gap_deg,class\n");
         long long basin=0,lost=0,layered=0,farCols=0;
         double sumNear=0,sumMid1=0,sumMid2=0,sumFar=0;int sumN=0;
+        double bestFarAng=-9,bestDhx=fx,bestDhy=fy;   // azimuth through the far massif
+        {double const fl=std::sqrt(fx*fx+fy*fy);if(fl>1e-6){bestDhx=fx/fl;bestDhy=fy/fl;}}
         for(int px=0;px<w;px+=4)
         {
             double const ndcx=(2.0*(px+0.5)/w-1.0)*tanX;
@@ -19426,6 +19458,7 @@ namespace
                 double const ang=std::atan2(z-g.camZ,d);
                 if(ang>aMax[b])aMax[b]=ang;
             }
+            if(aMax[3]>bestFarAng){bestFarAng=aMax[3];bestDhx=dhx;bestDhy=dhy;}
             double const aNear=aMax[0],aMid=(std::max)(aMax[1],aMax[2]),aFar=aMax[3];
             // rendered silhouette from the mask column: lower terrain block top, and
             // whether an upper terrain block exists above a sky gap.
@@ -19457,6 +19490,29 @@ namespace
                 aNear*R2D,aMax[1]*R2D,aMax[2]*R2D,aFar*R2D,rNearTop,rFarBot,rGap,cls);
         }
         if(csv)std::fclose(csv);
+        // World-space terrain PROFILE 0-128 km along the azimuth through the far
+        // massif (the "near -> gap -> far mountain" line). Fine 250 m step, absolute
+        // elevation + band + eye height, for local-maxima / prominence analysis.
+        {
+            FILE* pf=nullptr;char pp[176];
+            std::snprintf(pp,sizeof(pp),"Docs\\provenance_mv2_profile_%d_%s.csv",viewIdx,viewName);
+            if(fopen_s(&pf,pp,"wb")==0&&pf)
+            {
+                std::fprintf(pf,"# view=%s camX=%.1f camY=%.1f camZ=%.1f azx=%.5f azy=%.5f\n",
+                    viewName,g.camX,g.camY,g.camZ,bestDhx,bestDhy);
+                std::fprintf(pf,"dist_m,elev_m,band,eye_z_m\n");
+                for(double d=0.0;d<=(double)kMv2VisibleRadiusM;d+=250.0)
+                {
+                    double const wx=g.camX+bestDhx*d,wy=g.camY+bestDhy*d;
+                    double z;bool ok;
+                    if(d<32000.0)ok=nearH(wx,wy,z);else ok=Mv2PageHeight(cache,wx,wy,z);
+                    if(!ok)continue;
+                    int b=3;for(int k=0;k<4;++k)if(d<edge[k]){b=k;break;}
+                    std::fprintf(pf,"%.0f,%.1f,%d,%.1f\n",d,z,b,g.camZ);
+                }
+                std::fclose(pf);
+            }
+        }
         g.mv2SilColumns=(int)farCols;
         g.mv2SilBasinFrac=farCols>0?(double)basin/farCols:0;
         g.mv2SilLostFrac=farCols>0?(double)lost/farCols:0;
@@ -19717,6 +19773,172 @@ namespace
             "representation fix (preserve intermediate ridge maxima) is warranted.\n",
             aggBasin,aggLost,aggLayer,owner);
         std::fclose(f);
+    }
+
+    // ---- MV1/mid-range below-horizon coverage diagnostic -------------------
+    // Reproduces a player-style ELEVATED free-fly camera and counts illegal sky:
+    // a pixel is a below-horizon hole if it is sky (no terrain drawn in ANY pass)
+    // AND terrain is drawn HIGHER in the same column (so the pixel is below the
+    // visible skyline, not open sky above it). Attribution toggle --mv1-nocull
+    // disables the horizontal frustum/behind cull; if the holes vanish, the cull is
+    // the owner. Measurement only (unless --mv1-nocull is combined for the A/B).
+    // Fixed-position 360-degree YAW SWEEP: the decisive test. At a fixed player
+    // position/elevation the resident terrain set and authority digest must NOT
+    // change with camera yaw, and no camera yaw may expose sky below the local
+    // terrain skyline. Only the SUBMITTED (drawn) set may change with view.
+    static constexpr int kMv1RotSteps = 12;
+    static long long s_mv1RotHoles[kMv1RotSteps];
+    static int s_mv1RotResident[kMv1RotSteps], s_mv1RotSubmitted[kMv1RotSteps];
+    static uint64_t s_mv1RotResDigest[kMv1RotSteps], s_mv1RotAuthDigest[kMv1RotSteps];
+    static double s_mv1RotBaseX, s_mv1RotBaseY, s_mv1RotBaseZ;
+
+    // order-independent digest of the resident MV1 tile set (which tiles exist).
+    uint64_t Mv1ResidentDigest()
+    {
+        uint64_t x=0;
+        for(auto const& kv:g.mv1Tiles){uint64_t k=kv.first*0x9e3779b97f4a7c15ull;
+            k^=k>>29;k*=0xbf58476d1ce4e5b9ull;k^=k>>32;x^=k;}
+        return x;
+    }
+
+    // A "hole" = sky punched INTO the terrain surface: a sky pixel with terrain
+    // both a short distance ABOVE and a short distance BELOW it in the same column.
+    // This is robust to the distant above-horizon negative-space band (whose sky is
+    // open to the top or has only far terrain hundreds of px up), and directly counts
+    // the blue cutouts visible in the play screenshots.
+    void Mv1CoverageCount(long long& holes,long long& sky,long long& terr)
+    {
+        int const w=g.mv2bMaskW,h=g.mv2bMaskH;holes=sky=terr=0;
+        if(w<=0||h<=0||(int)g.mv2bTerrainMask.size()!=w*h)return;
+        // A real surface hole is sky ENCLOSED by terrain — sky NOT connected to the
+        // open sky at the top of the frame. Flood-fill the open sky from the top
+        // border through sky pixels; any sky pixel it cannot reach is a hole. This
+        // excludes silhouette-edge aliasing (jagged terrain-top notches connect to
+        // the open sky) while catching every blue cutout punched into the surface.
+        auto Tt=[&](int x,int y){return g.mv2bTerrainMask[(size_t)y*w+x]!=0;};
+        for(size_t p=0;p<(size_t)w*h;++p){if(g.mv2bTerrainMask[p])++terr;else ++sky;}
+        std::vector<uint8_t> open((size_t)w*h,0);
+        static thread_local std::vector<int> stk;stk.clear();
+        for(int x=0;x<w;++x){int const y=h-1;if(!Tt(x,y)&&!open[(size_t)y*w+x])
+            {open[(size_t)y*w+x]=1;stk.push_back(y*w+x);}}          // seed: top-of-screen sky
+        while(!stk.empty())
+        {
+            int const p=stk.back();stk.pop_back();int const px=p%w,py=p/w;
+            int const nb[4][2]={{px-1,py},{px+1,py},{px,py-1},{px,py+1}};
+            for(auto&e:nb){int nx=e[0],ny=e[1];if(nx<0||ny<0||nx>=w||ny>=h)continue;
+                size_t const q=(size_t)ny*w+nx;if(open[q]||Tt(nx,ny))continue;open[q]=1;stk.push_back(ny*w+nx);}
+        }
+        // Enclosed sky forms connected components; a real surface hole is a sizeable
+        // blue cutout, whereas coarse-LOD silhouette stair-steps leave 1-3 px pockets.
+        // Count only components >= kMinHole px, so the metric is 0 on a clean surface
+        // and large on a punched-through one.
+        constexpr int kMinHole=40;   // real coverage holes are 100s+ px; coarse-LOD
+                                     // silhouette stair-step pockets are <=~20 px
+        std::vector<uint8_t> seen((size_t)w*h,0);
+        for(size_t s0=0;s0<(size_t)w*h;++s0)
+        {
+            if(g.mv2bTerrainMask[s0]||open[s0]||seen[s0])continue;
+            stk.clear();stk.push_back((int)s0);seen[s0]=1;long long comp=0;
+            static thread_local std::vector<int> cells;cells.clear();
+            while(!stk.empty())
+            {
+                int const p=stk.back();stk.pop_back();cells.push_back(p);++comp;
+                int const px=p%w,py=p/w;int const nb[4][2]={{px-1,py},{px+1,py},{px,py-1},{px,py+1}};
+                for(auto&e:nb){int nx=e[0],ny=e[1];if(nx<0||ny<0||nx>=w||ny>=h)continue;
+                    size_t const q=(size_t)ny*w+nx;
+                    if(seen[q]||g.mv2bTerrainMask[q]||open[q])continue;seen[q]=1;stk.push_back(ny*w+nx);}
+            }
+            if(comp>=kMinHole)holes+=comp;   // real enclosed hole
+        }
+    }
+
+    void Mv1PlaceFixed(double yaw)
+    {
+        g.stage0ToolGeologyCutaway=false;g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+        g.stage0ToolPerformanceHud=false;g.stage0StageMenuOpen=false;g.walkMode=false;g.grounded=false;
+        g.feetX=(float)s_mv1RotBaseX;g.feetY=(float)s_mv1RotBaseY;
+        g.playerX=(int)std::floor(s_mv1RotBaseX);g.playerY=(int)std::floor(s_mv1RotBaseY);
+        FollowStreamCenter();
+        g.camX=(float)s_mv1RotBaseX;g.camY=(float)s_mv1RotBaseY;g.camZ=(float)s_mv1RotBaseZ;
+        g.feetZ=(float)(s_mv1RotBaseZ-220.0);g.yaw=(float)yaw;g.pitch=-0.32f;   // elevated, look down
+    }
+
+    void Mv1CoverageCertTick()
+    {
+        if(!g.certMv1Coverage||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv2bPhase;
+        bool const nearIdle=Stage8PackageJobsIdle()
+            &&Stage0MinCompleteRadiusM(Stage0PlayView::RegionalBiome)>=(float)g.stage0LiveRadiusM-.001f;
+        bool const farIdle=g.mv1PendingNow==0;   // MV1 residency fully settled
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);Mv1FindStations();
+            // a fixed elevated vantage over terrain-rich central ground (the free-fly regime).
+            s_mv1RotBaseX=0.0;s_mv1RotBaseY=0.0;
+            s_mv1RotBaseZ=g.regionalBiomeRuntime->ReconstructedZ(0.0,0.0)+220.0;
+            for(int i=0;i<kMv1RotSteps;++i){s_mv1RotHoles[i]=0;s_mv1RotResident[i]=0;s_mv1RotSubmitted[i]=0;
+                s_mv1RotResDigest[i]=0;s_mv1RotAuthDigest[i]=0;}
+            Mv1PlaceFixed(0.0);g.certMv2bStation=0;g.certMv2bSettle=0;ph=1;return;
+        }
+        if(ph==1)
+        {
+            double const yaw=g.certMv2bStation*(2.0*3.14159265358979/kMv1RotSteps);
+            Mv1PlaceFixed(yaw);
+            if(++g.certMv2bSettle>=70&&nearIdle&&farIdle){g.mv2bCaptureRequest=true;g.certMv2bSettle=0;ph=2;}
+            return;
+        }
+        if(ph==2)
+        {
+            double const yaw=g.certMv2bStation*(2.0*3.14159265358979/kMv1RotSteps);
+            Mv1PlaceFixed(yaw);
+            if(++g.certMv2bSettle>=3&&!g.mv2bCaptureRequest)
+            {
+                int const s=g.certMv2bStation;long long sky,terr;
+                Mv1CoverageCount(s_mv1RotHoles[s],sky,terr);
+                s_mv1RotResident[s]=(int)g.mv1Tiles.size();
+                s_mv1RotResDigest[s]=Mv1ResidentDigest();
+                s_mv1RotAuthDigest[s]=Mv1SourceRevision();
+                s_mv1RotSubmitted[s]=g.mv1DrawCallsFrame;
+                if(s==0||s==3||s==6||s==9)   // keep 4 evidence frames per run
+                {char path[128];std::snprintf(path,sizeof(path),
+                    "Docs\\provenance_mv1rot_%02d_%s_%s.ppm",s,
+                    g.mv2bEnabled?"mv2bon":"mv2boff",g.mv1CullDisable?"nocull":"cull");
+                 DumpFramePpm(path);}
+                ++g.certMv2bStation;g.certMv2bSettle=0;ph=(g.certMv2bStation>=kMv1RotSteps)?3:1;
+            }
+            return;
+        }
+        if(ph==3)
+        {
+            long long totHoles=0;int resMin=INT_MAX,resMax=0;bool resDigestStable=true,authStable=true;
+            for(int i=0;i<kMv1RotSteps;++i){totHoles+=s_mv1RotHoles[i];
+                resMin=(std::min)(resMin,s_mv1RotResident[i]);resMax=(std::max)(resMax,s_mv1RotResident[i]);
+                if(s_mv1RotResDigest[i]!=s_mv1RotResDigest[0])resDigestStable=false;
+                if(s_mv1RotAuthDigest[i]!=s_mv1RotAuthDigest[0])authStable=false;}
+            int const resDelta=resMax-resMin;
+            FILE* f=nullptr;
+            char const* p=g.mv1CullDisable?"Docs\\provenance_mv1_rotation_nocull.txt"
+                                          :"Docs\\provenance_mv1_rotation_cull.txt";
+            if(fopen_s(&f,p,"wb")==0&&f)
+            {
+                std::fprintf(f,
+                    "MV1_FIXED_POSITION_YAW_SWEEP cull=%s  yaw_steps=%d  base=(%.0f,%.0f,%.0f)\n"
+                    "invariant.resident_set_delta_under_yaw=%d (need 0)\n"
+                    "invariant.resident_digest_stable=%s\n"
+                    "invariant.authority_digest_stable=%s\n"
+                    "below_terrain_sky_holes_total=%lld (need 0)\n",
+                    g.mv1CullDisable?"DISABLED":"ENABLED",kMv1RotSteps,
+                    s_mv1RotBaseX,s_mv1RotBaseY,s_mv1RotBaseZ,
+                    resDelta,resDigestStable?"YES":"NO",authStable?"YES":"NO",totHoles);
+                for(int i=0;i<kMv1RotSteps;++i)
+                    std::fprintf(f,"yaw.%02d deg=%.0f resident=%d submitted=%d res_digest=%016llx below_horizon_holes=%lld\n",
+                        i,i*360.0/kMv1RotSteps,s_mv1RotResident[i],s_mv1RotSubmitted[i],
+                        (unsigned long long)s_mv1RotResDigest[i],s_mv1RotHoles[i]);
+                std::fclose(f);
+            }
+            bool const pass=(resDelta==0)&&resDigestStable&&authStable&&(totHoles==0);
+            g.certMv1Coverage=false;PostQuitMessage(pass?0:2);ph=4;
+        }
     }
 
     void Mv2bCertTick()
@@ -27445,7 +27667,7 @@ namespace
             g.mv2bFarPass = true;
             DrawMv2Horizon();
             g.mv2bFarPass = false;
-            if ( g.certMv2b && g.mv2bCaptureRequest )
+            if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
             { Mv2CaptureFarDepth( nf2, ff2 ); }   // request cleared after the MV1 pass unions its mask
             Mv2SetAerial( false );
             glClear( GL_DEPTH_BUFFER_BIT );
@@ -27486,7 +27708,7 @@ namespace
             { Mv1cCaptureFarDepth( nf, ff ); g.mv1cCaptureRequest = false; }
             if ( g.certMv1d && g.mv1dBandCaptureRequest )
             { Mv1dCaptureBands( nf, ff ); g.mv1dBandCaptureRequest = false; }
-            if ( g.certMv2b && g.mv2bCaptureRequest )
+            if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
             { Mv2AccumMv1Mask(); }   // union MV1 far; near pass unions + clears after DrawHeightfield
             if ( g.mv2bEnabled ) Mv2SetAerial( false );
             else if ( mv1dOn ) Mv1dSetFog( false );
@@ -27503,7 +27725,7 @@ namespace
         // Union the near authoritative world (0.03-600 m) into the gap-classifier
         // terrain mask, then close the capture: a sky pixel is only a hole if NONE
         // of the three passes drew terrain there.
-        if ( g.certMv2b && g.mv2bCaptureRequest )
+        if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
         { Mv2AccumMv1Mask(); g.mv2bCaptureRequest = false; }
         DrawLivingWorldLoadPresentation();
         if(g.certPresentationIsolation&&g.presentationIsolationMode==4)
@@ -48121,6 +48343,7 @@ namespace
             Mv1cCertTick();
             Mv1dCertTick();
             Mv2bCertTick();
+            Mv1CoverageCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -48201,7 +48424,8 @@ namespace
               && !g.certMv1Gpu
               && !g.certMv1C
               && !g.certMv1d
-              && !g.certMv2b )
+              && !g.certMv2b
+              && !g.certMv1Coverage )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -54353,6 +54577,16 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {g.mv2bEnabled=true;continue;}
                 if(_wcsicmp(argv[i],L"--mv2c-off")==0)  // revert to exact frozen MV2.B presentation
                 {g.mv2cEnabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--mv1-nocull")==0) // attribution toggle: disable horizontal cull
+                {g.mv1CullDisable=true;continue;}
+                if(_wcsicmp(argv[i],L"--cert-mv1-coverage")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv1Coverage=true;g.mv2bEnabled=false;  // pure MV1 surface (no macro-seam confound)
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--play-mv2b-horizon")==0
                   ||_wcsicmp(argv[i],L"--play-mv2b")==0)
                 {

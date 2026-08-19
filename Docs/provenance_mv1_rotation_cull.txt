@@ -1,0 +1,17 @@
+MV1_FIXED_POSITION_YAW_SWEEP cull=ENABLED  yaw_steps=12  base=(0,0,1400)
+invariant.resident_set_delta_under_yaw=0 (need 0)
+invariant.resident_digest_stable=YES
+invariant.authority_digest_stable=YES
+below_terrain_sky_holes_total=0 (need 0)
+yaw.00 deg=0 resident=728 submitted=306 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.01 deg=30 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.02 deg=60 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.03 deg=90 resident=728 submitted=306 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.04 deg=120 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.05 deg=150 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.06 deg=180 resident=728 submitted=306 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.07 deg=210 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.08 deg=240 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.09 deg=270 resident=728 submitted=306 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.10 deg=300 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
+yaw.11 deg=330 resident=728 submitted=297 res_digest=544d6808d2430d08 below_horizon_holes=0
