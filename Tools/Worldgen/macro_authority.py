@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-GENERATOR_VERSION = 3
+GENERATOR_VERSION = 4
 REGION_M = 64000.0          # serialization / ownership cell size (NOT feature scale)
 REGION_HALF_M = 32000.0     # frozen central region half-extent
 ANCHOR_INNER_M = 32000.0    # anchor window: 0 (with zero slope) at/inside the center boundary
@@ -407,7 +407,113 @@ class MacroField:
             z += young * 0.20 * amp * prof * (_ridged(self.seed + ":mfacet", x, y, 7000.0) - 0.42)
         return z
 
-    def regional_field(self, x: float, y: float, ctl: "Controls | None" = None) -> float:
+    # ---- MV3.B2 specialized macro landforms (consequences of the controls) -------
+    # Each is a bounded analytic operator gated by the continuous control fields, so a
+    # form only appears where its cause dominates (volcanic province, resistant mature
+    # plateau, ...). Placement is a seeded jittered lattice; the GATE is read at the
+    # feature CENTRE (not the query point) so a feature exists coherently. Feature
+    # wavelengths are independent of the 64 km pages and 384 km super-tiles.
+
+    def _volcanic(self, x: float, y: float, ctl: "Controls") -> float:
+        # constructional shields/cones where volcanic tendency is high & young; an eroded
+        # OLD volcano leaves a resistant plug/neck spire (a differential-erosion remnant).
+        sp = 52000.0
+        ci, cj = math.floor(x / sp), math.floor(y / sp)
+        z = 0.0
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(self.seed, "vol_present", gi, gj) > 0.5:
+                    continue
+                cx = (gi + _hash_range(0.2, 0.8, self.seed, "volx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.2, 0.8, self.seed, "voly", gi, gj)) * sp
+                cc = controls_at(self.seed, cx, cy)
+                if cc.volcanic < 0.77:                   # only genuine volcanic provinces
+                    continue
+                r = math.hypot(x - cx, y - cy)
+                if cc.age < 0.5:                         # young: shield (broad) or cone (steep)
+                    rad = _hash_range(9000.0, 32000.0, self.seed, "volr", gi, gj)
+                    if r >= rad:
+                        continue
+                    s = 1.0 - r / rad
+                    steep = 1.0 + 2.4 * (0.3 + 0.6 * cc.relief)    # cones steeper in high-relief
+                    h = _hash_range(450.0, 1500.0, self.seed, "volh", gi, gj) * (0.55 + 0.8 * cc.relief)
+                    z += h * (s ** steep)
+                    if r < rad * 0.13:                   # summit crater
+                        z -= h * 0.22 * smoothstep(rad * 0.13, 0.0, r)
+                else:                                    # old: eroded base + resistant plug spire
+                    pr = _hash_range(1400.0, 4200.0, self.seed, "plugr", gi, gj)
+                    outer = pr * 4.0
+                    if r >= outer:
+                        continue
+                    z += _hash_range(90.0, 260.0, self.seed, "plugb", gi, gj) * max(0.0, 1.0 - r / outer)
+                    if r < pr:
+                        z += cc.substrate * _hash_range(320.0, 880.0, self.seed, "plugh", gi, gj) \
+                            * max(0.0, 1.0 - r / pr) ** 2.3
+        return z
+
+    def _mesa_butte(self, x: float, y: float, ctl: "Controls") -> float:
+        # In a mature plateau province the tableland is dissected; resistant caps survive
+        # as flat-topped MESAS (young/large) and isolated BUTTES (older/smaller), their tops
+        # at the parent plateau level -> genuine erosional remnants, not procedural bumps.
+        sp = 15000.0
+        ci, cj = math.floor(x / sp), math.floor(y / sp)
+        ptop = 240.0 + 900.0 * ctl.relief
+        best = 0.0
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(self.seed, "mesa_present", gi, gj) > (0.55 - 0.30 * ctl.age):
+                    continue
+                if _hash_unit(self.seed, "mesa_cap", gi, gj) > ctl.substrate:   # needs a resistant cap
+                    continue
+                cx = (gi + _hash_range(0.25, 0.75, self.seed, "mx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.25, 0.75, self.seed, "my", gi, gj)) * sp
+                rad = _hash_range(1600.0, 7500.0, self.seed, "mr", gi, gj) * (1.35 - 0.7 * ctl.age)
+                r = math.hypot(x - cx, y - cy)
+                if r >= rad:
+                    continue
+                cap = ptop * (0.45 + 0.55 * ctl.age) * smoothstep(rad, rad - rad * 0.16, r)  # flat top, steep rim
+                if cap > best:
+                    best = cap
+        return best
+
+    def _tower(self, x: float, y: float, ctl: "Controls") -> float:
+        # very rare narrow tall survivors where competence is extreme and erosion strong;
+        # spatially tied to their host lattice (near ridge/plateau/volcanic parent context).
+        sp = 9000.0
+        ci, cj = math.floor(x / sp), math.floor(y / sp)
+        z = 0.0
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(self.seed, "tower_present", gi, gj) > 0.05:       # ~5% of eligible cells
+                    continue
+                if _hash_unit(self.seed, "tower_cap", gi, gj) > max(0.0, (ctl.substrate - 0.55) * 2.4):
+                    continue
+                cx = (gi + _hash_range(0.3, 0.7, self.seed, "tx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.3, 0.7, self.seed, "ty", gi, gj)) * sp
+                rad = _hash_range(300.0, 1100.0, self.seed, "tr", gi, gj)
+                r = math.hypot(x - cx, y - cy)
+                if r >= rad:
+                    continue
+                z += _hash_range(180.0, 560.0, self.seed, "th", gi, gj) * max(0.0, 1.0 - r / rad) ** 1.7
+        return z
+
+    def _special_forms(self, x: float, y: float, ctl: "Controls") -> float:
+        # Gate volcanic constructs on the dedicated volcanic-POTENTIAL field (a smooth
+        # province), not the rare style-weight; keeps volcanoes rare-but-present across seeds.
+        z = 0.0
+        if ctl.volcanic > 0.80:
+            z += self._volcanic(x, y, ctl)
+        if ctl.w_plateau > 0.32 and ctl.age > 0.42:
+            z += self._mesa_butte(x, y, ctl)
+        if ctl.substrate > 0.60 and ctl.age > 0.45:
+            z += self._tower(x, y, ctl)
+        return z
+
+    def regional_field(self, x: float, y: float, ctl: "Controls | None" = None,
+                       special: bool = True) -> float:
         if ctl is None:
             ctl = controls_at(self.seed, x, y)
         # Additive structural skeleton (the MV2.A field), with each feature already
@@ -434,18 +540,83 @@ class MacroField:
             z = z * (1.0 - ctl.w_plateau) + mesa * ctl.w_plateau
         for bs in self.basins:
             z += self._basin(bs, x, y)
+        if special:
+            z += self._special_forms(x, y, ctl)     # MV3.B2 volcanic / mesa-butte / tower
         return z
 
 
 def macro_z(central: CentralProgram, fieldf: MacroField, x: float, y: float,
-            ctl: "Controls | None" = None) -> float:
-    """The MV3.A continuous macro surface (pre-drainage): frozen center + anchored
-    regional field. This is the SOURCE the drainage graph routes on. `ctl` may be a
-    precomputed Controls to avoid recomputing the control fields."""
+            ctl: "Controls | None" = None, special: bool = True) -> float:
+    """The macro surface (pre-drainage): frozen center + anchored regional field with
+    MV3.B2 specialized landforms. `special=False` reproduces the MV3.B1 parent surface
+    (counterfactual). `ctl` may be a precomputed Controls to avoid recomputing them."""
     aw = anchor_window(x, y)
     if aw <= 0.0:
         return central_envelope(central, x, y)
-    return central_envelope(central, x, y) + aw * fieldf.regional_field(x, y, ctl)
+    return central_envelope(central, x, y) + aw * fieldf.regional_field(x, y, ctl, special)
+
+
+def landform_at(central: "CentralProgram", fieldf: "MacroField", x: float, y: float):
+    """Deterministic special-landform ancestry at a point: (class, id, parent_id, age,
+    substrate, center). class in {volcanic_shield/cone/plug, mesa, butte, tower, none}."""
+    ctl = controls_at(fieldf.seed, x, y)
+    seed = fieldf.seed
+    def fid(tag, gi, gj):
+        return f"{fnv1a64(seed + f':{tag}:({gi},{gj})'):016x}"
+    prov = f"{fnv1a64(seed + f':prov:({int(math.floor(x/200000.0))},{int(math.floor(y/200000.0))})'):016x}"
+    # volcanic
+    if ctl.volcanic > 0.80:
+        sp = 52000.0; ci, cj = math.floor(x / sp), math.floor(y / sp)
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(seed, "vol_present", gi, gj) > 0.5:
+                    continue
+                cx = (gi + _hash_range(0.2, 0.8, seed, "volx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.2, 0.8, seed, "voly", gi, gj)) * sp
+                cc = controls_at(seed, cx, cy)
+                if cc.volcanic < 0.77:
+                    continue
+                r = math.hypot(x - cx, y - cy)
+                if cc.age < 0.5:
+                    rad = _hash_range(9000.0, 32000.0, seed, "volr", gi, gj)
+                    if r < rad:
+                        cls = "volcanic_cone" if cc.relief > 0.5 else "volcanic_shield"
+                        return (cls, fid("vol", gi, gj), prov, cc.age, cc.substrate, (cx, cy))
+                else:
+                    if r < _hash_range(1400.0, 4200.0, seed, "plugr", gi, gj):
+                        return ("volcanic_plug", fid("vol", gi, gj), prov, cc.age, cc.substrate, (cx, cy))
+    # tower (rarer, check before mesa so a capped tower wins)
+    if ctl.substrate > 0.60 and ctl.age > 0.45:
+        sp = 9000.0; ci, cj = math.floor(x / sp), math.floor(y / sp)
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(seed, "tower_present", gi, gj) > 0.05:
+                    continue
+                if _hash_unit(seed, "tower_cap", gi, gj) > max(0.0, (ctl.substrate - 0.55) * 2.4):
+                    continue
+                cx = (gi + _hash_range(0.3, 0.7, seed, "tx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.3, 0.7, seed, "ty", gi, gj)) * sp
+                if math.hypot(x - cx, y - cy) < _hash_range(300.0, 1100.0, seed, "tr", gi, gj):
+                    return ("tower", fid("tower", gi, gj), prov, ctl.age, ctl.substrate, (cx, cy))
+    # mesa / butte
+    if ctl.w_plateau > 0.32 and ctl.age > 0.42:
+        sp = 15000.0; ci, cj = math.floor(x / sp), math.floor(y / sp)
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                gi, gj = ci + di, cj + dj
+                if _hash_unit(seed, "mesa_present", gi, gj) > (0.55 - 0.30 * ctl.age):
+                    continue
+                if _hash_unit(seed, "mesa_cap", gi, gj) > ctl.substrate:
+                    continue
+                cx = (gi + _hash_range(0.25, 0.75, seed, "mx", gi, gj)) * sp
+                cy = (gj + _hash_range(0.25, 0.75, seed, "my", gi, gj)) * sp
+                rad = _hash_range(1600.0, 7500.0, seed, "mr", gi, gj) * (1.35 - 0.7 * ctl.age)
+                if math.hypot(x - cx, y - cy) < rad:
+                    cls = "butte" if (ctl.age > 0.68 and rad < 5000.0) else "mesa"
+                    return (cls, fid("mesa", gi, gj), prov, ctl.age, ctl.substrate, (cx, cy))
+    return ("none", "none", prov, ctl.age, ctl.substrate, (x, y))
 
 
 # =========================================================================== #
@@ -738,11 +909,12 @@ def drainage_query(central: "CentralProgram", fieldf: "MacroField", x: float, y:
 
 
 def macro_z_incised(central: "CentralProgram", fieldf: "MacroField", x: float, y: float,
-                    incise: bool = True) -> float:
-    """Full macro surface with drainage-carved canyons. Incision is gated by the anchor
-    window, so it is exactly 0 inside the frozen +/-32 km center (MW4 not overwritten).
-    incise=False reproduces the exact MV3.A surface (counterfactual)."""
-    z = macro_z(central, fieldf, x, y)
+                    incise: bool = True, special: bool = True) -> float:
+    """Full macro surface with MV3.B2 special landforms and drainage-carved canyons.
+    Incision is gated by the anchor window (exactly 0 inside the frozen +/-32 km center,
+    MW4 not overwritten). incise=False drops canyons; special=False reproduces the MV3.B1
+    parent surface (counterfactuals)."""
+    z = macro_z(central, fieldf, x, y, None, special)
     if not incise:
         return z
     return z - anchor_window(x, y) * incision_at(central, fieldf, x, y)

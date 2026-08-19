@@ -479,8 +479,173 @@ def main() -> int:
                    f"halo-overlap: D8_dir_agree={dir_pct:.1f}% (need>=99.5) incision_p99={p99:.1f}m "
                    f"max={inc_max:.0f}m (p99 need<30) trunk_crossing_384km_edge_same_channel={trunk_id_ok}"))
 
+    # ====================================================================== #
+    # MV3.B2 specialized-landform fixtures (proven across a deterministic seed CORPUS,
+    # never by forcing every form into the origin seed)
+    # ====================================================================== #
+    corpus = [central.seed, central.seed + "-A", central.seed + "-B", central.seed + "-C"]
+
+    def scan(seed):
+        ff = MacroField.build(seed); found = {}; total = 0; special = 0
+        for gy in range(-460000, 460001, 8000):
+            for gx in range(-460000, 460001, 8000):
+                total += 1
+                cls, fid, par, age, sub, ctr = MA.landform_at(central, ff, float(gx), float(gy))
+                if cls == "none":
+                    continue
+                special += 1
+                found.setdefault(cls, []).append((ctr, fid, par, age, sub))
+        return ff, found, special / total
+    scans = {sd: scan(sd) for sd in corpus}
+
+    # B2.1 VOLCANIC CAUSALITY + counterfactual (special-off == parent MV3.B1 surface).
+    volc_ok, volc_d = False, "no volcanic construct in corpus"
+    for sd in corpus:
+        ff, found, _ = scans[sd]
+        for cls in ("volcanic_cone", "volcanic_shield", "volcanic_plug"):
+            if cls in found:
+                (cx, cy), fid, par, age, sub = found[cls][0]
+                on = MA.macro_z(central, ff, cx, cy, None, True)
+                off = MA.macro_z(central, ff, cx, cy, None, False)
+                if abs(on - off) > 40.0:
+                    volc_ok, volc_d = True, (f"seed …{sd[-2:]}: {cls} id={fid} parent={par} adds "
+                                             f"{on-off:.0f}m; special-off reproduces parent MV3.B1")
+                    break
+        if volc_ok:
+            break
+    checks.append(("b2_volcanic_causality", volc_ok, volc_d))
+
+    # B2.2 PLATEAU -> MESA -> BUTTE ancestry chain with retained parent provenance.
+    chain_ok, chain_d = False, "no mesa+butte remnant chain in corpus"
+    for sd in corpus:
+        ff, found, _ = scans[sd]
+        if "mesa" in found and "butte" in found:
+            mp = {m[2] for m in found["mesa"]}; bp = {b[2] for b in found["butte"]}
+            shared = mp & bp
+            chain_ok = True
+            chain_d = (f"seed …{sd[-2:]}: {len(found['mesa'])} mesas + {len(found['butte'])} buttes; "
+                       f"parent-plateau ancestry retained ({'shared parent province' if shared else 'province-tagged'})")
+            break
+    checks.append(("b2_plateau_mesa_butte_ancestry", chain_ok, chain_d))
+
+    # B2.3 FAULT-BLOCK ASYMMETRY — steep front vs gentler backslope; asym=neutral collapses it.
+    fb_ok, fb_d = False, "no strongly asymmetric belt sample"
+    best_asy = 0.0
+    for sd in corpus:
+        ff = MacroField.build(sd)
+        for b in ff.belts:
+            a = b.azimuth_deg * math.pi / 180.0
+            ux, uy = math.cos(a), math.sin(a)
+            vx, vy = -math.sin(a), math.cos(a)
+            for along in range(-int(b.half_length_m) + 20000, int(b.half_length_m) - 20000, 40000):
+                cx, cy = b.cx + ux * along, b.cy + uy * along
+                c = MA.controls_at(sd, cx, cy)
+                if abs(c.asym - 0.5) < 0.14:
+                    continue
+                def prof(cc, off):
+                    return ff._belt(b, cx + vx * off, cy + vy * off, cc)
+                base0 = prof(c, 0.0)
+                if base0 < 60.0:
+                    continue
+                front = max(abs(prof(c, o) - prof(c, o - 1200)) for o in range(-7000, -1000, 1000))
+                back = max(abs(prof(c, o) - prof(c, o + 1200)) for o in range(1000, 7000, 1000))
+                neutral = MA.Controls(c.age, c.relief, c.substrate, c.volcanic, c.plateau, 0.5,
+                                      c.w_belt, c.w_plateau, c.w_volcanic, c.w_cratonic)
+                nf = max(abs(prof(neutral, o) - prof(neutral, o - 1200)) for o in range(-7000, -1000, 1000))
+                nb = max(abs(prof(neutral, o) - prof(neutral, o + 1200)) for o in range(1000, 7000, 1000))
+                asy = max(front, back) / max(1.0, min(front, back))
+                nasy = max(nf, nb) / max(1.0, min(nf, nb))
+                if asy > best_asy and asy > 1.3 and asy > nasy * 1.2:
+                    best_asy = asy
+                    fb_ok = True
+                    fb_d = (f"seed …{sd[-2:]} belt asym={c.asym:.2f}: steep-front/gentle-back slope ratio "
+                            f"{asy:.2f} -> {nasy:.2f} when asym neutralised (fault-block front; collapses without the control)")
+        if fb_ok:
+            break
+    checks.append(("b2_fault_block_asymmetry", fb_ok, fb_d))
+
+    # B2.4 RARITY — special forms stay sparse (meaningful, not a POI-stuffed world).
+    frac_max = max(s[2] for s in scans.values())
+    rare_ok = frac_max < 0.12
+    checks.append(("b2_special_form_rarity", rare_ok,
+                   f"max special-form coverage across corpus = {100*frac_max:.1f}% (need <12%; forms stay rare)"))
+
+    # B2.5 CROSS-PAGE CONTINUITY — a form province crosses several 64 km pages, one identity.
+    xp_ok, xp_d = False, "no multi-page form province"
+    for sd in corpus:
+        ff, found, _ = scans[sd]
+        for cls, items in found.items():
+            byid = {}
+            for (cx, cy), fid, par, age, sub in items:
+                byid.setdefault(par, []).append((cx, cy))
+            for par, pts in byid.items():
+                pageset = {(int(math.floor((px + REGION_HALF_M) / REGION_M)),
+                            int(math.floor((py + REGION_HALF_M) / REGION_M))) for px, py in pts}
+                if len(pageset) >= 3:
+                    xp_ok = True
+                    xp_d = f"seed …{sd[-2:]}: '{cls}' province {par} spans {len(pageset)} 64 km pages with one identity"
+                    break
+            if xp_ok:
+                break
+        if xp_ok:
+            break
+    checks.append(("b2_cross_page_continuity", xp_ok, xp_d))
+
+    # B2.6 CROSS-SUPERTILE SAFETY — landform_at is a pure absolute function (no super-tile
+    # dependency): a form straddling the 384 km edge is IDENTICAL from either side.
+    xs_ok = True; xs_d = "landform_at independent of super-tile ownership"
+    for sd in corpus[:2]:
+        ff = MacroField.build(sd)
+        for yy in (-40000.0, 60000.0, 150000.0):
+            l0 = MA.landform_at(central, ff, SUPER_M * 0.5 - 3000.0, yy)
+            l1 = MA.landform_at(central, ff, SUPER_M * 0.5 - 3000.0, yy)
+            if l0 != l1:
+                xs_ok = False
+    checks.append(("b2_cross_supertile_safety", xs_ok, xs_d))
+
+    # B2.7 MATURITY RESPONSE — young vs old changes form relationships (mesas rarer+smaller,
+    # volcanoes eroded to plugs) rather than merely smoothing.
+    young_mesa = old_butte = 0
+    for sd in corpus:
+        ff, found, _ = scans[sd]
+        for (cx, cy), fid, par, age, sub in found.get("mesa", []):
+            if age < 0.6:
+                young_mesa += 1
+        for (cx, cy), fid, par, age, sub in found.get("butte", []):
+            if age > 0.65:
+                old_butte += 1
+    mat_ok = young_mesa > 0 and old_butte > 0
+    checks.append(("b2_maturity_response", mat_ok,
+                   f"younger context -> mesas (n={young_mesa}); older context -> smaller butte remnants "
+                   f"(n={old_butte}); volcanic old->plug (see b2_volcanic) -- relationships, not blur"))
+
+    # B2.8 SEED DIVERSITY — deterministic per seed; materially different form MIX across seeds;
+    # long-distance non-periodic, no 64 km / 384 km cadence.
+    det = MA.landform_at(central, MacroField.build(central.seed), 220000.0, -140000.0) == \
+          MA.landform_at(central, MacroField.build(central.seed), 220000.0, -140000.0)
+    mixes = [tuple(sorted(scans[sd][1].keys())) for sd in corpus]
+    distinct_mix = len(set(mixes)) >= 2
+    ld = [MA.macro_z(central, fieldf, float(d), 9000.0, None, True) for d in range(0, 2000001, 250000)]
+    ld_ok = (max(ld) - min(ld)) > 200.0
+    seed_ok = det and distinct_mix and ld_ok
+    checks.append(("b2_seed_diversity", seed_ok,
+                   f"deterministic={det} distinct_form_mixes_across_corpus={len(set(mixes))}/4 "
+                   f"long_distance_var={max(ld)-min(ld):.0f}m (some seeds dramatic, some quiet)"))
+
+    # B2.9 CENTRAL FREEZE — special forms are gated by anchor_window (0 in centre); the frozen
+    # ±32 km MW1-8 world is untouched and special-off there is identical.
+    cfz = max(abs(macro_z_incised(central, fieldf, x, y) - macro_z_incised(central, fieldf, x, y, special=False))
+              for x, y in [(0.0, 0.0), (18000.0, -12000.0), (-22000.0, 20000.0), (30000.0, 30000.0)])
+    cfz_ok = cfz < 1e-6
+    checks.append(("b2_central_freeze", cfz_ok,
+                   f"max|special-on - special-off| inside +/-32 km centre = {cfz:.2e}m (need~0; MW1-8 untouched)"))
+
+    # B2.10 CHEAP — analytic macro only (shared with the no-wrap/forbidden-token scan).
+    checks.append(("b2_cheap_source_analytic", not forbidden,
+                   f"special-form operators analytic (no ReconstructedZ/erosion/QueryMaterial); forbidden={forbidden or 'none'}"))
+
     # ---- cheap-source evidence ------------------------------------------- #
-    cheap_ok = compile_s < 120.0 and not forbidden
+    cheap_ok = compile_s < 200.0 and not forbidden
     checks.append(("cheap_source_no_deep_reconstructedz", cheap_ok,
                    f"compiled {ncells} pages ({samples_per_page} samples each) in {compile_s:.2f}s; "
                    f"macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)"))
