@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 REGION_M = 64000.0          # serialization / ownership cell size (NOT feature scale)
 REGION_HALF_M = 32000.0     # frozen central region half-extent
 ANCHOR_INNER_M = 32000.0    # anchor window: 0 (with zero slope) at/inside the center boundary
@@ -407,8 +407,9 @@ class MacroField:
             z += young * 0.20 * amp * prof * (_ridged(self.seed + ":mfacet", x, y, 7000.0) - 0.42)
         return z
 
-    def regional_field(self, x: float, y: float) -> float:
-        ctl = controls_at(self.seed, x, y)
+    def regional_field(self, x: float, y: float, ctl: "Controls | None" = None) -> float:
+        if ctl is None:
+            ctl = controls_at(self.seed, x, y)
         # Additive structural skeleton (the MV2.A field), with each feature already
         # SHAPED by the local morphology controls inside _belt/_massif (age->sharp/rounded,
         # asym->fault-block, volcanic->cone). Amplitude modulated by the relief control and
@@ -436,9 +437,311 @@ class MacroField:
         return z
 
 
-def macro_z(central: CentralProgram, fieldf: MacroField, x: float, y: float) -> float:
-    """The full continuous macro surface: frozen center + anchored regional field."""
-    return central_envelope(central, x, y) + anchor_window(x, y) * fieldf.regional_field(x, y)
+def macro_z(central: CentralProgram, fieldf: MacroField, x: float, y: float,
+            ctl: "Controls | None" = None) -> float:
+    """The MV3.A continuous macro surface (pre-drainage): frozen center + anchored
+    regional field. This is the SOURCE the drainage graph routes on. `ctl` may be a
+    precomputed Controls to avoid recomputing the control fields."""
+    aw = anchor_window(x, y)
+    if aw <= 0.0:
+        return central_envelope(central, x, y)
+    return central_envelope(central, x, y) + aw * fieldf.regional_field(x, y, ctl)
+
+
+# =========================================================================== #
+# MV3.B1 — Macro drainage graph + canyon incision (Python world-authority)
+# =========================================================================== #
+#
+# CORE LAW: canyons follow drainage; drainage is NOT painted to resemble canyons.
+# A deterministic, downhill-connected, cross-page drainage graph is COMPILED from the
+# MV3.A macro surface, and canyon/valley morphology is carved ONLY along its certified
+# thalwegs. No free ridged-noise "canyons", no erosion sim, no runtime water.
+#
+# Ownership is keyed to fixed ABSOLUTE super-tiles (aligned to the world origin, NOT to
+# the 64 km pages), so a trunk crossing pages (-1,0)->(0,0)->(1,0) keeps one identity.
+# Each super-tile compiles over its 384 km core + a 96 km halo (so basins that straddle a
+# core edge route correctly) at a coarse 2 km macro resolution. The 25-page +/-160 km
+# render ring lies entirely inside super-tile (0,0), so no super-tile seam enters the
+# rendered world; long-distance samples land in other super-tiles (each self-consistent).
+
+import heapq
+
+DRAIN_RES_M = 2000.0                 # coarse macro drainage cell (1-4 km band; cheapest defensible)
+SUPER_M = 384000.0                   # super-tile core (absolute, origin-aligned; != 64 km pages)
+SUPER_HALO_M = 96000.0               # halo so edge basins route correctly
+CHANNEL_ACCUM_CELLS = 220            # >= this upstream area (cells, 1 cell=4 km2) is a trunk channel
+DRAIN_GENERATOR_VERSION = 1
+
+
+def _super_index(x: float, y: float):
+    return (int(math.floor((x + SUPER_M * 0.5) / SUPER_M)),
+            int(math.floor((y + SUPER_M * 0.5) / SUPER_M)))
+
+
+@dataclass
+class DrainageSolution:
+    sti: int
+    stj: int
+    x0: float
+    y0: float
+    res: float
+    n: int
+    accum: list          # upstream cell count (flow accumulation)
+    down: list           # D8 downstream neighbour index, or -1 terminal (spill/outlet)
+    wshed: list          # MacroWatershed label = index of the outlet each cell drains to
+    incision: list       # canyon incision depth (m, >= 0)
+    nearest_depth: list  # depth of the nearest channel (for cross-section)
+    channel: list        # bool: is a trunk channel cell
+    src_rev: str
+    digest: str
+    ascending_edges: int = 0     # non-terminal edges that ASCEND (routing bug if > 0)
+    interior_basins: int = 0     # closed endorheic basins (terminal not on grid boundary)
+    boundary_terminals: int = 0  # terminals at the grid edge (spill out of the tile)
+
+
+_DRAIN_CACHE: dict = {}
+_D8 = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+
+
+def compile_drainage(central: "CentralProgram", fieldf: "MacroField",
+                     sti: int, stj: int) -> DrainageSolution:
+    """Compile (and cache) the macro drainage graph for one absolute super-tile."""
+    key = (fieldf.seed, sti, stj)
+    cached = _DRAIN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    cx, cy = sti * SUPER_M, stj * SUPER_M
+    half = SUPER_M * 0.5 + SUPER_HALO_M
+    x0, y0 = cx - half, cy - half
+    n = int(round(2.0 * half / DRAIN_RES_M)) + 1
+    nn = n * n
+    # 1. Sample the MV3.A macro surface + morphology controls on the drainage grid.
+    Z = [0.0] * nn
+    age = [0.0] * nn
+    sub = [0.0] * nn
+    plat = [0.0] * nn
+    seed = fieldf.seed
+    for j in range(n):
+        yy = y0 + j * DRAIN_RES_M
+        base = j * n
+        for i in range(n):
+            xx = x0 + i * DRAIN_RES_M
+            k = base + i
+            c = controls_at(seed, xx, yy)         # once per cell (reused for surface + incision)
+            Z[k] = macro_z(central, fieldf, xx, yy, c)
+            age[k] = c.age
+            sub[k] = c.substrate
+            plat[k] = c.w_plateau
+    # 2. Priority-flood depression handling (Barnes 2014): fill pits to their spill level
+    #    so every cell has a downhill path to the tile boundary; genuine deep closed basins
+    #    keep an explicit spill outlet (the rim saddle they filled to).
+    # Priority-Flood + epsilon (Barnes 2014): fill pits AND give filled flats a tiny
+    # monotone gradient back to the spill, so D8 always finds a strict descent (no flats
+    # left un-routed -> no spurious terminals). eps is negligible vs real relief.
+    EPS = 1e-3
+    filled = list(Z)
+    visited = bytearray(nn)
+    pq = []
+    for i in range(n):
+        for k in (i, (n - 1) * n + i, i * n, i * n + (n - 1)):
+            if not visited[k]:
+                visited[k] = 1
+                heapq.heappush(pq, (filled[k], k))
+    while pq:
+        e, k = heapq.heappop(pq)
+        kx, ky = k % n, k // n
+        for dx, dy in _D8:
+            nx, ny = kx + dx, ky + dy
+            if 0 <= nx < n and 0 <= ny < n:
+                m = ny * n + nx
+                if not visited[m]:
+                    visited[m] = 1
+                    if filled[m] <= e:
+                        filled[m] = e + EPS      # raise to spill + eps => strict descent to k
+                    heapq.heappush(pq, (filled[m], m))
+    # 3. D8 steepest descent on the filled surface (guaranteed downhill or flat-to-spill).
+    down = [-1] * nn
+    for k in range(nn):
+        kx, ky = k % n, k // n
+        best, bj = 0.0, -1
+        e = filled[k]
+        for dx, dy in _D8:
+            nx, ny = kx + dx, ky + dy
+            if 0 <= nx < n and 0 <= ny < n:
+                m = ny * n + nx
+                dist = 1.41421356 if (dx and dy) else 1.0
+                drop = (e - filled[m]) / dist
+                if drop > best:
+                    best, bj = drop, m
+        down[k] = bj                              # -1 => terminal (boundary spill / basin outlet)
+    # routing validity: count ascending edges (should be 0) and classify terminals.
+    ascending = 0
+    interior_basins = 0
+    boundary_terminals = 0
+    for k in range(nn):
+        d = down[k]
+        if d < 0:
+            kx, ky = k % n, k // n
+            if kx == 0 or ky == 0 or kx == n - 1 or ky == n - 1:
+                boundary_terminals += 1
+            else:
+                interior_basins += 1          # a real closed basin with a spill outlet here
+        elif filled[d] > filled[k] + 2.0 * EPS:
+            ascending += 1
+    # 4. Flow accumulation: process cells high->low, push unit area downstream.
+    accum = [1.0] * nn
+    order = sorted(range(nn), key=lambda k: filled[k], reverse=True)
+    for k in order:
+        d = down[k]
+        if d >= 0:
+            accum[d] += accum[k]
+    # 5. Watershed label = the terminal outlet each cell drains to (path compression).
+    wshed = [-1] * nn
+    for start in range(nn):
+        if wshed[start] != -1:
+            continue
+        path = []
+        k = start
+        while k >= 0 and wshed[k] == -1:
+            path.append(k)
+            k = down[k]
+        outlet = wshed[k] if (k >= 0 and wshed[k] != -1) else (path[-1] if k < 0 else k)
+        for p in path:
+            wshed[p] = outlet
+    # 6. Channels + canyon incision. Depth ~ stream power (accum^m * slope^n), shaped by
+    #    substrate competence and erosional maturity; cross-section width/steepness from
+    #    the same controls (resistant/young -> narrow steep canyon; weak/old -> broad valley).
+    channel = bytearray(nn)
+    depth = [0.0] * nn
+    for k in range(nn):
+        if accum[k] < CHANNEL_ACCUM_CELLS:
+            continue
+        channel[k] = 1
+        kx, ky = k % n, k // n
+        d = down[k]
+        slope = 0.0
+        if d >= 0:
+            dd = 1.41421356 if (abs(d % n - kx) and abs(d // n - ky)) else 1.0
+            slope = max(0.0, (filled[k] - filled[d]) / (dd * DRAIN_RES_M))
+        a = accum[k]
+        # stream power incision; resistant substrate cuts deeper (steep-walled), young keeps
+        # relief so canyons stay prominent, plateau context favours box canyons.
+        comp = 0.55 + 0.9 * sub[k]
+        young = 1.0 - age[k]
+        base_d = 55.0 * (a ** 0.34) * (0.22 + slope ** 0.55)          # stream power (A^m S^n)
+        depth[k] = min(600.0, base_d * (0.5 + comp) * (0.7 + 0.6 * young) * (1.0 + 0.5 * plat[k]))
+    # multi-source distance transform from channel cells; carry the source channel depth.
+    INF = 1e18
+    dist = [INF] * nn
+    nearest_depth = [0.0] * nn
+    dq = []
+    for k in range(nn):
+        if channel[k]:
+            dist[k] = 0.0
+            nearest_depth[k] = depth[k]
+            heapq.heappush(dq, (0.0, k))
+    while dq:
+        dcur, k = heapq.heappop(dq)
+        if dcur > dist[k]:
+            continue
+        kx, ky = k % n, k // n
+        for dx, dy in _D8:
+            nx, ny = kx + dx, ky + dy
+            if 0 <= nx < n and 0 <= ny < n:
+                m = ny * n + nx
+                step = (1.41421356 if (dx and dy) else 1.0) * DRAIN_RES_M
+                nd = dcur + step
+                if nd < dist[m]:
+                    dist[m] = nd
+                    nearest_depth[m] = nearest_depth[k]
+                    heapq.heappush(dq, (nd, m))
+    # cross-section: incision falls off from the thalweg over a control-dependent width.
+    incision = [0.0] * nn
+    for k in range(nn):
+        dep = nearest_depth[k]
+        if dep <= 0.0:
+            continue
+        width = 2200.0 + 6000.0 * (1.0 - sub[k]) + 3500.0 * age[k]   # resistant/young narrow
+        wall = 2.4 - 1.3 * (1.0 - sub[k]) - 0.4 * age[k]             # resistant steep walls
+        t = dist[k] / width
+        if t >= 1.0:
+            continue
+        prof = (1.0 - t) ** max(0.8, wall)
+        incision[k] = dep * prof
+    # digest of the graph (accum + incision, quantized) for determinism fixtures.
+    hh = _FNV_OFFSET
+    for k in range(0, nn, 7):
+        q = (int(accum[k]) ^ (int(incision[k] * 10.0) << 20)) & 0xFFFFFFFFFFFFFFFF
+        hh ^= q
+        hh = (hh * _FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+    sol = DrainageSolution(
+        sti=sti, stj=stj, x0=x0, y0=y0, res=DRAIN_RES_M, n=n,
+        accum=accum, down=down, wshed=wshed, incision=incision,
+        nearest_depth=nearest_depth, channel=channel,
+        src_rev=f"gv{GENERATOR_VERSION}.dgv{DRAIN_GENERATOR_VERSION}",
+        digest=f"{hh:016x}",
+        ascending_edges=ascending, interior_basins=interior_basins,
+        boundary_terminals=boundary_terminals)
+    _DRAIN_CACHE[key] = sol
+    return sol
+
+
+def _drain_bilinear(sol: DrainageSolution, grid: list, x: float, y: float) -> float:
+    fx = (x - sol.x0) / sol.res
+    fy = (y - sol.y0) / sol.res
+    i0 = int(math.floor(fx))
+    j0 = int(math.floor(fy))
+    if i0 < 0 or j0 < 0 or i0 >= sol.n - 1 or j0 >= sol.n - 1:
+        ic = min(max(i0, 0), sol.n - 1)
+        jc = min(max(j0, 0), sol.n - 1)
+        return grid[jc * sol.n + ic]
+    tx, ty = fx - i0, fy - j0
+    n = sol.n
+    a = grid[j0 * n + i0]; b = grid[j0 * n + i0 + 1]
+    c = grid[(j0 + 1) * n + i0]; d = grid[(j0 + 1) * n + i0 + 1]
+    return a * (1 - tx) * (1 - ty) + b * tx * (1 - ty) + c * (1 - tx) * ty + d * tx * ty
+
+
+def incision_at(central: "CentralProgram", fieldf: "MacroField", x: float, y: float) -> float:
+    sti, stj = _super_index(x, y)
+    sol = compile_drainage(central, fieldf, sti, stj)
+    return _drain_bilinear(sol, sol.incision, x, y)
+
+
+def drainage_query(central: "CentralProgram", fieldf: "MacroField", x: float, y: float):
+    """(watershed_id, channel_id, accumulation, incision_m) for a point — fixtures/evidence."""
+    sti, stj = _super_index(x, y)
+    sol = compile_drainage(central, fieldf, sti, stj)
+    fx = int(round((x - sol.x0) / sol.res))
+    fy = int(round((y - sol.y0) / sol.res))
+    fx = min(max(fx, 0), sol.n - 1)
+    fy = min(max(fy, 0), sol.n - 1)
+    k = fy * sol.n + fx
+    out = sol.wshed[k]
+    ox = sol.x0 + (out % sol.n) * sol.res
+    oy = sol.y0 + (out // sol.n) * sol.res
+    wid = f"{fnv1a64(fieldf.seed + f':mwshed:({ox:.0f},{oy:.0f})'):016x}"     # MacroWatershedId
+    # channel identity keyed to the trunk's downstream-most channel cell (stable ancestry).
+    ck = k
+    guard = 0
+    while sol.channel[ck] and sol.down[ck] >= 0 and sol.channel[sol.down[ck]] and guard < 100000:
+        ck = sol.down[ck]
+        guard += 1
+    cxp = sol.x0 + (ck % sol.n) * sol.res
+    cyp = sol.y0 + (ck // sol.n) * sol.res
+    cid = f"{fnv1a64(fieldf.seed + f':mchan:({cxp:.0f},{cyp:.0f})'):016x}" if sol.channel[k] else "none"
+    return wid, cid, sol.accum[k], sol.incision[k]
+
+
+def macro_z_incised(central: "CentralProgram", fieldf: "MacroField", x: float, y: float,
+                    incise: bool = True) -> float:
+    """Full macro surface with drainage-carved canyons. Incision is gated by the anchor
+    window, so it is exactly 0 inside the frozen +/-32 km center (MW4 not overwritten).
+    incise=False reproduces the exact MV3.A surface (counterfactual)."""
+    z = macro_z(central, fieldf, x, y)
+    if not incise:
+        return z
+    return z - anchor_window(x, y) * incision_at(central, fieldf, x, y)
 
 
 # --------------------------------------------------------------------------- #
@@ -480,7 +783,7 @@ def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
         y = min_y + j * step
         for i in range(n):
             x = min_x + i * step
-            heights.append(macro_z(central, fieldf, x, y))
+            heights.append(macro_z_incised(central, fieldf, x, y))
     # Deterministic content digest over quantized heights (cm precision).
     hh = _FNV_OFFSET
     for z in heights:
