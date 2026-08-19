@@ -920,12 +920,404 @@ def macro_z_incised(central: "CentralProgram", fieldf: "MacroField", x: float, y
     return z - anchor_window(x, y) * incision_at(central, fieldf, x, y)
 
 
+# =========================================================================== #
+# MS1.A — SurfaceState authority + composition (Python world-authority)
+# =========================================================================== #
+#
+# CORE LAW: surface appearance is DOWNSTREAM. First the world must KNOW what the
+# exposed surface actually IS — substrate, lithology/parent, and material state —
+# independent of how any renderer colours it. MS1.A owns that knowledge and NOTHING
+# else: no palette retirement, no appearance resolver, no geometry change.
+#
+# ONE composition law (`compose_surface_state`) resolves a compact semantic
+# `SurfaceState` from authority-agnostic `SurfaceInputs`, applying a fixed exposure
+# precedence (deposit -> regolith -> weathered parent -> host bedrock) then state
+# overlays (wetness/organic/exposure/weathering/stability). The SAME law is fed by
+# two authority regimes that SHARE this vocabulary (the unbounded-world doctrine):
+#   * MACRO (unbounded, MV3 controls only): `_macro_surface_inputs` derives inputs
+#     from the morphology controls + drainage + landform ancestry -- cheap analytic,
+#     never the fine causal stack. This is the far-authority PROMISE.
+#   * FINE (central +/-32 km, MW1-8 present): the same law is fed by real MW2/5/6/7/8
+#     samples in the engine (MS1.B / detail-on-approach); MS1.A does not generate fine
+#     MW detail at macro range and does not modify the frozen fine authorities.
+# Distance may SIMPLIFY the presentation; it may never change the semantic identity.
+
+SURFACE_DESCRIPTOR_VERSION = 1
+
+# Substrate class vocabulary (MW7 RegolithProfileClass-style, + the volcanic substrates
+# MV3.B2 ancestry needs). Order is the on-page integer code; append-only.
+SUBSTRATE_CLASSES = [
+    "bare_bedrock", "weathered_bedrock", "thin_regolith", "colluvium", "talus",
+    "alluvium", "floodplain_sediment", "basin_fill", "organic_capable", "waterlogged_mineral",
+    "fresh_lava", "scoria_ash", "weathered_basalt", "volcanic_soil",
+]
+# Lithology families (what the rock/parent sediment IS; compact by decree).
+LITHOLOGY_CLASSES = [
+    "granite", "basalt", "sandstone", "shale", "limestone", "quartzite",
+    "metamorphic", "mixed_unknown",
+]
+# Coarse dominant surface family -- the near/far agreement axis (Certificate C). Distance
+# collapses substrate sub-classes toward THIS; it is what may never contradict near vs far.
+SURFACE_FAMILIES = ["rock", "regolith", "sediment", "volcanic", "organic"]
+
+_SUBSTRATE_IDX = {n: i for i, n in enumerate(SUBSTRATE_CLASSES)}
+_LITHOLOGY_IDX = {n: i for i, n in enumerate(LITHOLOGY_CLASSES)}
+_FAMILY_IDX = {n: i for i, n in enumerate(SURFACE_FAMILIES)}
+
+# substrate -> coarse family (the distance-collapse mapping)
+_SUBSTRATE_FAMILY = {
+    "bare_bedrock": "rock", "weathered_bedrock": "rock",
+    "thin_regolith": "regolith", "colluvium": "regolith", "talus": "regolith",
+    "organic_capable": "organic",
+    "alluvium": "sediment", "floodplain_sediment": "sediment",
+    "basin_fill": "sediment", "waterlogged_mineral": "sediment",
+    "fresh_lava": "volcanic", "scoria_ash": "volcanic",
+    "weathered_basalt": "volcanic", "volcanic_soil": "volcanic",
+}
+# nominal grain/coarseness per substrate (fed as the roughness proxy default)
+_SUBSTRATE_GRAIN = {
+    "bare_bedrock": 0.55, "weathered_bedrock": 0.50, "thin_regolith": 0.40,
+    "colluvium": 0.70, "talus": 0.92, "alluvium": 0.45, "floodplain_sediment": 0.20,
+    "basin_fill": 0.25, "organic_capable": 0.30, "waterlogged_mineral": 0.22,
+    "fresh_lava": 0.85, "scoria_ash": 0.78, "weathered_basalt": 0.60, "volcanic_soil": 0.33,
+}
+
+
+def _q4(v: float) -> int:
+    """Quantise [0,1] -> 4-bit nibble (deterministic, documented)."""
+    if v <= 0.0:
+        return 0
+    if v >= 1.0:
+        return 15
+    return int(v * 15.0 + 0.5)
+
+
+def _dq4(n: int) -> float:
+    return n / 15.0
+
+
+@dataclass
+class SurfaceState:
+    """Compact SEMANTIC surface record at a point. NO stored RGB; NO renderer material
+    id as authority. State axes are continuous [0,1] (quantised to nibbles on the page)."""
+    substrate_class: str
+    lithology_class: str
+    wetness: float
+    weathering: float
+    soil_depth: float
+    stability: float
+    organic_potential: float
+    exposure: float
+    roughness_proxy: float
+    dominant_surface_family: str
+    source_rev: str = ""
+
+    def code_tuple(self):
+        """(substrate_idx, lithology_idx, family_idx, nibble state axes) for packing/digest."""
+        return (_SUBSTRATE_IDX[self.substrate_class],
+                _LITHOLOGY_IDX[self.lithology_class],
+                _FAMILY_IDX[self.dominant_surface_family],
+                _q4(self.wetness), _q4(self.weathering), _q4(self.soil_depth),
+                _q4(self.stability), _q4(self.organic_potential), _q4(self.exposure),
+                _q4(self.roughness_proxy))
+
+    def pack(self) -> int:
+        """Pack to a single uint (<=40 bits): 4b substrate,3b lith,3b family,7x4b axes."""
+        (su, li, fa, we, wx, so, st, orn, ex, ro) = self.code_tuple()
+        v = (su & 0xF)
+        v |= (li & 0x7) << 4
+        v |= (fa & 0x7) << 7
+        v |= (we & 0xF) << 10
+        v |= (wx & 0xF) << 14
+        v |= (so & 0xF) << 18
+        v |= (st & 0xF) << 22
+        v |= (orn & 0xF) << 26
+        v |= (ex & 0xF) << 30
+        v |= (ro & 0xF) << 34
+        return v
+
+
+def unpack_surface(v: int, source_rev: str = "") -> SurfaceState:
+    su = v & 0xF
+    li = (v >> 4) & 0x7
+    fa = (v >> 7) & 0x7
+    we = (v >> 10) & 0xF
+    wx = (v >> 14) & 0xF
+    so = (v >> 18) & 0xF
+    st = (v >> 22) & 0xF
+    orn = (v >> 26) & 0xF
+    ex = (v >> 30) & 0xF
+    ro = (v >> 34) & 0xF
+    return SurfaceState(
+        substrate_class=SUBSTRATE_CLASSES[su], lithology_class=LITHOLOGY_CLASSES[li],
+        wetness=_dq4(we), weathering=_dq4(wx), soil_depth=_dq4(so), stability=_dq4(st),
+        organic_potential=_dq4(orn), exposure=_dq4(ex), roughness_proxy=_dq4(ro),
+        dominant_surface_family=SURFACE_FAMILIES[fa], source_rev=source_rev)
+
+
+@dataclass
+class SurfaceInputs:
+    """Authority-agnostic composition inputs (the single-writer owners feed THESE).
+    Macro derivation and fine MW composition both build a SurfaceInputs, so the exposure
+    precedence law is identical in both regimes and in the fixtures."""
+    lithology: str            # host bedrock lithology (MW2 / macro geology proxy)
+    deposit_present: float    # [0,1] exposed depositional-body strength (MW5 / drainage)
+    deposit_kind: str         # '' or alluvium/floodplain_sediment/basin_fill/colluvium/talus
+    regolith_depth: float     # [0,1] soil/regolith profile depth (MW7 / age)
+    weathering: float         # [0,1] maturity (age / erosion)
+    wetness: float            # [0,1] saturation/climate state (MW6 / macro proxy)
+    organic_potential: float  # [0,1] ecological tendency (MW8 / macro proxy) -- input, not flora
+    exposure: float           # [0,1] bare-rock fraction (slope / relief)
+    stability: float          # [0,1] slope stability
+    volcanic: float           # [0,1] volcanic-ancestry strength (basalt family)
+    volcanic_age: float       # [0,1] 0 fresh .. 1 old-weathered volcanic
+    grain: float = -1.0       # [0,1] override; <0 => use substrate default
+
+
+# thresholds for the exposure-precedence law (documented, deterministic)
+_T_DEPOSIT = 0.42
+_T_REGOLITH = 0.34
+_T_ORGANIC = 0.55
+_T_WEATHER = 0.45
+_T_WET_LOG = 0.66      # saturation above which a fine basin/floodplain becomes waterlogged mineral
+
+
+def compose_surface_state(inp: SurfaceInputs, source_rev: str = "") -> SurfaceState:
+    """LAW A -- exposure precedence: resolve WHAT IS AT THE SURFACE so a point never gets
+    four different materials depending on which owner was queried. Then apply state overlays.
+
+        1. exposed depositional body   (MW5 / drainage)
+        2. regolith / soil profile     (MW7 / age)
+        3. weathered parent material   (age / erosion)
+        4. host bedrock lithology      (MW2)
+    then STATE overlays: wetness -> waterlogged promotion; organic -> organic_capable;
+    plus exposure/weathering/stability carried as axes.
+    A volcanic-ancestry province remaps the chosen bedrock/weathered/regolith tiers to the
+    shared VOLCANIC substrates (fresh_lava/weathered_basalt/volcanic_soil) -- same vocabulary,
+    same precedence, so volcanic terrain is not a special-case parallel path."""
+    volcanic = inp.volcanic >= 0.5
+    lithology = "basalt" if volcanic else inp.lithology
+
+    # ---- precedence: choose the exposed substrate tier -------------------- #
+    if inp.deposit_present >= _T_DEPOSIT and inp.deposit_kind:
+        substrate = inp.deposit_kind
+        # extreme saturation in a fine valley/basin deposit -> waterlogged mineral surface
+        if (inp.wetness >= _T_WET_LOG
+                and substrate in ("floodplain_sediment", "basin_fill", "alluvium")
+                and inp.organic_potential < _T_ORGANIC):
+            substrate = "waterlogged_mineral"
+    elif inp.regolith_depth >= _T_REGOLITH:
+        # a deep, wet, ecologically-capable regolith is an organic-capable surface
+        if inp.organic_potential >= _T_ORGANIC and inp.regolith_depth >= 0.5 and inp.wetness >= 0.35:
+            substrate = "organic_capable"
+        else:
+            substrate = "thin_regolith"
+    elif inp.weathering >= _T_WEATHER:
+        substrate = "weathered_bedrock"
+    else:
+        substrate = "bare_bedrock"
+
+    # ---- volcanic remap (shared vocabulary; NOT a parallel path) ---------- #
+    if volcanic:
+        fam0 = _SUBSTRATE_FAMILY[substrate]
+        if fam0 == "sediment":
+            pass                                   # reworked volcaniclastic sediment stays sediment
+        elif substrate == "organic_capable":
+            substrate = "volcanic_soil"
+        elif fam0 == "regolith":
+            substrate = "volcanic_soil" if inp.volcanic_age >= 0.55 else "scoria_ash"
+        else:                                      # rock tier
+            if inp.volcanic_age < 0.30:
+                substrate = "fresh_lava"
+            elif inp.volcanic_age < 0.62:
+                substrate = "weathered_basalt"
+            else:
+                substrate = "volcanic_soil" if inp.regolith_depth >= 0.28 else "weathered_basalt"
+
+    grain = inp.grain if inp.grain >= 0.0 else _SUBSTRATE_GRAIN[substrate]
+    family = _SUBSTRATE_FAMILY[substrate]
+    return SurfaceState(
+        substrate_class=substrate, lithology_class=lithology,
+        wetness=min(1.0, max(0.0, inp.wetness)),
+        weathering=min(1.0, max(0.0, inp.weathering)),
+        soil_depth=min(1.0, max(0.0, inp.regolith_depth)),
+        stability=min(1.0, max(0.0, inp.stability)),
+        organic_potential=min(1.0, max(0.0, inp.organic_potential)),
+        exposure=min(1.0, max(0.0, inp.exposure)),
+        roughness_proxy=min(1.0, max(0.0, grain)),
+        dominant_surface_family=family, source_rev=source_rev)
+
+
+def _macro_lithology(ctl: Controls, volcanic_anc: float) -> str:
+    """Macro host lithology proxy from the morphology style controls. Returns
+    'mixed_unknown' where the macro authority cannot honestly distinguish."""
+    if volcanic_anc >= 0.5:
+        return "basalt"
+    w = {"belt": ctl.w_belt, "plateau": ctl.w_plateau,
+         "volcanic": ctl.w_volcanic, "cratonic": ctl.w_cratonic}
+    dom = max(w, key=w.get)
+    if w[dom] < 0.40:
+        return "mixed_unknown"
+    if dom == "volcanic":
+        return "basalt"
+    if dom == "plateau":                           # layered sedimentary tableland
+        if ctl.substrate >= 0.55:
+            return "sandstone"                     # competent bench-forming cap
+        return "limestone" if ctl.age >= 0.55 else "shale"
+    if dom == "belt":                              # orogenic belt
+        if ctl.substrate >= 0.62:
+            return "quartzite"
+        return "granite" if ctl.age < 0.55 else "metamorphic"
+    # cratonic shield / plains
+    return "granite" if ctl.substrate >= 0.5 else "shale"
+
+
+def _macro_surface_slope(central: "CentralProgram", fieldf: "MacroField",
+                         x: float, y: float, h: float = 250.0) -> float:
+    """Local macro surface slope (m/m) by central difference of the macro surface. Cheap
+    analytic (a few macro_z evals); NEVER the fine causal stack."""
+    zx1 = macro_z_incised(central, fieldf, x + h, y)
+    zx0 = macro_z_incised(central, fieldf, x - h, y)
+    zy1 = macro_z_incised(central, fieldf, x, y + h)
+    zy0 = macro_z_incised(central, fieldf, x, y - h)
+    gx = (zx1 - zx0) / (2.0 * h)
+    gy = (zy1 - zy0) / (2.0 * h)
+    return math.hypot(gx, gy)
+
+
+def _macro_surface_inputs(central: "CentralProgram", fieldf: "MacroField",
+                          x: float, y: float, ctl: "Controls | None" = None) -> SurfaceInputs:
+    """Derive authority-agnostic SurfaceInputs from the MACRO controls + drainage + landform
+    ancestry. Cheap analytic macro proxies of the fine MW authorities; the far PROMISE that
+    later detailed generation must refine, never contradict."""
+    seed = fieldf.seed
+    if ctl is None:
+        ctl = controls_at(seed, x, y)
+    cls, lid, par, lf_age, lf_sub, _ = landform_at(central, fieldf, x, y)
+    wid, cid, accum, incision = drainage_query(central, fieldf, x, y)
+    z = macro_z_incised(central, fieldf, x, y)
+    slope = _macro_surface_slope(central, fieldf, x, y)
+
+    # The macro SurfaceState is the OUTSIDE promise; inside the frozen +/-32 km centre the
+    # fine MW authority owns the surface (MS1.B). Defer to it: the anchor window (0 in the
+    # centre, 1 beyond 64 km) scales every province-specific macro signal so the macro
+    # family transitions continuously to the frozen central family and never CONTRADICTS it.
+    aw = anchor_window(x, y)
+
+    # volcanic ancestry: the smooth volcanic-potential province OR a B2 volcanic landform.
+    # Scaled by the anchor window so the sedimentary frozen centre is never painted basaltic.
+    volc_land = cls in ("volcanic_shield", "volcanic_cone", "volcanic_plug")
+    volcanic = 0.0
+    volcanic_age = ctl.age
+    if ctl.volcanic >= 0.80 or volc_land:
+        volcanic = smoothstep(0.72, 0.86, ctl.volcanic)
+        if volc_land:
+            volcanic = max(volcanic, 0.85)
+            volcanic_age = lf_age                   # plug = old, shield/cone = young (ancestry)
+    volcanic *= aw
+    # bare, resistant erosional survivors read as rock regardless of province (gated by the
+    # anchor window, since special landforms do not exist in the frozen centre either).
+    bare_landform = aw > 0.15 and cls in ("volcanic_plug", "tower", "mesa", "butte")
+
+    # ---- macro hydroclimate proxy (NOT fine MW6): broad humidity band + drainage + lowland.
+    humidity = _control(seed + ":macro_humidity", x, y, 520000.0)
+    lowland = smoothstep(1400.0, 0.0, z)            # valleys wetter, high ground drier (macro proxy)
+    near_flow = smoothstep(160.0, 900.0, accum)     # concentrated flow corridors are wetter
+    endorheic = smoothstep(900.0, 1500.0, accum) * lowland
+    wetness = min(1.0, 0.15 + 0.55 * humidity + 0.35 * near_flow + 0.30 * lowland)
+    wetness = max(0.0, wetness - 0.35 * smoothstep(0.10, 0.45, slope))   # steep drains fast
+
+    # ---- exposure (bare-rock fraction): slope + young/high-relief + bare landforms.
+    exposure = smoothstep(0.03, 0.34, slope)
+    exposure = max(exposure, (1.0 - ctl.age) * smoothstep(0.4, 0.9, ctl.relief) * 0.7)
+    if bare_landform:
+        exposure = max(exposure, 0.75)
+    exposure = min(1.0, exposure)
+
+    # ---- regolith depth (MW7 proxy): old + gentle + wet + not-exposed accumulates soil.
+    regolith = ctl.age * (1.0 - exposure) * (0.45 + 0.55 * wetness)
+    regolith = min(1.0, regolith * (1.0 + 0.4 * smoothstep(0.06, 0.0, slope)))
+    if bare_landform:
+        regolith = min(regolith, 0.12)
+
+    # ---- weathering / maturity (age, humid-boosted).
+    weathering = min(1.0, ctl.age * (0.7 + 0.5 * wetness))
+
+    # ---- depositional body (MW5 / drainage): valley alluvium, basin fill, talus, colluvium.
+    deposit_present = 0.0
+    deposit_kind = ""
+    valley = smoothstep(0.05, 0.0, slope) * near_flow
+    basin = smoothstep(0.035, 0.0, slope) * endorheic
+    if basin >= 0.45 and basin >= valley:
+        deposit_present, deposit_kind = basin, "basin_fill"
+    elif valley >= 0.40:
+        deposit_present = valley
+        deposit_kind = "floodplain_sediment" if slope < 0.015 else "alluvium"
+    elif slope >= 0.22 and ctl.substrate >= 0.5:
+        # steep competent flank at the foot of relief -> talus/colluvium apron
+        deposit_present = smoothstep(0.22, 0.5, slope)
+        deposit_kind = "talus" if ctl.substrate >= 0.62 else "colluvium"
+    elif 0.08 <= slope < 0.22 and ctl.age >= 0.4:
+        deposit_present = 0.5 * smoothstep(0.08, 0.22, slope)
+        deposit_kind = "colluvium"
+
+    # ---- organic potential (MW8 proxy): wet + soil + temperate + not-bare.
+    temperate = 1.0 - smoothstep(1700.0, 3200.0, z)       # cold barren above treeline (macro proxy)
+    organic = wetness * (0.35 + 0.65 * regolith) * temperate * (1.0 - 0.7 * exposure)
+    organic = min(1.0, organic * 1.3)
+
+    stability = min(1.0, (1.0 - exposure) * (0.5 + 0.5 * smoothstep(0.25, 0.0, slope)))
+
+    lithology = _macro_lithology(ctl, volcanic)
+    if aw < 0.5:                                     # anchored centre: defer host rock to the
+        cfam = central_surface_family(central, x, y) # frozen central family (compatibility, not
+        lithology = {"rock": "granite", "sediment": "shale",   # a render -- MS1.B fine owns it)
+                     "regolith": "granite"}[cfam]
+    return SurfaceInputs(
+        lithology=lithology, deposit_present=deposit_present, deposit_kind=deposit_kind,
+        regolith_depth=regolith, weathering=weathering, wetness=wetness,
+        organic_potential=organic, exposure=exposure, stability=stability,
+        volcanic=volcanic, volcanic_age=volcanic_age)
+
+
+def surface_state_at(central: "CentralProgram", fieldf: "MacroField",
+                     x: float, y: float, ctl: "Controls | None" = None) -> SurfaceState:
+    """MACRO SurfaceState at an absolute coordinate: derive inputs from MV3 controls +
+    drainage + landform, then apply the shared exposure-precedence composition law."""
+    inp = _macro_surface_inputs(central, fieldf, x, y, ctl)
+    return compose_surface_state(inp, source_rev=f"gv{GENERATOR_VERSION}.sd{SURFACE_DESCRIPTOR_VERSION}")
+
+
+def central_surface_family(central: "CentralProgram", x: float, y: float) -> str:
+    """Coarse dominant-family PROXY of the frozen central envelope (belt uplift = rock,
+    basin = sediment, hinterland = regolith). Used only to prove macro/fine compatibility at
+    the +/-32 km boundary (it must not CONTRADICT the macro family), never to render."""
+    p = central
+    a = p.belt_azimuth_deg * math.pi / 180.0
+    ux, uy = math.cos(a), math.sin(a)
+    vx, vy = -math.sin(a), math.cos(a)
+    along = x * ux + y * uy
+    across = x * vx + y * vy
+    belt = (smoothstep(p.belt_half_length_m, p.belt_half_length_m - 4000.0, abs(along))
+            * smoothstep(p.belt_half_width_m, p.belt_half_width_m - 2200.0, abs(across)))
+    d_basin = across - p.basin_center_across_m
+    basin = (math.exp(-0.5 * (d_basin / p.basin_half_width_m) ** 2)
+             * smoothstep(p.basin_half_length_m, p.basin_half_length_m - 3500.0, abs(along)))
+    if belt > 0.35:
+        return "rock"
+    if basin > 0.35:
+        return "sediment"
+    return "regolith"
+
+
 # --------------------------------------------------------------------------- #
 # Compiled macro PAGES (64 km serialization cells)
 # --------------------------------------------------------------------------- #
 
 PAGE_MAGIC = "PROVENANCE_MACRO_AUTHORITY_PAGE_V1"
 PAGE_STEP_M = 1000.0        # coarse macro sample step (macro silhouette, not grooves)
+SURFACE_STEP_M = 4000.0     # coarse SurfaceState descriptor step (state varies on 200-500 km
+                            # control wavelengths, so a 4 km grid is ample; keeps pages small)
 
 
 def region_id(central: CentralProgram, ri: int, rj: int) -> str:
@@ -947,6 +1339,10 @@ class MacroPage:
     world_identity_hash: str
     source_digest: str
     neighbor_lineage: dict[str, str]  # direction -> region_id
+    surface_step: float = 0.0             # MS1.A SurfaceState descriptor grid step (m)
+    surface_n: int = 0                    # descriptor grid dimension
+    surface_codes: list[int] = field(default_factory=list)   # packed SurfaceState per cell
+    surface_digest: str = "0"             # deterministic digest of the descriptor grid
 
 
 def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
@@ -970,12 +1366,30 @@ def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
     dirs = {"n": (0, 1), "s": (0, -1), "e": (1, 0), "w": (-1, 0),
             "ne": (1, 1), "nw": (-1, 1), "se": (1, -1), "sw": (-1, -1)}
     lineage = {d: region_id(central, ri + dx, rj + dy) for d, (dx, dy) in dirs.items()}
+
+    # ---- MS1.A SurfaceState descriptor grid (compact semantic; NO colour) ---------- #
+    sn = int(round(REGION_M / SURFACE_STEP_M)) + 1
+    surf_codes: list[int] = []
+    for j in range(sn):
+        y = min_y + j * SURFACE_STEP_M
+        for i in range(sn):
+            x = min_x + i * SURFACE_STEP_M
+            surf_codes.append(surface_state_at(central, fieldf, x, y).pack())
+    sh = _FNV_OFFSET
+    for code in surf_codes:
+        c = code & 0xFFFFFFFFFFFFFFFF
+        for shift in (0, 8, 16, 24, 32):
+            sh ^= (c >> shift) & 0xFF
+            sh = (sh * _FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+
     return MacroPage(
         ri=ri, rj=rj, min_x=min_x, min_y=min_y, step=step, n=n, heights=heights,
         region_id=region_id(central, ri, rj), world_seed=fieldf.seed,
         generator_version=GENERATOR_VERSION,
         world_identity_hash=central.world_identity_hash,
-        source_digest=f"{hh:016x}", neighbor_lineage=lineage)
+        source_digest=f"{hh:016x}", neighbor_lineage=lineage,
+        surface_step=SURFACE_STEP_M, surface_n=sn, surface_codes=surf_codes,
+        surface_digest=f"{sh:016x}")
 
 
 def serialize_page(page: MacroPage) -> str:
@@ -998,6 +1412,17 @@ def serialize_page(page: MacroPage) -> str:
         "no_wrap_into_region=1",
         "cheap_source=macro_analytic_no_reconstructedz",
         f"height_grid_row_major={' '.join(f'{z:.2f}' for z in page.heights)}",
+        # MS1.A SurfaceState descriptor: compact SEMANTIC surface identity per coarse cell
+        # (substrate/lithology/family + quantised state axes packed into one integer). NO
+        # RGB / renderer material; the renderer may ignore this in MS1.A (MS1.B consumes it).
+        "# surface_code bit layout: [0:4]=substrate [4:7]=lithology [7:10]=family "
+        "[10:14]=wetness [14:18]=weathering [18:22]=soil_depth [22:26]=stability "
+        "[26:30]=organic_potential [30:34]=exposure [34:38]=roughness (nibbles = /15)",
+        f"surface_descriptor_version={SURFACE_DESCRIPTOR_VERSION}",
+        f"surface_step_m={page.surface_step:.1f}",
+        f"surface_grid_n={page.surface_n}",
+        f"surface_digest={page.surface_digest}",
+        f"surface_grid_row_major={' '.join(f'{c:x}' for c in page.surface_codes)}",
         "",
     ]
     return "\n".join(lines)

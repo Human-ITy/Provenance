@@ -22,7 +22,10 @@ import macro_authority as MA
 from macro_authority import (CentralProgram, MacroField, compile_page, serialize_page,
                              macro_z, macro_z_incised, central_envelope, anchor_window, REGION_M,
                              REGION_HALF_M, compile_drainage, drainage_query, incision_at,
-                             SUPER_M, DRAIN_RES_M)
+                             SUPER_M, DRAIN_RES_M,
+                             SurfaceInputs, compose_surface_state, surface_state_at,
+                             central_surface_family, unpack_surface, SURFACE_STEP_M,
+                             SURFACE_DESCRIPTOR_VERSION, _SUBSTRATE_FAMILY)
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE_DIR = ROOT / "Data" / "Worldgen" / "MacroAuthority"
@@ -644,6 +647,268 @@ def main() -> int:
     checks.append(("b2_cheap_source_analytic", not forbidden,
                    f"special-form operators analytic (no ReconstructedZ/erosion/QueryMaterial); forbidden={forbidden or 'none'}"))
 
+    # ====================================================================== #
+    # MS1.A — SurfaceState authority + composition fixtures
+    #   Does the deterministic unbounded world KNOW what the exposed surface actually is,
+    #   from existing certified authorities, with explicit exposure precedence and no
+    #   renderer-owned truth? Authority only; no palette retirement, no appearance resolver.
+    # ====================================================================== #
+    SREV = f"gv{MA.GENERATOR_VERSION}.sd{SURFACE_DESCRIPTOR_VERSION}"
+
+    def famof(ss):
+        return ss.dominant_surface_family
+
+    # MS1.A-1 PRECEDENCE: an exposed depositional body OWNS the surface over its host rock;
+    # the host lithology survives only as ANCESTRY, never as the top surface.
+    inp = SurfaceInputs(lithology="sandstone", deposit_present=0.72, deposit_kind="alluvium",
+                        regolith_depth=0.60, weathering=0.55, wetness=0.40,
+                        organic_potential=0.30, exposure=0.10, stability=0.70,
+                        volcanic=0.0, volcanic_age=0.0)
+    ssd = compose_surface_state(inp, SREV)
+    p1_ok = (ssd.substrate_class == "alluvium" and ssd.lithology_class == "sandstone"
+             and ssd.dominant_surface_family == "sediment")
+    checks.append(("ms1a_precedence_deposit_over_host", p1_ok,
+                   f"deposit over sandstone host -> substrate={ssd.substrate_class} "
+                   f"lithology(ancestry)={ssd.lithology_class} family={ssd.dominant_surface_family} "
+                   f"(deposit owns top; host is ancestry not surface)"))
+
+    # MS1.A-2 REGOLITH OVER BEDROCK: with no deposit, a regolith profile owns the surface;
+    # a deep/wet/ecological profile resolves to organic_capable, a thin one to thin_regolith;
+    # neither leaves bare host bedrock exposed.
+    inp_thin = SurfaceInputs("granite", 0.0, "", 0.42, 0.50, 0.30, 0.20, 0.15, 0.70, 0.0, 0.0)
+    inp_deep = SurfaceInputs("granite", 0.0, "", 0.72, 0.55, 0.55, 0.66, 0.12, 0.75, 0.0, 0.0)
+    ss_thin = compose_surface_state(inp_thin, SREV)
+    ss_deep = compose_surface_state(inp_deep, SREV)
+    p2_ok = (ss_thin.substrate_class == "thin_regolith"
+             and ss_deep.substrate_class == "organic_capable"
+             and _SUBSTRATE_FAMILY[ss_thin.substrate_class] in ("regolith", "organic")
+             and ss_thin.substrate_class != "bare_bedrock")
+    checks.append(("ms1a_regolith_over_bedrock", p2_ok,
+                   f"thin profile -> {ss_thin.substrate_class}; deep+wet+ecological -> "
+                   f"{ss_deep.substrate_class} (regolith owns surface; bedrock not exposed)"))
+
+    # MS1.A-3 BEDROCK FALLBACK: no deposit + no regolith -> weathered/host bedrock chosen
+    # DETERMINISTICALLY by maturity (weathered above the threshold, fresh bare bedrock below).
+    inp_bare = SurfaceInputs("granite", 0.0, "", 0.10, 0.20, 0.20, 0.10, 0.55, 0.60, 0.0, 0.0)
+    inp_weath = SurfaceInputs("granite", 0.0, "", 0.10, 0.62, 0.20, 0.10, 0.45, 0.60, 0.0, 0.0)
+    ss_bare = compose_surface_state(inp_bare, SREV)
+    ss_weath = compose_surface_state(inp_weath, SREV)
+    p3_ok = (ss_bare.substrate_class == "bare_bedrock"
+             and ss_weath.substrate_class == "weathered_bedrock"
+             and ss_bare.lithology_class == "granite")
+    checks.append(("ms1a_bedrock_fallback", p3_ok,
+                   f"no deposit/regolith: fresh->{ss_bare.substrate_class}, "
+                   f"mature->{ss_weath.substrate_class} (deterministic by weathering; host=granite)"))
+
+    # MS1.A-4 WETNESS OVERLAY: same substrate under dry vs wet climate keeps the SAME dominant
+    # substrate identity; only the wetness STATE axis changes (wetness is an overlay, not a
+    # substrate rewrite -- below the waterlogged-basin promotion).
+    inp_dry = SurfaceInputs("granite", 0.0, "", 0.42, 0.50, 0.12, 0.20, 0.15, 0.70, 0.0, 0.0)
+    inp_wet = SurfaceInputs("granite", 0.0, "", 0.42, 0.50, 0.60, 0.20, 0.15, 0.70, 0.0, 0.0)
+    ss_dry = compose_surface_state(inp_dry, SREV)
+    ss_wet = compose_surface_state(inp_wet, SREV)
+    p4_ok = (ss_dry.substrate_class == ss_wet.substrate_class
+             and abs(ss_dry.wetness - ss_wet.wetness) > 0.3)
+    checks.append(("ms1a_wetness_overlay", p4_ok,
+                   f"dry vs wet: substrate UNCHANGED ({ss_dry.substrate_class}); "
+                   f"wetness axis {ss_dry.wetness:.2f}->{ss_wet.wetness:.2f} (state overlay, not rewrite)"))
+
+    # MS1.A-5 ORGANIC POTENTIAL: same substrate with differing ecological potential keeps the
+    # SAME substrate; only the organic_potential axis differs (input, not flora).
+    inp_lo = SurfaceInputs("sandstone", 0.72, "alluvium", 0.4, 0.4, 0.30, 0.20, 0.1, 0.7, 0.0, 0.0)
+    inp_hi = SurfaceInputs("sandstone", 0.72, "alluvium", 0.4, 0.4, 0.30, 0.85, 0.1, 0.7, 0.0, 0.0)
+    ss_lo = compose_surface_state(inp_lo, SREV)
+    ss_hi = compose_surface_state(inp_hi, SREV)
+    p5_ok = (ss_lo.substrate_class == ss_hi.substrate_class == "alluvium"
+             and abs(ss_lo.organic_potential - ss_hi.organic_potential) > 0.4)
+    checks.append(("ms1a_organic_potential", p5_ok,
+                   f"low vs high ecological potential: substrate UNCHANGED ({ss_lo.substrate_class}); "
+                   f"organic axis {ss_lo.organic_potential:.2f}->{ss_hi.organic_potential:.2f}"))
+
+    # MS1.A-6 VOLCANIC MACRO STATE: at a certified MV3.B2 volcanic landform the SurfaceState
+    # reflects volcanic/basaltic ancestry; a YOUNG shield/cone vs an OLD eroded plug differ
+    # materially in weathering/regolith tendency. No renderer colour involved.
+    young_ss = old_ss = None
+    for sd in corpus:
+        ff, found, _ = scans[sd]
+        for cls in ("volcanic_shield", "volcanic_cone"):
+            for (cx, cy), fid, par, age, sub in found.get(cls, []):
+                s = surface_state_at(central, ff, cx, cy)
+                if s.dominant_surface_family == "volcanic":
+                    young_ss = young_ss or s
+        for (cx, cy), fid, par, age, sub in found.get("volcanic_plug", []):
+            s = surface_state_at(central, ff, cx, cy)
+            if s.dominant_surface_family == "volcanic":
+                old_ss = old_ss or s
+    if young_ss and old_ss:
+        p6_ok = (young_ss.lithology_class == "basalt" and old_ss.lithology_class == "basalt"
+                 and old_ss.weathering > young_ss.weathering + 0.1)
+        p6_d = (f"young construct: substrate={young_ss.substrate_class} weathering={young_ss.weathering:.2f}; "
+                f"old plug: substrate={old_ss.substrate_class} weathering={old_ss.weathering:.2f} "
+                f"(basalt ancestry both; old more weathered)")
+    elif young_ss:
+        p6_ok = (young_ss.lithology_class == "basalt")
+        p6_d = (f"young volcanic construct: substrate={young_ss.substrate_class} basalt ancestry "
+                f"(no old plug in corpus to contrast this run)")
+    else:
+        p6_ok, p6_d = False, "no volcanic construct surfaced in corpus"
+    checks.append(("ms1a_volcanic_macro_state", p6_ok, p6_d))
+
+    # MS1.A-7 DRAINAGE / FLOODPLAIN CONTEXT: a macro drainage valley/basin (concentrated flow,
+    # low slope) derives a depositional/alluvial/waterlogged surface -- classification only,
+    # no invented sediment mass.
+    p7_ok, p7_d = False, "no depositional surface found in drainage context"
+    sed_cells = 0
+    best = None
+    for k in range(0, n * n, 3):
+        x, y = cell_xy(k)
+        if abs(x) < 40000 and abs(y) < 40000:      # outside frozen centre
+            continue
+        if abs(x) > 150000 or abs(y) > 150000:     # inside the rendered footprint band
+            continue
+        if sol.accum[k] < 120:
+            continue
+        ss = surface_state_at(central, fieldf, x, y)
+        if ss.dominant_surface_family == "sediment":
+            sed_cells += 1
+            if best is None:
+                best = (x, y, ss, sol.accum[k])
+    if best is not None:
+        x, y, ss, acc = best
+        p7_ok = True
+        p7_d = (f"drainage cell ({x:.0f},{y:.0f}) accum={acc:.0f} -> substrate={ss.substrate_class} "
+                f"family=sediment; {sed_cells} depositional cells in drainage context")
+    checks.append(("ms1a_drainage_floodplain_context", p7_ok, p7_d))
+
+    # MS1.A-8 CENTRAL FREEZE: MS1.A never overrides the frozen +/-32 km world -- macro drainage
+    # incision is still exactly 0 there, and the macro surface family DEFERS to the frozen
+    # central family (does not paint the sedimentary centre as a foreign material).
+    center_incision = max(abs(macro_z_incised(central, fieldf, x, y) - macro_z(central, fieldf, x, y))
+                          for x, y in [(0.0, 0.0), (15000.0, -10000.0), (-20000.0, 18000.0)])
+    center_compat = center_total = 0
+    for gx in range(-28000, 28001, 7000):
+        for gy in range(-28000, 28001, 7000):
+            center_total += 1
+            fam = surface_state_at(central, fieldf, float(gx), float(gy)).dominant_surface_family
+            cfam = central_surface_family(central, float(gx), float(gy))
+            # defer law: centre never reads volcanic; rock<->regolith<->sediment are refinements
+            if fam != "volcanic" and (fam == cfam or {fam, cfam} <= {"rock", "regolith", "sediment"}):
+                center_compat += 1
+    freeze_ok = center_incision < 1e-6 and center_compat == center_total
+    checks.append(("ms1a_central_freeze", freeze_ok,
+                   f"center incision delta={center_incision:.2e}m (need~0); "
+                   f"center macro-family defers to frozen family {center_compat}/{center_total} "
+                   f"(no volcanic paint over the frozen sedimentary centre)"))
+
+    # MS1.A-9 SAME-SEED DETERMINISM: same seed+coord+version -> identical SurfaceState digest.
+    p_again = compile_page(central, MacroField.build(central.seed), 0, 0)
+    det9_pt = all(surface_state_at(central, fieldf, x, y).pack()
+                  == surface_state_at(central, MacroField.build(central.seed), x, y).pack()
+                  for x, y in [(70000.0, 40000.0), (-110000.0, 90000.0), (130000.0, -60000.0)])
+    det9_ok = p_again.surface_digest == center.surface_digest and det9_pt
+    checks.append(("ms1a_same_seed_determinism", det9_ok,
+                   f"center surface_digest reproduces ({center.surface_digest}); "
+                   f"per-point packs identical across rebuild={det9_pt}"))
+
+    # MS1.A-10 DIFFERENT-SEED DIVERSITY: a different seed -> materially different surface-state
+    # arrangement where the upstream world differs.
+    alt_field = MacroField.build(central.seed + "-alt")     # (0,0) drainage already compiled in B1.7
+    alt_page = compile_page(central, alt_field, 0, 0)
+    from collections import Counter as _C
+    fam_a = _C(unpack_surface(c0).dominant_surface_family for c0 in center.surface_codes)
+    fam_b = _C(unpack_surface(c0).dominant_surface_family for c0 in alt_page.surface_codes)
+    sub_a = _C(unpack_surface(c0).substrate_class for c0 in center.surface_codes)
+    sub_b = _C(unpack_surface(c0).substrate_class for c0 in alt_page.surface_codes)
+    arrangement_diff = sum(abs(fam_a[k] - fam_b[k]) for k in set(fam_a) | set(fam_b))
+    div10_ok = (alt_page.surface_digest != center.surface_digest
+                and (set(sub_a) != set(sub_b) or arrangement_diff > center.surface_n))
+    checks.append(("ms1a_different_seed_diversity", div10_ok,
+                   f"digest differs; families origin={dict(fam_a)} alt={dict(fam_b)} "
+                   f"(materially different arrangement)"))
+
+    # MS1.A-11 LONG-DISTANCE UNBOUNDED: SurfaceState stays deterministic + non-periodic with no
+    # 64 km or 384 km cadence signature over 0..2000 km.
+    ld_pts = [(0.0, 7000.0), (250000.0, 7000.0), (500000.0, 7000.0),
+              (1000000.0, 7000.0), (2000000.0, 7000.0)]
+    ld_codes = [surface_state_at(central, fieldf, x, y).pack() for x, y in ld_pts]
+    ld_again = [surface_state_at(central, MacroField.build(central.seed), x, y).pack() for x, y in ld_pts]
+    ld_states = [unpack_surface(c0) for c0 in ld_codes]
+    ld_families = {s.dominant_surface_family for s in ld_states}
+    ld_substr = {s.substrate_class for s in ld_states}
+    ld_det = ld_codes == ld_again
+    ld11_ok = ld_det and (len(ld_families) >= 2 or len(ld_substr) >= 3)
+    checks.append(("ms1a_long_distance_unbounded", ld11_ok,
+                   f"deterministic={ld_det}; families over 0..2000km={sorted(ld_families)} "
+                   f"substrates={sorted(ld_substr)} (non-periodic, no page/super-tile cadence)"))
+
+    # MS1.A-12 MACRO/FINE COMPATIBILITY: at the +/-32 km boundary the macro dominant family must
+    # NOT CONTRADICT the frozen central family (compatibility, not byte identity).
+    comp12 = tot12 = 0
+    for t in range(-31, 32, 2):
+        s = t * 1000.0
+        for (bx, by) in [(REGION_HALF_M, s), (-REGION_HALF_M, s), (s, REGION_HALF_M), (s, -REGION_HALF_M)]:
+            tot12 += 1
+            fam = surface_state_at(central, fieldf, bx, by).dominant_surface_family
+            cfam = central_surface_family(central, bx, by)
+            if fam != "volcanic" and (fam == cfam or {fam, cfam} <= {"rock", "regolith", "sediment"}):
+                comp12 += 1
+    comp12_pct = 100.0 * comp12 / max(1, tot12)
+    comp12_ok = comp12_pct >= 90.0
+    checks.append(("ms1a_macro_fine_compatibility", comp12_ok,
+                   f"boundary macro-family vs frozen central-family compatible "
+                   f"{comp12}/{tot12} ({comp12_pct:.0f}%, need>=90; no contradiction)"))
+
+    # MS1.A-13 GEOMETRY INVARIANCE: the SurfaceState descriptor is orthogonal to geometry --
+    # recomputing each page's height digest from macro_z_incised alone reproduces the page's
+    # source_digest exactly (surface state ON changes no terrain sample).
+    def height_digest(pg):
+        hh = MA._FNV_OFFSET
+        for j in range(pg.n):
+            yy = pg.min_y + j * pg.step
+            for i in range(pg.n):
+                xx = pg.min_x + i * pg.step
+                q = int(round(macro_z_incised(central, fieldf, xx, yy) * 100.0)) & 0xFFFFFFFFFFFFFFFF
+                for shift in (0, 8, 16, 24, 32, 40):
+                    hh ^= (q >> shift) & 0xFF
+                    hh = (hh * MA._FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+        return f"{hh:016x}"
+    geo13_ok = True
+    for cell in [(0, 0), (2, 0), (-2, 2)]:
+        pg = pages[cell]
+        if height_digest(pg) != pg.source_digest:
+            geo13_ok = False
+    checks.append(("ms1a_geometry_invariance", geo13_ok,
+                   f"height digest recomputed (no surface) == page source_digest for sampled pages "
+                   f"(surface ON changes no geometry sample)"))
+
+    # MS1.A-14 CHEAP SOURCE: macro SurfaceState is analytic macro-only -- no ReconstructedZ /
+    # QueryMaterial / runtime-water dependency (shares the module-wide forbidden-token scan).
+    cheap14_ok = not forbidden
+    checks.append(("ms1a_surface_cheap_source", cheap14_ok,
+                   f"SurfaceState composed from macro controls+drainage+landform only; "
+                   f"forbidden_tokens={forbidden or 'none'}; descriptor {center.surface_n}x{center.surface_n} "
+                   f"cells @ {SURFACE_STEP_M:.0f}m (bounded, a few bytes/cell)"))
+
+    # MS1.A-H2H: near/far identity down the resolution chain. The dominant surface FAMILY read
+    # from the coarse macro page descriptor (128 km promise) must agree with the fine point
+    # sample (near refinement) at the SAME place -- distance simplifies, never contradicts.
+    h2h_agree = h2h_tot = 0
+    for cell in [(1, 0), (0, 1), (-1, 1), (2, 0), (-2, 2), (1, -2)]:
+        pg = pages[cell]
+        for (ci, cj) in [(4, 4), (8, 8), (12, 6), (6, 12)]:
+            dx = pg.min_x + ci * pg.surface_step
+            dy = pg.min_y + cj * pg.surface_step
+            coarse = unpack_surface(pg.surface_codes[cj * pg.surface_n + ci]).dominant_surface_family
+            fine = surface_state_at(central, fieldf, dx + 750.0, dy - 600.0).dominant_surface_family
+            h2h_tot += 1
+            if coarse == fine or {coarse, fine} <= {"rock", "regolith"}:
+                h2h_agree += 1
+    h2h_pct = 100.0 * h2h_agree / max(1, h2h_tot)
+    h2h_ok = h2h_pct >= 85.0
+    checks.append(("ms1a_h2h_near_far_identity", h2h_ok,
+                   f"coarse macro descriptor family == fine point family {h2h_agree}/{h2h_tot} "
+                   f"({h2h_pct:.0f}%, need>=85; distance simplifies, never contradicts)"))
+
     # ---- cheap-source evidence ------------------------------------------- #
     cheap_ok = compile_s < 200.0 and not forbidden
     checks.append(("cheap_source_no_deep_reconstructedz", cheap_ok,
@@ -652,11 +917,14 @@ def main() -> int:
 
     passed = all(ok for _, ok, _ in checks)
 
-    lines = ["MV2A_REGIONAL_MACRO_AUTHORITY " + ("PASS" if passed else "FAIL"),
-             "scope=macro_forcing_only_no_renderer_no_fine_causal_stack",
+    lines = ["MV2A_MACRO_AUTHORITY+MS1A_SURFACESTATE " + ("PASS" if passed else "FAIL"),
+             "scope=macro_forcing+surface_state_authority_only_no_renderer_no_fine_causal_stack",
              f"authority_ring=+/-{RING}_cells  pages_compiled={ncells}  (full 128 km radial authority)",
              f"world_seed={central.seed}",
              f"generator_version={MA.GENERATOR_VERSION}",
+             f"surface_descriptor_version={SURFACE_DESCRIPTOR_VERSION}  "
+             f"surface_step_m={SURFACE_STEP_M:.0f}  surface_grid={center.surface_n}x{center.surface_n}  "
+             f"center_surface_digest={center.surface_digest}",
              f"central_region_key={central.region_key}",
              f"central_world_identity_hash={central.world_identity_hash}",
              f"page_cell_size_m={REGION_M:.0f}  (packaging only; feature wavelengths independent)",
@@ -671,6 +939,7 @@ def main() -> int:
         lines.append(f"  {name}={cell} region_id={p.region_id} digest={p.source_digest} "
                      f"bounds=[{p.min_x:.0f},{p.min_x+REGION_M:.0f}]x[{p.min_y:.0f},{p.min_y+REGION_M:.0f}]")
     lines += ["", "mv2c=closed mw9=closed presentation_diversity=closed",
+              "ms1a=surface_state_authority_only (palette retirement + appearance resolver = MS1.B)",
               "no_reopen=MW1-MW8/MV1/MV2.B/PX1-PX3", ""]
     RECEIPT.parent.mkdir(parents=True, exist_ok=True)
     RECEIPT.write_text("\n".join(lines), encoding="utf-8", newline="\n")

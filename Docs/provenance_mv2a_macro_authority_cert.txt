@@ -1,13 +1,14 @@
-MV2A_REGIONAL_MACRO_AUTHORITY PASS
-scope=macro_forcing_only_no_renderer_no_fine_causal_stack
+MV2A_MACRO_AUTHORITY+MS1A_SURFACESTATE PASS
+scope=macro_forcing+surface_state_authority_only_no_renderer_no_fine_causal_stack
 authority_ring=+/-2_cells  pages_compiled=25  (full 128 km radial authority)
 world_seed=mw1-64km-01
 generator_version=4
+surface_descriptor_version=1  surface_step_m=4000  surface_grid=17x17  center_surface_digest=14a9c334e90397da
 central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=119.077
+compile_seconds=152.954
 
 fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
 fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=674.4m worst=2114.9m (need rms>40)
@@ -42,7 +43,22 @@ fixture.b2_maturity_response=PASS  younger context -> mesas (n=19); older contex
 fixture.b2_seed_diversity=PASS  deterministic=True distinct_form_mixes_across_corpus=4/4 long_distance_var=488m (some seeds dramatic, some quiet)
 fixture.b2_central_freeze=PASS  max|special-on - special-off| inside +/-32 km centre = 0.00e+00m (need~0; MW1-8 untouched)
 fixture.b2_cheap_source_analytic=PASS  special-form operators analytic (no ReconstructedZ/erosion/QueryMaterial); forbidden=none
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 119.08s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.ms1a_precedence_deposit_over_host=PASS  deposit over sandstone host -> substrate=alluvium lithology(ancestry)=sandstone family=sediment (deposit owns top; host is ancestry not surface)
+fixture.ms1a_regolith_over_bedrock=PASS  thin profile -> thin_regolith; deep+wet+ecological -> organic_capable (regolith owns surface; bedrock not exposed)
+fixture.ms1a_bedrock_fallback=PASS  no deposit/regolith: fresh->bare_bedrock, mature->weathered_bedrock (deterministic by weathering; host=granite)
+fixture.ms1a_wetness_overlay=PASS  dry vs wet: substrate UNCHANGED (thin_regolith); wetness axis 0.12->0.60 (state overlay, not rewrite)
+fixture.ms1a_organic_potential=PASS  low vs high ecological potential: substrate UNCHANGED (alluvium); organic axis 0.20->0.85
+fixture.ms1a_volcanic_macro_state=PASS  young construct: substrate=scoria_ash weathering=0.43; old plug: substrate=weathered_basalt weathering=0.88 (basalt ancestry both; old more weathered)
+fixture.ms1a_drainage_floodplain_context=PASS  drainage cell (-122000,-150000) accum=839 -> substrate=floodplain_sediment family=sediment; 107 depositional cells in drainage context
+fixture.ms1a_central_freeze=PASS  center incision delta=0.00e+00m (need~0); center macro-family defers to frozen family 81/81 (no volcanic paint over the frozen sedimentary centre)
+fixture.ms1a_same_seed_determinism=PASS  center surface_digest reproduces (14a9c334e90397da); per-point packs identical across rebuild=True
+fixture.ms1a_different_seed_diversity=PASS  digest differs; families origin={'regolith': 190, 'rock': 98, 'sediment': 1} alt={'organic': 224, 'regolith': 34, 'rock': 30, 'sediment': 1} (materially different arrangement)
+fixture.ms1a_long_distance_unbounded=PASS  deterministic=True; families over 0..2000km=['rock', 'volcanic'] substrates=['bare_bedrock', 'weathered_basalt'] (non-periodic, no page/super-tile cadence)
+fixture.ms1a_macro_fine_compatibility=PASS  boundary macro-family vs frozen central-family compatible 128/128 (100%, need>=90; no contradiction)
+fixture.ms1a_geometry_invariance=PASS  height digest recomputed (no surface) == page source_digest for sampled pages (surface ON changes no geometry sample)
+fixture.ms1a_surface_cheap_source=PASS  SurfaceState composed from macro controls+drainage+landform only; forbidden_tokens=none; descriptor 17x17 cells @ 4000m (bounded, a few bytes/cell)
+fixture.ms1a_h2h_near_far_identity=PASS  coarse macro descriptor family == fine point family 23/24 (96%, need>=85; distance simplifies, never contradicts)
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 152.95s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
 page_ids (named subset of the 25-page ring):
   center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]
@@ -62,4 +78,5 @@ page_ids (named subset of the 25-page ring):
   sw2=(-2, -2) region_id=181e7e56757910e4 digest=6e311548f5eb9c01 bounds=[-160000,-96000]x[-160000,-96000]
 
 mv2c=closed mw9=closed presentation_diversity=closed
+ms1a=surface_state_authority_only (palette retirement + appearance resolver = MS1.B)
 no_reopen=MW1-MW8/MV1/MV2.B/PX1-PX3

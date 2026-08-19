@@ -275,9 +275,42 @@ MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DE
 MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
 MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e + B1.1 super-tile-boundary hardening (window-independent raw-D8 routing; rivers cross 64km pages AND the 384km drainage super-tile edge with one identity, no reset/seam; 100% dir agree, incision p99 18m)
 MV3.B2  special natural forms            CERTIFIED @ 4f5126fd (volcanic shields/cones/plugs, plateau->mesa->butte remnants w/ ancestry, fault-block scarps, rare towers; consequences of continuous controls not POIs; proven across seed corpus; rarity+seed-diversity; renderer+Test B green)
-MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette; NEXT cut = MS1.A
+MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette
+MS1.A   SurfaceState authority + compose  CERTIFIED (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical; NEXT = MS1.B shared appearance resolver + retire diagnostic palette + Certificate C)
 MW9     flora / fauna                     CLOSED
 ```
+
+**MS1.A CERTIFIED** — SurfaceState authority + composition (Python world-authority only;
+renderer unchanged, consumes re-emitted `.mcp` pages; **authority only** — no palette
+retirement / appearance resolver / geometry change). Answers ONE question: *at any absolute
+coordinate, does the world KNOW what the exposed surface is, independent of how the renderer
+colours it?* A compact **semantic** `SurfaceState` (substrate/lithology + wetness/weathering/
+soil_depth/stability/organic/exposure/roughness + dominant family; **no RGB**, packs ≤40 bits)
+is resolved by ONE `compose_surface_state` law — **exposure precedence** deposit→regolith→
+weathered→host, then state overlays — shared by the macro derivation and the fine-context
+fixtures. Macro `surface_state_at` derives inputs from the MV3 controls + drainage +
+landform ancestry (cheap analytic macro proxies of MW2/5/6/7/8; never the fine causal stack),
+scaled by `anchor_window` so the frozen ±32 km centre **defers to the frozen central family
+and never contradicts it**. Macro pages gain a **17×17 @ 4 km** packed descriptor +
+`surface_digest`; the renderer parser ignores the new keys and heights/`source_digest` are
+**byte-identical to HEAD** (page diff = 6 additive lines, 0 deletions → geometry provably
+untouched). **All 15 MS1.A fixtures PASS** (49 total, 0 FAIL): precedence/regolith/bedrock-
+fallback/wetness-overlay/organic, volcanic macro state (young scoria vs old plug), drainage/
+floodplain, central freeze (family defers 81/81), determinism, seed diversity, long-distance
+non-periodic, macro/fine compatibility (100%), geometry invariance, cheap source, H2H near/far
+(96%). Renderer green on the descriptor pages: **MV2.B** (25 pages, 0 holes, seam 5.27 m),
+**MV2.C** (sep 0.061), **MV1 coverage** (0 holes, yaw-invariant), **Test B 24 m/s horizon-on**
+(90 s NE, `--mv2b-on`, default soak kernel stage_filter=29 = P5b.3B.3B Compaction, idle at the
+192 m live radius so render/travel pacing is what is measured: engine 0-over, 0 stage-owned,
+cadence no-regression, 0 movement frames >16.667; descriptor pages are inert to the sim kernel).
+Tools:
+`Tools/Worldgen/{macro_authority,cert_macro_authority,viz_surface_state}.py`; pages
+`Data/Worldgen/MacroAuthority/*.mcp`; receipt
+`Docs/provenance_mv2a_macro_authority_cert.txt`; visuals
+`Docs/provenance_ms1a_surface_state_maps.png` + `_seed_corpus.png`; handoff
+`MS1A_SURFACE_STATE_AUTHORITY_HANDOFF.md`. **NEXT = MS1.B** shared C++ appearance resolver +
+retire the diagnostic palette + Certificate C near/far semantic continuity. MW1–MW8 / MV1 /
+MV2.* / MV3.* / PX1–PX3 frozen; central geometry untouched.
 
 **MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were
