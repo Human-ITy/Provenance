@@ -273,7 +273,7 @@ MV1     live-terrain coverage             FIXED+CERTIFIED @ 779611bc (band-bound
 WORLD   seed-deterministic + UNBOUNDED     DOCTRINE (128 km = player horizon, NOT world extent; pages=cache units; new seed=new world; 4 coupled causal grammars landform/surface/water/living)
 MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DESIGN.md)
 MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
-MV3.B1  macro drainage / canyons          CERTIFIED @ __MV3B1_SHA__ (deterministic downhill-connected cross-page drainage graph; substrate/age-shaped canyon incision; Priority-Flood+eps; super-tile ownership; no fake grooves; renderer green; Test B green)
+MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e (deterministic downhill-connected cross-page drainage graph; substrate/age-shaped canyon incision; Priority-Flood+eps; super-tile ownership; no fake grooves; renderer green; Test B green)
 MW9     flora / fauna                     CLOSED
 ```
 
