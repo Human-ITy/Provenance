@@ -40,9 +40,13 @@ from which render path draws). `far=olive / mid=white / near=gray` is retired.
   grain). Same vocabulary, same resolver as the macro path — **no single-diagnostic-layer
   colour query**. `Mv1SampleAuthority` feeds it; MV1's `shadeOf` drops the elevation-brightness
   term under MS1.B (material, not elevation, drives appearance).
-- **Opt-in flag** — `--ms1b` / `--play-ms1b` / `--ms1b-on` enable it; **default OFF** so every
-  frozen byte-cert (`--mv2b-off`, MV1.C/D, …) is unaffected. `--ms1b-off` forces frozen.
-  `--cert-ms1b` runs the semantic cert. Geometry is untouched either way.
+- **Default ON (MS1.B1 closure)** — semantic material presentation is the **normal renderer**;
+  the diagnostic white/gray/olive palette is now **debug-only**. `--ms1b-off` explicitly
+  reproduces the frozen diagnostic baseline (frozen byte-comparison / A-side); `--ms1b-debug=<n>`
+  isolates one authority axis. `--cert-ms1b` runs the semantic cert. Geometry is untouched
+  either way. (Frozen certs stay green because they are property-based — coverage holes,
+  raster-class pixels, distance-class/seam, contrast-falls/blend-rises, PX2 — all invariant to
+  the surface palette; none byte-compares the framebuffer against a committed colour baseline.)
 
 ## Certification — `Docs/provenance_ms1b_surface_appearance_cert.txt` — **PASS**
 
@@ -77,6 +81,28 @@ fine-point family 23/24). Not faked to force a green result.
   the requirement, and is **not** an MW8-stage worldgen proof. The frozen
   `provenance_mw8_streaming_soak_cert.txt` was restored, not overwritten.)
 - **Geometry / water / mass untouched** — MS1.B only writes vertex colours.
+
+## MS1.B1 — Semantic Surface Default (activation closure)
+
+MS1.B shipped opt-in; MS1.B1 makes it the default so the diagnostic palette is genuinely
+retired from player presentation, not merely available. `ms1bEnabled` now defaults **true**;
+`--ms1b-off` is the explicit escape hatch. Standing gates re-run on the **default** path (no
+`--ms1b` flag):
+
+- **default boot is material** — a plain `--cert-mv1-coverage` (no flag) renders the origin
+  surface at mid-frame RGB **(75,87,88)** cool-grey rock; `--ms1b-off` on the same view is
+  **(225,227,230)** diagnostic white → the toggle cleanly reproduces the frozen baseline.
+- **MV1 coverage** (default) — **0 below-terrain holes**, resident-set delta 0.
+- **MV2.B** (default) — 0 coverage holes, 25 unique pages, seam 5.27 m, all fixtures PASS.
+- **MV2.C** (default) — far-vs-sky separation **0.198** (material dark reads as terrain even
+  more strongly than the frozen 0.061), fixture PASS.
+- **Test B 24 m/s MW8 path** (default `--cert-streaming-soak-mw8 --mv2b-on`) — PX2 all-green
+  (engine_cpu 0-over worst 11.7 ms, 0 presented/stage-owned/os-gap misses, cadence
+  no-regression, 0 movement frames > 16.667).
+- **geometry / authority unchanged** — `--cert-ms1b` geometry-invariance stays bit-exact.
+
+Honest statement now true: **the diagnostic palette is debug-only; semantic material
+presentation is the normal renderer.**
 
 ## Visual evidence — `Docs/provenance_ms1b_ab_contact_sheet.png`
 

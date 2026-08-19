@@ -1097,11 +1097,12 @@ namespace
         // render time, so --mv2c-off rebuilds the exact frozen MV2.B presentation.
         bool mv2cEnabled = true;                    // --mv2c-off => exact MV2.B
         bool certMv2c = false;
-        // MS1.B — shared SurfaceState->appearance. OPT-IN (default OFF == exact frozen
-        // MV2.C/MV1 presentation, so every frozen byte-cert is unaffected). --ms1b / --play-ms1b
-        // enable the semantic surface; --ms1b-off forces frozen. ms1bDebugAxis (Ms1::DebugAxis)
-        // isolates one authority axis for debug play; 0 = normal composed appearance.
-        bool ms1bEnabled = false;
+        // MS1.B — shared SurfaceState->appearance. MS1.B1: ON BY DEFAULT (semantic material
+        // presentation is the NORMAL renderer; the diagnostic white/gray/olive palette is now
+        // debug-only). --ms1b-off explicitly reproduces the frozen diagnostic baseline (frozen
+        // byte-comparison), --ms1b-debug=<n> isolates one authority axis (Ms1::DebugAxis);
+        // 0 = normal composed appearance.
+        bool ms1bEnabled = true;
         int  ms1bDebugAxis = 0;
         bool certMs1b = false;
         double mv2cFarContrast[4] = {0,0,0,0};      // A/B: far-band luminance contrast

@@ -277,7 +277,8 @@ MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e + B1.1 super-tile
 MV3.B2  special natural forms            CERTIFIED @ 4f5126fd (volcanic shields/cones/plugs, plateau->mesa->butte remnants w/ ancestry, fault-block scarps, rare towers; consequences of continuous controls not POIs; proven across seed corpus; rarity+seed-diversity; renderer+Test B green)
 MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette
 MS1.A   SurfaceState authority + compose  CERTIFIED @ b970585b (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical)
-MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; diagnostic palette retired in normal play (opt-in --ms1b, default off keeps frozen byte-certs); near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green with ms1b on; NEXT = WD1 water)
+MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green)
+MS1.B1  semantic surface default          CERTIFIED (MS1.B now ON BY DEFAULT — diagnostic palette is debug-only; --ms1b-off reproduces frozen; default gates re-run green: default boot material (75,87,88) vs --ms1b-off white (225,227,230), MV1 coverage 0 holes, MV2.B 0 holes, MV2.C separation 0.198, MW8 24m/s Test B PX2 all-green, geometry bit-exact; NEXT = WD1 water)
 WD1     water diversity                   NEXT / READY FOR DESIGN
 MW9     flora / fauna                     CLOSED
 ```
@@ -326,8 +327,10 @@ the exposure-precedence substrate + MW2 host lithology + drainage/weathering/org
 the SAME vocabulary and resolver, no single-diagnostic-layer colour query. Distance controls
 ONLY grain/breakup fidelity; `organic_capable`=dark soil (never green), `waterlogged`=dark wet
 mineral (never blue water), bare high ground=rock (never snow); MW9/WD1/FL1 stay closed.
-**Opt-in** (`--ms1b`/`--play-ms1b`; default OFF so all frozen byte-certs are unaffected;
-`--ms1b-off` forces frozen; `--ms1b-debug=<axis>` isolates one authority axis). Cert
+**MS1.B1: ON by default** (semantic material is the normal renderer; diagnostic palette is
+debug-only; `--ms1b-off` reproduces the frozen baseline; `--ms1b-debug=<axis>` isolates one
+authority axis). Frozen certs stay green because they are property-based (coverage/raster/seam/
+contrast/PX2), never a committed framebuffer-colour byte-compare. Cert
 `--cert-ms1b` → `Docs/provenance_ms1b_surface_appearance_cert.txt` **PASS**: near/far continuity
 120/120 (100%, avg luma Δ0.098, no palette pop), 32 km handoff 48/48, **geometry invariance
 bit-exact** (MS1.B on/off ReconstructedZ max_dz=0), far-family diversity 4 families over
