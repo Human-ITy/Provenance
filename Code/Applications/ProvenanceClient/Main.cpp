@@ -1069,6 +1069,12 @@ namespace
         long long mv2bVerts = 0;
         double mv2bBuildMsFrame = 0.0, mv2bBuildMsHigh = 0.0, mv2bCpuSubmitMsFrame = 0.0;
         bool mv2bWarmed = false;
+        // MV3.B2 landform showcase: render the macro pages ONLY (macro pass with a low
+        // near plane, MV1 far + near heightfield skipped) so a macro landform can be
+        // viewed up close through the REAL renderer, without the origin central region
+        // (a different authority) mismatching at 32 km. Python picks the seed+coords of a
+        // certified landform; this just visits and captures them.
+        bool certMv2Showcase = false; int showcasePhase = 0; int showcaseView = 0; int showcaseSettle = 0;
         bool certMv2b = false; int certMv2bPhase = 0; int certMv2bStation = 0; int certMv2bSettle = 0;
         bool mv2bCaptureRequest = false;
         long long mv2bClassPixels[4] = {0,0,0,0};   // 32-50/50-80/80-100/100-128 km
@@ -19997,6 +20003,51 @@ namespace
                   bool const ok=WriteMv2bCertArtifact();g.certMv2b=false;PostQuitMessage(ok?0:2);ph=4;}
     }
 
+    // MV3.B2 landform showcase: visit certified landform viewpoints (absolute coords the
+    // Python authority chose) and capture them through the REAL renderer, macro-only.
+    struct ShowcaseView { double tx, ty, dist, bearing, eyeAbove, pitch; char name[28]; };
+    static ShowcaseView s_showcase[6];
+    static int s_showcaseN;
+
+    void Mv2ShowcaseTick()
+    {
+        if(!g.certMv2Showcase||!g.playWorldgenInitialized)return;
+        auto& ph=g.showcasePhase;
+        if(ph==0)
+        {
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            g.showcaseView=0;g.showcaseSettle=0;ph=1;return;
+        }
+        ShowcaseView const& v=s_showcase[g.showcaseView];
+        // camera stands `dist` from the landform along `bearing`, eye `eyeAbove` the local
+        // macro surface, looking at the landform.
+        double const camx=v.tx-std::sin(v.bearing)*v.dist;
+        double const camy=v.ty-std::cos(v.bearing)*v.dist;
+        g.stage0ToolPerformanceHud=false;g.stage0StageMenuOpen=false;g.walkMode=false;g.grounded=false;
+        g.feetX=(float)camx;g.feetY=(float)camy;
+        g.playerX=(int)std::floor(camx);g.playerY=(int)std::floor(camy);
+        FollowStreamCenter();
+        static std::unordered_map<uint64_t,Mv2Page> cache;
+        double gz=0.0;Mv2PageHeight(cache,camx,camy,gz);
+        g.camX=(float)camx;g.camY=(float)camy;g.camZ=(float)(gz+v.eyeAbove);
+        g.yaw=(float)std::atan2(v.tx-camx,v.ty-camy);g.pitch=(float)v.pitch;
+        if(ph==1)
+        {
+            if(++g.showcaseSettle>=100){g.showcaseSettle=0;ph=2;}   // let the macro ring stream in
+            return;
+        }
+        if(ph==2)
+        {
+            char path[128];std::snprintf(path,sizeof(path),
+                "Docs\\provenance_mv3b2_showcase_%d_%s.ppm",g.showcaseView,v.name);
+            DumpFramePpm(path);
+            ++g.showcaseView;g.showcaseSettle=0;
+            if(g.showcaseView>=s_showcaseN){g.certMv2Showcase=false;PostQuitMessage(0);ph=3;}
+            else ph=1;
+            return;
+        }
+    }
+
     void DrawStage0FarField()
     {
         if(!g.playWorldgenBaseline){return;}
@@ -27655,7 +27706,9 @@ namespace
         if ( g.playWorldgenBaseline && g.mv2bEnabled
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
-            float const nf2 = 24000.f, ff2 = (float)kMv2VisibleRadiusM + 2000.f;
+            // Showcase renders macro-only from up close: drop the near plane to 350 m and
+            // keep the macro depth (no clear), so the macro landform IS the terrain.
+            float const nf2 = g.certMv2Showcase ? 350.f : 24000.f, ff2 = (float)kMv2VisibleRadiusM + 2000.f;
             float const fm2[16] = {
                 f / aspect, 0, 0, 0,
                 0, f, 0, 0,
@@ -27670,7 +27723,7 @@ namespace
             if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
             { Mv2CaptureFarDepth( nf2, ff2 ); }   // request cleared after the MV1 pass unions its mask
             Mv2SetAerial( false );
-            glClear( GL_DEPTH_BUFFER_BIT );
+            if ( !g.certMv2Showcase ) glClear( GL_DEPTH_BUFFER_BIT );
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
             glMatrixMode( GL_MODELVIEW );
         }
@@ -27682,7 +27735,7 @@ namespace
         // clean depth buffer to the near authoritative world, which paints over
         // the far terrain wherever near geometry exists. Camera/modelview is
         // shared; only the projection differs between passes.
-        if ( g.playWorldgenBaseline && g.mv1Enabled
+        if ( g.playWorldgenBaseline && g.mv1Enabled && !g.certMv2Showcase
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
             float const nf = 128.f, ff = (float)kMv1VisibleRangeM + 1000.f;
@@ -27721,7 +27774,7 @@ namespace
             glMatrixMode( GL_MODELVIEW );
         }
 
-        DrawHeightfield();
+        if ( !g.certMv2Showcase ) DrawHeightfield();   // macro-only showcase: no near central world
         // Union the near authoritative world (0.03-600 m) into the gap-classifier
         // terrain mask, then close the capture: a sky pixel is only a hole if NONE
         // of the three passes drew terrain there.
@@ -48343,6 +48396,7 @@ namespace
             Mv1cCertTick();
             Mv1dCertTick();
             Mv2bCertTick();
+            Mv2ShowcaseTick();
             Mv1CoverageCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
@@ -48425,7 +48479,8 @@ namespace
               && !g.certMv1C
               && !g.certMv1d
               && !g.certMv2b
-              && !g.certMv1Coverage )
+              && !g.certMv1Coverage
+              && !g.certMv2Showcase )
             {
                 UpdateCamera( dt );
                 if ( g.playWorldgenBaseline ) { UpdateStage0ToolStrike(); }
@@ -54592,6 +54647,23 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;g.mv2bEnabled=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv2-showcase")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2Showcase=true;g.mv2bEnabled=true;g.mv2cEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    // Landform viewpoints (the Python authority chose the seed+coords; the
+                    // showcase page set is compiled at these locations before this run).
+                    ShowcaseView vs[]={
+                        {15829,274464, 26000, 0.75, 300, 0.055, "volcanic_cone_near"},
+                        {15829,274464, 52000, 2.35, 500, 0.030, "volcanic_cone_mid"},
+                        {15829,274464, 34000, 4.05, 380, 0.050, "volcanic_cone_flank"},
+                    };
+                    s_showcaseN=(int)(sizeof(vs)/sizeof(vs[0]));
+                    for(int k=0;k<s_showcaseN;++k)s_showcase[k]=vs[k];
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
                 if(_wcsicmp(argv[i],L"--cert-mv2b-horizon")==0

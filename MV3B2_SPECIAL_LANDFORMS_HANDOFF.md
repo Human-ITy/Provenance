@@ -73,6 +73,23 @@ fidelity (crisp cliffs, walk-up detail) belongs to the detailed renderer / MW4 w
 player approaches — this cut proves the **grammar and causal placement**, not final
 close-up beauty.
 
+### Real-renderer showcase harness (`--cert-mv2-showcase`)
+
+Adopting the strategy of *Python proves the authority, the real client proves the
+player-view*: a **macro-only showcase mode** lets the actual engine visit the absolute
+seed+coordinates the Python authority chose and capture a landform. It renders the macro
+pages ONLY — macro pass with a 350 m near plane, MV1 far pass + near heightfield skipped —
+so a macro landform is viewed up close through the real MV2.B/MV2.C stack **without** the
+origin central region (a different authority) mismatching at 32 km. The Python side
+compiles a chosen seed's pages around the landform; the client teleports to the viewpoints
+and captures. `Docs/provenance_mv3b2_showcase_realrenderer.png` — seed-A volcanic edifice
+through the real renderer (proper palette / lighting / aerial), confirming the earlier
+crude-rasterizer artifacts were the throwaway tool, not the engine or the authority. The
+edifice reads as a broad high massif (it sits in a high volcanic province and 1 km macro
+resolution smooths the cone) rather than a textbook isolated silhouette — a viewpoint/
+resolution matter, not a capability gap. The harness is the reusable capability; it is
+gated behind `--cert-mv2-showcase` and changes nothing in the normal render paths.
+
 ## HARD CLOSED (later cuts)
 
 Detailed water diversity / waterfalls / water colour+depth, groundwater, glacial carving,
