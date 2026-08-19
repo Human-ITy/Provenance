@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 REGION_M = 64000.0          # serialization / ownership cell size (NOT feature scale)
 REGION_HALF_M = 32000.0     # frozen central region half-extent
 ANCHOR_INNER_M = 32000.0    # anchor window: 0 (with zero slope) at/inside the center boundary
@@ -71,6 +71,103 @@ def smoothstep(edge0: float, edge1: float, x: float) -> float:
     t = (x - edge0) / denom
     t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
     return t * t * (3.0 - 2.0 * t)
+
+
+def _smoother(t: float) -> float:
+    """C2 smootherstep weight for lattice interpolation (no kinks in control fields)."""
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+
+def _control(salt: str, x: float, y: float, wavelength: float, octaves: int = 2) -> float:
+    """MV3 morphology CONTROL FIELD: a smooth, continuous, seeded value-noise scalar in
+    [0,1] over absolute coordinates. Independent fields via `salt` (age, relief, substrate,
+    volcanic/plateau tendency, asymmetry, style). Slow wavelengths (~200-500 km) so
+    morphology TYPE varies smoothly across the world; incommensurate with the 64 km page
+    cadence so no packaging signature. Continuity by construction (lattice + smootherstep).
+    """
+    val = 0.0
+    amp = 1.0
+    tot = 0.0
+    w = wavelength
+    for o in range(octaves):
+        gx, gy = x / w, y / w
+        ix, iy = math.floor(gx), math.floor(gy)
+        fx, fy = gx - ix, gy - iy
+        sx, sy = _smoother(fx), _smoother(fy)
+        v00 = _hash_unit(salt, o, ix, iy)
+        v10 = _hash_unit(salt, o, ix + 1, iy)
+        v01 = _hash_unit(salt, o, ix, iy + 1)
+        v11 = _hash_unit(salt, o, ix + 1, iy + 1)
+        v = (v00 * (1 - sx) * (1 - sy) + v10 * sx * (1 - sy)
+             + v01 * (1 - sx) * sy + v11 * sx * sy)
+        val += v * amp
+        tot += amp
+        amp *= 0.5
+        w *= 0.5
+    return val / tot
+
+
+def _ridged(salt: str, u: float, v: float, wavelength: float, octaves: int = 3) -> float:
+    """Ridged detail in [0,1] (sharp crests) for young-range facets. Absolute-coordinate,
+    continuous, deterministic. Used only as SECONDARY relief scaled by (1-age)."""
+    val = 0.0
+    amp = 1.0
+    tot = 0.0
+    w = wavelength
+    ph = _hash_unit(salt, "phase") * math.tau
+    for o in range(octaves):
+        r = 1.0 - abs(math.sin(math.tau * (u / w) + ph) + math.sin(math.tau * (v / (w * 1.31)) - ph)) * 0.5
+        r = max(0.0, r)
+        val += r * r * amp
+        tot += amp
+        amp *= 0.5
+        w *= 0.55
+    return val / tot
+
+
+def _softmax4(a, b, c, d, temp=1.0):
+    m = max(a, b, c, d)
+    ea = math.exp((a - m) / temp); eb = math.exp((b - m) / temp)
+    ec = math.exp((c - m) / temp); ed = math.exp((d - m) / temp)
+    s = ea + eb + ec + ed
+    return ea / s, eb / s, ec / s, ed / s
+
+
+@dataclass
+class Controls:
+    """Local morphology parameters sampled from the independent control fields."""
+    age: float          # 0 young/sharp .. 1 old/rounded (affects RELATIONSHIPS, not just blur)
+    relief: float       # local relief energy (amplitude regime)
+    substrate: float    # resistance/competence (mesas, buttes, canyon walls)
+    volcanic: float     # volcanic tendency
+    plateau: float      # plateau/escarpment tendency
+    asym: float         # deformation asymmetry (fault-block scarps)
+    # normalized structural-style weights (sum to 1) — blends, not a named-region enum.
+    # Block-fault character is the `asym` control within the belt family (not a 5th style).
+    w_belt: float
+    w_plateau: float
+    w_volcanic: float
+    w_cratonic: float
+
+
+def controls_at(seed: str, x: float, y: float) -> Controls:
+    age = _control(seed + ":age", x, y, 380000.0)
+    relief = _control(seed + ":relief", x, y, 300000.0)
+    substrate = _control(seed + ":substrate", x, y, 260000.0)
+    volcanic = _control(seed + ":volcanic", x, y, 440000.0)
+    plateau = _control(seed + ":plateau", x, y, 340000.0)
+    asym = _control(seed + ":asym", x, y, 300000.0)
+    # Structural style is INDEPENDENT of relief (amplitude): a belt region may be
+    # Appalachian-low or Alaska-high. Independent style-tendency fields -> softmax weights
+    # (continuous blends). Volcanic biased rarer; each family wins a fair share of the world.
+    t_belt = _control(seed + ":s_belt", x, y, 330000.0)
+    t_plateau = _control(seed + ":s_plateau", x, y, 360000.0) + 0.05
+    t_volcanic = _control(seed + ":s_volcanic", x, y, 450000.0) - 0.55    # volcanic is uncommon
+    t_cratonic = _control(seed + ":s_cratonic", x, y, 270000.0) + 0.18    # plains are common
+    # low temp => one family dominates locally (decisive character), softmax keeps the
+    # transition bands smooth (continuity by construction).
+    wb, wp, wv, wc = _softmax4(t_belt, t_plateau, t_volcanic, t_cratonic, temp=0.16)
+    return Controls(age, relief, substrate, volcanic, plateau, asym, wb, wp, wv, wc)
 
 
 # --------------------------------------------------------------------------- #
@@ -247,19 +344,39 @@ class MacroField:
         z += self.base_amplitude2_m * math.sin(2 * math.pi * (u + 0.5 * v) / w2 + pa)
         return z
 
-    def _belt(self, b: Belt, x: float, y: float) -> float:
+    def _belt(self, b: Belt, x: float, y: float, ctl: Controls) -> float:
         a = b.azimuth_deg * math.pi / 180.0
         ux, uy = math.cos(a), math.sin(a)
         vx, vy = -math.sin(a), math.cos(a)
         along = (x - b.cx) * ux + (y - b.cy) * uy
         across = (x - b.cx) * vx + (y - b.cy) * vy
-        env = (smoothstep(b.half_length_m, b.half_length_m - 30000.0, abs(along))
-               * smoothstep(b.half_width_m, b.half_width_m - 4000.0, abs(across)))
-        if env <= 0.0:
+        env_len = smoothstep(b.half_length_m, b.half_length_m - 30000.0, abs(along))
+        if env_len <= 0.0:
             return 0.0
+        # Cross-profile shaped by erosional maturity (age) and fault-block asymmetry.
+        side = across / b.half_width_m
+        asym = (ctl.asym - 0.5) * 2.0                          # scarp/dip (block-fault) character
+        t = abs(side) * (1.0 + 0.7 * asym * (1.0 if side >= 0 else -1.0))
+        t = min(1.6, max(0.0, t))
+        age = ctl.age
+        young = 1.0 - age
+        p_round = smoothstep(1.0, 0.0, t)                      # old: broad, rounded shoulders
+        p_sharp = max(0.0, 1.0 - t) ** 0.72                    # young: high narrow crest, steep flank
+        p = p_sharp * young + p_round * age
+        if p <= 0.0:
+            return 0.0
+        # young => higher local relief + strong prominence; old => lower regional relief.
+        relief_gain = (0.72 + 0.75 * ctl.relief) * (0.85 + 0.5 * young)
+        uplift = b.uplift_m * env_len * p * relief_gain
+        # young: ridged facets (secondary structural relief); old: shallow dissection grooves
+        if young > 0.06:
+            facet = _ridged(self.seed + ":beltfacet", along, across, 9000.0)
+            uplift += young * 0.30 * b.uplift_m * env_len * p * (facet - 0.42)
+        if age > 0.25:
+            diss = _ridged(self.seed + ":beltdiss", along * 1.3, across * 1.3, 16000.0)
+            uplift -= age * 0.10 * b.uplift_m * env_len * p_round * diss
         grain = b.grain_amplitude_m * math.sin(2 * math.pi * across / b.grain_wavelength_m)
-        along_mod = 1.0 + 0.18 * math.sin(2 * math.pi * along / 60000.0)
-        return b.uplift_m * env * along_mod + env * grain
+        return uplift + env_len * p * grain * 0.6
 
     def _basin(self, bs: Basin, x: float, y: float) -> float:
         a = bs.azimuth_deg * math.pi / 180.0
@@ -271,21 +388,51 @@ class MacroField:
                * smoothstep(bs.half_length_m, bs.half_length_m - 40000.0, abs(along)))
         return -bs.subsidence_m * env
 
-    def _massif(self, m: Massif, x: float, y: float) -> float:
-        q = ((x - m.cx) ** 2 + (y - m.cy) ** 2) / (m.radius_m ** 2)
-        if q >= 1.0:
+    def _massif(self, m: Massif, x: float, y: float, ctl: Controls) -> float:
+        q2 = ((x - m.cx) ** 2 + (y - m.cy) ** 2) / (m.radius_m ** 2)
+        if q2 >= 1.0:
             return 0.0
-        s = 1.0 - q
-        return m.amplitude_m * s * s * (3.0 - 2.0 * s)
+        s = 1.0 - q2
+        q = math.sqrt(q2)
+        # volcanic tendency morphs the dome into a radial cone (+ summit crater).
+        dome = s * s * (3.0 - 2.0 * s)
+        cone = max(0.0, 1.0 - q) ** 1.15
+        prof = dome * (1.0 - ctl.w_volcanic) + cone * ctl.w_volcanic
+        amp = m.amplitude_m * (0.7 + 0.7 * ctl.relief)
+        z = amp * prof
+        if ctl.w_volcanic > 0.4 and q < 0.14:
+            z -= amp * 0.20 * ctl.w_volcanic * smoothstep(0.14, 0.0, q)   # crater
+        young = 1.0 - ctl.age
+        if young > 0.1 and prof > 0.05:
+            z += young * 0.20 * amp * prof * (_ridged(self.seed + ":mfacet", x, y, 7000.0) - 0.42)
+        return z
 
     def regional_field(self, x: float, y: float) -> float:
-        z = self._base(x, y)
+        ctl = controls_at(self.seed, x, y)
+        # Additive structural skeleton (the MV2.A field), with each feature already
+        # SHAPED by the local morphology controls inside _belt/_massif (age->sharp/rounded,
+        # asym->fault-block, volcanic->cone). Amplitude modulated by the relief control and
+        # damped in cratonic regions so plains stay legitimately low WITHOUT deleting the
+        # skeleton elsewhere.
+        amp = (0.55 + 0.9 * ctl.relief) * (1.0 - 0.55 * ctl.w_cratonic)
+        z = self._base(x, y) * amp
         for b in self.belts:
-            z += self._belt(b, x, y)
+            z += self._belt(b, x, y, ctl) * amp
+        for m in self.massifs:
+            z += self._massif(m, x, y, ctl) * amp
+        # Plateau/escarpment operator: where the plateau style is present, reshape the
+        # POSITIVE relief into a flat-topped tableland with a steep-but-finite escarpment
+        # rim (the smoothstep band), blended by the plateau weight (continuous).
+        if ctl.w_plateau > 0.12 and z > 0.0:
+            ptop = (240.0 + 900.0 * ctl.relief)
+            thr, band = ptop * 0.5, ptop * 0.20
+            mesa = ptop * smoothstep(thr - band, thr + band, z)
+            # shallow incision on the plateau top (real drainage canyons arrive in MV3.B)
+            mesa -= 0.16 * ptop * smoothstep(thr, thr + band, z) * max(
+                0.0, _ridged(self.seed + ":platinc", x, y, 13000.0) - 0.5)
+            z = z * (1.0 - ctl.w_plateau) + mesa * ctl.w_plateau
         for bs in self.basins:
             z += self._basin(bs, x, y)
-        for m in self.massifs:
-            z += self._massif(m, x, y)
         return z
 
 

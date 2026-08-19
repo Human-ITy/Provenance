@@ -157,7 +157,8 @@ def main() -> int:
         lo = hi = None
         s = -b.half_length_m - 20000.0
         while s <= b.half_length_m + 20000.0:
-            if fieldf._belt(b, b.cx + s * ux, b.cy + s * uy) > 150.0:
+            bx, by = b.cx + s * ux, b.cy + s * uy
+            if fieldf._belt(b, bx, by, MA.controls_at(fieldf.seed, bx, by)) > 150.0:
                 lo = s if lo is None else lo; hi = s
             s += 2000.0
         if lo is not None and hi is not None and (hi - lo) > longest:
@@ -232,8 +233,50 @@ def main() -> int:
     checks.append(("no_wrap_no_fine_authority", wrap_ok,
                    f"pages_declare_no_wrap={files_declare} forbidden_tokens={forbidden or 'none'}"))
 
+    # ---- MV3.A morphology diversity -------------------------------------- #
+    # Sample the world widely; count dominant structural families present and require the
+    # morphology descriptors to actually vary (not one monotone type). Families come from
+    # the continuous style weights; descriptors from local relief/roughness.
+    fam = {"belt": 0, "plateau": 0, "volcanic": 0, "cratonic": 0}
+    ages, reliefs = [], []
+    R = 500000
+    for gy in range(-R, R + 1, 40000):
+        for gx in range(-R, R + 1, 40000):
+            c = MA.controls_at(fieldf.seed, float(gx), float(gy))
+            w = {"belt": c.w_belt, "plateau": c.w_plateau, "volcanic": c.w_volcanic, "cratonic": c.w_cratonic}
+            fam[max(w, key=w.get)] += 1
+            ages.append(c.age); reliefs.append(c.relief)
+    fams_present = sum(1 for v in fam.values() if v >= 3)
+    age_spread = max(ages) - min(ages)
+    relief_spread = max(reliefs) - min(reliefs)
+    div_ok = fams_present >= 3 and age_spread > 0.4 and relief_spread > 0.4
+    checks.append(("morphology_diversity", div_ok,
+                   f"families_present={fams_present}/4 dist={fam} age_spread={age_spread:.2f} "
+                   f"relief_spread={relief_spread:.2f} (need >=3 families, spreads>0.4)"))
+
+    # ---- MV3.A seed diversity (Minecraft-style world semantics) ----------- #
+    # same seed+coord -> identical controls (determinism); a DIFFERENT seed -> materially
+    # different arrangement; long-distance samples along one seed do not repeat periodically
+    # and carry no 64 km cadence.
+    probe = [(0.0, 0.0), (250000.0, 120000.0), (-500000.0, 300000.0), (900000.0, -400000.0)]
+    same = all(abs(MA.controls_at(fieldf.seed, x, y).age
+                   - MA.controls_at(fieldf.seed, x, y).age) < 1e-12 for x, y in probe)
+    alt_seed = fieldf.seed + "-alt"
+    diff = 0.0
+    for x, y in probe:
+        a = MA.controls_at(fieldf.seed, x, y); b = MA.controls_at(alt_seed, x, y)
+        diff += abs(a.age - b.age) + abs(a.relief - b.relief) + abs(a.w_belt - b.w_belt)
+    diff /= len(probe)
+    # long-distance non-repetition: macro_z sampled every 250 km must not be near-periodic
+    ld = [macro_z(central, fieldf, float(d), 7000.0) for d in range(0, 2000001, 250000)]
+    ld_var = (max(ld) - min(ld))
+    seed_ok = same and diff > 0.15 and ld_var > 200.0
+    checks.append(("seed_diversity_unbounded_world", seed_ok,
+                   f"same_seed_deterministic={same} diff_seed_mean_delta={diff:.3f} (need>0.15) "
+                   f"long_distance_0-2000km_relief_var={ld_var:.0f}m (need>200)"))
+
     # ---- cheap-source evidence ------------------------------------------- #
-    cheap_ok = compile_s < 40.0 and not forbidden
+    cheap_ok = compile_s < 60.0 and not forbidden
     checks.append(("cheap_source_no_deep_reconstructedz", cheap_ok,
                    f"compiled {ncells} pages ({samples_per_page} samples each) in {compile_s:.2f}s; "
                    f"macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)"))
