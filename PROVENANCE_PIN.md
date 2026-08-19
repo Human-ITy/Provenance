@@ -270,6 +270,8 @@ MV2.B   horizon renderer                  CERTIFIED @ 40272156 (real 128 km rast
 MV2 full 128 km radial                    CERTIFIED (MV2.A2 authority + MV2.B cardinal proof) @ 7c344ca1
 MV2.C   distant-terrain presence          CERTIFIED @ 48ccf496 (presentation only; far ranges read as terrain ~7x more separated from sky; gentler aerial + land-cover palette + hillshade; authority/relief/step UNTOUCHED; off==frozen MV2.B)
 MV1     live-terrain coverage             FIXED+CERTIFIED @ 779611bc (band-boundary LOD-ring underlap -> AABB desired-set; rotation-invariant resident set; 0 below-terrain holes; skirts no longer exposed; frozen certs + Test B green)
+WORLD   seed-deterministic + UNBOUNDED     DOCTRINE (128 km = player horizon, NOT world extent; pages=cache units; new seed=new world; 4 coupled causal grammars landform/surface/water/living)
+MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DESIGN.md); NEXT cut = MV3.A control fields + maturity/sharpness + plateau/escarpment
 MW9     flora / fauna                     CLOSED
 ```
 
