@@ -1,7 +1,7 @@
 ﻿// Provenance Phase 4 client - Esoterica fork app.
 // Phase 2 far heightfield + Phase 3 6ft walk + Phase 4 interaction digests (handful scoop).
 // Handheld law: ~245 mL ~= 1 cup ~= 32/255 of a 12.5cm storage voxel (~8 scoops per voxel).
-// Protocol matches Unreal FFablescriptClient (newline JSON, version 1).
+// EI0.A canonical identity gates the historical newline-JSON terrain bridge.
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -69,6 +69,7 @@
 #include "WaterLedger.h"
 #include "PickFracture.h"
 #include "FractureSurface.h"
+#include "Ei0aHandshake.h"
 
 #include <algorithm>
 #include <cmath>
@@ -227,6 +228,7 @@ namespace
     enum class PendingKind
     {
         None,
+        Hello,
         Caps,
         Player,
         Surface,
@@ -1738,6 +1740,23 @@ namespace
         int worldSize = -1;
         bool envelopeOk = false;
         std::string lastError;
+        bool canonicalHandshakeOk = false;
+        std::string protocolId;
+        std::string protocolSemver;
+        std::string protocolSchemaDigest;
+        std::string engineBuild;
+        std::string worldUuid;
+        std::string genesisDigest;
+        std::string sessionToken;
+        std::string serverInstanceId;
+        std::string canonicalGeneratorFamily;
+        std::string canonicalGeneratorVersion;
+        std::string materialRegistryId;
+        std::string materialRegistryDigest;
+        std::string surfaceGrammarId;
+        std::string surfaceGrammarVersion;
+        std::string waterGrammarId;
+        std::string waterGrammarVersion;
         float reliefVoxels = 64.f;
         float gradeDatum = 0.5f;
         float voxelEdgeM = 0.125f;
@@ -1753,6 +1772,7 @@ namespace
         int pendingId = 0;
         int pendingBx = 0;
         int pendingBy = 0;
+        Ei0a::RequestTracker requestTracker;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2526,6 +2546,8 @@ namespace
         }
         g.recvBuf.clear();
         g.pending = PendingKind::None;
+        g.requestTracker.Clear();
+        g.canonicalHandshakeOk = false;
     }
 
     bool ExtractJsonString( std::string const& json, char const* key, std::string& out )
@@ -6676,17 +6698,32 @@ namespace
 
     bool RequestMethod( char const* method, char const* paramsJson, PendingKind kind, int bx = 0, int by = 0 )
     {
-        char buf[384];
         int id = g.nextId++;
-        std::snprintf( buf, sizeof( buf ),
-            "{\"version\":%d,\"id\":\"%d\",\"type\":\"request\",\"method\":\"%s\",\"params\":%s}\n",
-            kProtocolVersion, id, method, paramsJson );
-        if ( !SendLine( buf ) ) { return false; }
+        std::string const requestId = std::to_string( id );
+        std::string line = "{\"version\":" + std::to_string( kProtocolVersion )
+            + ",\"id\":\"" + requestId + "\",\"type\":\"request\",\"method\":\""
+            + method + "\",\"params\":" + paramsJson + "}\n";
+        if ( !SendLine( line ) ) { return false; }
+        if ( !g.requestTracker.Register(
+                requestId, { (int)kind, bx, by } ) )
+        {
+            g.lastError = "duplicate local request_id";
+            return false;
+        }
         g.pending = kind;
         g.pendingId = id;
         g.pendingBx = bx;
         g.pendingBy = by;
         return true;
+    }
+
+    bool RequestCanonicalHello( char const* laneRole = "control",
+                                std::string const& sessionToken = {} )
+    {
+        int const id = g.nextId;
+        std::string const params = Ei0a::BuildClientHelloParams(
+            std::to_string( id ), laneRole, sessionToken );
+        return RequestMethod( "hello", params.c_str(), PendingKind::Hello );
     }
 
     void UpdateStreamHud()
@@ -6745,6 +6782,65 @@ namespace
             g.digestLine.c_str(),
             g.spireLine.c_str() );
         g.detail = d;
+    }
+
+    void ParseHelloReply( std::string const& line, std::string const& requestId )
+    {
+        bool ok = false;
+        ExtractJsonBool( line, "ok", ok );
+        if ( !ok )
+        {
+            std::string code;
+            std::string message;
+            ExtractJsonString( line, "code", code );
+            ExtractJsonString( line, "message", message );
+            g.link = LinkState::CapsError;
+            g.canonicalHandshakeOk = false;
+            g.statusLine = "canonical handshake rejected";
+            g.lastError = code.empty() ? "handshake_error" : code;
+            g.detail = message.empty() ? g.lastError : g.lastError + ": " + message;
+            return;
+        }
+
+        Ei0a::EngineHello hello;
+        std::string errorCode;
+        if ( !Ei0a::ParseAndValidateEngineHello( line, requestId, hello, errorCode ) )
+        {
+            g.link = LinkState::CapsError;
+            g.canonicalHandshakeOk = false;
+            g.statusLine = "canonical handshake invalid";
+            g.lastError = errorCode;
+            g.detail = errorCode;
+            return;
+        }
+
+        g.canonicalHandshakeOk = true;
+        g.protocolId = hello.protocolId;
+        g.protocolSemver = hello.protocolSemver;
+        g.protocolSchemaDigest = hello.schemaDigest;
+        g.engineBuild = hello.engineBuild;
+        g.authorityMode = hello.authorityMode;
+        g.worldUuid = hello.worldUuid;
+        g.genesisDigest = hello.genesisDigest;
+        g.sessionToken = hello.sessionToken;
+        g.serverInstanceId = hello.serverInstanceId;
+        g.canonicalGeneratorFamily = hello.generatorFamily;
+        g.canonicalGeneratorVersion = hello.generatorVersion;
+        g.materialRegistryId = hello.materialRegistryId;
+        g.materialRegistryDigest = hello.materialRegistryDigest;
+        g.surfaceGrammarId = hello.surfaceGrammarId;
+        g.surfaceGrammarVersion = hello.surfaceGrammarVersion;
+        g.waterGrammarId = hello.waterGrammarId;
+        g.waterGrammarVersion = hello.waterGrammarVersion;
+        g.statusLine = "canonical identity ok - requesting terrain_caps";
+
+        // EI0.A deliberately leaves the historical projection/mutation bridge in
+        // place. It is entered only after canonical authority identity succeeds.
+        if ( !RequestMethod( "terrain_caps", "{}", PendingKind::Caps ) )
+        {
+            g.link = LinkState::SocketError;
+            g.statusLine = "failed to send terrain_caps";
+        }
     }
 
     void ParseCapsReply( std::string const& line )
@@ -11265,12 +11361,31 @@ namespace
 
     void HandleReply( std::string const& line )
     {
-        PendingKind kind = g.pending;
-        g.pending = PendingKind::None;
+        Ei0a::PendingRequest correlated;
+        std::string responseId;
+        Ei0a::Correlation const correlation =
+            g.requestTracker.Complete( line, correlated, responseId );
+        if ( correlation != Ei0a::Correlation::Matched )
+        {
+            g.lastError = correlation == Ei0a::Correlation::DuplicateCompletedId
+                ? "duplicate_completed_request_id"
+                : ( correlation == Ei0a::Correlation::UnknownId
+                    ? "unknown_request_id" : "missing_request_id" );
+            g.statusLine = "protocol response rejected";
+            g.detail = g.lastError;
+            return;
+        }
+
+        PendingKind const kind = (PendingKind)correlated.kind;
+        g.pendingBx = correlated.bx;
+        g.pendingBy = correlated.by;
+        if ( g.pendingId == std::atoi( responseId.c_str() ) )
+        { g.pending = PendingKind::None; }
 
         bool ok = true;
         ExtractJsonBool( line, "ok", ok );
-        if ( !ok && kind != PendingKind::Caps && kind != PendingKind::Carve && kind != PendingKind::Place )
+        if ( !ok && kind != PendingKind::Hello && kind != PendingKind::Caps
+          && kind != PendingKind::Carve && kind != PendingKind::Place )
         {
             std::string msg;
             ExtractJsonString( line, "message", msg );
@@ -11282,6 +11397,7 @@ namespace
 
         switch ( kind )
         {
+            case PendingKind::Hello: ParseHelloReply( line, responseId ); break;
             case PendingKind::Caps: ParseCapsReply( line ); break;
             case PendingKind::Player: ParsePlayerReply( line ); break;
             case PendingKind::Surface: ParseSurfaceReply( line ); break;
@@ -11342,6 +11458,7 @@ namespace
         g.streamComplete = false;
         g.havePlayer = false;
         g.pending = PendingKind::None;
+        g.requestTracker.Clear();
         g.heldBite.clear();
         g.heldTotalG = 0;
         g.heldDominant.clear();
@@ -11450,12 +11567,12 @@ namespace
         ioctlsocket( s, FIONBIO, &nonBlock );
         g.sock = s;
         g.link = LinkState::Connected;
-        g.statusLine = "TCP up - requesting terrain_caps";
-        if ( !RequestMethod( "terrain_caps", "{}", PendingKind::Caps ) )
+        g.statusLine = "TCP up - proving canonical authority identity";
+        if ( !RequestCanonicalHello() )
         {
             CloseSock();
             g.link = LinkState::SocketError;
-            g.statusLine = "failed to send terrain_caps";
+            g.statusLine = "failed to send canonical hello";
         }
     }
 
