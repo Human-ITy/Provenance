@@ -9,6 +9,33 @@ Branches:
 
 **Spike contract:** `SPIKE_CONTRACT.md` (One Simulation, Two Clients).
 
+## EI0 engine integration pin (2026-08-19)
+
+```
+EI0.A  identity + handshake          CERTIFIED
+EI0.B  generated schemas             NEXT
+EI0.C  fail-closed page validation   CLOSED
+EI0.D  two-lane transport            CLOSED
+EI1+                                 CLOSED
+```
+
+Canonical protocol: `fablescript.embodied-terrain` `1.0.0`. FableScript remains
+the authoritative process; Provenance owns input, disposable prediction,
+residency/LOD/meshes/GPU/culling, and presentation. EI0.A moves no world truth.
+
+- Integration branch: `integration/ei0a-canonical-handshake`
+- FableScript base: `bb6bb3d5452d12f2b9f82b6d67849b4d6e41d19a`
+- Donor references: `5a69afb3bc65690041f7c2fab69182df8db3bbda`,
+  `be29a059c2e31aa74bdb62169592d0539f4e6d7b`
+- Provenance base: `5073baa73905e731eb72c17ae026685b25a9e812`
+- FableScript EI0.A: `6fbc1856dc74c336895026dd4432f37f3d504bcc`
+- Provenance EI0.A: `4cc674c9a97f72d8c8cbb4d7cdbaf1c16a731494`
+- Handoff: `EI0A_CANONICAL_IDENTITY_HANDOFF.md`
+
+Historical unqualified `v1` is not canonical and is never an implicit
+downgrade. No new world-authority stage is open: WD1.C existence, FL1
+population, and AT1 authority remain on hold.
+
 ## Isolation (hard)
 
 | Do | Don't |
