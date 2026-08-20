@@ -8,7 +8,7 @@ central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=196.242
+compile_seconds=197.467
 
 fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
 fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=656.5m worst=2114.9m (need rms>40)
@@ -79,10 +79,10 @@ fixture.wd1a_cross_page_identity=PASS  channel crosses 64 km page line x=32km ke
 fixture.wd1a_cross_supertile_identity=PASS  channel keeps MacroChannel+Watershed identity across the 384 km super-tile edge
 fixture.wd1a_seed_semantics=PASS  same-seed water_digest reproduces=True; alt-seed differs=True (origin body mix {'none': 289} vs alt {'none': 289})
 fixture.wd1a_long_distance_unbounded=PASS  deterministic=True; presence regimes over 0..2000km=['damp_substrate', 'dry'] (non-periodic, no page/super-tile cadence)
-fixture.wd1a_macro_fine_compatibility_guardrail=PASS  centre-page macro water bodies=0 (need 0; 16D-16F owns detailed water); ±32km interior deferred/dry=True (no fabricated macro water in detailed coverage)
+fixture.wd1a_macro_fine_compatibility_guardrail=PASS  centre-page macro_authority=defer_to_detailed (all cells)=True (NOT `dry`); ±32km interior defers=True; all 1103 outer bodies valid_macro=True (16D-16F owns detailed; no fabricated macro water)
 fixture.wd1a_frozen_geometry_no_mass=PASS  height digest == page source_digest (WaterState changes no terrain sample); classification only, no water mass created, 16D-16F/P5b untouched
 fixture.wd1a_cheap_source=PASS  WaterState from drainage+MS1+macro hydroclimate proxy only; no ReconstructedZ/QueryMaterial/runtime-water; forbidden=none; descriptor 17x17@4000m v1
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) + surface+water descriptors in 196.24s (budget 280; invariant=no fine causal stack); macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) + surface+water descriptors in 197.47s (budget 280; invariant=no fine causal stack); macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
 page_ids (named subset of the 25-page ring):
   center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]

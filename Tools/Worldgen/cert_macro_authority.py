@@ -1262,20 +1262,27 @@ def main() -> int:
                    f"deterministic={ldw_det}; presence regimes over 0..2000km={sorted(ldw_regimes)} "
                    f"(non-periodic, no page/super-tile cadence)"))
 
-    # WD1.A-13 MACRO/FINE COMPATIBILITY (guardrail) — WD1 does NOT fabricate macro water inside
-    # the frozen ±32 km centre where detailed 16D-16F water is authoritative: the centre is dry
-    # (deferred). Compatibility is only demanded where detailed truth legitimately exists.
-    center_water = sum(1 for c0 in center.water_codes if unpack_water(c0).body_class != "none")
-    boundary_dry = True
+    # WD1.A-13 MACRO/FINE COMPATIBILITY (guardrail) — inside the frozen ±32 km centre the macro
+    # authority does NOT assert water; it explicitly DEFERS to detailed 16D-16F (macro_authority=
+    # defer_to_detailed, which is NOT `dry`). A consumer reads the scope first, so a detailed lake
+    # here never contradicts a macro conclusion. Compatibility is only demanded where detailed
+    # truth legitimately exists.
+    center_defer = all(unpack_water(c0).macro_authority == "defer_to_detailed" for c0 in center.water_codes)
+    outer_valid = 0
+    for _x, _y, _ws in foot_water[:50]:            # bodies exist only outside the centre
+        pass
+    outer_valid = sum(1 for (_x, _y, _ws) in foot_water if _ws.macro_authority == "valid_macro")
+    interior_defer = True
     for t in range(-30, 31, 5):
         s = t * 1000.0
         for bx, by in [(REGION_HALF_M - 1000.0, s), (s, REGION_HALF_M - 1000.0)]:   # just inside centre
-            if water_state_at(central, fieldf, bx, by).body_class != "none":
-                boundary_dry = False
-    w13_ok = center_water == 0 and boundary_dry
+            if water_state_at(central, fieldf, bx, by).macro_authority != "defer_to_detailed":
+                interior_defer = False
+    w13_ok = center_defer and interior_defer and outer_valid == len(foot_water) and len(foot_water) > 0
     checks.append(("wd1a_macro_fine_compatibility_guardrail", w13_ok,
-                   f"centre-page macro water bodies={center_water} (need 0; 16D-16F owns detailed water); "
-                   f"±32km interior deferred/dry={boundary_dry} (no fabricated macro water in detailed coverage)"))
+                   f"centre-page macro_authority=defer_to_detailed (all cells)={center_defer} (NOT `dry`); "
+                   f"±32km interior defers={interior_defer}; all {len(foot_water)} outer bodies valid_macro="
+                   f"{outer_valid == len(foot_water)} (16D-16F owns detailed; no fabricated macro water)"))
 
     # WD1.A-14 FROZEN AUTHORITY + GEOMETRY/MASS — the WaterState descriptor is orthogonal to
     # geometry (page height source_digest unchanged) and to the surface descriptor

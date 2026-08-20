@@ -57,8 +57,12 @@ Yes. `CHANNEL_EXISTS != WATER_PRESENT != WATER_BODY_TYPE != WATER_OPTICAL_STATE`
 - **Macro WaterState is an environmental PROMISE, not a conserved water ledger** — WD1.A creates
   **no water mass** and changes **no terrain geometry**; 16D–16F/P5b are untouched.
 - **No circular input** — presence uses climate/substrate/catchment potential, never actual water.
-- **Compatibility only where detailed water legitimately exists** — the frozen ±32 km centre is
-  dry (deferred); WD1 does not fabricate macro water inside detailed coverage.
+- **Authority scope — `macro_authority ∈ {valid_macro, defer_to_detailed}`.** Inside the frozen
+  ±32 km centre the macro descriptor does **not assert** water; it is `defer_to_detailed`. This is
+  **NOT `dry`** (a real hydrologic state) — a consumer must read the scope FIRST, so a detailed
+  16D–16F lake in the centre is never read as contradicting a macro conclusion. Everywhere the
+  macro authority is legitimate it is `valid_macro`. WD1 does not fabricate macro water inside
+  detailed coverage; compatibility is demanded only where detailed truth exists.
 
 ## Certification — all 15 WD1.A fixtures PASS (`Docs/provenance_mv2a_macro_authority_cert.txt`)
 

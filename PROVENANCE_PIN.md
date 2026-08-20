@@ -281,7 +281,7 @@ MS1.A   SurfaceState authority + compose  CERTIFIED @ b970585b (semantic Surface
 MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green)
 MS1.B1  semantic surface default          CERTIFIED (MS1.B now ON BY DEFAULT — diagnostic palette is debug-only; --ms1b-off reproduces frozen; default gates re-run green: default boot material (75,87,88) vs --ms1b-off white (225,227,230), MV1 coverage 0 holes, MV2.B 0 holes, MV2.C separation 0.198, MW8 24m/s Test B PX2 all-green, geometry bit-exact; NEXT = WD1 water)
 WD1     water diversity                   DESIGN LOCKED @ c2f9bd55 (WD1_WATER_DIVERSITY_DESIGN.md): CHANNEL_EXISTS!=WATER_PRESENT!=WATER_BODY_TYPE!=WATER_OPTICAL_STATE; two-stage presence (supply vs accommodation); 16D/16E/16F/P5b stay authoritative; WD1.B = continuous optical transmission over MS1 bottom substrate; reserved hooks waterfalls/volcanic-chem/season/glacial
-WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage presence supply(macro_humidity+catchment−permeability/evap) then accommodation(channel gradient/basin closure) → dry/damp/ephemeral/seasonal/perennial/standing + body/regime; discharge_proxy first-class; optical axes clarity/turbidity/sediment/mineral/organic over MS1 bottom substrate; MacroWaterBodyId keyed to watershed sink, rivers inherit MacroChannelId; 17x17@4km page water descriptor; anchor-window gated (centre dry, 16D-16F owns detailed); mass law = no water mass/no geometry; 15 fixtures + MV2.B 0-holes green; surface_digest byte-identical; NEXT = WD1.B appearance)
+WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage presence supply(macro_humidity+catchment−permeability/evap) then accommodation(channel gradient/basin closure) → dry/damp/ephemeral/seasonal/perennial/standing + body/regime; discharge_proxy first-class; optical axes clarity/turbidity/sediment/mineral/organic over MS1 bottom substrate; MacroWaterBodyId keyed to watershed sink, rivers inherit MacroChannelId; 17x17@4km page water descriptor; anchor-window gated (centre macro_authority=defer_to_detailed, NOT dry; 16D-16F owns detailed); mass law = no water mass/no geometry; 15 fixtures + MV2.B 0-holes green; surface_digest byte-identical; NEXT = WD1.B appearance)
 WD1.B   shared water appearance           NEXT (continuous optical transmission over MS1 substrate; never depth bands)
 WD1.C   waterfalls                        CLOSED (hook only)
 MV3.C-testB  24m/s Test B on gen-5 pages   PASS (engine_cpu 0-over worst 11.7ms, 0 presented/stage-owned/os-gap, cadence no-regression, 0 movement frames over)
@@ -390,9 +390,10 @@ lake, arid permeable → dry channel. `WaterState` (presence/body/flow/depth_m+b
 elev/discharge_proxy/clarity/turbidity/sediment/mineral/organic/temperature/**MS1 bottom_family
 ref**/ancestry; **no RGB, no shader params**). Optical axes are physical inputs for WD1.B.
 Identity: `MacroWaterBodyId` keyed to the canonical watershed sink (absolute), rivers inherit
-`MacroChannelId` (B1.1 window-independent). Anchor-window gated → the frozen ±32 km centre is
-**dry** (16D–16F owns detailed water; guardrail: compatibility only where detailed truth
-exists). **Mass law:** environmental PROMISE, not a conserved ledger — creates no water mass,
+`MacroChannelId` (B1.1 window-independent). **Authority scope** `macro_authority ∈ {valid_macro,
+defer_to_detailed}`: the frozen ±32 km centre is `defer_to_detailed` — **NOT `dry`** (dry is a
+real hydrologic state; defer means the macro authority does not assert and 16D–16F owns it, so a
+detailed lake there never contradicts a macro conclusion; consumers read the scope first). **Mass law:** environmental PROMISE, not a conserved ledger — creates no water mass,
 changes no geometry, 16D–16F/P5b untouched. Macro pages gain a 17×17@4 km packed WaterState
 descriptor (computed with the MS1 surface descriptor via one shared per-cell env `_macro_place`,
 so `compile_seconds≈196`, budget 280; the hard invariant is the no-fine-causal-stack token

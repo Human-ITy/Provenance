@@ -1515,9 +1515,17 @@ BODY_CLASSES = [
 ]
 FLOW_REGIMES = ["none", "still", "slow", "channelized", "fast", "turbulent"]
 
+# Macro-water authority SCOPE: whether the macro descriptor OWNS the water conclusion here, or
+# defers to the frozen detailed authority (16D-16F). DEFER_TO_DETAILED is NOT `dry` — `dry` is a
+# real hydrologic state, whereas defer means "macro does not assert; the detailed system owns
+# this location". A consumer must check the scope BEFORE reading presence, so a detailed lake in
+# the frozen centre is never read as contradicting a macro `dry`.
+MACRO_WATER_AUTHORITY = ["valid_macro", "defer_to_detailed"]
+
 _PRESENCE_IDX = {n: i for i, n in enumerate(PRESENCE_REGIMES)}
 _BODY_IDX = {n: i for i, n in enumerate(BODY_CLASSES)}
 _FLOW_IDX = {n: i for i, n in enumerate(FLOW_REGIMES)}
+_WAUTH_IDX = {n: i for i, n in enumerate(MACRO_WATER_AUTHORITY)}
 
 # substrate hydrologic properties (from the MS1 substrate class): permeability = infiltration
 # loss (bedrock sheds/ponds, sand/scoria drains); erodibility = sediment supply to the water.
@@ -1559,6 +1567,7 @@ class WaterState:
     bottom_family: str            # MS1 dominant_surface_family beneath the water
     waterfall_potential: float    # reserved hook (WD1.C); classification only
     mineral_potential: float      # reserved hook (volcanic/mineral chemistry later)
+    macro_authority: str = "valid_macro"   # valid_macro | defer_to_detailed (16D-16F owns it)
     macro_watershed_id: str = ""
     macro_channel_id: str = ""
     macro_water_body_id: str = ""
@@ -1586,6 +1595,7 @@ class WaterState:
         v |= (_q4(self.temperature_proxy) & 0xF) << 50
         v |= (min(3, int(round(self.waterfall_potential * 3.0))) & 0x3) << 54
         v |= (min(3, int(round(self.mineral_potential * 3.0))) & 0x3) << 56
+        v |= (_WAUTH_IDX[self.macro_authority] & 0x1) << 58
         return v
 
 
@@ -1602,7 +1612,7 @@ def unpack_water(v: int, source_rev: str = "") -> WaterState:
         organic_load=_dq4((v >> 46) & 0xF), temperature_proxy=_dq4((v >> 50) & 0xF),
         bottom_family=SURFACE_FAMILIES[(v >> 10) & 0x7],
         waterfall_potential=((v >> 54) & 0x3) / 3.0, mineral_potential=((v >> 56) & 0x3) / 3.0,
-        source_rev=source_rev)
+        macro_authority=MACRO_WATER_AUTHORITY[(v >> 58) & 0x1], source_rev=source_rev)
 
 
 def _clip01(v: float) -> float:
@@ -1744,10 +1754,13 @@ def water_state_at(central: "CentralProgram", fieldf: "MacroField", x: float, y:
     aw = anchor_window(x, y)
     if ss is None:
         ss = surface_state_at(central, fieldf, x, y, ctl, place)
-    dry = WaterState("dry", "none", "none", 0.0, z, z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                     0.0, 0.0, ss.dominant_surface_family, 0.0, 0.0, source_rev=rev)
-    if aw <= 0.0:                              # frozen centre: 16D–16F owns water here
-        return dry
+    if aw <= 0.0:
+        # frozen centre: the macro authority does NOT assert water here — it DEFERS to the
+        # detailed 16D-16F system. This is NOT `dry` (a real hydrologic state); a consumer must
+        # read macro_authority first, so a detailed lake here is never a contradiction.
+        return WaterState("dry", "none", "none", 0.0, z, z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                          0.0, 0.0, 0.0, ss.dominant_surface_family, 0.0, 0.0,
+                          macro_authority="defer_to_detailed", source_rev=rev)
 
     perm = _SUBSTRATE_PERMEABILITY.get(ss.substrate_class, 0.4)
     erod = _SUBSTRATE_ERODIBILITY.get(ss.substrate_class, 0.5)
@@ -1953,7 +1966,8 @@ def serialize_page(page: MacroPage) -> str:
         "# water_code bit layout: [0:3]=presence [3:7]=body [7:10]=flow [10:13]=bottom_family "
         "[13:22]=depth(0.25m units) [22:26]=discharge [26:30]=seasonality [30:34]=clarity "
         "[34:38]=turbidity [38:42]=suspended_sediment [42:46]=mineral_load [46:50]=organic_load "
-        "[50:54]=temperature [54:56]=waterfall_potential(/3) [56:58]=mineral_potential(/3)",
+        "[50:54]=temperature [54:56]=waterfall_potential(/3) [56:58]=mineral_potential(/3) "
+        "[58]=macro_authority(0=valid_macro,1=defer_to_detailed -- defer!=dry: read this FIRST)",
         f"water_descriptor_version={WATER_DESCRIPTOR_VERSION}",
         f"water_step_m={page.water_step:.1f}",
         f"water_grid_n={page.water_n}",
