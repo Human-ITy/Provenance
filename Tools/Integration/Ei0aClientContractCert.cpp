@@ -21,10 +21,13 @@ namespace
             + "\",\"protocol_id\":\"" + protocolId
             + "\",\"protocol_semver\":\"" + Ei0a::kProtocolSemver
             + "\",\"schema_digest\":\"" + Ei0a::kSchemaDigest
+            + "\",\"descriptor_schema_digest\":\"" + Ei0a::kDescriptorSchemaDigest
             + "\",\"engine_build\":\"engine-test\""
               ",\"authority_mode\":\"local_server_authoritative\""
               ",\"world_uuid\":\"3f25975e-4a31-445c-939f-6a1a4f4f6722\""
-              ",\"genesis_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+              ",\"macro_genesis_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+              ",\"world_baseline_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\""
+              ",\"baseline_components\":[{\"role\":\"substrate\",\"semantic_identity_id\":\"substrate.test\",\"semantic_identity_version\":\"1\",\"semantic_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"}]"
               ",\"generator_family\":\"fablescript.test\""
               ",\"generator_version\":\"1\""
               ",\"material_registry_id\":\"materials.test\""
@@ -71,6 +74,11 @@ int main()
     Check( Ei0a::ParseAndValidateEngineHello(
         EngineHelloJson(), "17", parsed, error ),
         "canonical EngineHello parser accepts matching authority" );
+    Check( parsed.macroGenesisDigest == std::string( 64, 'a' )
+        && parsed.worldBaselineDigest == std::string( 64, 'c' )
+        && parsed.baselineComponents.size() == 1
+        && parsed.baselineComponents[0].role == "substrate",
+        "client preserves layered baseline identity" );
     Check( !Ei0a::ParseAndValidateEngineHello(
         EngineHelloJson( "wrong", "17" ), "17", parsed, error )
         && error == "request_id_mismatch",

@@ -66,14 +66,15 @@ namespace Ei0d
         std::string serverInstanceId;
         std::string sessionToken;
         std::string worldUuid;
-        std::string genesisDigest;
+        std::string macroGenesisDigest;
+        std::string worldBaselineDigest;
 
         bool Complete() const
         {
             return !protocolId.empty() && !protocolSemver.empty()
                 && !schemaDigest.empty() && !serverInstanceId.empty()
                 && !sessionToken.empty() && !worldUuid.empty()
-                && !genesisDigest.empty();
+                && !macroGenesisDigest.empty() && !worldBaselineDigest.empty();
         }
     };
 
@@ -81,7 +82,7 @@ namespace Ei0d
     {
         return { hello.protocolId, hello.protocolSemver, hello.schemaDigest,
             hello.serverInstanceId, hello.sessionToken, hello.worldUuid,
-            hello.genesisDigest };
+            hello.macroGenesisDigest, hello.worldBaselineDigest };
     }
 
     inline bool ValidateBulkBinding( SessionBinding const& control,
@@ -99,7 +100,8 @@ namespace Ei0d
           || bulk.serverInstanceId != control.serverInstanceId
           || bulk.sessionToken != control.sessionToken
           || bulk.worldUuid != control.worldUuid
-          || bulk.genesisDigest != control.genesisDigest )
+          || bulk.macroGenesisDigest != control.macroGenesisDigest
+          || bulk.worldBaselineDigest != control.worldBaselineDigest )
         { errorCode = "session_mismatch"; return false; }
         errorCode.clear();
         return true;

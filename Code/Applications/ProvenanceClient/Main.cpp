@@ -1761,9 +1761,11 @@ namespace
         std::string protocolId;
         std::string protocolSemver;
         std::string protocolSchemaDigest;
+        std::string descriptorSchemaDigest;
         std::string engineBuild;
         std::string worldUuid;
-        std::string genesisDigest;
+        std::string macroGenesisDigest;
+        std::string worldBaselineDigest;
         std::string sessionToken;
         std::string serverInstanceId;
         std::string canonicalGeneratorFamily;
@@ -6818,7 +6820,7 @@ namespace
         std::string const requestId = "b-" + std::to_string( g.nextBulkId );
         std::string const params = Ei0a::BuildClientHelloParams(
             requestId, "bulk", g.sessionToken, g.serverInstanceId,
-            g.worldUuid, g.genesisDigest );
+            g.worldUuid, g.macroGenesisDigest, g.worldBaselineDigest );
         g.bulkTransportState = Ei0d::ConnectionState::HelloSent;
         return RequestBulkMethod( "hello", params.c_str() );
     }
@@ -6929,10 +6931,12 @@ namespace
         g.protocolId = hello.protocolId;
         g.protocolSemver = hello.protocolSemver;
         g.protocolSchemaDigest = hello.schemaDigest;
+        g.descriptorSchemaDigest = hello.descriptorSchemaDigest;
         g.engineBuild = hello.engineBuild;
         g.authorityMode = hello.authorityMode;
         g.worldUuid = hello.worldUuid;
-        g.genesisDigest = hello.genesisDigest;
+        g.macroGenesisDigest = hello.macroGenesisDigest;
+        g.worldBaselineDigest = hello.worldBaselineDigest;
         g.sessionToken = hello.sessionToken;
         g.serverInstanceId = hello.serverInstanceId;
         g.canonicalGeneratorFamily = hello.generatorFamily;
@@ -19517,7 +19521,7 @@ namespace
         MacroPageAuthority::Context context; // exact pinned projection context until EI0.D supplies a session
         if(g.canonicalHandshakeOk)
         {
-            context.genesisDigest=g.genesisDigest;
+            context.genesisDigest=g.macroGenesisDigest;
             context.generatorFamily=g.canonicalGeneratorFamily;
             context.generatorVersion=g.canonicalGeneratorVersion;
             context.materialRegistryId=g.materialRegistryId;
@@ -19526,7 +19530,7 @@ namespace
             context.surfaceGrammarVersion=g.surfaceGrammarVersion;
             context.waterGrammarId=g.waterGrammarId;
             context.waterGrammarVersion=g.waterGrammarVersion;
-            context.descriptorSchemaDigest=g.protocolSchemaDigest;
+            context.descriptorSchemaDigest=g.descriptorSchemaDigest;
         }
         auto const validationStart=std::chrono::steady_clock::now();
         bool validationRecorded=false;

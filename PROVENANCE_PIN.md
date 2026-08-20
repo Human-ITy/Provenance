@@ -18,11 +18,12 @@ EI0.C  fail-closed page validation   CERTIFIED locally
 EI0.D  two-lane transport            CERTIFIED locally
 EI0.E  reproducible genesis identity CERTIFIED locally
 EI1    WorldGenesis adoption         CERTIFIED locally
-EI2    macro -> micro substrate      NEXT
-EI3+                                 CLOSED
+EI2    macro -> micro substrate      CERTIFIED locally
+EI3    revisioned detail projection  NEXT
+EI4+                                 CLOSED
 ```
 
-Canonical protocol: `fablescript.embodied-terrain` `1.0.0`. FableScript remains
+Canonical protocol: `fablescript.embodied-terrain` `1.1.0`. FableScript remains
 the authoritative process; Provenance owns input, disposable prediction,
 residency/LOD/meshes/GPU/culling, and presentation. EI0.A moves no world truth.
 
@@ -97,6 +98,18 @@ Engine commits: `969831e3d0e5a7f3dfb6b38533e3309a6814cbd0`,
 MV2/MV3/MS1.A/WD1.A replay passed all world-behavior assertions; its historical
 stdlib-only monolith source check is replaced by an exact package dependency
 and forbidden-fine-authority audit, with no behavior threshold changed.
+
+EI2 resolves the macro baseline into engine-owned deterministic 12.5 cm
+occupancy, formations, strata, and fixed-total mixed material queries without
+changing Macro Page V2 bytes or any client presentation law. Identity is now
+layered: Page V2/Manifest bind to the unchanged macro digest, detailed physical
+truth binds to an extensible WorldBaselineIdentity component manifest, and a
+playthrough is `world_uuid + world_baseline_digest`. Protocol 1.1 EngineHello
+and both local lanes prove macro and physical baseline independently; the
+client retains only residency/presentation ownership and does not consume the
+new detailed resolver yet. FableScript commits: `a75d91a` and `741b6f9`.
+Handoff: `EI2_WORLD_BASELINE_CLIENT_HANDOFF.md`. **NEXT = EI3 revisioned
+detailed projection.**
 
 Historical unqualified `v1` is not canonical and is never an implicit
 downgrade. No new world-authority stage is open: WD1.C existence, FL1

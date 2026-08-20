@@ -13,8 +13,11 @@ std::string Hello(char const* id,char const* lane,char const* token,
     return std::string("{\"id\":\"")+id+"\",\"request_id\":\""+id+
       "\",\"protocol_id\":\""+Ei0a::kProtocolId+"\",\"protocol_semver\":\""+
       Ei0a::kProtocolSemver+"\",\"schema_digest\":\""+Ei0a::kSchemaDigest+
+      "\",\"descriptor_schema_digest\":\""+Ei0a::kDescriptorSchemaDigest+
       "\",\"engine_build\":\"ei0d-cert\",\"authority_mode\":\""+Ei0a::kAuthorityMode+
-      "\",\"world_uuid\":\""+world+"\",\"genesis_digest\":\""+std::string(64,'a')+
+      "\",\"world_uuid\":\""+world+"\",\"macro_genesis_digest\":\""+std::string(64,'a')+
+      "\",\"world_baseline_digest\":\""+std::string(64,'c')+
+      "\",\"baseline_components\":[{\"role\":\"substrate\",\"semantic_identity_id\":\"substrate.test\",\"semantic_identity_version\":\"1\",\"semantic_digest\":\""+std::string(64,'d')+"\"}]"
       "\",\"generator_family\":\"provmapfps\",\"generator_version\":\"5\""
       " ,\"material_registry_id\":\"provenance-material-registry\",\"material_registry_digest\":\""+
       std::string(64,'b')+"\",\"surface_grammar_id\":\"ms1.surface-state\",\"surface_grammar_version\":\"1\""
@@ -35,6 +38,8 @@ int main()
     if(!Ei0a::ParseAndValidateEngineHello(Hello("b-1","bulk","session"),"b-1",bulk,error))return Fail("bulk hello");
     Ei0d::SessionBinding const binding=Ei0d::BindingFromHello(control);
     if(!Ei0d::ValidateBulkBinding(binding,bulk,error))return Fail("same-session binding");
+    Ei0a::EngineHello wrongBaseline=bulk;wrongBaseline.worldBaselineDigest=std::string(64,'e');
+    if(Ei0d::ValidateBulkBinding(binding,wrongBaseline,error)||error!="session_mismatch")return Fail("wrong baseline admitted");
     Ei0a::EngineHello wrong=bulk;wrong.worldUuid="33333333-3333-4333-8333-333333333333";
     if(Ei0d::ValidateBulkBinding(binding,wrong,error)||error!="session_mismatch")return Fail("wrong world admitted");
     wrong=bulk;wrong.transportProfileId="legacy-v1";

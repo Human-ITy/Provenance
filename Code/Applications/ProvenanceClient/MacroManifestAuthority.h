@@ -45,7 +45,9 @@ inline Manifest Fail(std::string const& value){Manifest out;out.failure=value;re
 inline Manifest Load(std::string const& path,MacroPageAuthority::Context const& context)
 {
     std::string text;if(!Detail::Read(path,text))return Detail::Fail("manifest_open_failed");
-    std::istringstream input(text);std::string line;if(!std::getline(input,line)||line!=kMagic)
+    std::istringstream input(text);std::string line;if(!std::getline(input,line))
+        return Detail::Fail("manifest_family_mismatch");
+    if(!line.empty()&&line.back()=='\r')line.pop_back();if(line!=kMagic)
         return Detail::Fail("manifest_family_mismatch");
     std::map<std::string,std::string> fields;std::vector<std::string> pageLines;
     Manifest result;
