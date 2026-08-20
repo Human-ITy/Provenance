@@ -70,7 +70,11 @@ Preserved every prior fixture (MV2.A/A2 + MV3.A/B1/B1.1/B2 + MS1.A; 0 FAIL total
 | cheap source | PASS — analytic (cones + ridge crests); no ReconstructedZ/erosion/QueryMaterial |
 
 `compile_seconds ≈ 186` (< 200 budget). Renderer green on the regenerated gen-5 pages:
-MV2.B 128 km raster, **0 MV2 coverage holes**, 25 unique pages, seam continuous.
+MV2.B 128 km raster, **0 MV2 coverage holes**, 25 unique pages, seam continuous. **24 m/s
+Test B on the MW8 presentation path** (`--cert-streaming-soak-mw8 --mv2b-on`, default MS1.B on)
+**PX2 all-green** on gen-5 pages: `engine_cpu_over_16_667=0` (worst 11.7 ms), 0 presented/
+stage-owned/os-gap misses, cadence no-regression, 0 movement frames > 16.667 (peak changes are
+outside the origin ±160 km footprint, so the render/travel pacing is unchanged).
 
 ## Visual evidence
 
