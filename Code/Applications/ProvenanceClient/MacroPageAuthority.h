@@ -20,10 +20,10 @@ namespace MacroPageAuthority
 constexpr char const* kMagic="PROVENANCE_MACRO_AUTHORITY_PAGE_V2";
 constexpr char const* kLegacyMagic="PROVENANCE_MACRO_AUTHORITY_PAGE_V1";
 constexpr int kPageSchemaVersion=2;
-constexpr char const* kGenesisDigest="8394bfefb6955cfffec1c927721d2e6da1b4a24c5525dce4cd238640c2ecd801";
+constexpr char const* kGenesisDigest="9dca0db5344baf0cf709dd654fb80fce38589f0f7fcf01ed8fe086d74818d711";
 constexpr char const* kGeneratorFamily="provenance.macro-authority";
 constexpr char const* kGeneratorVersion="5";
-constexpr char const* kGeneratorBuildDigest="5d7c1636de50e62dabbae43233e7fc4abdb6d16bc06e79874a92f0010f697d08";
+constexpr char const* kGeneratorBuildDigest="62346ed9f1bc4b094211130902241269fe18f2e9d3511c851ad9ec6e4395d5fb";
 constexpr char const* kGeneratorConfigDigest="bd88947d297f3c231f94e5213ec7da67d03853a6882f56bcfb184f33b285ab1a";
 constexpr char const* kMaterialRegistryId="provenance.material-registry.ms1a-v1";
 constexpr char const* kMaterialRegistryDigest="f095c59862b3856a3c71761ea0e8d9b56e24a08f4530a37e589713ba8ed3eaaf";
@@ -31,6 +31,8 @@ constexpr char const* kLegacyGenesisDigest="17405cbecb97d55aee9e85408e8735c7f055
 constexpr char const* kLegacyGeneratorBuildDigest="afa225c1bada4642a3ba6dd79948870e396293a5dd8c5595b1e8c10257a8b72a";
 constexpr char const* kLegacyGeneratorConfigDigest="f5ad774512951d272fe507700dd4702ac3094f253c75596936a92e1d852cf8a0";
 constexpr char const* kLegacyMaterialRegistryDigest="e33bf4530caf681caed2d8a0bebe5cd886fd38d4954a480fa4d458149f825c76";
+constexpr char const* kToolchainSupersededGenesisDigest="8394bfefb6955cfffec1c927721d2e6da1b4a24c5525dce4cd238640c2ecd801";
+constexpr char const* kToolchainSupersededGeneratorBuildDigest="5d7c1636de50e62dabbae43233e7fc4abdb6d16bc06e79874a92f0010f697d08";
 constexpr char const* kRegionKey="causal_world_macro_provinces_floor";
 constexpr char const* kPageDigestAlgorithm="sha256-canonical-records-v1";
 constexpr char const* kSourceDigestAlgorithm="fnv1a64-height-centimeters-le6-v1";
@@ -153,7 +155,9 @@ inline Page ValidateText(std::string const& text,int requestedRi,int requestedRj
     static char const* required[]={"macro_page_schema_version","identity_schema_version","seed","coordinate_frame_id","generator_family","generator_version","generator_build_digest","generator_config_digest","material_registry_id","material_registry_digest","surface_grammar_id","surface_grammar_version","water_grammar_id","water_grammar_version","genesis_digest","descriptor_schema_digest","region_key","region_id","region_cell","region_min_x_m","region_min_y_m","region_size_m","sample_step_m","grid_n","height_count","source_digest_algorithm","source_digest","height_grid_row_major","surface_descriptor_version","surface_step_m","surface_grid_n","surface_count","surface_digest_algorithm","surface_digest","surface_grid_row_major","water_descriptor_version","water_step_m","water_grid_n","water_count","water_digest_algorithm","water_digest","water_grid_row_major","parent_supertile_cell","parent_supertile_id","payload_encoding","page_digest_algorithm","page_digest","no_wrap_into_region","cheap_source","world_seed","world_identity_hash","neighbor_n","neighbor_s","neighbor_e","neighbor_w","neighbor_ne","neighbor_nw","neighbor_se","neighbor_sw"};
     if(v.size()!=sizeof(required)/sizeof(required[0]))return Detail::Fail(p,Failure::MalformedHeader,"missing or unknown field");for(char const* name:required)if(!v.count(name))return Detail::Fail(p,Failure::MalformedHeader,std::string("missing ")+name);
     int schema=0;if(!Detail::Int(v["macro_page_schema_version"],schema)||schema!=kPageSchemaVersion)return Detail::Fail(p,Failure::UnsupportedPageSchema,"unsupported page schema");
-    bool const legacyIdentity=v["generator_build_digest"]==kLegacyGeneratorBuildDigest&&v["generator_config_digest"]==kLegacyGeneratorConfigDigest&&v["material_registry_digest"]==kLegacyMaterialRegistryDigest&&v["genesis_digest"]==kLegacyGenesisDigest;
+    bool const opaqueLegacyIdentity=v["generator_build_digest"]==kLegacyGeneratorBuildDigest&&v["generator_config_digest"]==kLegacyGeneratorConfigDigest&&v["material_registry_digest"]==kLegacyMaterialRegistryDigest&&v["genesis_digest"]==kLegacyGenesisDigest;
+    bool const toolchainLegacyIdentity=v["generator_build_digest"]==kToolchainSupersededGeneratorBuildDigest&&v["generator_config_digest"]==kGeneratorConfigDigest&&v["material_registry_digest"]==kMaterialRegistryDigest&&v["genesis_digest"]==kToolchainSupersededGenesisDigest;
+    bool const legacyIdentity=opaqueLegacyIdentity||toolchainLegacyIdentity;
     if(v["generator_family"]!=ctx.generatorFamily||v["generator_version"]!=ctx.generatorVersion||(!legacyIdentity&&(v["generator_build_digest"]!=kGeneratorBuildDigest||v["generator_config_digest"]!=kGeneratorConfigDigest)))return Detail::Fail(p,Failure::WrongGenerator,"generator identity mismatch");
     if(v["material_registry_id"]!=ctx.materialRegistryId||(!legacyIdentity&&v["material_registry_digest"]!=ctx.materialRegistryDigest))return Detail::Fail(p,Failure::WrongMaterialRegistry,"material registry mismatch");
     if(v["surface_grammar_id"]!=ctx.surfaceGrammarId||v["surface_grammar_version"]!=ctx.surfaceGrammarVersion||v["water_grammar_id"]!=ctx.waterGrammarId||v["water_grammar_version"]!=ctx.waterGrammarVersion||v["descriptor_schema_digest"]!=ctx.descriptorSchemaDigest)return Detail::Fail(p,Failure::WrongSchemaDigest,"descriptor contract mismatch");
@@ -174,7 +178,7 @@ inline Page ValidateText(std::string const& text,int requestedRi,int requestedRj
     int si=Detail::SuperCell(ri),sj=Detail::SuperCell(rj);if(v["parent_supertile_cell"]!=std::to_string(si)+","+std::to_string(sj)||v["parent_supertile_id"]!=Detail::SuperId(v["seed"],si,sj))return Detail::Fail(p,Failure::LineageMismatch,"parent supertile lineage mismatch");
     if(v["world_seed"]!=v["seed"]||v["payload_encoding"]!="ascii-row-major-v1"||v["no_wrap_into_region"]!="1"||v["cheap_source"]!="macro_analytic_no_reconstructedz")return Detail::Fail(p,Failure::MalformedHeader,"invalid page declaration");
     p.pageDigest=Detail::Sha256(Detail::CanonicalPage(magic,v));if(v["page_digest_algorithm"]!=kPageDigestAlgorithm||v["page_digest"]!=p.pageDigest)return Detail::Fail(p,Failure::PageDigestMismatch,"whole-page digest mismatch");
-    if(legacyIdentity){p.trust=ctx.diagnosticLegacy?Trust::DiagnosticOnly:Trust::Quarantined;p.failure=Failure::WrongGenesis;p.detail="superseded opaque EI0.C generator identity";return p;}
+    if(legacyIdentity){p.trust=ctx.diagnosticLegacy?Trust::DiagnosticOnly:Trust::Quarantined;p.failure=Failure::WrongGenesis;p.detail=opaqueLegacyIdentity?"superseded opaque EI0.C generator identity":"superseded toolchain-sensitive EI0.E/EI2 generator identity";return p;}
     p.trust=Trust::ValidAuthority;p.failure=Failure::None;p.detail.clear();return p;
 }
 

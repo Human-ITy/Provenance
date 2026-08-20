@@ -27,13 +27,13 @@ std::string EngineHello()
       "\",\"water_grammar_id\":\""+Ms1::kWaterGrammarId+"\",\"water_grammar_version\":\""+Ms1::kWaterGrammarVersion+
       "\",\"session_token\":\"session-ei0c\",\"lane_role\":\"control\",\"server_instance_id\":\"22222222-2222-4222-8222-222222222222\"}";
 }
-std::string SupersededIdentityPage(std::string const& text)
+std::string SupersededIdentityPage(std::string const& text,bool toolchain)
 {
     std::string magic;std::map<std::string,std::string> values;if(!MacroPageAuthority::Detail::Parse(text,magic,values))return {};
-    values["generator_build_digest"]=MacroPageAuthority::kLegacyGeneratorBuildDigest;
-    values["generator_config_digest"]=MacroPageAuthority::kLegacyGeneratorConfigDigest;
-    values["material_registry_digest"]=MacroPageAuthority::kLegacyMaterialRegistryDigest;
-    values["genesis_digest"]=MacroPageAuthority::kLegacyGenesisDigest;
+    values["generator_build_digest"]=toolchain?MacroPageAuthority::kToolchainSupersededGeneratorBuildDigest:MacroPageAuthority::kLegacyGeneratorBuildDigest;
+    values["generator_config_digest"]=toolchain?MacroPageAuthority::kGeneratorConfigDigest:MacroPageAuthority::kLegacyGeneratorConfigDigest;
+    values["material_registry_digest"]=toolchain?MacroPageAuthority::kMaterialRegistryDigest:MacroPageAuthority::kLegacyMaterialRegistryDigest;
+    values["genesis_digest"]=toolchain?MacroPageAuthority::kToolchainSupersededGenesisDigest:MacroPageAuthority::kLegacyGenesisDigest;
     values["page_digest"]=MacroPageAuthority::Detail::Sha256(MacroPageAuthority::Detail::CanonicalPage(magic,values));
     std::string out=magic+"\n";for(auto const& value:values)out+=value.first+"="+value.second+"\n";return out;
 }
@@ -48,7 +48,7 @@ int main(int argc,char** argv)
     for(int rj=-2;rj<=2;++rj)for(int ri=-2;ri<=2;++ri){auto page=MacroPageAuthority::Load(PagePath(argv[1],ri,rj),ri,rj,context);if(!page.Authoritative()){std::cerr<<ri<<","<<rj<<": "<<MacroPageAuthority::FailureName(page.failure)<<" "<<page.detail<<"\n";return 4;}heights+=page.heights.size();surface+=page.surfaceCodes.size();water+=page.waterCodes.size();}
     auto valid=MacroPageAuthority::Load(PagePath(argv[1],0,0),0,0,context);auto wrongContext=context;wrongContext.genesisDigest=std::string(64,'f');auto corrupt=MacroPageAuthority::Load(PagePath(argv[1],0,0),0,0,wrongContext);if(corrupt.failure!=MacroPageAuthority::Failure::WrongGenesis)return 5;
     std::string legacy=Slurp(PagePath(argv[1],0,0));legacy.replace(0,std::string(MacroPageAuthority::kMagic).size(),MacroPageAuthority::kLegacyMagic);auto legacyAuthority=MacroPageAuthority::ValidateText(legacy,0,0,context);context.diagnosticLegacy=true;auto legacyDiagnostic=MacroPageAuthority::ValidateText(legacy,0,0,context);if(legacyAuthority.trust!=MacroPageAuthority::Trust::Quarantined||legacyDiagnostic.trust!=MacroPageAuthority::Trust::DiagnosticOnly||legacyDiagnostic.Authoritative())return 6;
-    context.diagnosticLegacy=false;std::string superseded=SupersededIdentityPage(Slurp(PagePath(argv[1],0,0)));auto oldAuthority=MacroPageAuthority::ValidateText(superseded,0,0,context);context.diagnosticLegacy=true;auto oldDiagnostic=MacroPageAuthority::ValidateText(superseded,0,0,context);if(oldAuthority.trust!=MacroPageAuthority::Trust::Quarantined||oldDiagnostic.trust!=MacroPageAuthority::Trust::DiagnosticOnly||oldAuthority.failure!=MacroPageAuthority::Failure::WrongGenesis||oldDiagnostic.failure!=MacroPageAuthority::Failure::WrongGenesis||oldDiagnostic.Authoritative())return 9;
+    for(bool toolchain:{false,true}){context.diagnosticLegacy=false;std::string superseded=SupersededIdentityPage(Slurp(PagePath(argv[1],0,0)),toolchain);auto oldAuthority=MacroPageAuthority::ValidateText(superseded,0,0,context);context.diagnosticLegacy=true;auto oldDiagnostic=MacroPageAuthority::ValidateText(superseded,0,0,context);if(oldAuthority.trust!=MacroPageAuthority::Trust::Quarantined||oldDiagnostic.trust!=MacroPageAuthority::Trust::DiagnosticOnly||oldAuthority.failure!=MacroPageAuthority::Failure::WrongGenesis||oldDiagnostic.failure!=MacroPageAuthority::Failure::WrongGenesis||oldDiagnostic.Authoritative())return 9;}
     MacroPageAuthority::TrustedSlot slot;if(!slot.Publish(valid)||slot.Publish(corrupt)||!slot.hasPublished||slot.published.pageDigest!=valid.pageDigest)return 7;MacroPageAuthority::TrustedSlot empty;if(empty.Publish(corrupt)||!empty.Publish(valid)||!empty.published.Authoritative())return 8;
     double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     std::cout<<"EI0.C C++ PAGE VALIDATION CERT: PASS\n"<<"pages=25 heights="<<heights<<" surface="<<surface<<" water="<<water<<"\n"<<"macro_genesis_digest="<<hello.macroGenesisDigest<<"\n"<<"validation_25_pages_ms="<<ms<<" per_page_ms="<<(ms/25.0)<<"\n";

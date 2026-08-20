@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EI0.E reproducible identity, semantic parity, and page reissue certificate."""
+"""EI2.R toolchain-independent identity and semantic parity certificate."""
 
 from __future__ import annotations
 
@@ -54,10 +54,10 @@ def emit(magic, values):
         f"{key}={value}" for key, value in values.items()) + "\n"
 
 
-def superseded_page(text):
+def superseded_page(text, identity, digest):
     magic, values = contract._records(text)
-    values.update(contract.LEGACY_GENESIS_IDENTITY)
-    values["genesis_digest"] = contract.LEGACY_GENESIS_DIGEST
+    values.update(identity)
+    values["genesis_digest"] = digest
     values["page_digest"] = contract.page_digest(magic, values)
     return emit(magic, values)
 
@@ -148,15 +148,21 @@ def main(argv=None):
         if actual != expected:
             raise AssertionError(f"semantic payload drift: {key} {actual}")
 
-    old = superseded_page(pages[12].read_text(encoding="utf-8"))
-    rejected = contract.validate_text(old, coord(pages[12]), contract.GENESIS_DIGEST)
-    diagnostic = contract.validate_text(
-        old, coord(pages[12]), contract.GENESIS_DIGEST, diagnostic_legacy=True)
-    if (rejected.trust != contract.Trust.QUARANTINED or
-            diagnostic.trust != contract.Trust.DIAGNOSTIC_ONLY or
-            rejected.failure != contract.Failure.WRONG_GENESIS or
-            diagnostic.authoritative):
-        raise AssertionError("superseded identity policy failed")
+    for identity, digest, label in (
+            (contract.LEGACY_GENESIS_IDENTITY,
+             contract.LEGACY_GENESIS_DIGEST, "opaque EI0.C"),
+            (contract.TOOLCHAIN_SUPERSEDED_GENESIS_IDENTITY,
+             contract.TOOLCHAIN_SUPERSEDED_GENESIS_DIGEST, "toolchain EI0.E/EI2")):
+        old = superseded_page(
+            pages[12].read_text(encoding="utf-8"), identity, digest)
+        rejected = contract.validate_text(old, coord(pages[12]), contract.GENESIS_DIGEST)
+        diagnostic = contract.validate_text(
+            old, coord(pages[12]), contract.GENESIS_DIGEST, diagnostic_legacy=True)
+        if (rejected.trust != contract.Trust.QUARANTINED or
+                diagnostic.trust != contract.Trust.DIAGNOSTIC_ONLY or
+                rejected.failure != contract.Failure.WRONG_GENESIS or
+                diagnostic.authoritative):
+            raise AssertionError("{} superseded identity policy failed".format(label))
 
     source = macro.read_text(encoding="utf-8")
     if "genesis_digest" in source:
@@ -166,11 +172,12 @@ def main(argv=None):
         if namespace not in source:
             raise AssertionError(f"missing static-ID namespace audit target {namespace}")
 
-    print("EI0.E REPRODUCIBLE GENESIS IDENTITY CERT: PASS")
+    print("EI2.R TOOLCHAIN-INDEPENDENT GENESIS IDENTITY CERT: PASS")
     print(f"generator_build_digest={generator_build_digest(actual_manifest)}")
     print(f"generator_config_digest={identity['generator_config_digest']}")
     print(f"material_registry_digest={identity['material_registry_digest']}")
     print(f"old_genesis_digest={contract.LEGACY_GENESIS_DIGEST}")
+    print(f"toolchain_superseded_genesis_digest={contract.TOOLCHAIN_SUPERSEDED_GENESIS_DIGEST}")
     print(f"corrected_genesis_digest={contract.GENESIS_DIGEST}")
     print("relocation_locations=2 semantic_mutation=detected representation_mutation=stable")
     print("static_ids=seed_plus_absolute_feature_facts genesis_digest_dependency=none")

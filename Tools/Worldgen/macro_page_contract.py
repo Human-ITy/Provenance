@@ -52,8 +52,8 @@ GENESIS_IDENTITY = {
     name: _IDENTITY_PRODUCT[name] for name in GENESIS_FIELDS
 }
 
-# EI0.C evidence identity, superseded by EI0.E. It can be inspected only in
-# explicit diagnostic mode and can never enter canonical authority.
+# Superseded identities are evidence only. They can be inspected in explicit
+# diagnostic mode and can never enter canonical authority.
 LEGACY_GENESIS_IDENTITY = {
     **GENESIS_IDENTITY,
     "generator_build_digest": "afa225c1bada4642a3ba6dd79948870e396293a5dd8c5595b1e8c10257a8b72a",
@@ -61,6 +61,17 @@ LEGACY_GENESIS_IDENTITY = {
     "material_registry_digest": "e33bf4530caf681caed2d8a0bebe5cd886fd38d4954a480fa4d458149f825c76",
 }
 LEGACY_GENESIS_DIGEST = "17405cbecb97d55aee9e85408e8735c7f055f6ad87369dfa94bee4762c67e994"
+TOOLCHAIN_SUPERSEDED_GENESIS_IDENTITY = {
+    **GENESIS_IDENTITY,
+    "generator_build_digest": "5d7c1636de50e62dabbae43233e7fc4abdb6d16bc06e79874a92f0010f697d08",
+}
+TOOLCHAIN_SUPERSEDED_GENESIS_DIGEST = (
+    "8394bfefb6955cfffec1c927721d2e6da1b4a24c5525dce4cd238640c2ecd801")
+SUPERSEDED_GENESIS_IDENTITIES = (
+    (LEGACY_GENESIS_IDENTITY, LEGACY_GENESIS_DIGEST, "opaque EI0.C"),
+    (TOOLCHAIN_SUPERSEDED_GENESIS_IDENTITY,
+     TOOLCHAIN_SUPERSEDED_GENESIS_DIGEST, "toolchain-sensitive EI0.E/EI2"),
+)
 
 
 def canonical_genesis_bytes(identity: dict) -> bytes:
@@ -247,7 +258,9 @@ def validate_text(text: str, requested_coord: tuple[int, int], expected_genesis:
         if int(values["macro_page_schema_version"]) != PAGE_SCHEMA_VERSION:
             return _fail(Failure.UNSUPPORTED_PAGE_SCHEMA, "unsupported macro page schema", values)
         identity = {name: values[name] for name in GENESIS_FIELDS}
-        legacy_identity = identity == LEGACY_GENESIS_IDENTITY
+        superseded = next((entry for entry in SUPERSEDED_GENESIS_IDENTITIES
+                           if identity == entry[0]), None)
+        legacy_identity = superseded is not None
         if (values["generator_family"] != GENESIS_IDENTITY["generator_family"] or
                 values["generator_version"] != GENESIS_IDENTITY["generator_version"] or
                 (not legacy_identity and
@@ -262,7 +275,7 @@ def validate_text(text: str, requested_coord: tuple[int, int], expected_genesis:
         if declared_genesis != values["genesis_digest"]:
             return _fail(Failure.WRONG_GENESIS, "page GenesisIdentity is internally inconsistent", values)
         if legacy_identity:
-            if declared_genesis != LEGACY_GENESIS_DIGEST:
+            if declared_genesis != superseded[1]:
                 return _fail(Failure.WRONG_GENESIS, "malformed superseded identity", values)
         elif declared_genesis != expected_genesis:
             return _fail(Failure.WRONG_GENESIS, "page GenesisIdentity does not match session", values)
@@ -334,19 +347,21 @@ def validate_text(text: str, requested_coord: tuple[int, int], expected_genesis:
     if legacy_identity:
         return ValidationResult(
             Trust.DIAGNOSTIC_ONLY if diagnostic_legacy else Trust.QUARANTINED,
-            Failure.WRONG_GENESIS, "superseded opaque EI0.C generator identity",
+            Failure.WRONG_GENESIS, "superseded {} generator identity".format(superseded[2]),
             values, heights, surface, water)
     return ValidationResult(Trust.VALID_AUTHORITY, Failure.NONE, "", values, heights, surface, water)
 
 
 def reissue_identity_text(text: str) -> str:
-    """Rebind a valid V2 page to EI0.E without touching semantic payloads."""
+    """Rebind a superseded V2 page without touching semantic payloads."""
     magic, values = _records(text)
     if magic != MAGIC:
         raise ValueError("identity reissue requires a V2 page")
     old_identity = {name: values[name] for name in GENESIS_FIELDS}
-    if old_identity != LEGACY_GENESIS_IDENTITY:
-        raise ValueError("identity reissue requires the superseded EI0.C identity")
+    superseded = next((entry for entry in SUPERSEDED_GENESIS_IDENTITIES
+                       if old_identity == entry[0]), None)
+    if superseded is None:
+        raise ValueError("identity reissue requires a recognized superseded identity")
     if genesis_digest(old_identity) != values["genesis_digest"]:
         raise ValueError("legacy page identity is internally inconsistent")
     values.update({name: str(value) for name, value in GENESIS_IDENTITY.items()})
