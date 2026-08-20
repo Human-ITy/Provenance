@@ -29,6 +29,7 @@ residency/LOD/meshes/GPU/culling, and presentation. EI0.A moves no world truth.
   `be29a059c2e31aa74bdb62169592d0539f4e6d7b`
 - Provenance base: `5073baa73905e731eb72c17ae026685b25a9e812`
 - FableScript EI0.A: `6fbc1856dc74c336895026dd4432f37f3d504bcc`
+- FableScript EI0.A bulk-lane closure: `b74f20ee216df310c99a414a3f3330a439fdedab`
 - Provenance EI0.A: `4cc674c9a97f72d8c8cbb4d7cdbaf1c16a731494`
 - Handoff: `EI0A_CANONICAL_IDENTITY_HANDOFF.md`
 

@@ -13,6 +13,7 @@ EI0.D, EI1, or any new world-authority stage.
 | Historical donor tip | `be29a059c2e31aa74bdb62169592d0539f4e6d7b` |
 | Provenance integration base | `5073baa73905e731eb72c17ae026685b25a9e812` |
 | FableScript EI0.A implementation | `6fbc1856dc74c336895026dd4432f37f3d504bcc` |
+| FableScript bulk-lane projection closure | `b74f20ee216df310c99a414a3f3330a439fdedab` |
 | Provenance EI0.A implementation | `4cc674c9a97f72d8c8cbb4d7cdbaf1c16a731494` |
 
 The donor lineage was inspected and used as a reference. It was not merged or
@@ -97,6 +98,8 @@ The current authority mode is exactly `local_server_authoritative`.
 - A control hello creates the session token. A bulk hello can attach only to the
   same engine-process context, world UUID, and genesis digest. Foreign tokens
   fail with `session_mismatch`.
+- The bulk scaffold advertises and permits projection reads only; mutation
+  methods fail with `lane_method_not_allowed`.
 - An engine with no loaded canonical world returns explicit `no_world`.
 
 EI0.A establishes two-lane identity only. It does not implement EI0.D TCP lane
@@ -143,7 +146,7 @@ FableScript full regression:
 
 ```
 python run_engine_tests.py
-Ran 1828 tests in 2.579s
+Ran 1828 tests in 2.581s
 OK (skipped=7)
 demo scene PASS
 OVERALL PASS
