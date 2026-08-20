@@ -226,26 +226,59 @@ Do not combine A and B (the MS1.A/MS1.B discipline that worked).
 Full weather / live rainfall · snow / glaciers · groundwater simulation · waterfalls (hook only)
 · new fluid physics · sediment-transport rewrite · flora · atmosphere/time · civilization.
 
-## Open decisions — need approval before WD1.A
+## Decisions — RESOLVED (locked for WD1.A)
 
-1. **Macro hydroclimate/supply source** — reuse the existing MS1 `_control(":macro_humidity")`
-   band + drainage-derived wetness + an elevation/continentality evaporation proxy (no new
-   authority), vs. open a dedicated macro-hydroclimate cut first. **Lean: reuse existing
-   proxies** for WD1.A; a richer macro hydroclimate is a possible later refinement.
-2. **Seasonal baseline** — WD1.A emits a single annual-mean presence with a reserved `season`
-   slot (no live variation), vs. emit a min/mean/max presence band now. **Lean: annual-mean +
-   reserved slot.**
-3. **Depth representation** — continuous coarse metres + a 4-class collapse, vs. depth-range
-   band only. **Lean: continuous coarse metres (WD1.B owns the transmission curve).**
-4. **MacroWaterBodyId keying** — key standing bodies to the B1 basin-outlet/terminal cell (reuse
-   B1's window-independent ids). **Lean: yes; add MacroWaterBodyId/MacroRegimeId keyed to the
-   outlet cell; rivers reuse MacroChannelId.**
-5. **Descriptor scope** — add a WaterState page descriptor alongside the MS1 surface descriptor
-   (a few bytes/cell), vs. derive water at render time from the existing descriptors. **Lean:
-   add the descriptor** (cacheable, deterministic, cheap; mirrors MS1).
+1. **Hydroclimate** — reuse current macro environmental proxies (`macro_humidity` band +
+   elevation/lapse/continentality + drainage accumulation + basin accommodation + substrate
+   permeability). **No new hydroclimate cut.** **Guardrail (HARD): no circular input** — water
+   presence may consume environmental wetness *POTENTIAL* (climate/substrate-derived) but may
+   **never** use `WaterState` (actual presence) to prove `WaterState`. WD1 reads MS1 for
+   SUBSTRATE/permeability/organic/lithology, and derives supply directly from
+   climate+catchment+loss — not from any water-derived wetness value.
+2. **Season** — **annual-mean presence authoritative now, PLUS a seasonality/persistence proxy**
+   (`mean_supply` · `seasonality_index` · `persistence_margin`) so ephemeral/seasonal/perennial
+   are classified by persistence, not left empty. Explicit world season/time drives the reserved
+   slot LATER (no live weather now).
+3. **Depth** — **continuous `depth_m` authoritative**; keep `surface_elevation`/`bottom_elevation`
+   (`depth = surface − bottom`) and let shallow/mid/deep be *derived convenience metadata*.
+   **No hard depth bands as authority.**
+4. **Identity** — standing body → **`MacroWaterBodyId` keyed to the canonical basin
+   terminal/sink/spill identity** (absolute coords, not whichever page compiled it); rivers inherit
+   **`MacroChannelId`** (B1 ancestry); a derived **`WaterRegimeId`** may refine a local reach/state,
+   never replace the channel ancestry.
+5. **Descriptor** — **compile a semantic WaterState descriptor into the macro pages** (Python
+   authority → compiled descriptor → C++ consumes), versioned, no RGB, no shader coefficients.
+6. **Supply proxy (NEW, LOCKED)** — a first-class **`discharge_proxy` / `water_supply_index`** =
+   `f(upstream accumulation × climatic supply − permeability/evaporation losses)`, reused by
+   presence, river width/depth tendency, flow regime, turbidity/sediment capacity, waterfall
+   discharge, wetland support. A macro hydrologic FORCING descriptor — **not water mass, not
+   runtime flow.**
+7. **Mass law (NEW, HARD)** — **macro WaterState is an environmental PROMISE, not a conserved
+   water ledger.** WD1.A adds no grams to 16D/F and changes no terrain geometry. Inside detailed
+   authority the conserved 16D–16F/P5b system wins; outside, the macro promise only says what
+   detailed generation must resolve TOWARD.
 
-**Status:** design LOCKED (§G above). Next cut = **WD1.A** (WaterState authority + presence law +
-macro descriptors), then **WD1.B** (shared water appearance), then WD1.C (waterfalls, later).
+**Presence is TWO STAGES (locked), not one blended score:**
+```
+Stage 1  HYDROLOGIC SUPPLY   climate + catchment(accumulation) − losses(permeability/evaporation)
+                             → water_supply_index / mean_supply / seasonality / persistence
+Stage 2  ACCOMMODATION       channel gradient / basin closure / relief
+                             → flowing vs standing vs wet-ground expression
+```
+So a high-supply location does not automatically become a lake: high supply + steep channel →
+perennial river; high supply + closed basin → lake; moderate supply + flat poor-drained →
+wetland; low mean supply + high seasonality → seasonal wash; low supply + permeable substrate →
+dry channel / damp subsurface.
+
+**Compatibility-cert scope (guardrail, locked):** demand macro/fine agreement **only where frozen
+detailed 16D–16F water truth legitimately exists** — do not assume fine water spans the whole
+±32 km just because terrain does. Where detailed water exists: macro "perennial body" → detailed
+may refine shoreline/depth, may not say "dry". Where it does not: the macro promise is authoritative
+context (no fabricated fine comparison).
+
+**Status:** design LOCKED. Next cut = **WD1.A** (WaterState authority + two-stage presence +
+discharge proxy + macro descriptors), then **WD1.B** (shared optical appearance), then WD1.C
+(waterfalls, later).
 
 ## Non-goals
 

@@ -1,5 +1,5 @@
-MV2A_MACRO_AUTHORITY+MV3C_ALPINE_PEAKS+MS1A_SURFACESTATE PASS
-scope=macro_forcing+alpine_peak_hierarchy+surface_state_authority_only_no_renderer_no_fine_causal_stack
+MV2A+MV3C_PEAKS+MS1A_SURFACE+WD1A_WATER PASS
+scope=macro_forcing+alpine_peaks+surface_state+water_state_authority_only_no_renderer_no_fine_causal_stack
 authority_ring=+/-2_cells  pages_compiled=25  (full 128 km radial authority)
 world_seed=mw1-64km-01
 generator_version=5
@@ -8,7 +8,7 @@ central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=185.585
+compile_seconds=196.242
 
 fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
 fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=656.5m worst=2114.9m (need rms>40)
@@ -67,7 +67,22 @@ fixture.ms1a_macro_fine_compatibility=PASS  boundary macro-family vs frozen cent
 fixture.ms1a_geometry_invariance=PASS  height digest recomputed (no surface) == page source_digest for sampled pages (surface ON changes no geometry sample)
 fixture.ms1a_surface_cheap_source=PASS  SurfaceState composed from macro controls+drainage+landform only; forbidden_tokens=none; descriptor 17x17 cells @ 4000m (bounded, a few bytes/cell)
 fixture.ms1a_h2h_near_far_identity=PASS  coarse macro descriptor family == fine point family 23/24 (96%, need>=85; distance simplifies, never contradicts)
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 185.58s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.wd1a_drainage_neq_water=PASS  same channel (accum=320): dry supply -> presence=dry/body=none; wet supply -> presence=perennial/body=perennial_river (drainage line != water present)
+fixture.wd1a_perennial_vs_seasonal=PASS  humid low-seasonality -> perennial/perennial_river; dry high-seasonality permeable -> ephemeral/arid_wash (regime follows supply/seasonality, not the channel)
+fixture.wd1a_lake_basin_accommodation=PASS  closed basin + supply -> standing/closed_basin_lake; supply removed -> dry/none (standing needs accommodation AND supply)
+fixture.wd1a_bottom_substrate_reference=PASS  water bodies carry >=2 distinct MS1 bottom families {'rock': 123, 'regolith': 549, 'volcanic': 332, 'sediment': 99} (substrate beneath is recoverable; water occupies, not replaces)
+fixture.wd1a_sediment_turbidity_optics=PASS  clear-headwater mean clarity=0.87 vs sediment/floodplain clarity=0.32 (need clearer headwaters)
+fixture.wd1a_organic_wetland=PASS  558 wetland/dark-water bodies; max organic_load=0.80 (need>0.3; low-gradient wet+organic)
+fixture.wd1a_volcanic_mineral=PASS  28 volcanic/mineral bodies + 244 ordinary bodies in mineral-potential areas (mineral water exists but is not universal in volcanic provinces)
+fixture.wd1a_depth_continuous_deterministic=PASS  85 distinct depths spanning 1.5-120.0m (continuous, not banded); per-point pack reproduces=True
+fixture.wd1a_cross_page_identity=PASS  channel crosses 64 km page line x=32km keeping MacroChannelId 95843a26a430dcc0
+fixture.wd1a_cross_supertile_identity=PASS  channel keeps MacroChannel+Watershed identity across the 384 km super-tile edge
+fixture.wd1a_seed_semantics=PASS  same-seed water_digest reproduces=True; alt-seed differs=True (origin body mix {'none': 289} vs alt {'none': 289})
+fixture.wd1a_long_distance_unbounded=PASS  deterministic=True; presence regimes over 0..2000km=['damp_substrate', 'dry'] (non-periodic, no page/super-tile cadence)
+fixture.wd1a_macro_fine_compatibility_guardrail=PASS  centre-page macro water bodies=0 (need 0; 16D-16F owns detailed water); ±32km interior deferred/dry=True (no fabricated macro water in detailed coverage)
+fixture.wd1a_frozen_geometry_no_mass=PASS  height digest == page source_digest (WaterState changes no terrain sample); classification only, no water mass created, 16D-16F/P5b untouched
+fixture.wd1a_cheap_source=PASS  WaterState from drainage+MS1+macro hydroclimate proxy only; no ReconstructedZ/QueryMaterial/runtime-water; forbidden=none; descriptor 17x17@4000m v1
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) + surface+water descriptors in 196.24s (budget 280; invariant=no fine causal stack); macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
 page_ids (named subset of the 25-page ring):
   center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]

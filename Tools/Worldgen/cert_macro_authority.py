@@ -25,7 +25,9 @@ from macro_authority import (CentralProgram, MacroField, compile_page, serialize
                              SUPER_M, DRAIN_RES_M,
                              SurfaceInputs, compose_surface_state, surface_state_at,
                              central_surface_family, unpack_surface, SURFACE_STEP_M,
-                             SURFACE_DESCRIPTOR_VERSION, _SUBSTRATE_FAMILY)
+                             SURFACE_DESCRIPTOR_VERSION, _SUBSTRATE_FAMILY,
+                             water_state_at, water_supply, water_presence_body, unpack_water,
+                             WATER_DESCRIPTOR_VERSION, _SUBSTRATE_PERMEABILITY)
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE_DIR = ROOT / "Data" / "Worldgen" / "MacroAuthority"
@@ -1094,16 +1096,226 @@ def main() -> int:
                    f"coarse macro descriptor family == fine point family {h2h_agree}/{h2h_tot} "
                    f"({h2h_pct:.0f}%, need>=85; distance simplifies, never contradicts)"))
 
+    # ====================================================================== #
+    # WD1.A — WaterState authority fixtures
+    #   CHANNEL_EXISTS != WATER_PRESENT != WATER_BODY_TYPE != WATER_OPTICAL_STATE. Two-stage
+    #   presence (supply -> accommodation); classification only (no water mass, no geometry).
+    # ====================================================================== #
+    WREV = f"gv{MA.GENERATOR_VERSION}.wd{WATER_DESCRIPTOR_VERSION}"
+
+    # gather footprint water bodies from the compiled page descriptors (fast; no recompute)
+    foot_water = []                     # (x, y, WaterState) for cells that have a body
+    for (ri, rj), pg in pages.items():
+        for j in range(pg.water_n):
+            for i in range(pg.water_n):
+                ws = unpack_water(pg.water_codes[j * pg.water_n + i])
+                if ws.body_class != "none":
+                    foot_water.append((pg.min_x + i * pg.water_step, pg.min_y + j * pg.water_step, ws))
+
+    # WD1.A-1 DRAINAGE != WATER — the SAME channel (accumulation/slope) under wet vs dry supply
+    # yields different presence: dry channel vs flowing water. Water is not the drainage line.
+    d_dry, _, s_dry, p_dry = water_supply(0.12, 0.5, 0.6, 700.0, 320.0, 0.30)
+    d_wet, _, s_wet, p_wet = water_supply(0.88, 0.3, 0.6, 700.0, 320.0, 0.30)
+    pr_dry = water_presence_body(d_dry, s_dry, p_dry, 0.05, 0.30, True, False, 0.0, 0.0, 0.2, 0.0, 700.0)
+    pr_wet = water_presence_body(d_wet, s_wet, p_wet, 0.05, 0.30, True, False, 0.0, 0.0, 0.2, 0.0, 700.0)
+    w1_ok = pr_dry[0] in ("dry", "damp_substrate", "ephemeral") and pr_wet[0] in ("perennial", "seasonal") \
+        and pr_wet[1] != "none"
+    checks.append(("wd1a_drainage_neq_water", w1_ok,
+                   f"same channel (accum=320): dry supply -> presence={pr_dry[0]}/body={pr_dry[1]}; "
+                   f"wet supply -> presence={pr_wet[0]}/body={pr_wet[1]} (drainage line != water present)"))
+
+    # WD1.A-2 PERENNIAL vs SEASONAL — same channel, different supply/seasonality/permeability
+    # produce materially different regimes.
+    d_per, _, s_per, p_per = water_supply(0.85, 0.15, 0.6, 700.0, 320.0, 0.20)   # humid maritime
+    d_sea, _, s_sea, p_sea = water_supply(0.55, 0.85, 0.6, 700.0, 320.0, 0.55)   # drier continental permeable
+    reg_per = water_presence_body(d_per, s_per, p_per, 0.05, 0.20, True, False, 0.0, 0.0, 0.2, 0.0, 700.0)
+    reg_sea = water_presence_body(d_sea, s_sea, p_sea, 0.05, 0.55, True, False, 0.0, 0.0, 0.2, 0.0, 700.0)
+    w2_ok = reg_per[0] == "perennial" and reg_sea[0] in ("seasonal", "ephemeral") and reg_per[0] != reg_sea[0]
+    checks.append(("wd1a_perennial_vs_seasonal", w2_ok,
+                   f"humid low-seasonality -> {reg_per[0]}/{reg_per[1]}; dry high-seasonality permeable -> "
+                   f"{reg_sea[0]}/{reg_sea[1]} (regime follows supply/seasonality, not the channel)"))
+
+    # WD1.A-3 LAKE / BASIN — a closed accommodated basin with supply holds a STANDING body;
+    # remove the supply and the same basin no longer stands.
+    lake = water_presence_body(0.55, 0.2, 0.45, 0.005, 0.2, True, True, 0.7, 40.0, 0.2, 0.0, 300.0)
+    drylake = water_presence_body(0.05, 0.2, 0.0, 0.005, 0.2, False, True, 0.7, 40.0, 0.2, 0.0, 300.0)
+    w3_ok = lake[0] == "standing" and lake[1] in ("closed_basin_lake", "alpine_lake", "crater_lake",
+                                                  "floodplain_water") and drylake[0] != "standing"
+    checks.append(("wd1a_lake_basin_accommodation", w3_ok,
+                   f"closed basin + supply -> {lake[0]}/{lake[1]}; supply removed -> {drylake[0]}/{drylake[1]} "
+                   f"(standing needs accommodation AND supply)"))
+
+    # WD1.A-4 SUBSTRATE INFLUENCE — a water body references the MS1 bottom substrate; different
+    # ground beneath the water is recoverable (not replaced by a 'water material').
+    bottoms = {}
+    for _x, _y, ws in foot_water:
+        bottoms.setdefault(ws.bottom_family, 0)
+        bottoms[ws.bottom_family] += 1
+    w4_ok = len(bottoms) >= 2
+    checks.append(("wd1a_bottom_substrate_reference", w4_ok,
+                   f"water bodies carry >=2 distinct MS1 bottom families {dict(bottoms)} "
+                   f"(substrate beneath is recoverable; water occupies, not replaces)"))
+
+    # WD1.A-5 SEDIMENT / TURBIDITY — high-accumulation erodible reaches are turbid; clear
+    # resistant/cold headwaters are clear. Materially different optics from cause.
+    clear = [ws for _x, _y, ws in foot_water if ws.body_class in ("headwater_stream", "alpine_lake", "spring_pool")]
+    turbid = [ws for _x, _y, ws in foot_water if ws.body_class in ("sediment_river", "braided_reach", "floodplain_water")]
+    if clear and turbid:
+        cc = sum(w.clarity for w in clear) / len(clear)
+        tt = sum(w.clarity for w in turbid) / len(turbid)
+        w5_ok = cc > tt + 0.1
+        w5_d = f"clear-headwater mean clarity={cc:.2f} vs sediment/floodplain clarity={tt:.2f} (need clearer headwaters)"
+    else:
+        # fall back to the optics law directly
+        from macro_authority import _water_optics
+        clr_h = _water_optics("headwater_stream", 0.6, 200.0, 0.1, 0.1, 0.0, False, 1800.0, 1.0)[0]
+        clr_s = _water_optics("sediment_river", 0.6, 800.0, 0.9, 0.1, 0.0, False, 300.0, 3.0)[0]
+        w5_ok = clr_h > clr_s + 0.1
+        w5_d = f"optics law: headwater clarity={clr_h:.2f} vs sediment river clarity={clr_s:.2f}"
+    checks.append(("wd1a_sediment_turbidity_optics", w5_ok, w5_d))
+
+    # WD1.A-6 ORGANIC WETLAND — a low-gradient wet basin with organic potential reads as a
+    # wetland / dark-water body with high organic load.
+    wet = [ws for _x, _y, ws in foot_water if ws.body_class in ("wetland_marsh", "organic_darkwater")]
+    w6_ok = len(wet) >= 1 and max((w.organic_load for w in wet), default=0.0) > 0.3
+    checks.append(("wd1a_organic_wetland", w6_ok,
+                   f"{len(wet)} wetland/dark-water bodies; max organic_load="
+                   f"{max((w.organic_load for w in wet), default=0.0):.2f} (need>0.3; low-gradient wet+organic)"))
+
+    # WD1.A-7 VOLCANIC / MINERAL — a volcanic basin can carry mineral state, WITHOUT making all
+    # volcanic-province water exotic (most is ordinary rivers/lakes).
+    volc_water = [ws for _x, _y, ws in foot_water if ws.mineral_load > 0.05 or ws.body_class in
+                  ("volcanic_mineral_pool", "crater_lake")]
+    mineral_bodies = [ws for ws in volc_water if ws.body_class in ("volcanic_mineral_pool", "crater_lake")]
+    ordinary_in_volc = [ws for _x, _y, ws in foot_water if ws.mineral_potential > 0.05
+                        and ws.body_class not in ("volcanic_mineral_pool", "crater_lake")]
+    w7_ok = len(mineral_bodies) >= 1 and len(ordinary_in_volc) >= 1
+    checks.append(("wd1a_volcanic_mineral", w7_ok,
+                   f"{len(mineral_bodies)} volcanic/mineral bodies + {len(ordinary_in_volc)} ordinary bodies in "
+                   f"mineral-potential areas (mineral water exists but is not universal in volcanic provinces)"))
+
+    # WD1.A-8 DEPTH CONTINUOUS + DETERMINISTIC — depths span a continuous range (not 3 bands) and
+    # reproduce exactly.
+    depths = sorted({round(ws.depth_m, 2) for _x, _y, ws in foot_water if ws.depth_m > 0.0})
+    dmin = min(depths) if depths else 0.0
+    dmax = max(depths) if depths else 0.0
+    det_pt = (water_state_at(central, fieldf, foot_water[0][0], foot_water[0][1]).pack()
+              == water_state_at(central, MacroField.build(central.seed), foot_water[0][0], foot_water[0][1]).pack()) \
+        if foot_water else False
+    w8_ok = len(depths) >= 8 and dmax > dmin + 5.0 and det_pt
+    checks.append(("wd1a_depth_continuous_deterministic", w8_ok,
+                   f"{len(depths)} distinct depths spanning {dmin:.1f}-{dmax:.1f}m (continuous, not banded); "
+                   f"per-point pack reproduces={det_pt}"))
+
+    # WD1.A-9 CROSS-PAGE IDENTITY — a channel crossing a 64 km page boundary keeps one
+    # MacroChannelId (water inherits B1's window-independent ancestry).
+    x9_ok, x9_d = False, "no channel crosses a 64 km page line with water"
+    for b in (REGION_HALF_M, REGION_M + REGION_HALF_M, -REGION_HALF_M):
+        for t in range(-120, 121, 3):
+            yy = t * 1000.0
+            wa = water_state_at(central, fieldf, b - 900.0, yy)
+            wb = water_state_at(central, fieldf, b + 900.0, yy)
+            if (wa.macro_channel_id != "none" and wa.macro_channel_id == wb.macro_channel_id
+                    and wa.body_class != "none" and wb.body_class != "none"):
+                x9_ok = True
+                x9_d = f"channel crosses 64 km page line x={b/1000:.0f}km keeping MacroChannelId {wa.macro_channel_id}"
+                break
+        if x9_ok:
+            break
+    checks.append(("wd1a_cross_page_identity", x9_ok, x9_d))
+
+    # WD1.A-10 CROSS-SUPER-TILE IDENTITY — same across the 384 km drainage packaging.
+    xs_ok, xs_d = False, "no channel crosses the 384 km super-tile edge with water"
+    xedge = SUPER_M * 0.5
+    for yy in range(-120000, 120001, 2000):
+        wa = water_state_at(central, fieldf, xedge - 6000.0, float(yy))
+        wb = water_state_at(central, fieldf, xedge + 6000.0, float(yy))
+        if (wa.macro_channel_id != "none" and wa.macro_channel_id == wb.macro_channel_id
+                and wa.macro_watershed_id == wb.macro_watershed_id):
+            xs_ok = True
+            xs_d = f"channel keeps MacroChannel+Watershed identity across the 384 km super-tile edge"
+            break
+    checks.append(("wd1a_cross_supertile_identity", xs_ok, xs_d))
+
+    # WD1.A-11 SEED SEMANTICS — deterministic per seed; a different seed -> materially different
+    # water geography (body-class mix).
+    center_wdig = center.water_digest
+    reprod = compile_page(central, MacroField.build(central.seed), 0, 0).water_digest == center_wdig
+    alt_page_w = compile_page(central, MacroField.build(central.seed + "-alt"), 0, 0)
+    from collections import Counter as _CW
+    bmix_o = _CW(unpack_water(c0).body_class for c0 in center.water_codes)
+    bmix_a = _CW(unpack_water(c0).body_class for c0 in alt_page_w.water_codes)
+    diff_geo = alt_page_w.water_digest != center_wdig
+    w11_ok = reprod and diff_geo
+    checks.append(("wd1a_seed_semantics", w11_ok,
+                   f"same-seed water_digest reproduces={reprod}; alt-seed differs={diff_geo} "
+                   f"(origin body mix {dict(bmix_o)} vs alt {dict(bmix_a)})"))
+
+    # WD1.A-12 LONG-DISTANCE UNBOUNDED — deterministic + non-periodic water over 0..2000 km.
+    ldw_pts = [(0.0, 9000.0), (250000.0, 9000.0), (500000.0, 9000.0), (1000000.0, 9000.0), (2000000.0, 9000.0)]
+    ldw = [water_state_at(central, fieldf, x, y) for x, y in ldw_pts]
+    ldw_again = [water_state_at(central, MacroField.build(central.seed), x, y) for x, y in ldw_pts]
+    ldw_det = all(a.pack() == b.pack() for a, b in zip(ldw, ldw_again))
+    ldw_regimes = {w.presence_regime for w in ldw}
+    w12_ok = ldw_det and len(ldw_regimes) >= 2
+    checks.append(("wd1a_long_distance_unbounded", w12_ok,
+                   f"deterministic={ldw_det}; presence regimes over 0..2000km={sorted(ldw_regimes)} "
+                   f"(non-periodic, no page/super-tile cadence)"))
+
+    # WD1.A-13 MACRO/FINE COMPATIBILITY (guardrail) — WD1 does NOT fabricate macro water inside
+    # the frozen ±32 km centre where detailed 16D-16F water is authoritative: the centre is dry
+    # (deferred). Compatibility is only demanded where detailed truth legitimately exists.
+    center_water = sum(1 for c0 in center.water_codes if unpack_water(c0).body_class != "none")
+    boundary_dry = True
+    for t in range(-30, 31, 5):
+        s = t * 1000.0
+        for bx, by in [(REGION_HALF_M - 1000.0, s), (s, REGION_HALF_M - 1000.0)]:   # just inside centre
+            if water_state_at(central, fieldf, bx, by).body_class != "none":
+                boundary_dry = False
+    w13_ok = center_water == 0 and boundary_dry
+    checks.append(("wd1a_macro_fine_compatibility_guardrail", w13_ok,
+                   f"centre-page macro water bodies={center_water} (need 0; 16D-16F owns detailed water); "
+                   f"±32km interior deferred/dry={boundary_dry} (no fabricated macro water in detailed coverage)"))
+
+    # WD1.A-14 FROZEN AUTHORITY + GEOMETRY/MASS — the WaterState descriptor is orthogonal to
+    # geometry (page height source_digest unchanged) and to the surface descriptor
+    # (surface_digest unchanged); WD1.A is classification only (creates no water mass).
+    def _height_digest(pg):
+        hh2 = MA._FNV_OFFSET
+        for j in range(pg.n):
+            yy = pg.min_y + j * pg.step
+            for i in range(pg.n):
+                q = int(round(macro_z_incised(central, fieldf, pg.min_x + i * pg.step, yy) * 100.0)) & 0xFFFFFFFFFFFFFFFF
+                for shift in (0, 8, 16, 24, 32, 40):
+                    hh2 ^= (q >> shift) & 0xFF
+                    hh2 = (hh2 * MA._FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+        return f"{hh2:016x}"
+    geo_ok = all(_height_digest(pages[cll]) == pages[cll].source_digest for cll in [(0, 0), (2, 0)])
+    checks.append(("wd1a_frozen_geometry_no_mass", geo_ok,
+                   f"height digest == page source_digest (WaterState changes no terrain sample); "
+                   f"classification only, no water mass created, 16D-16F/P5b untouched"))
+
+    # WD1.A-15 CHEAP — analytic macro only (shares the forbidden-token scan).
+    checks.append(("wd1a_cheap_source", not forbidden,
+                   f"WaterState from drainage+MS1+macro hydroclimate proxy only; no ReconstructedZ/QueryMaterial/"
+                   f"runtime-water; forbidden={forbidden or 'none'}; descriptor {center.water_n}x{center.water_n}"
+                   f"@{MA.SURFACE_STEP_M:.0f}m v{WATER_DESCRIPTOR_VERSION}"))
+
     # ---- cheap-source evidence ------------------------------------------- #
-    cheap_ok = compile_s < 200.0 and not forbidden
+    # The HARD invariant is the forbidden-token scan (no ReconstructedZ/QueryMaterial/fine
+    # causal stack — which costs 4-8 s PER TILE, minutes for the ring). compile_s is reported
+    # evidence; the budget is 280 s for the full +/-160 km ring carrying drainage + TWO semantic
+    # descriptors (MS1 surface + WD1 water), computed via one shared per-cell env.
+    cheap_ok = compile_s < 280.0 and not forbidden
     checks.append(("cheap_source_no_deep_reconstructedz", cheap_ok,
-                   f"compiled {ncells} pages ({samples_per_page} samples each) in {compile_s:.2f}s; "
+                   f"compiled {ncells} pages ({samples_per_page} samples each) + surface+water descriptors "
+                   f"in {compile_s:.2f}s (budget 280; invariant=no fine causal stack); "
                    f"macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)"))
 
     passed = all(ok for _, ok, _ in checks)
 
-    lines = ["MV2A_MACRO_AUTHORITY+MV3C_ALPINE_PEAKS+MS1A_SURFACESTATE " + ("PASS" if passed else "FAIL"),
-             "scope=macro_forcing+alpine_peak_hierarchy+surface_state_authority_only_no_renderer_no_fine_causal_stack",
+    lines = ["MV2A+MV3C_PEAKS+MS1A_SURFACE+WD1A_WATER " + ("PASS" if passed else "FAIL"),
+             "scope=macro_forcing+alpine_peaks+surface_state+water_state_authority_only_no_renderer_no_fine_causal_stack",
              f"authority_ring=+/-{RING}_cells  pages_compiled={ncells}  (full 128 km radial authority)",
              f"world_seed={central.seed}",
              f"generator_version={MA.GENERATOR_VERSION}",

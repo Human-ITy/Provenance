@@ -1351,18 +1351,29 @@ def _macro_surface_slope(central: "CentralProgram", fieldf: "MacroField",
     return math.hypot(gx, gy)
 
 
+def _macro_place(central: "CentralProgram", fieldf: "MacroField", x: float, y: float):
+    """Shared per-point macro environment (landform ancestry + drainage + z + slope), computed
+    ONCE and reused by both the SurfaceState and WaterState derivations (they otherwise each
+    recompute z/slope/drainage/landform — the dominant page-compile cost)."""
+    landform = landform_at(central, fieldf, x, y)
+    wid, cid, accum, incision = drainage_query(central, fieldf, x, y)
+    z = macro_z_incised(central, fieldf, x, y)
+    slope = _macro_surface_slope(central, fieldf, x, y)
+    return landform, wid, cid, accum, incision, z, slope
+
+
 def _macro_surface_inputs(central: "CentralProgram", fieldf: "MacroField",
-                          x: float, y: float, ctl: "Controls | None" = None) -> SurfaceInputs:
+                          x: float, y: float, ctl: "Controls | None" = None,
+                          place=None) -> SurfaceInputs:
     """Derive authority-agnostic SurfaceInputs from the MACRO controls + drainage + landform
     ancestry. Cheap analytic macro proxies of the fine MW authorities; the far PROMISE that
     later detailed generation must refine, never contradict."""
     seed = fieldf.seed
     if ctl is None:
         ctl = controls_at(seed, x, y)
-    cls, lid, par, lf_age, lf_sub, _ = landform_at(central, fieldf, x, y)
-    wid, cid, accum, incision = drainage_query(central, fieldf, x, y)
-    z = macro_z_incised(central, fieldf, x, y)
-    slope = _macro_surface_slope(central, fieldf, x, y)
+    if place is None:
+        place = _macro_place(central, fieldf, x, y)
+    (cls, lid, par, lf_age, lf_sub, _), wid, cid, accum, incision, z, slope = place
 
     # The macro SurfaceState is the OUTSIDE promise; inside the frozen +/-32 km centre the
     # fine MW authority owns the surface (MS1.B). Defer to it: the anchor window (0 in the
@@ -1447,10 +1458,11 @@ def _macro_surface_inputs(central: "CentralProgram", fieldf: "MacroField",
 
 
 def surface_state_at(central: "CentralProgram", fieldf: "MacroField",
-                     x: float, y: float, ctl: "Controls | None" = None) -> SurfaceState:
+                     x: float, y: float, ctl: "Controls | None" = None,
+                     place=None) -> SurfaceState:
     """MACRO SurfaceState at an absolute coordinate: derive inputs from MV3 controls +
     drainage + landform, then apply the shared exposure-precedence composition law."""
-    inp = _macro_surface_inputs(central, fieldf, x, y, ctl)
+    inp = _macro_surface_inputs(central, fieldf, x, y, ctl, place)
     return compose_surface_state(inp, source_rev=f"gv{GENERATOR_VERSION}.sd{SURFACE_DESCRIPTOR_VERSION}")
 
 
@@ -1474,6 +1486,336 @@ def central_surface_family(central: "CentralProgram", x: float, y: float) -> str
     if basin > 0.35:
         return "sediment"
     return "regolith"
+
+
+# =========================================================================== #
+# WD1.A — WaterState authority (Python world-authority)
+# =========================================================================== #
+#
+# CORE LAW: CHANNEL_EXISTS != WATER_PRESENT != WATER_BODY_TYPE != WATER_OPTICAL_STATE.
+# The MV3.B1 drainage graph says where water CAN travel; it never asserts water is there now.
+# Presence is a TWO-STAGE causal gate: (1) hydrologic SUPPLY (climate + catchment − losses)
+# then (2) ACCOMMODATION (channel gradient / basin closure) — so a high-supply place becomes a
+# river on a slope but a lake in a closed basin, and an arid high-permeability place leaves the
+# same channel dry. Appearance is downstream (WD1.B); WaterState stores NO RGB / shader params.
+# MASS LAW: this is an environmental PROMISE, not a conserved water ledger — it adds no grams to
+# 16D/16F and changes no terrain geometry. GUARDRAIL: supply consumes environmental wetness
+# POTENTIAL (climate/substrate), never WaterState itself (no circular input). MS1 owns the
+# bottom substrate; water OCCUPIES it (recoverable through shallow water in WD1.B).
+
+WATER_DESCRIPTOR_VERSION = 1
+
+# presence regimes (ordered dry..standing); body/regime families (consequences, not presets);
+# flow regimes (hydrologic context only, no fluid sim). Index order = on-page code; append-only.
+PRESENCE_REGIMES = ["dry", "damp_substrate", "ephemeral", "seasonal", "perennial", "standing"]
+BODY_CLASSES = [
+    "none", "headwater_stream", "perennial_river", "sediment_river", "braided_reach",
+    "alpine_lake", "closed_basin_lake", "floodplain_water", "wetland_marsh",
+    "organic_darkwater", "arid_wash", "spring_pool", "volcanic_mineral_pool", "crater_lake",
+]
+FLOW_REGIMES = ["none", "still", "slow", "channelized", "fast", "turbulent"]
+
+_PRESENCE_IDX = {n: i for i, n in enumerate(PRESENCE_REGIMES)}
+_BODY_IDX = {n: i for i, n in enumerate(BODY_CLASSES)}
+_FLOW_IDX = {n: i for i, n in enumerate(FLOW_REGIMES)}
+
+# substrate hydrologic properties (from the MS1 substrate class): permeability = infiltration
+# loss (bedrock sheds/ponds, sand/scoria drains); erodibility = sediment supply to the water.
+_SUBSTRATE_PERMEABILITY = {
+    "bare_bedrock": 0.05, "weathered_bedrock": 0.20, "thin_regolith": 0.40, "colluvium": 0.50,
+    "talus": 0.85, "alluvium": 0.70, "floodplain_sediment": 0.45, "basin_fill": 0.40,
+    "organic_capable": 0.35, "waterlogged_mineral": 0.08, "fresh_lava": 0.78, "scoria_ash": 0.82,
+    "weathered_basalt": 0.30, "volcanic_soil": 0.42,
+}
+_SUBSTRATE_ERODIBILITY = {
+    "bare_bedrock": 0.05, "weathered_bedrock": 0.25, "thin_regolith": 0.50, "colluvium": 0.60,
+    "talus": 0.40, "alluvium": 0.85, "floodplain_sediment": 0.92, "basin_fill": 0.70,
+    "organic_capable": 0.50, "waterlogged_mineral": 0.60, "fresh_lava": 0.15, "scoria_ash": 0.60,
+    "weathered_basalt": 0.40, "volcanic_soil": 0.55,
+}
+
+
+@dataclass
+class WaterState:
+    """Compact SEMANTIC water record at a point. NO stored RGB, NO shader coefficients as
+    authority. Depth is continuous metres (bottom/surface elevations kept). References the MS1
+    bottom substrate; carries B1 hydrologic ancestry."""
+    presence_regime: str
+    body_class: str
+    flow_regime: str
+    depth_m: float
+    bottom_elev_m: float
+    surface_elev_m: float
+    discharge_proxy: float        # water_supply_index (macro hydrologic forcing; NOT water mass)
+    mean_supply: float
+    seasonality_index: float
+    persistence_margin: float
+    clarity: float
+    turbidity: float
+    suspended_sediment: float
+    mineral_load: float
+    organic_load: float
+    temperature_proxy: float
+    bottom_family: str            # MS1 dominant_surface_family beneath the water
+    waterfall_potential: float    # reserved hook (WD1.C); classification only
+    mineral_potential: float      # reserved hook (volcanic/mineral chemistry later)
+    macro_watershed_id: str = ""
+    macro_channel_id: str = ""
+    macro_water_body_id: str = ""
+    water_regime_id: str = ""
+    source_rev: str = ""
+
+    def has_water(self) -> bool:
+        return self.presence_regime not in ("dry",)
+
+    def pack(self) -> int:
+        """Pack to an integer (~60 bits; hex on the page). Layout documented on the page."""
+        de = min(511, int(round(max(0.0, self.depth_m) * 4.0)))     # 0..127.75 m at 0.25 m (9 bits)
+        v = _PRESENCE_IDX[self.presence_regime] & 0x7
+        v |= (_BODY_IDX[self.body_class] & 0xF) << 3
+        v |= (_FLOW_IDX[self.flow_regime] & 0x7) << 7
+        v |= (_FAMILY_IDX[self.bottom_family] & 0x7) << 10
+        v |= (de & 0x1FF) << 13
+        v |= (_q4(self.discharge_proxy) & 0xF) << 22
+        v |= (_q4(self.seasonality_index) & 0xF) << 26
+        v |= (_q4(self.clarity) & 0xF) << 30
+        v |= (_q4(self.turbidity) & 0xF) << 34
+        v |= (_q4(self.suspended_sediment) & 0xF) << 38
+        v |= (_q4(self.mineral_load) & 0xF) << 42
+        v |= (_q4(self.organic_load) & 0xF) << 46
+        v |= (_q4(self.temperature_proxy) & 0xF) << 50
+        v |= (min(3, int(round(self.waterfall_potential * 3.0))) & 0x3) << 54
+        v |= (min(3, int(round(self.mineral_potential * 3.0))) & 0x3) << 56
+        return v
+
+
+def unpack_water(v: int, source_rev: str = "") -> WaterState:
+    de = (v >> 13) & 0x1FF
+    return WaterState(
+        presence_regime=PRESENCE_REGIMES[v & 0x7], body_class=BODY_CLASSES[(v >> 3) & 0xF],
+        flow_regime=FLOW_REGIMES[(v >> 7) & 0x7], depth_m=de / 4.0,
+        bottom_elev_m=0.0, surface_elev_m=de / 4.0,
+        discharge_proxy=_dq4((v >> 22) & 0xF), mean_supply=_dq4((v >> 22) & 0xF),
+        seasonality_index=_dq4((v >> 26) & 0xF), persistence_margin=0.0,
+        clarity=_dq4((v >> 30) & 0xF), turbidity=_dq4((v >> 34) & 0xF),
+        suspended_sediment=_dq4((v >> 38) & 0xF), mineral_load=_dq4((v >> 42) & 0xF),
+        organic_load=_dq4((v >> 46) & 0xF), temperature_proxy=_dq4((v >> 50) & 0xF),
+        bottom_family=SURFACE_FAMILIES[(v >> 10) & 0x7],
+        waterfall_potential=((v >> 54) & 0x3) / 3.0, mineral_potential=((v >> 56) & 0x3) / 3.0,
+        source_rev=source_rev)
+
+
+def _clip01(v: float) -> float:
+    return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+
+
+def water_supply(humidity: float, continentality: float, relief: float, z: float,
+                 accum: float, permeability: float):
+    """STAGE 1 — hydrologic supply (climate + catchment − losses). Returns
+    (discharge_proxy, mean_supply, seasonality_index, persistence_margin). Consumes only
+    environmental POTENTIAL (climate/substrate); NEVER WaterState (no circular input)."""
+    aridity = 1.0 - humidity
+    warm = 1.0 - smoothstep(1600.0, 3200.0, z)                  # low warm evaporates, high cold less
+    evap_loss = aridity * (0.40 + 0.60 * warm)
+    orographic = 0.15 * relief
+    climate_supply = _clip01(humidity + orographic - 0.45 * evap_loss)   # local moisture availability
+    catchment = smoothstep(15.0, 700.0, accum)                  # upstream integrated area (discharge)
+    discharge = _clip01(climate_supply * (0.30 + 0.80 * catchment) - 0.28 * permeability * (1.0 - catchment))
+    seasonality = _clip01(0.18 + 0.50 * aridity + 0.40 * continentality - 0.20 * catchment)
+    persistence = _clip01(discharge - 0.35 * seasonality)
+    return discharge, climate_supply, seasonality, persistence
+
+
+def water_presence_body(discharge: float, seasonality: float, persistence: float,
+                        slope: float, permeability: float, is_channel: bool,
+                        closed_basin: bool, accommodation: float, accom_depth: float,
+                        organic: float, volcanic: float, z: float):
+    """STAGE 2 — accommodation. Given supply, decide presence regime, body family, flow regime
+    and a depth hint. Standing (basin) vs flowing (channel) vs wet-ground vs dry, from geometry.
+    A high-supply place is NOT automatically a lake."""
+    # ---- presence gate (persistence-based) -------------------------------- #
+    if persistence >= 0.34:
+        presence = "perennial"
+    elif discharge >= 0.28 and seasonality >= 0.42:
+        presence = "seasonal"
+    elif discharge >= 0.15:
+        presence = "ephemeral"
+    elif discharge >= 0.07 and permeability < 0.45:
+        presence = "damp_substrate"
+    else:
+        presence = "dry"
+
+    standing = accommodation >= 0.45 and accom_depth > 8.0 and discharge >= 0.14
+
+    # ---- body / regime ---------------------------------------------------- #
+    if standing:
+        presence = "perennial" if persistence >= 0.30 else ("seasonal" if presence in ("seasonal", "ephemeral") else presence)
+        presence = "standing" if persistence >= 0.20 else presence
+        if volcanic >= 0.55 and closed_basin:
+            body = "crater_lake" if accom_depth > 60.0 else "volcanic_mineral_pool"
+        elif closed_basin:
+            body = "closed_basin_lake"
+        elif z > 1500.0:
+            body = "alpine_lake"
+        elif organic >= 0.5 and accom_depth < 25.0:
+            body = "organic_darkwater" if organic >= 0.62 else "wetland_marsh"
+        else:
+            body = "floodplain_water" if accom_depth < 18.0 else "closed_basin_lake"
+        flow = "still" if accom_depth > 20.0 else "slow"
+    elif is_channel and presence in ("perennial", "seasonal", "ephemeral"):
+        if presence in ("seasonal", "ephemeral"):
+            body = "arid_wash"
+            flow = "channelized"
+        elif slope < 0.012 and permeability < 0.5:
+            body = "floodplain_water"
+            flow = "slow"
+        elif discharge >= 0.55 and slope < 0.05:
+            body = "sediment_river" if permeability >= 0.4 else "perennial_river"
+            flow = "channelized"
+        elif slope >= 0.10:
+            body = "headwater_stream"
+            flow = "fast" if slope < 0.24 else "turbulent"
+        else:
+            body = "perennial_river"
+            flow = "channelized"
+    elif presence == "damp_substrate" and slope < 0.02 and organic >= 0.45:
+        presence = "damp_substrate"
+        body = "wetland_marsh"
+        flow = "still"
+    else:
+        # not a channel and no accommodation: hillslope — spring proxy only, else no body
+        if presence in ("perennial", "seasonal") and slope < 0.06 and permeability < 0.3:
+            body, flow = "spring_pool", "slow"
+        else:
+            body = "none"
+            flow = "none"
+            if presence in ("perennial", "seasonal", "ephemeral"):
+                presence = "damp_substrate"    # supply exists but nowhere to collect/flow
+    return presence, body, flow
+
+
+def _water_optics(body: str, discharge: float, accum: float, erodibility: float,
+                  organic: float, volcanic: float, closed_basin: bool, z: float, depth: float):
+    """Optical-state axes (physical inputs for WD1.B): clarity/turbidity/sediment/mineral/
+    organic/temperature. Consequences of setting, not a palette."""
+    flow_energy = smoothstep(30.0, 900.0, accum)
+    turbidity = _clip01(erodibility * (0.25 + 0.75 * flow_energy) * (0.4 + 0.9 * discharge))
+    if body in ("headwater_stream", "alpine_lake", "spring_pool"):
+        turbidity *= 0.25                                       # clear cold/resistant headwaters
+    if body in ("closed_basin_lake", "crater_lake") and not volcanic:
+        turbidity *= 0.5
+    sediment = _clip01(turbidity * (0.5 + 0.6 * erodibility))
+    organic_load = _clip01(organic * (0.3 + 0.9 * (1.0 if body in ("wetland_marsh", "organic_darkwater") else 0.25))
+                           * (0.5 + 0.6 * smoothstep(20.0, 0.0, depth if depth > 0 else 0.0)))
+    mineral = _clip01(volcanic * (0.3 + 0.9 * (1.0 if closed_basin else 0.4)))
+    if body in ("volcanic_mineral_pool", "crater_lake"):
+        mineral = _clip01(mineral + 0.35)
+    temperature = _clip01(1.0 - smoothstep(200.0, 2800.0, z))   # warm low, cold high (state-relevant)
+    clarity = _clip01(1.0 - 0.85 * turbidity - 0.4 * organic_load)
+    return clarity, turbidity, sediment, mineral, organic_load, temperature
+
+
+def _basin_context(central: "CentralProgram", fieldf: "MacroField", x: float, y: float, z: float):
+    """Cheap concavity probe: (closed_basin, accommodation_depth_m). Closed if the terrain rises
+    on all four 5 km probes (an enclosed depression); accommodation depth = rim − floor. Only a
+    few extra macro_z evals; NEVER the fine causal stack."""
+    r = 5000.0
+    zs = [macro_z_incised(central, fieldf, x + r, y), macro_z_incised(central, fieldf, x - r, y),
+          macro_z_incised(central, fieldf, x, y + r), macro_z_incised(central, fieldf, x, y - r)]
+    rises = sum(1 for zz in zs if zz > z + 3.0)
+    accom_depth = max(0.0, min(zs) - z)
+    return rises >= 4, accom_depth
+
+
+def water_state_at(central: "CentralProgram", fieldf: "MacroField", x: float, y: float,
+                   ss: "SurfaceState | None" = None, ctl: "Controls | None" = None,
+                   place=None) -> WaterState:
+    """MACRO WaterState at an absolute coordinate: two-stage presence (supply → accommodation)
+    over MV3.B1 drainage + MS1 substrate + macro hydroclimate proxies. Anchor-window gated
+    (dry in the frozen ±32 km centre, where detailed 16D–16F water is authoritative). Cheap
+    analytic; creates no water mass, changes no geometry."""
+    seed = fieldf.seed
+    if ctl is None:
+        ctl = controls_at(seed, x, y)
+    if place is None:
+        place = _macro_place(central, fieldf, x, y)
+    (cls, _lid, _par, _lfa, _lsub, _lc), wid, cid, accum, incision, z, slope = place
+    rev = f"gv{GENERATOR_VERSION}.wd{WATER_DESCRIPTOR_VERSION}"
+    aw = anchor_window(x, y)
+    if ss is None:
+        ss = surface_state_at(central, fieldf, x, y, ctl, place)
+    dry = WaterState("dry", "none", "none", 0.0, z, z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                     0.0, 0.0, ss.dominant_surface_family, 0.0, 0.0, source_rev=rev)
+    if aw <= 0.0:                              # frozen centre: 16D–16F owns water here
+        return dry
+
+    perm = _SUBSTRATE_PERMEABILITY.get(ss.substrate_class, 0.4)
+    erod = _SUBSTRATE_ERODIBILITY.get(ss.substrate_class, 0.5)
+    humidity = _control(seed + ":macro_humidity", x, y, 520000.0)
+    continentality = _control(seed + ":macro_contin", x, y, 720000.0)
+    volcanic = smoothstep(0.72, 0.90, ctl.volcanic)
+    if cls in ("volcanic_shield", "volcanic_cone", "volcanic_plug"):
+        volcanic = max(volcanic, 0.7)
+    volcanic *= aw
+
+    discharge, mean_supply, seasonality, persistence = water_supply(
+        humidity, continentality, ctl.relief, z, accum, perm)
+
+    # accommodation: flat + (closed basin OR lowland pooling); cheap concavity for closed basins
+    is_channel = cid != "none"
+    flatness = smoothstep(0.030, 0.0, slope)
+    closed_basin, accom_depth = (False, 0.0)
+    lowland = smoothstep(400.0, -120.0, z)
+    if flatness > 0.2:                          # only probe basins where it could pond (cheap gate)
+        closed_basin, accom_depth = _basin_context(central, fieldf, x, y, z)
+        if not closed_basin:
+            accom_depth = max(accom_depth, 30.0 * lowland * flatness)   # broad low pooling
+    accommodation = flatness * (0.6 * (1.0 if closed_basin else 0.0) + 0.6 * lowland)
+
+    presence, body, flow = water_presence_body(
+        discharge, seasonality, persistence, slope, perm, is_channel,
+        closed_basin, accommodation, accom_depth, ss.organic_potential, volcanic, z)
+
+    # depth (continuous metres): standing = basin accommodation; channel = discharge-scaled.
+    if body in ("closed_basin_lake", "alpine_lake", "crater_lake", "volcanic_mineral_pool",
+                "floodplain_water", "wetland_marsh", "organic_darkwater"):
+        depth = min(120.0, accom_depth * (0.4 + 0.6 * discharge))
+        if body in ("wetland_marsh", "organic_darkwater"):
+            depth = min(depth, 3.5)             # wetlands are shallow
+    elif body in ("perennial_river", "sediment_river", "braided_reach", "headwater_stream",
+                  "arid_wash", "spring_pool"):
+        depth = (0.2 + 6.0 * discharge) * (0.5 + 0.5 * smoothstep(30.0, 900.0, accum))
+        if body == "arid_wash":
+            depth = 0.0 if presence in ("ephemeral", "seasonal", "dry") else depth * 0.3
+        depth = min(9.0, depth)
+    else:
+        depth = 0.0
+
+    clarity, turbidity, sediment, mineral, organic_load, temperature = _water_optics(
+        body, discharge, accum, erod, ss.organic_potential, volcanic, closed_basin, z, depth)
+
+    # identity / ancestry (absolute-coordinate; window-independent via B1 ids)
+    water_body_id = "none"
+    regime_id = "none"
+    if body != "none":
+        if body in ("closed_basin_lake", "alpine_lake", "crater_lake", "volcanic_mineral_pool",
+                    "wetland_marsh", "organic_darkwater", "floodplain_water"):
+            # key the standing body to its canonical watershed sink identity (from B1)
+            water_body_id = f"{fnv1a64(seed + ':mwbody:' + wid):016x}"
+        regime_id = f"{fnv1a64(seed + f':mregime:{body}:' + (cid if cid != 'none' else wid)):016x}"
+
+    return WaterState(
+        presence_regime=presence, body_class=body, flow_regime=flow,
+        depth_m=depth, bottom_elev_m=z, surface_elev_m=z + depth,
+        discharge_proxy=discharge, mean_supply=mean_supply, seasonality_index=seasonality,
+        persistence_margin=persistence, clarity=clarity, turbidity=turbidity,
+        suspended_sediment=sediment, mineral_load=mineral, organic_load=organic_load,
+        temperature_proxy=temperature, bottom_family=ss.dominant_surface_family,
+        waterfall_potential=_clip01(smoothstep(0.18, 0.5, slope) * discharge
+                                    * (1.0 if is_channel else 0.0) * (0.4 + 0.6 * ctl.substrate)),
+        mineral_potential=_clip01(volcanic * (0.5 if closed_basin else 0.25)),
+        macro_watershed_id=wid, macro_channel_id=cid,
+        macro_water_body_id=water_body_id, water_regime_id=regime_id, source_rev=rev)
 
 
 # --------------------------------------------------------------------------- #
@@ -1509,6 +1851,10 @@ class MacroPage:
     surface_n: int = 0                    # descriptor grid dimension
     surface_codes: list[int] = field(default_factory=list)   # packed SurfaceState per cell
     surface_digest: str = "0"             # deterministic digest of the descriptor grid
+    water_step: float = 0.0               # WD1.A WaterState descriptor grid step (m)
+    water_n: int = 0
+    water_codes: list[int] = field(default_factory=list)     # packed WaterState per cell
+    water_digest: str = "0"
 
 
 def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
@@ -1533,20 +1879,29 @@ def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
             "ne": (1, 1), "nw": (-1, 1), "se": (1, -1), "sw": (-1, -1)}
     lineage = {d: region_id(central, ri + dx, rj + dy) for d, (dx, dy) in dirs.items()}
 
-    # ---- MS1.A SurfaceState descriptor grid (compact semantic; NO colour) ---------- #
+    # ---- MS1.A SurfaceState + WD1.A WaterState descriptor grids (compact semantic; NO colour) #
+    # Computed in ONE cell loop so the WaterState reuses the SurfaceState (which owns the
+    # substrate beneath the water) instead of recomputing the expensive MS1 derivation.
     sn = int(round(REGION_M / SURFACE_STEP_M)) + 1
     surf_codes: list[int] = []
+    water_codes: list[int] = []
     for j in range(sn):
         y = min_y + j * SURFACE_STEP_M
         for i in range(sn):
             x = min_x + i * SURFACE_STEP_M
-            surf_codes.append(surface_state_at(central, fieldf, x, y).pack())
-    sh = _FNV_OFFSET
-    for code in surf_codes:
-        c = code & 0xFFFFFFFFFFFFFFFF
-        for shift in (0, 8, 16, 24, 32):
-            sh ^= (c >> shift) & 0xFF
-            sh = (sh * _FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+            ctl = controls_at(fieldf.seed, x, y)
+            place = _macro_place(central, fieldf, x, y)      # shared env (computed once)
+            ss = surface_state_at(central, fieldf, x, y, ctl, place)
+            surf_codes.append(ss.pack())
+            water_codes.append(water_state_at(central, fieldf, x, y, ss=ss, ctl=ctl, place=place).pack())
+
+    def _grid_digest(codes, shifts):
+        d = _FNV_OFFSET
+        for code in codes:
+            for shift in shifts:
+                d ^= (code >> shift) & 0xFF
+                d = (d * _FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
+        return f"{d:016x}"
 
     return MacroPage(
         ri=ri, rj=rj, min_x=min_x, min_y=min_y, step=step, n=n, heights=heights,
@@ -1555,7 +1910,9 @@ def compile_page(central: CentralProgram, fieldf: MacroField, ri: int, rj: int,
         world_identity_hash=central.world_identity_hash,
         source_digest=f"{hh:016x}", neighbor_lineage=lineage,
         surface_step=SURFACE_STEP_M, surface_n=sn, surface_codes=surf_codes,
-        surface_digest=f"{sh:016x}")
+        surface_digest=_grid_digest(surf_codes, (0, 8, 16, 24, 32)),
+        water_step=SURFACE_STEP_M, water_n=sn, water_codes=water_codes,
+        water_digest=_grid_digest(water_codes, (0, 8, 16, 24, 32, 40, 48, 56)))
 
 
 def serialize_page(page: MacroPage) -> str:
@@ -1589,6 +1946,19 @@ def serialize_page(page: MacroPage) -> str:
         f"surface_grid_n={page.surface_n}",
         f"surface_digest={page.surface_digest}",
         f"surface_grid_row_major={' '.join(f'{c:x}' for c in page.surface_codes)}",
+        # WD1.A WaterState descriptor: compact SEMANTIC water identity per coarse cell (presence/
+        # body/flow/bottom-family + depth + optical axes + reserved hooks packed into one integer).
+        # NO RGB / shader coefficients; environmental PROMISE, not a conserved water ledger. The
+        # renderer may ignore this in WD1.A (WD1.B consumes it).
+        "# water_code bit layout: [0:3]=presence [3:7]=body [7:10]=flow [10:13]=bottom_family "
+        "[13:22]=depth(0.25m units) [22:26]=discharge [26:30]=seasonality [30:34]=clarity "
+        "[34:38]=turbidity [38:42]=suspended_sediment [42:46]=mineral_load [46:50]=organic_load "
+        "[50:54]=temperature [54:56]=waterfall_potential(/3) [56:58]=mineral_potential(/3)",
+        f"water_descriptor_version={WATER_DESCRIPTOR_VERSION}",
+        f"water_step_m={page.water_step:.1f}",
+        f"water_grid_n={page.water_n}",
+        f"water_digest={page.water_digest}",
+        f"water_grid_row_major={' '.join(f'{c:x}' for c in page.water_codes)}",
         "",
     ]
     return "\n".join(lines)

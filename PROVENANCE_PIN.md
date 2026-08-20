@@ -280,7 +280,10 @@ MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DE
 MS1.A   SurfaceState authority + compose  CERTIFIED @ b970585b (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical)
 MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green)
 MS1.B1  semantic surface default          CERTIFIED (MS1.B now ON BY DEFAULT — diagnostic palette is debug-only; --ms1b-off reproduces frozen; default gates re-run green: default boot material (75,87,88) vs --ms1b-off white (225,227,230), MV1 coverage 0 holes, MV2.B 0 holes, MV2.C separation 0.198, MW8 24m/s Test B PX2 all-green, geometry bit-exact; NEXT = WD1 water)
-WD1     water diversity                   DESIGN LOCKED (WD1_WATER_DIVERSITY_DESIGN.md): CHANNEL_EXISTS!=WATER_PRESENT!=WATER_BODY_TYPE!=WATER_OPTICAL_STATE; drainage says where water CAN travel, not that it's there; presence=supply(hydroclimate+accum)−loss(aridity+permeability) vs accommodation(basin); WaterState (presence/body/depth/flow/optical/substrate-ref/ancestry, no RGB); composes MV3.B1 drainage + MS1 substrate + macro hydroclimate proxy; 16D/16E/16F/P5b stay authoritative (compose, never replace); WD1.B = continuous optical transmission over MS1 bottom substrate (never depth bands); refinement-may-add-not-contradict; waterfalls/volcanic-chem/season/glacial = reserved hooks. NEXT cut = WD1.A authority
+WD1     water diversity                   DESIGN LOCKED @ c2f9bd55 (WD1_WATER_DIVERSITY_DESIGN.md): CHANNEL_EXISTS!=WATER_PRESENT!=WATER_BODY_TYPE!=WATER_OPTICAL_STATE; two-stage presence (supply vs accommodation); 16D/16E/16F/P5b stay authoritative; WD1.B = continuous optical transmission over MS1 bottom substrate; reserved hooks waterfalls/volcanic-chem/season/glacial
+WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage presence supply(macro_humidity+catchment−permeability/evap) then accommodation(channel gradient/basin closure) → dry/damp/ephemeral/seasonal/perennial/standing + body/regime; discharge_proxy first-class; optical axes clarity/turbidity/sediment/mineral/organic over MS1 bottom substrate; MacroWaterBodyId keyed to watershed sink, rivers inherit MacroChannelId; 17x17@4km page water descriptor; anchor-window gated (centre dry, 16D-16F owns detailed); mass law = no water mass/no geometry; 15 fixtures + MV2.B 0-holes green; surface_digest byte-identical; NEXT = WD1.B appearance)
+WD1.B   shared water appearance           NEXT (continuous optical transmission over MS1 substrate; never depth bands)
+WD1.C   waterfalls                        CLOSED (hook only)
 MV3.C-testB  24m/s Test B on gen-5 pages   PASS (engine_cpu 0-over worst 11.7ms, 0 presented/stage-owned/os-gap, cadence no-regression, 0 movement frames over)
 MW9     flora / fauna                     CLOSED
 ```
@@ -373,6 +376,37 @@ apexes close-up → a sub-macro 250–500 m peak/ridge refinement is the noted f
 sharpening (horns/arêtes) deliberately deferred (peak structure is its hook). Handoff
 `MV3C_ALPINE_PEAK_HIERARCHY_HANDOFF.md`. MW1–MW8 / MV1 / MV2.* / MV3.A/B1/B1.1/B2 / MS1.* /
 PX1–PX3 frozen. **NEXT = WD1** water diversity.
+
+**WD1.A CERTIFIED** — WaterState authority (Python authority only;
+`Tools/Worldgen/macro_authority.py`; renderer unchanged, consumes gen-5 pages). Core law:
+`CHANNEL_EXISTS != WATER_PRESENT != WATER_BODY_TYPE != WATER_OPTICAL_STATE` — the MV3.B1
+drainage graph says where water CAN travel, never that it is there now. **Two-stage presence:**
+`water_supply()` (climate `macro_humidity` + orographic − evaporation, × catchment(accumulation)
+− substrate permeability loss → discharge_proxy/seasonality/persistence; consumes environmental
+POTENTIAL only, never WaterState — no circular input) then `water_presence_body()` (accommodation
+= channel gradient / basin closure / relief → flowing vs standing vs wet-ground vs dry, and the
+body/regime). So high supply + steep channel → perennial river, high supply + closed basin →
+lake, arid permeable → dry channel. `WaterState` (presence/body/flow/depth_m+bottom/surface
+elev/discharge_proxy/clarity/turbidity/sediment/mineral/organic/temperature/**MS1 bottom_family
+ref**/ancestry; **no RGB, no shader params**). Optical axes are physical inputs for WD1.B.
+Identity: `MacroWaterBodyId` keyed to the canonical watershed sink (absolute), rivers inherit
+`MacroChannelId` (B1.1 window-independent). Anchor-window gated → the frozen ±32 km centre is
+**dry** (16D–16F owns detailed water; guardrail: compatibility only where detailed truth
+exists). **Mass law:** environmental PROMISE, not a conserved ledger — creates no water mass,
+changes no geometry, 16D–16F/P5b untouched. Macro pages gain a 17×17@4 km packed WaterState
+descriptor (computed with the MS1 surface descriptor via one shared per-cell env `_macro_place`,
+so `compile_seconds≈196`, budget 280; the hard invariant is the no-fine-causal-stack token
+scan). **15 fixtures PASS** (0 FAIL total): drainage≠water, perennial-vs-seasonal, lake/basin
+accommodation, bottom-substrate reference (≥2 MS1 families), sediment/turbidity (clear 0.87 vs
+turbid 0.32), organic wetland (558 bodies, organic 0.80), volcanic/mineral (28 mineral + 244
+ordinary in mineral areas), depth continuous (85 depths 1.5–120 m), cross-page + cross-super-tile
+identity, seed semantics, long-distance, macro/fine-compat guardrail (centre 0 water), frozen
+geometry/no-mass, cheap. `surface_digest` byte-identical to committed MS1.A. Renderer green:
+MV2.B 128 km raster, 0 coverage holes, 25 unique. Visuals
+`Docs/provenance_wd1a_water_state_maps.png` (presence/body/depth/turbidity/organic/mineral;
+centre all-dry) + `provenance_wd1a_seed_corpus.png`. Handoff
+`WD1A_WATER_STATE_AUTHORITY_HANDOFF.md`. **NEXT = WD1.B** shared optical appearance (continuous
+transmission over the MS1 bottom substrate; never depth bands). All frozen cuts untouched.
 
 **MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were
