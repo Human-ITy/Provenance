@@ -19,8 +19,9 @@ EI0.D  two-lane transport            CERTIFIED locally
 EI0.E  reproducible genesis identity CERTIFIED locally
 EI1    WorldGenesis adoption         CERTIFIED locally
 EI2    macro -> micro substrate      CERTIFIED locally
-EI3    revisioned detail projection  NEXT
-EI4+                                 CLOSED
+EI3    revisioned detail projection  CERTIFIED locally
+EI4    authoritative mutation        NEXT
+EI5+                                 CLOSED
 ```
 
 Canonical protocol: `fablescript.embodied-terrain` `1.1.0`. FableScript remains
@@ -123,6 +124,20 @@ manifest were reissued while height, SurfaceState, WaterState, and static-ID
 payloads remained exact. Handoff:
 `EI2R_TOOLCHAIN_INDEPENDENT_BASELINE_IDENTITY_CLIENT_HANDOFF.md`.
 **NEXT = EI3 revisioned detailed projection.**
+
+EI3 projects engine-owned 64 m detailed snapshots from the shared EI2
+WorldSubstrate over the canonical bulk lane. Snapshots and contiguous deltas
+prove world UUID, macro genesis, WorldBaselineIdentity, absolute chunk identity,
+revisions, and canonical checksums before immutable client publication. The
+client owns bounded P0-P5 predictive residency and the mesh/appearance adapter;
+authoritative walking/landing requires admitted detail, while macro/coarse
+presentation remains outside-detail fallback. A 1,069.5 m playable traversal
+passed 24/60/120/240 m/s, course and chunk-boundary changes, reconnect, and
+landing with 146 accepted/0 rejected snapshots, max 146/256 resident, max 8
+requested, and zero sky holes in 574,210 lower-frame samples. Detailed water is
+explicitly `deferred_to_ei5`; no mutation endpoint was opened. Handoff:
+`EI3_REVISIONED_DETAILED_PROJECTION_HANDOFF.md`. **NEXT = EI4 authoritative
+mutation and reconciliation.**
 
 Historical unqualified `v1` is not canonical and is never an implicit
 downgrade. No new world-authority stage is open: WD1.C existence, FL1
