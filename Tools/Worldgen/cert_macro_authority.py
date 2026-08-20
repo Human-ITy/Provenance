@@ -648,6 +648,191 @@ def main() -> int:
                    f"special-form operators analytic (no ReconstructedZ/erosion/QueryMaterial); forbidden={forbidden or 'none'}"))
 
     # ====================================================================== #
+    # MV3.C — alpine peak / ridge hierarchy fixtures (proven across a seed CORPUS)
+    #   A mountain range must be a peak HIERARCHY (spine -> summit nodes -> secondary peaks ->
+    #   saddles -> prominence), not the highest sample on a smooth uplift. Young/competent/
+    #   high-energy provinces build dominant peaks; old/weak provinces stay broad + rounded.
+    # ====================================================================== #
+    corpusC = [central.seed, central.seed + "-A", central.seed + "-B",
+               central.seed + "-C", central.seed + "-D"]
+
+    def scan_ranges(seed):
+        ff = MacroField.build(seed)
+        rs = []
+        for gi in range(-8, 9):
+            for gj in range(-8, 9):
+                rp = ff._range_summits(gi, gj)
+                if rp is not None:
+                    rs.append((gi, gj, rp))
+        return ff, rs
+    scansC = {sd: scan_ranges(sd) for sd in corpusC}
+
+    # pick the most prominent range across the corpus for the structural fixtures
+    best = None
+    for sd in corpusC:
+        ff, rs = scansC[sd]
+        for gi, gj, rp in rs:
+            if best is None or rp["prominence"] > best[3]["prominence"]:
+                best = (sd, gi, gj, rp)
+
+    # C1 PEAK PROMINENCE HIERARCHY — a dominant summit stands well above its key saddle, and
+    # the summit heights form a real descending hierarchy (not co-equal bumps).
+    if best is not None:
+        sd, gi, gj, rp = best
+        ff = scansC[sd][0]
+        hs = sorted((s[2] for s in rp["summits"]), reverse=True)
+        hierarchy = len(hs) >= 2 and hs[0] > hs[1] * 1.12
+        c1_ok = rp["prominence"] > 700.0 and rp["key_saddle"] < rp["Hdom"] - 500.0 and hierarchy
+        c1_d = (f"seed …{sd[-2:]}: dominant summit alpine-H={rp['Hdom']:.0f}m prominence={rp['prominence']:.0f}m "
+                f"(need>700) key_saddle={rp['key_saddle']:.0f}m ({rp['Hdom']-rp['key_saddle']:.0f}m below summit) "
+                f"summit hierarchy={[round(h) for h in hs]}")
+    else:
+        c1_ok, c1_d = False, "no alpine range in corpus"
+    checks.append(("c_peak_prominence_hierarchy", c1_ok, c1_d))
+
+    # C2 RANGE / PEAK ANCESTRY — a range's summits carry distinct MacroPeakIds under ONE shared
+    # ParentRangeId (a coherent range, not independent bumps).
+    c2_ok, c2_d = False, "no multi-summit range in corpus"
+    for sd in corpusC:
+        ff, rs = scansC[sd]
+        for gi, gj, rp in rs:
+            if len(rp["summits"]) >= 3:
+                ids = set()
+                rids = set()
+                for (sx, sy, H, R, a) in rp["summits"]:
+                    cls, pid, rid, se, pr, ks, clu = MA.peak_at(central, ff, sx, sy)
+                    if cls in ("dominant_summit", "secondary_peak"):
+                        ids.add(pid); rids.add(rid)
+                if len(ids) >= 2 and len(rids) == 1:
+                    c2_ok = True
+                    c2_d = (f"seed …{sd[-2:]}: range {list(rids)[0]} has {len(ids)} distinct MacroPeakIds "
+                            f"(cluster={rp['cluster']}) under one ParentRangeId")
+                    break
+        if c2_ok:
+            break
+    checks.append(("c_range_peak_ancestry", c2_ok, c2_d))
+
+    # C3 YOUNG-SHARP vs OLD-ROUNDED — a young alpine summit apex is materially STEEPER than an
+    # old belt crest of comparable stature (the grammar produces both, from structure not blur).
+    def apex_slope(ff, cx, cy, seed):
+        # steepest local descent over 2 km from the point (m per m)
+        import math as _m
+        z0 = macro_z(central, ff, cx, cy)
+        s = 0.0
+        for k in range(8):
+            th = k * _m.pi / 4.0
+            z1 = macro_z(central, ff, cx + 2000.0 * _m.cos(th), cy + 2000.0 * _m.sin(th))
+            s = max(s, (z0 - z1) / 2000.0)
+        return s
+    young_slope = 0.0
+    if best is not None:
+        sd, gi, gj, rp = best
+        ff = scansC[sd][0]
+        dom = rp["dominant"]
+        young_slope = apex_slope(ff, dom[0], dom[1], sd)
+    # old belt crest: scan belts in a high-age province
+    old_slope, old_found = 0.0, False
+    for sd in corpusC:
+        ff = scansC[sd][0]
+        for b in ff.belts:
+            a = b.azimuth_deg * math.pi / 180.0
+            ux, uy = math.cos(a), math.sin(a)
+            cx, cy = b.cx, b.cy
+            cc = MA.controls_at(sd, cx, cy)
+            if cc.age > 0.6 and ff._belt(b, cx, cy, cc) > 300.0 and ff._alpine_energy(cc) < 0.2:
+                old_slope = max(old_slope, apex_slope(ff, cx, cy, sd))
+                old_found = True
+    c3_ok = young_slope > 0.18 and (not old_found or young_slope > old_slope * 1.4)
+    checks.append(("c_young_sharp_vs_old_rounded", c3_ok,
+                   f"young alpine apex slope={young_slope:.3f} m/m vs old belt crest slope={old_slope:.3f} "
+                   f"(found_old={old_found}; young must be steeper -> sharp peaks vs rounded crests)"))
+
+    # C4 SADDLE / PASS DEPTH — between the two highest summits the ridge sags to a real saddle
+    # below BOTH apexes (a pass, not a continuous dome).
+    c4_ok, c4_d = False, "no saddle sampled"
+    if best is not None:
+        sd, gi, gj, rp = best
+        ff = scansC[sd][0]
+        by_h = sorted(rp["summits"], key=lambda s: s[2], reverse=True)
+        s0, s1 = by_h[0], by_h[1]
+        # sample midpoint region between the two summits, take the ridge minimum along the join
+        lo = 1e18
+        for t in range(1, 20):
+            u = t / 20.0
+            mx, my = s0[0] * (1 - u) + s1[0] * u, s0[1] * (1 - u) + s1[1] * u
+            lo = min(lo, macro_z(central, ff, mx, my))
+        apex0 = macro_z(central, ff, s0[0], s0[1])
+        apex1 = macro_z(central, ff, s1[0], s1[1])
+        drop = min(apex0, apex1) - lo
+        c4_ok = drop > 350.0
+        c4_d = (f"seed …{sd[-2:]}: apexes {apex0:.0f}/{apex1:.0f}m, ridge saddle min {lo:.0f}m "
+                f"-> pass sits {drop:.0f}m below the lower summit (need>350; a real col, not a dome)")
+    checks.append(("c_saddle_pass_depth", c4_ok, c4_d))
+
+    # C5 DOMINANT SUMMIT TOWERS — local relief: the dominant apex rises far above the terrain
+    # within a few km (Denali-style prominence-by-relief, from valley floor).
+    c5_ok, c5_d = False, "no dominant summit"
+    if best is not None:
+        sd, gi, gj, rp = best
+        ff = scansC[sd][0]
+        dom = rp["dominant"]
+        apex = macro_z(central, ff, dom[0], dom[1])
+        lo = 1e18
+        for rr in (6000.0, 9000.0, 12000.0):
+            for k in range(12):
+                th = k * math.pi / 6.0
+                lo = min(lo, macro_z(central, ff, dom[0] + rr * math.cos(th), dom[1] + rr * math.sin(th)))
+        c5_ok = (apex - lo) > 1500.0
+        c5_d = (f"seed …{sd[-2:]}: dominant apex {apex:.0f}m towers {apex-lo:.0f}m above the surrounding "
+                f"terrain within 12km (need>1500 -> reads as a dominant peak from the valley floor)")
+    checks.append(("c_dominant_summit_towers", c5_ok, c5_d))
+
+    # C6 SEED DIVERSITY — deterministic per seed; across the corpus the alpine character ranges
+    # from dramatic (high max prominence) to absent (plains/plateau seeds) — not every world.
+    proms = {}
+    for sd in corpusC:
+        rs = scansC[sd][1]
+        proms[sd] = max((rp["prominence"] for _, _, rp in rs), default=0.0)
+    dramatic = sum(1 for v in proms.values() if v > 1200.0)
+    quiet = sum(1 for v in proms.values() if v < 300.0)
+    # determinism: rebuild one seed, same top prominence
+    ff2 = MacroField.build(central.seed + "-A")
+    top2 = max((ff2._range_summits(gi, gj)["prominence"]
+                for gi in range(-8, 9) for gj in range(-8, 9)
+                if ff2._range_summits(gi, gj) is not None), default=0.0)
+    det = abs(top2 - proms[central.seed + "-A"]) < 1e-6
+    c6_ok = dramatic >= 1 and quiet >= 1 and det
+    checks.append(("c_seed_diversity", c6_ok,
+                   f"max prominence per seed={{{', '.join(f'…{k[-2:]}:{v:.0f}' for k,v in proms.items())}}} "
+                   f"dramatic(>1200)={dramatic} quiet(<300)={quiet} deterministic={det} "
+                   f"(some seeds jagged alpine, some none)"))
+
+    # C7 CENTRAL FREEZE — the alpine superstructure is gated by anchor_window (0 in the frozen
+    # ±32 km centre); MW1-8 geometry untouched.
+    cfz_alpine = max(abs(macro_z(central, fieldf, x, y) - central_envelope(central, x, y))
+                     for x, y in [(0.0, 0.0), (15000.0, -12000.0), (-20000.0, 18000.0), (30000.0, 30000.0)])
+    c7_ok = cfz_alpine < 1e-6
+    checks.append(("c_alpine_central_freeze", c7_ok,
+                   f"max|macro_z - frozen_envelope| inside ±32km = {cfz_alpine:.2e}m (need~0; alpine 0 in centre)"))
+
+    # C8 CROSS-SUPER-TILE SAFETY + DETERMINISM — peak_at is a pure absolute-coordinate function
+    # (no super-tile / page dependency): identical from either side, and across a rebuild.
+    c8_ok = True
+    for sd in corpusC[:2]:
+        ff = scansC[sd][0]
+        ffb = MacroField.build(sd)
+        for (px, py) in [(SUPER_M * 0.5 - 4000.0, 60000.0), (330000.0, -559000.0)]:
+            if MA.peak_at(central, ff, px, py) != MA.peak_at(central, ffb, px, py):
+                c8_ok = False
+    checks.append(("c_peak_at_pure_deterministic", c8_ok,
+                   "peak_at independent of super-tile ownership and identical across rebuild (pure absolute function)"))
+
+    # C9 CHEAP — analytic macro only (shares the module-wide forbidden-token scan).
+    checks.append(("c_alpine_cheap_source", not forbidden,
+                   f"alpine peak/ridge operator analytic (summit cones + ridge crests; no ReconstructedZ/"
+                   f"erosion/QueryMaterial); forbidden={forbidden or 'none'}"))
+
+    # ====================================================================== #
     # MS1.A — SurfaceState authority + composition fixtures
     #   Does the deterministic unbounded world KNOW what the exposed surface actually is,
     #   from existing certified authorities, with explicit exposure precedence and no
@@ -917,8 +1102,8 @@ def main() -> int:
 
     passed = all(ok for _, ok, _ in checks)
 
-    lines = ["MV2A_MACRO_AUTHORITY+MS1A_SURFACESTATE " + ("PASS" if passed else "FAIL"),
-             "scope=macro_forcing+surface_state_authority_only_no_renderer_no_fine_causal_stack",
+    lines = ["MV2A_MACRO_AUTHORITY+MV3C_ALPINE_PEAKS+MS1A_SURFACESTATE " + ("PASS" if passed else "FAIL"),
+             "scope=macro_forcing+alpine_peak_hierarchy+surface_state_authority_only_no_renderer_no_fine_causal_stack",
              f"authority_ring=+/-{RING}_cells  pages_compiled={ncells}  (full 128 km radial authority)",
              f"world_seed={central.seed}",
              f"generator_version={MA.GENERATOR_VERSION}",

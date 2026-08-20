@@ -275,6 +275,7 @@ MV3     macro morphology grammar          DESIGN LOCKED (MV3_MACRO_MORPHOLOGY_DE
 MV3.A   morphology control fields + ops    CERTIFIED @ 4f804588 (independent control fields; style weights belt/plateau/volcanic/cratonic; maturity/sharpness affecting relationships; plateau/escarpment; volcanic cones; gen_version=2; morphology-diversity + seed-diversity certs green; renderer green). NEXT = MV3.B drainage/canyons/volcanics/buttes
 MV3.B1  macro drainage / canyons          CERTIFIED @ 51bb1b9e + B1.1 super-tile-boundary hardening (window-independent raw-D8 routing; rivers cross 64km pages AND the 384km drainage super-tile edge with one identity, no reset/seam; 100% dir agree, incision p99 18m)
 MV3.B2  special natural forms            CERTIFIED @ 4f5126fd (volcanic shields/cones/plugs, plateau->mesa->butte remnants w/ ancestry, fault-block scarps, rare towers; consequences of continuous controls not POIs; proven across seed corpus; rarity+seed-diversity; renderer+Test B green)
+MV3.C   alpine peak / ridge hierarchy    CERTIFIED (a range is a peak HIERARCHY not the highest sample on a smooth uplift: ridge spine + summit nodes + secondary peaks + deep saddles + prominence; young/competent/high-uplift belts build dominant pyramidal peaks (dom prominence 1660m, towers 3283m/12km, apex 5x steeper than old crest), old ranges stay rounded; peak_at MacroPeakId/ParentRangeId; gen_version=5; 9 fixtures + renderer/MV2.B green; central frozen; NEXT = WD1. Honest limit: 1km macro blunts narrow apexes -> sub-macro refinement is a follow-on)
 MS1     surface / material grammar        DESIGN LOCKED (MS1_SURFACE_MATERIAL_DESIGN.md); compose MW2/5/6/7/8 authority into SurfaceState; one shared appearance resolver near+far; macro-derived outside +/-32km; retire diagnostic palette
 MS1.A   SurfaceState authority + compose  CERTIFIED @ b970585b (semantic SurfaceState from MV3 controls+drainage+landform via one exposure-precedence law; macro page 17x17@4km descriptor; 15 fixtures + renderer/Test-B green; geometry byte-identical)
 MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppearance resolver consumed by MV1 near + MV2/MV3 macro; fine composition from regionalBiomeRuntime->QueryBiome; macro consumes MS1.A descriptor; near/far continuity 120/120 + 32km handoff 48/48; geometry bit-exact; volcanic dark-not-snow; MV1 coverage 0 holes + MW8 24m/s Test B PX2 all-green)
@@ -344,6 +345,33 @@ no-regression). A/B `Docs/provenance_ms1b_ab_contact_sheet.png` (real-renderer n
 WHITE → material; far: descriptor material provinces top-down). Handoff
 `MS1B_SHARED_SURFACE_APPEARANCE_HANDOFF.md`. MW1–MW8 / MV1 / MV2.* / MV3.* / PX1–PX3 frozen;
 SurfaceState authority (MS1.A) untouched; geometry untouched. **NEXT = WD1** water diversity.
+
+**MV3.C CERTIFIED** — alpine peak / ridge hierarchy (Python authority only;
+`Tools/Worldgen/macro_authority.py`; renderer unchanged, consumes gen-5 pages). A mountain
+range is now a peak HIERARCHY, not the highest sample on a smooth uplift: a seeded 72 km
+range-anchor lattice, GATED by orogenic `_alpine_energy` (= 0.55·relief + 0.45·(1−age),
+gated by belt style × competence; a weighted term, not a 4-way product), builds a ridge
+spine + descending summit NODES + secondary peaks + deep SADDLES + convergent pyramidal
+apexes joined by knife ridges (`_range_relief_from` = max of summit cones + sagging ridge
+crests → summits/cols/prominence emerge). Cheap early-out (skips the lattice scan where
+query energy < 0.12) so it costs nothing outside alpine country; added after the plateau
+reshape (summits never mesa-flattened), outside the B2 `special` gate, anchor-window gated
+(0 in the frozen ±32 km centre). `peak_at(x,y)` publishes MacroPeakId/ParentRangeId/
+summit/prominence/key_saddle/cluster (pure absolute function). Old/weak provinces do NOT
+activate it → keep the existing broad rounded crests. **9 fixtures PASS** (0 FAIL total):
+prominence hierarchy (dominant 3254 m, prominence 1660 m, hierarchy 3254/2762/2269/1777),
+range/peak ancestry (distinct MacroPeakIds under one ParentRangeId), young-sharp vs
+old-rounded (apex 0.827 vs 0.158 m/m = 5×), saddle depth (pass 1174 m below lower summit),
+dominant towers 3283 m/12 km, seed diversity (dramatic origin/A/D, none in C; deterministic),
+central freeze, peak_at pure/deterministic, cheap. Renderer green on gen-5 pages: MV2.B
+128 km raster, 0 coverage holes, 25 unique. Visuals `Docs/provenance_mv3c_peak_hierarchy.png`
+(authority: top-down + peak→saddle→peak profile + young/old cross-sections) and
+`Docs/provenance_mv3c_showcase.png` (real C++ client `--cert-mv3c-showcase`: valley-floor
+tower + 40 km peak→saddle→peak + 100 km skyline). **Honest limit:** 1 km macro blunts narrow
+apexes close-up → a sub-macro 250–500 m peak/ridge refinement is the noted follow-on; glacial
+sharpening (horns/arêtes) deliberately deferred (peak structure is its hook). Handoff
+`MV3C_ALPINE_PEAK_HIERARCHY_HANDOFF.md`. MW1–MW8 / MV1 / MV2.* / MV3.A/B1/B1.1/B2 / MS1.* /
+PX1–PX3 frozen. **NEXT = WD1** water diversity.
 
 **MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were

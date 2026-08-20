@@ -4,7 +4,7 @@ PROVENANCE_MACRO_AUTHORITY_PAGE_V1
 region_id=174c5174da3a0667
 region_cell=0,1
 world_seed=mw1-64km-01
-generator_version=4
+generator_version=5
 world_identity_hash=a31c6e90d4b27f11
 region_min_x_m=-32000.0
 region_min_y_m=32000.0

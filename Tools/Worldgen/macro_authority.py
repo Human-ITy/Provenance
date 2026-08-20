@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-GENERATOR_VERSION = 4
+GENERATOR_VERSION = 5
 REGION_M = 64000.0          # serialization / ownership cell size (NOT feature scale)
 REGION_HALF_M = 32000.0     # frozen central region half-extent
 ANCHOR_INNER_M = 32000.0    # anchor window: 0 (with zero slope) at/inside the center boundary
@@ -500,6 +500,126 @@ class MacroField:
                 z += _hash_range(180.0, 560.0, self.seed, "th", gi, gj) * max(0.0, 1.0 - r / rad) ** 1.7
         return z
 
+    # ---- MV3.C alpine peak / ridge hierarchy -------------------------------------- #
+    # CORE LAW: a mountain range is a peak HIERARCHY, not the highest sample on a smooth
+    # uplift. In a high-energy province (young + competent + high relief + orogenic belt
+    # style) a range gets a structural SPINE: major summit NODES with real prominence,
+    # secondary peaks, deep SADDLES/passes, and convergent (pyramidal/horn) apexes joined
+    # by knife RIDGES. Old / weak / low-relief provinces do NOT activate this operator, so
+    # they keep the existing broad rounded character (the Sleeping-Lady family). Same
+    # continuous absolute-coordinate grammar; a seed either has dramatic alpine ranges or
+    # does not, depending on its structure/age/substrate/uplift.
+
+    RANGE_SP_M = 72000.0                   # range-anchor lattice spacing (< is over-dense)
+
+    def _alpine_energy(self, ctl: "Controls") -> float:
+        """Orogenic peak-building energy in [0,1]: young + high relief, GATED by belt style +
+        rock competence. A weighted amplitude*youth term (not a 4-way product, which collapses
+        to ~0) so genuine young competent belts reach 0.5-0.8 while plains/old/plateau stay 0."""
+        base = 0.55 * ctl.relief + 0.45 * max(0.0, 1.0 - ctl.age)
+        gate = smoothstep(0.30, 0.55, ctl.w_belt) * (0.40 + 0.60 * ctl.substrate)
+        return base * gate
+
+    def _range_summits(self, gi: int, gj: int):
+        """Deterministic summit hierarchy for the range anchored in lattice cell (gi,gj), or
+        None if that cell hosts no high-energy alpine range. Returns a dict with the axis,
+        summit nodes (sx,sy,H,R,along), sharpness, ridge width/sag, cluster type, dominant
+        summit, key saddle and prominence — shared by the relief operator and peak_at."""
+        seed = self.seed
+        if _hash_unit(seed, "rng_present", gi, gj) > 0.62:      # ~38% of cells eligible-to-host
+            return None
+        sp = self.RANGE_SP_M
+        cx = (gi + _hash_range(0.2, 0.8, seed, "rngx", gi, gj)) * sp
+        cy = (gj + _hash_range(0.2, 0.8, seed, "rngy", gi, gj)) * sp
+        cc = controls_at(seed, cx, cy)
+        energy = self._alpine_energy(cc)
+        if energy < 0.35:                                        # genuine alpine provinces only
+            return None
+        az = _hash_range(0.0, math.pi, seed, "rngaz", gi, gj)
+        ux, uy = math.cos(az), math.sin(az)
+        vx, vy = -math.sin(az), math.cos(az)
+        Hdom = (_hash_range(1500.0, 2700.0, seed, "rngh", gi, gj)
+                * (0.6 + 0.9 * energy) * (0.7 + 0.6 * cc.relief))
+        L = _hash_range(14000.0, 34000.0, seed, "rngl", gi, gj)  # along-axis half-length
+        cluster = _hash_unit(seed, "rngclu", gi, gj) > 0.5       # cluster (Himalaya) vs solitary (Denali)
+        n = 2 + int(_hash_unit(seed, "rngn", gi, gj) * 4.0)      # 2..5 summit nodes
+        p = 1.05 + 1.35 * energy                                 # apex sharpness (young/hard = sharp)
+        summits = []
+        for k in range(n):
+            if cluster:
+                f = 1.0 - 0.16 * k + (_hash_unit(seed, "rnghk", gi, gj, k) - 0.5) * 0.12
+            else:
+                f = ([1.0, 0.55, 0.42, 0.34, 0.28][k] if k < 5 else 0.24) \
+                    + (_hash_unit(seed, "rnghk", gi, gj, k) - 0.5) * 0.08
+            f = max(0.2, f)
+            a = ((-1.0 + 2.0 * (k + 0.5) / n) * L
+                 + (_hash_unit(seed, "rngak", gi, gj, k) - 0.5) * L * 0.25)
+            perp = (_hash_unit(seed, "rngpk", gi, gj, k) - 0.5) * (2000.0 + 4000.0 * (1.0 - energy))
+            Hk = Hdom * f
+            Rk = (2600.0 + 3400.0 * f) * (0.8 + 0.4 * (1.0 - energy))
+            summits.append((cx + ux * a + vx * perp, cy + uy * a + vy * perp, Hk, Rk, a))
+        summits_by_h = sorted(summits, key=lambda s: s[2], reverse=True)
+        H0 = summits_by_h[0][2]
+        H1 = summits_by_h[1][2] if len(summits_by_h) > 1 else 0.0
+        sag = 0.35 + 0.30 * energy
+        key_saddle = max(0.0, 0.5 * (H0 + H1) - sag * min(H0, H1))
+        return {
+            "cx": cx, "cy": cy, "cc": cc, "energy": energy, "az": az,
+            "summits": summits, "p": p,
+            "ridge_w": 900.0 + 2200.0 * (1.0 - energy), "sag": sag,
+            "cluster": cluster, "dominant": summits_by_h[0],
+            "key_saddle": key_saddle, "prominence": H0 - key_saddle, "Hdom": H0,
+        }
+
+    def _range_relief_from(self, x: float, y: float, rp: dict) -> float:
+        summits = rp["summits"]
+        p = rp["p"]
+        z = 0.0
+        for (sx, sy, Hk, Rk, _a) in summits:                     # convergent summit cones
+            r = math.hypot(x - sx, y - sy)
+            if r < Rk:
+                z = max(z, Hk * (1.0 - r / Rk) ** p)
+        ss = sorted(summits, key=lambda s: s[4])                 # ridges join consecutive summits
+        Wr, energy = rp["ridge_w"], rp["energy"]
+        sag = rp["sag"]
+        qexp = 1.0 + 1.3 * energy
+        for k in range(len(ss) - 1):
+            ax0, ay0 = ss[k][0], ss[k][1]
+            ex, ey = ss[k + 1][0] - ax0, ss[k + 1][1] - ay0
+            ll = ex * ex + ey * ey
+            if ll < 1.0:
+                continue
+            u = ((x - ax0) * ex + (y - ay0) * ey) / ll
+            if u < 0.0 or u > 1.0:
+                continue
+            d = math.hypot(x - (ax0 + u * ex), y - (ay0 + u * ey))
+            if d >= Wr:
+                continue
+            H0h, H1h = ss[k][2], ss[k + 1][2]
+            crest = (H0h * (1.0 - u) + H1h * u) - sag * min(H0h, H1h) * 4.0 * u * (1.0 - u)
+            z = max(z, crest * (1.0 - d / Wr) ** qexp)
+        return z
+
+    def _alpine_range(self, x: float, y: float, ctl: "Controls") -> float:
+        # cheap early-out: alpine energy varies on 200-500 km control wavelengths and a range
+        # reaches < the 72 km lattice spacing, so if the query point is not in a high-energy
+        # province no nearby anchor's range can reach it. Skips the lattice scan everywhere
+        # except genuine alpine country.
+        if self._alpine_energy(ctl) < 0.12:
+            return 0.0
+        sp = self.RANGE_SP_M
+        ci, cj = math.floor(x / sp), math.floor(y / sp)
+        best = 0.0
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                rp = self._range_summits(ci + di, cj + dj)
+                if rp is None:
+                    continue
+                z = self._range_relief_from(x, y, rp)
+                if z > best:
+                    best = z
+        return best
+
     def _special_forms(self, x: float, y: float, ctl: "Controls") -> float:
         # Gate volcanic constructs on the dedicated volcanic-POTENTIAL field (a smooth
         # province), not the rare style-weight; keeps volcanoes rare-but-present across seeds.
@@ -540,6 +660,13 @@ class MacroField:
             z = z * (1.0 - ctl.w_plateau) + mesa * ctl.w_plateau
         for bs in self.basins:
             z += self._basin(bs, x, y)
+        # MV3.C alpine peak/ridge hierarchy: adds the summit-node + knife-ridge + saddle
+        # SUPERSTRUCTURE on top of the broad belt uplift in high-energy provinces (young/
+        # competent/high-relief orogenic belts). Added AFTER the plateau reshape so summits
+        # are never mesa-flattened; 0 (early-out) in every non-alpine province, so old/weak
+        # ranges keep their existing broad rounded crests. Part of the base skeleton (not the
+        # MV3.B2 `special` gate), so the B2 counterfactual still isolates only B2 forms.
+        z += self._alpine_range(x, y, ctl)
         if special:
             z += self._special_forms(x, y, ctl)     # MV3.B2 volcanic / mesa-butte / tower
         return z
@@ -617,6 +744,45 @@ def landform_at(central: "CentralProgram", fieldf: "MacroField", x: float, y: fl
                     cls = "butte" if (ctl.age > 0.68 and rad < 5000.0) else "mesa"
                     return (cls, fid("mesa", gi, gj), prov, ctl.age, ctl.substrate, (cx, cy))
     return ("none", "none", prov, ctl.age, ctl.substrate, (x, y))
+
+
+def peak_at(central: "CentralProgram", fieldf: "MacroField", x: float, y: float):
+    """MV3.C alpine peak ancestry at a point (pure absolute-coordinate function; no super-tile
+    dependency): (class, MacroPeakId, ParentRangeId, summit_elev_m, prominence_m,
+    key_saddle_m, cluster). class in {dominant_summit, secondary_peak, ridge, flank, none}.
+    summit_elev / prominence are the ALPINE superstructure relief (above the belt base)."""
+    ctl = controls_at(fieldf.seed, x, y)
+    seed = fieldf.seed
+    none = ("none", "none", "none", 0.0, 0.0, 0.0, False)
+    if fieldf._alpine_energy(ctl) < 0.12:
+        return none
+    sp = fieldf.RANGE_SP_M
+    ci, cj = math.floor(x / sp), math.floor(y / sp)
+    best_gi = best_gj = None
+    best_rp = None
+    best_z = 0.0
+    for dj in (-1, 0, 1):
+        for di in (-1, 0, 1):
+            rp = fieldf._range_summits(ci + di, cj + dj)
+            if rp is None:
+                continue
+            z = fieldf._range_relief_from(x, y, rp)
+            if z > best_z:
+                best_z, best_gi, best_gj, best_rp = z, ci + di, cj + dj, rp
+    if best_rp is None:
+        return none
+    rid = f"{fnv1a64(seed + f':range:({best_gi},{best_gj})'):016x}"
+    ns = min(best_rp["summits"], key=lambda s: math.hypot(x - s[0], y - s[1]))
+    dist = math.hypot(x - ns[0], y - ns[1])
+    is_dom = abs(ns[2] - best_rp["Hdom"]) < 1e-6
+    pid = f"{fnv1a64(seed + f':peak:({best_gi},{best_gj}):({ns[4]:.0f})'):016x}"
+    if dist < ns[3] * 0.30:
+        cls = "dominant_summit" if is_dom else "secondary_peak"
+    elif best_z > 0.35 * best_rp["Hdom"]:
+        cls = "ridge"
+    else:
+        cls = "flank"
+    return (cls, pid, rid, ns[2], best_rp["prominence"], best_rp["key_saddle"], best_rp["cluster"])
 
 
 # =========================================================================== #

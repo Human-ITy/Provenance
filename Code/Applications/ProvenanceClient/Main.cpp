@@ -20377,7 +20377,7 @@ namespace
         if(ph==2)
         {
             char path[128];std::snprintf(path,sizeof(path),
-                "Docs\\provenance_mv3b2_showcase_%d_%s.ppm",g.showcaseView,v.name);
+                "Docs\\provenance_showcase_%d_%s.ppm",g.showcaseView,v.name);
             DumpFramePpm(path);
             ++g.showcaseView;g.showcaseSettle=0;
             if(g.showcaseView>=s_showcaseN){g.certMv2Showcase=false;PostQuitMessage(0);ph=3;}
@@ -55021,6 +55021,26 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                         {15829,274464, 26000, 0.75, 300, 0.055, "volcanic_cone_near"},
                         {15829,274464, 52000, 2.35, 500, 0.030, "volcanic_cone_mid"},
                         {15829,274464, 34000, 4.05, 380, 0.050, "volcanic_cone_flank"},
+                    };
+                    s_showcaseN=(int)(sizeof(vs)/sizeof(vs[0]));
+                    for(int k=0;k<s_showcaseN;++k)s_showcase[k]=vs[k];
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-mv3c-showcase")==0)
+                {
+                    // MV3.C alpine peak/ridge real-client proof. Seed-D near-origin range
+                    // (dominant summit (-100404,6937) H~2259 alpine + second (-103550,26735)
+                    // H~1906, N-S ridge); viewed broadside from the EAST (bearing 270deg).
+                    // The seed-D page set (super-tile (0,0)) is compiled here before this run.
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2Showcase=true;g.mv2bEnabled=true;g.mv2cEnabled=true;g.ms1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    double const PI=3.14159265358979;
+                    ShowcaseView vs[]={
+                        {-100404, 6937, 8500, 1.5*PI, 25, 0.10, "mv3c_valley_floor"},   // towers over player
+                        {-101977, 16836, 42000, 1.5*PI, 700, 0.0, "mv3c_range_40km"},   // peak->saddle->peak
+                        {-101977, 16836, 100000, 1.5*PI, 2000, -0.01, "mv3c_skyline_100km"}, // summit ordering
                     };
                     s_showcaseN=(int)(sizeof(vs)/sizeof(vs[0]));
                     for(int k=0;k<s_showcaseN;++k)s_showcase[k]=vs[k];

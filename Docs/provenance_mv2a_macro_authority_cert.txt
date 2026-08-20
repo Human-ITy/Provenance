@@ -1,17 +1,17 @@
-MV2A_MACRO_AUTHORITY+MS1A_SURFACESTATE PASS
-scope=macro_forcing+surface_state_authority_only_no_renderer_no_fine_causal_stack
+MV2A_MACRO_AUTHORITY+MV3C_ALPINE_PEAKS+MS1A_SURFACESTATE PASS
+scope=macro_forcing+alpine_peak_hierarchy+surface_state_authority_only_no_renderer_no_fine_causal_stack
 authority_ring=+/-2_cells  pages_compiled=25  (full 128 km radial authority)
 world_seed=mw1-64km-01
-generator_version=4
+generator_version=5
 surface_descriptor_version=1  surface_step_m=4000  surface_grid=17x17  center_surface_digest=14a9c334e90397da
 central_region_key=causal_world_macro_provinces_floor
 central_world_identity_hash=a31c6e90d4b27f11
 page_cell_size_m=64000  (packaging only; feature wavelengths independent)
 sample_step_m=1000  samples_per_page=4225
-compile_seconds=152.954
+compile_seconds=185.585
 
 fixture.determinism_same_seed_same_digest=PASS  all 25 pages reproduce digest+region_id
-fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=674.4m worst=2114.9m (need rms>40)
+fixture.non_repetition_no_64km_tiling=PASS  unique_ids=25/25 unique_digests=25/25 period64_rms=656.5m worst=2114.9m (need rms>40)
 fixture.boundary_continuity_4_center_edges=PASS  max_position_step=0.0461m (need<0.5) max_slope_step=0.0001 (need<0.05)
 fixture.boundary_continuity_ring2_96km_seams=PASS  max_anomalous_step_vs_interior=0.0003m (need<0.10) max_slope_step=0.0040 (need<0.05)
 fixture.cardinal_ring2_reaches_128km=PASS  E:reach=160km relief=1314m distinct=True  W:reach=160km relief=779m distinct=True  N:reach=160km relief=3086m distinct=True  S:reach=160km relief=2993m distinct=True
@@ -26,10 +26,10 @@ fixture.drain_downhill_routing=PASS  ascending_edges=0 (need 0) terminals=44 (in
 fixture.drain_confluence_hierarchy=PASS  confluence at accum=552 of 2 channel tributaries (sum=551); downstream>=sum, hierarchy stable
 fixture.drain_cross_page_continuity=PASS  main stem (57 cells) crosses 3 of the 64 km page boundaries with 1 watershed identity (need 1, seam-free)
 fixture.drain_plateau_canyon_and_counterfactual=PASS  plateau(w=0.39) canyon at (46000,-162000) incision=275m on the graph; incise_off==MV3.A_surface (max_delta=0.00e+00m)
-fixture.drain_maturity_substrate_response=PASS  resistant/young mean canyon width=5077m vs weak/old valley width=7124m (ratio 1.40x, need>1.25 -> materially different cross-section, not one universal)
+fixture.drain_maturity_substrate_response=PASS  resistant/young mean canyon width=5077m vs weak/old valley width=7125m (ratio 1.40x, need>1.25 -> materially different cross-section, not one universal)
 fixture.drain_closed_basin_spill_no_page_hack=PASS  depressions_resolved(ascending=0)=True interior_endorheic_basins=33 spill_terminals=11 terminals_on_64km_page_lines=0 (need 0 -> no page-edge drain hack)
 fixture.drain_seed_semantics=PASS  same_seed_digest=match diff_seed_digest=differs
-fixture.drain_long_distance_nonperiodic=PASS  supertile(0,0).digest=a7bd62585954d201 != supertile(5,0)@1920km.digest=d1a35e298668b8d3 (non-periodic, page-independent)
+fixture.drain_long_distance_nonperiodic=PASS  supertile(0,0).digest=6f68ce63bcc956fc != supertile(5,0)@1920km.digest=ff27f6242745848d (non-periodic, page-independent)
 fixture.drain_no_square_signature=PASS  channel_density_on_64km_lines=0.0209 interior=0.0236 (line<=interior*1.35)
 fixture.drain_h2h_center_frozen_mw4_not_overwritten=PASS  max|incised-MV3.A| inside +/-32km center=0.00e+00m (need~0; MW4 untouched)
 fixture.drain_supertile_boundary_continuity=PASS  halo-overlap: D8_dir_agree=100.0% (need>=99.5) incision_p99=18.1m max=181m (p99 need<30) trunk_crossing_384km_edge_same_channel=True
@@ -43,13 +43,22 @@ fixture.b2_maturity_response=PASS  younger context -> mesas (n=19); older contex
 fixture.b2_seed_diversity=PASS  deterministic=True distinct_form_mixes_across_corpus=4/4 long_distance_var=488m (some seeds dramatic, some quiet)
 fixture.b2_central_freeze=PASS  max|special-on - special-off| inside +/-32 km centre = 0.00e+00m (need~0; MW1-8 untouched)
 fixture.b2_cheap_source_analytic=PASS  special-form operators analytic (no ReconstructedZ/erosion/QueryMaterial); forbidden=none
+fixture.c_peak_prominence_hierarchy=PASS  seed …-A: dominant summit alpine-H=3254m prominence=1660m (need>700) key_saddle=1594m (1660m below summit) summit hierarchy=[3254, 2762, 2269, 1777]
+fixture.c_range_peak_ancestry=PASS  seed …01: range 6e46802b7c0b69d6 has 4 distinct MacroPeakIds (cluster=True) under one ParentRangeId
+fixture.c_young_sharp_vs_old_rounded=PASS  young alpine apex slope=0.827 m/m vs old belt crest slope=0.158 (found_old=True; young must be steeper -> sharp peaks vs rounded crests)
+fixture.c_saddle_pass_depth=PASS  seed …-A: apexes 3386/2872m, ridge saddle min 1698m -> pass sits 1174m below the lower summit (need>350; a real col, not a dome)
+fixture.c_dominant_summit_towers=PASS  seed …-A: dominant apex 3386m towers 3283m above the surrounding terrain within 12km (need>1500 -> reads as a dominant peak from the valley floor)
+fixture.c_seed_diversity=PASS  max prominence per seed={…01:1209, …-A:1660, …-B:869, …-C:0, …-D:1641} dramatic(>1200)=3 quiet(<300)=1 deterministic=True (some seeds jagged alpine, some none)
+fixture.c_alpine_central_freeze=PASS  max|macro_z - frozen_envelope| inside ±32km = 0.00e+00m (need~0; alpine 0 in centre)
+fixture.c_peak_at_pure_deterministic=PASS  peak_at independent of super-tile ownership and identical across rebuild (pure absolute function)
+fixture.c_alpine_cheap_source=PASS  alpine peak/ridge operator analytic (summit cones + ridge crests; no ReconstructedZ/erosion/QueryMaterial); forbidden=none
 fixture.ms1a_precedence_deposit_over_host=PASS  deposit over sandstone host -> substrate=alluvium lithology(ancestry)=sandstone family=sediment (deposit owns top; host is ancestry not surface)
 fixture.ms1a_regolith_over_bedrock=PASS  thin profile -> thin_regolith; deep+wet+ecological -> organic_capable (regolith owns surface; bedrock not exposed)
 fixture.ms1a_bedrock_fallback=PASS  no deposit/regolith: fresh->bare_bedrock, mature->weathered_bedrock (deterministic by weathering; host=granite)
 fixture.ms1a_wetness_overlay=PASS  dry vs wet: substrate UNCHANGED (thin_regolith); wetness axis 0.12->0.60 (state overlay, not rewrite)
 fixture.ms1a_organic_potential=PASS  low vs high ecological potential: substrate UNCHANGED (alluvium); organic axis 0.20->0.85
 fixture.ms1a_volcanic_macro_state=PASS  young construct: substrate=scoria_ash weathering=0.43; old plug: substrate=weathered_basalt weathering=0.88 (basalt ancestry both; old more weathered)
-fixture.ms1a_drainage_floodplain_context=PASS  drainage cell (-122000,-150000) accum=839 -> substrate=floodplain_sediment family=sediment; 107 depositional cells in drainage context
+fixture.ms1a_drainage_floodplain_context=PASS  drainage cell (-122000,-150000) accum=839 -> substrate=floodplain_sediment family=sediment; 106 depositional cells in drainage context
 fixture.ms1a_central_freeze=PASS  center incision delta=0.00e+00m (need~0); center macro-family defers to frozen family 81/81 (no volcanic paint over the frozen sedimentary centre)
 fixture.ms1a_same_seed_determinism=PASS  center surface_digest reproduces (14a9c334e90397da); per-point packs identical across rebuild=True
 fixture.ms1a_different_seed_diversity=PASS  digest differs; families origin={'regolith': 190, 'rock': 98, 'sediment': 1} alt={'organic': 224, 'regolith': 34, 'rock': 30, 'sediment': 1} (materially different arrangement)
@@ -58,22 +67,22 @@ fixture.ms1a_macro_fine_compatibility=PASS  boundary macro-family vs frozen cent
 fixture.ms1a_geometry_invariance=PASS  height digest recomputed (no surface) == page source_digest for sampled pages (surface ON changes no geometry sample)
 fixture.ms1a_surface_cheap_source=PASS  SurfaceState composed from macro controls+drainage+landform only; forbidden_tokens=none; descriptor 17x17 cells @ 4000m (bounded, a few bytes/cell)
 fixture.ms1a_h2h_near_far_identity=PASS  coarse macro descriptor family == fine point family 23/24 (96%, need>=85; distance simplifies, never contradicts)
-fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 152.95s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
+fixture.cheap_source_no_deep_reconstructedz=PASS  compiled 25 pages (4225 samples each) in 185.58s; macro-analytic only (no ReconstructedZ/erosion/QueryMaterial)
 
 page_ids (named subset of the 25-page ring):
   center=(0, 0) region_id=174fb574da3ce62a digest=b275a0b71daf2381 bounds=[-32000,32000]x[-32000,32000]
   north=(0, 1) region_id=174c5174da3a0667 digest=7461f8c375537f36 bounds=[-32000,32000]x[32000,96000]
-  south=(0, -1) region_id=de46b38e475061de digest=392d127d9b6df552 bounds=[-32000,32000]x[-96000,-32000]
+  south=(0, -1) region_id=de46b38e475061de digest=6a7b96ec32e7b8fb bounds=[-32000,32000]x[-96000,-32000]
   east=(1, 0) region_id=a28d3b6dbebf86cf digest=a94f709639b7c40d bounds=[32000,96000]x[-32000,32000]
   west=(-1, 0) region_id=861e8b3f32a04f56 digest=fd0eca60777b7b36 bounds=[-96000,-32000]x[-32000,32000]
   ne=(1, 1) region_id=a2909f6dbec26692 digest=a38e7c1837dcee2a bounds=[32000,96000]x[32000,96000]
   nw=(-1, 1) region_id=861b673f329ddc53 digest=b4d45496dd08e205 bounds=[-96000,-32000]x[32000,96000]
-  se=(1, -1) region_id=95ab9e7ae9009965 digest=048f17e7735a644e bounds=[32000,96000]x[-96000,-32000]
+  se=(1, -1) region_id=95ab9e7ae9009965 digest=9523fd76872beeca bounds=[32000,96000]x[-96000,-32000]
   sw=(-1, -1) region_id=d1809e62a0629d0a digest=373d6e32a65ede61 bounds=[-96000,-32000]x[-96000,-32000]
   east2=(2, 0) region_id=f7e58d8672e0ce6c digest=f1d0cf987dc2daba bounds=[96000,160000]x[-32000,32000]
   west2=(-2, 0) region_id=f669c147fef2c135 digest=6e6c4f2109e9e720 bounds=[-160000,-96000]x[-32000,32000]
   north2=(0, 2) region_id=17563174da42248c digest=819dd7d44ec139f9 bounds=[-32000,32000]x[96000,160000]
-  south2=(0, -2) region_id=de49db8e4752dbad digest=f8b46ec1b0e560bf bounds=[-32000,32000]x[-160000,-96000]
+  south2=(0, -2) region_id=de49db8e4752dbad digest=da9cdd675bf0326e bounds=[-32000,32000]x[-160000,-96000]
   ne2=(2, 2) region_id=f7de918672dab68a digest=908db161aede809f bounds=[96000,160000]x[96000,160000]
   sw2=(-2, -2) region_id=181e7e56757910e4 digest=6e311548f5eb9c01 bounds=[-160000,-96000]x[-160000,-96000]
 
