@@ -5,6 +5,10 @@ Provenance process to prove the new layered untouched-world identity. It does
 not make the client authoritative for substrate, switch a terrain consumer,
 change a mesh/material/water resolver, or publish detailed engine projection.
 
+> EI2.R supersedes only this cut's toolchain-sensitive macro/world-baseline
+> digest values. The layered contract and client behavior remain intact. See
+> `EI2R_TOOLCHAIN_INDEPENDENT_BASELINE_IDENTITY_CLIENT_HANDOFF.md`.
+
 ## Git ground truth
 
 - Branch: `integration/ei2-world-baseline-client`

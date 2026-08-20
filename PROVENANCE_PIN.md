@@ -111,6 +111,19 @@ new detailed resolver yet. FableScript commits: `a75d91a` and `741b6f9`.
 Handoff: `EI2_WORLD_BASELINE_CLIENT_HANDOFF.md`. **NEXT = EI3 revisioned
 detailed projection.**
 
+EI2.R corrects a toolchain-sensitive identity procedure before EI3. The old
+EI0.E/EI2 macro digest `8394bfef...` and derived world baseline `afff30f8...`
+are superseded diagnostic evidence. Canonical macro genesis is now
+`9dca0db5344baf0cf709dd654fb80fce38589f0f7fcf01ed8fe086d74818d711`;
+canonical world baseline is
+`b979a8df68f97adeed64fd2acad70b9ecb1158b7898b8d0ac04bbe773a33b0b4`.
+Python 3.12 and 3.14 plus relocated engine/client sources produce exact
+identity and macro/micro fixture receipts. All 25 Page V2 envelopes and the
+manifest were reissued while height, SurfaceState, WaterState, and static-ID
+payloads remained exact. Handoff:
+`EI2R_TOOLCHAIN_INDEPENDENT_BASELINE_IDENTITY_CLIENT_HANDOFF.md`.
+**NEXT = EI3 revisioned detailed projection.**
+
 Historical unqualified `v1` is not canonical and is never an implicit
 downgrade. No new world-authority stage is open: WD1.C existence, FL1
 population, and AT1 authority remain on hold.
