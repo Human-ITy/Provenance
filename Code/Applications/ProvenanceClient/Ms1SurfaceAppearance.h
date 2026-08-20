@@ -202,4 +202,116 @@ namespace Ms1
             default:             return { 0.5f, 0.5f, 0.5f };
         }
     }
+
+    // ===================================================================================
+    // WD1.B — shared Water Appearance. Water is an OVERLAY over the MS1 substrate: what you
+    // see = the bottom (MS1) transmitted through the water column + the body's own optical
+    // character + surface reflection. Continuous optical DEPTH, never colour bands. The
+    // WaterState mirrors the WD1.A Python descriptor (macro_authority.py :: WaterState.pack).
+    // ===================================================================================
+    enum WPresence : uint8_t { WP_DRY=0, WP_DAMP, WP_EPHEMERAL, WP_SEASONAL, WP_PERENNIAL, WP_STANDING };
+    enum WBody : uint8_t {
+        WB_NONE=0, WB_HEADWATER, WB_PERENNIAL_RIVER, WB_SEDIMENT_RIVER, WB_BRAIDED, WB_ALPINE_LAKE,
+        WB_CLOSED_LAKE, WB_FLOODPLAIN, WB_WETLAND, WB_ORGANIC, WB_ARID_WASH, WB_SPRING,
+        WB_VOLCANIC_POOL, WB_CRATER, WB_COUNT
+    };
+    enum WAuthority : uint8_t { WA_VALID_MACRO=0, WA_DEFER_TO_DETAILED=1 };
+
+    struct WaterState {
+        uint8_t presence = WP_DRY, body = WB_NONE, flow = 0, bottomFamily = FAM_ROCK, authority = WA_VALID_MACRO;
+        float depth_m = 0.f, discharge = 0.f, seasonality = 0.f, clarity = 1.f, turbidity = 0.f;
+        float sediment = 0.f, mineral = 0.f, organic = 0.f, temperature = 0.f;
+        float waterfallPot = 0.f, mineralPot = 0.f;
+        bool valid = false;
+    };
+
+    // mirror of Python WaterState.pack() bit layout (see the .mcp water_code comment)
+    inline WaterState UnpackWater(uint64_t v)
+    {
+        WaterState w;
+        w.presence     = (uint8_t)(v & 0x7);
+        w.body         = (uint8_t)((v >> 3) & 0xF);
+        w.flow         = (uint8_t)((v >> 7) & 0x7);
+        w.bottomFamily = (uint8_t)((v >> 10) & 0x7);
+        w.depth_m      = ((v >> 13) & 0x1FF) / 4.f;
+        w.discharge    = nib((int)((v >> 22) & 0xF));
+        w.seasonality  = nib((int)((v >> 26) & 0xF));
+        w.clarity      = nib((int)((v >> 30) & 0xF));
+        w.turbidity    = nib((int)((v >> 34) & 0xF));
+        w.sediment     = nib((int)((v >> 38) & 0xF));
+        w.mineral      = nib((int)((v >> 42) & 0xF));
+        w.organic      = nib((int)((v >> 46) & 0xF));
+        w.temperature  = nib((int)((v >> 50) & 0xF));
+        w.waterfallPot = ((v >> 54) & 0x3) / 3.f;
+        w.mineralPot   = ((v >> 56) & 0x3) / 3.f;
+        w.authority    = (uint8_t)((v >> 58) & 0x1);
+        if (w.body >= WB_COUNT) { return WaterState(); }
+        w.valid = true;
+        return w;
+    }
+
+    // Is there macro-authoritative standing/flowing water to render at this cell?
+    inline bool MacroWaterPresent(WaterState const& w)
+    {
+        return w.valid && w.authority == WA_VALID_MACRO && w.body != WB_NONE
+            && w.presence != WP_DRY && w.presence != WP_DAMP;
+    }
+    inline bool MacroStandingWater(WaterState const& w)
+    {
+        return MacroWaterPresent(w) && (w.body == WB_ALPINE_LAKE || w.body == WB_CLOSED_LAKE
+            || w.body == WB_FLOODPLAIN || w.body == WB_WETLAND || w.body == WB_ORGANIC
+            || w.body == WB_VOLCANIC_POOL || w.body == WB_CRATER);
+    }
+
+    // The body's OWN optical colour (what deep water tends toward), by causal state — clear
+    // cold blue-green, sediment olive-brown, organic tea-dark, mineral turquoise/amber.
+    inline RGB WaterBodyOptical(WaterState const& w)
+    {
+        RGB clear    = { 0.06f, 0.24f, 0.30f };   // cold clear deep blue-green
+        RGB sediment = { 0.22f, 0.26f, 0.18f };   // olive / brown-green suspended load
+        RGB organic  = { 0.10f, 0.15f, 0.12f };   // tea / dark brown-green
+        RGB mineralT = { 0.06f, 0.40f, 0.40f };   // mineral turquoise
+        RGB c = clear;
+        c = mix(c, sediment, clamp01(0.85f * w.sediment + 0.5f * w.turbidity));
+        c = mix(c, organic,  clamp01(w.organic));
+        c = mix(c, mineralT, clamp01(w.mineral));
+        // warmer bodies read very slightly greener/warmer; cold alpine stays blue
+        c = mix(c, RGB{ c.r * 1.05f, c.g * 1.02f, c.b * 0.92f }, 0.4f * w.temperature);
+        return { clamp01(c.r), clamp01(c.g), clamp01(c.b) };
+    }
+
+    // Optical attenuation coefficient (per metre): clear water lets the bottom show metres
+    // down; turbid/organic water hides it within ~1 m. Continuous — this is the depth law.
+    inline float WaterAttenuation(WaterState const& w)
+    {
+        return 0.10f + 1.35f * w.turbidity + 0.85f * w.organic + 0.25f * w.sediment;
+    }
+
+    // The shared resolver: observed = bottom transmitted through depth + body optical + surface
+    // reflection. `bottom` is the MS1 substrate appearance (already resolved). `sky` is the
+    // horizon/sky colour for reflection. `fresnel` in [0,1] (grazing = more reflection).
+    inline RGB ResolveWaterAppearance(WaterState const& w, RGB bottom, float depth_m,
+                                      RGB sky, float fresnel)
+    {
+        float const k = WaterAttenuation(w);
+        float const T = std::exp(-k * (depth_m < 0.f ? 0.f : depth_m));   // bottom transmittance
+        RGB body = WaterBodyOptical(w);
+        // shallow: bottom shows through (tinted by a thin water column); deep: body dominates.
+        RGB throughWater = { bottom.r * (0.55f + 0.45f * body.r * 3.0f),
+                             bottom.g * (0.55f + 0.45f * body.g * 3.0f),
+                             bottom.b * (0.60f + 0.40f * body.b * 3.0f) };
+        throughWater = { clamp01(mix(bottom, throughWater, 0.5f).r),
+                         clamp01(mix(bottom, throughWater, 0.5f).g),
+                         clamp01(mix(bottom, throughWater, 0.5f).b) };
+        RGB observed = { body.r + (throughWater.r - body.r) * T,
+                         body.g + (throughWater.g - body.g) * T,
+                         body.b + (throughWater.b - body.b) * T };
+        // surface reflection: still water reflects sky more; turbulent/turbid scatters.
+        float still = (w.flow <= 2) ? 1.f : 0.5f;                 // still/slow reflect more
+        float refl = clamp01((0.06f + 0.22f * fresnel) * still * (0.5f + 0.5f * w.clarity));
+        observed = { observed.r + (sky.r - observed.r) * refl,
+                     observed.g + (sky.g - observed.g) * refl,
+                     observed.b + (sky.b - observed.b) * refl };
+        return { clamp01(observed.r), clamp01(observed.g), clamp01(observed.b) };
+    }
 }

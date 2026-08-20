@@ -1,0 +1,10 @@
+WD1B_SHARED_WATER_APPEARANCE PASS
+scope=presentation_only_shared_resolver_macro_overlay  geometry+water_truth_untouched
+resolver=Ms1::ResolveWaterAppearance(WaterState, MS1 bottom, depth, sky, fresnel)
+
+fixture.optical_depth_law=PASS  bottom->body distance by depth (0.15m..20m)=[0.09 0.09 0.11 0.13 0.17 0.20] monotone=1 shallow_shows_bottom=1 deep_near_body(0.10<0.30)
+fixture.families_diverge=PASS  min pairwise deep-colour separation clear/sediment/organic/mineral=0.159 (need>0.08)
+fixture.geometry_water_truth_invariant=PASS  WD1.B on/off ReconstructedZ bit-exact (max_dz=0.00e+00; overlay only, no water mass, 16D-16F/P5b untouched)
+fixture.macro_descriptor_consumed=PASS  resident page(1,-2) standing-water cells=10 (renderer reads the WD1.A descriptor; no recompute)
+
+no hard depth colour bands (continuous transmission); water is an OVERLAY over the MS1 bottom substrate; detailed 16D-16F stays separately owned; waterfalls/foam/spray CLOSED.

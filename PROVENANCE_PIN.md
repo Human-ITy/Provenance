@@ -282,8 +282,8 @@ MS1.B   shared surface appearance         CERTIFIED (one C++ Ms1::ResolveAppeara
 MS1.B1  semantic surface default          CERTIFIED (MS1.B now ON BY DEFAULT — diagnostic palette is debug-only; --ms1b-off reproduces frozen; default gates re-run green: default boot material (75,87,88) vs --ms1b-off white (225,227,230), MV1 coverage 0 holes, MV2.B 0 holes, MV2.C separation 0.198, MW8 24m/s Test B PX2 all-green, geometry bit-exact; NEXT = WD1 water)
 WD1     water diversity                   DESIGN LOCKED @ c2f9bd55 (WD1_WATER_DIVERSITY_DESIGN.md): CHANNEL_EXISTS!=WATER_PRESENT!=WATER_BODY_TYPE!=WATER_OPTICAL_STATE; two-stage presence (supply vs accommodation); 16D/16E/16F/P5b stay authoritative; WD1.B = continuous optical transmission over MS1 bottom substrate; reserved hooks waterfalls/volcanic-chem/season/glacial
 WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage presence supply(macro_humidity+catchment−permeability/evap) then accommodation(channel gradient/basin closure) → dry/damp/ephemeral/seasonal/perennial/standing + body/regime; discharge_proxy first-class; optical axes clarity/turbidity/sediment/mineral/organic over MS1 bottom substrate; MacroWaterBodyId keyed to watershed sink, rivers inherit MacroChannelId; 17x17@4km page water descriptor; anchor-window gated (centre macro_authority=defer_to_detailed, NOT dry; 16D-16F owns detailed); mass law = no water mass/no geometry; 15 fixtures + MV2.B 0-holes green; surface_digest byte-identical; NEXT = WD1.B appearance)
-WD1.B   shared water appearance           NEXT (continuous optical transmission over MS1 substrate; never depth bands)
-WD1.C   waterfalls                        CLOSED (hook only)
+WD1.B   shared water appearance           CERTIFIED (one C++ Ms1::ResolveWaterAppearance resolver: observed = MS1 bottom·T(depth) + body_optical·(1-T) + reflection, T=exp(-k·depth), k from turbidity/organic/sediment; continuous optical depth, NEVER bands; clear/sediment/organic/mineral bodies diverge; macro STANDING water rendered as an overlay at surface_z over the MS1 substrate (terrain untouched); macro_authority respected (centre defers, no macro water); opt-in --wd1b (default off==frozen); optical cert PASS + real-client showcase (turquoise crater lakes over basalt, organic lowland) + MW8 24m/s Test B PX2 green; geometry/water-truth bit-exact; NEXT = WD1.C)
+WD1.C   waterfalls / cascades             NEXT / READY FOR DESIGN (hook: channel + discharge + abrupt drop + resistant lip)
 MV3.C-testB  24m/s Test B on gen-5 pages   PASS (engine_cpu 0-over worst 11.7ms, 0 presented/stage-owned/os-gap, cadence no-regression, 0 movement frames over)
 MW9     flora / fauna                     CLOSED
 ```
@@ -408,6 +408,30 @@ MV2.B 128 km raster, 0 coverage holes, 25 unique. Visuals
 centre all-dry) + `provenance_wd1a_seed_corpus.png`. Handoff
 `WD1A_WATER_STATE_AUTHORITY_HANDOFF.md`. **NEXT = WD1.B** shared optical appearance (continuous
 transmission over the MS1 bottom substrate; never depth bands). All frozen cuts untouched.
+
+**WD1.B CERTIFIED** — shared water appearance (presentation only; consumes the WD1.A descriptor;
+no page regeneration, no water mass, no geometry change). One C++ resolver in
+`Ms1SurfaceAppearance.h`: `Ms1::ResolveWaterAppearance(WaterState, MS1 bottom RGB, depth, sky,
+fresnel)` = `bottom·T(depth) + body_optical·(1−T) + surface_reflection`, `T=exp(−k·depth)`,
+`k=0.10+1.35·turbidity+0.85·organic+0.25·sediment` — an absorption/transmission model, NOT a
+palette: shallow shows the MS1 bottom, deep tends to the body colour, **continuous (no depth
+bands)**. `WaterBodyOptical` derives the body colour causally (clear cold blue-green / sediment
+olive-brown / organic tea-dark / mineral turquoise). **Macro overlay:** `Mv2Page` parses the
+WD1.A water descriptor (`Mv2WaterAt`); `Mv2BuildTile` emits a flat water quad at `surface_z` for
+each macro-authoritative STANDING cell, coloured by the resolver over the MS1 bottom, drawn as a
+second pass in `DrawMv2Horizon` — **water is an OVERLAY; terrain geometry/colour untouched**.
+`macro_authority` respected (frozen ±32 km centre defers → no macro water; never read as `dry`);
+rivers sub-cell at macro scale = deferred; detailed 16D–16F stays separately owned. Opt-in
+`--wd1b`/`--play-wd1b` (default OFF == frozen; `--wd1b-off` forces frozen). Cert `--cert-wd1b`
+→ `Docs/provenance_wd1b_water_appearance_cert.txt` **PASS**: optical depth law (bottom→body
+distance monotone 0.09→0.20 over 0.15–20 m, shallow shows bottom, deep near body), families
+diverge (min sep 0.159), geometry/water-truth bit-exact (on/off ReconstructedZ max_dz=0),
+descriptor consumed (10 standing cells on a resident page). MW8 24 m/s Test B `--wd1b` PX2
+all-green; MV1 coverage unaffected (macro-only overlay); `--wd1b-off` reproduces frozen. Visual
+`Docs/provenance_wd1b_water_showcase.png` (real C++ client `--cert-wd1b-showcase`): **turquoise
+volcanic crater lakes over dark basalt**, organic lowland water, lowland bodies across the
+horizon. Handoff `WD1B_SHARED_WATER_APPEARANCE_HANDOFF.md`. **NEXT = WD1.C** waterfalls/cascades
+(the `waterfall_potential` hook + B1 channels + terrain drops). All frozen cuts untouched.
 
 **MV1.C CERTIFIED @ `331f94ff`** — real 32 km raster visibility. A projection
 audit found the render far plane was 600 m, so MV1's regional/horizon bands were

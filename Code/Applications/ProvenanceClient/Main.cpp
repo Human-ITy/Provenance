@@ -1105,6 +1105,12 @@ namespace
         bool ms1bEnabled = true;
         int  ms1bDebugAxis = 0;
         bool certMs1b = false;
+        // WD1.B — shared water appearance (macro standing-water overlay via the WD1.A descriptor).
+        // OPT-IN (default OFF == frozen no-macro-water presentation). --wd1b enables; --wd1b-off
+        // forces frozen. Water is an OVERLAY at surface_z over the MS1 substrate, never a terrain
+        // recolour. Detailed 16D-16F water stays separately owned.
+        bool wd1bEnabled = false;
+        bool certWd1b = false;
         double mv2cFarContrast[4] = {0,0,0,0};      // A/B: far-band luminance contrast
         double mv2cFarLuma[4] = {0,0,0,0};
         // MV2 silhouette-stack diagnostic (MEASUREMENT ONLY): per-view attribution of
@@ -19093,6 +19099,9 @@ namespace
         // MS1.A SurfaceState descriptor (consumed by MS1.B; inert otherwise).
         int surfN=0; double surfStep=0; uint64_t surfDigest=0;
         std::vector<uint64_t> surfCodes;   // surfN*surfN packed SurfaceState
+        // WD1.A WaterState descriptor (consumed by WD1.B; inert otherwise).
+        int watN=0; double watStep=0; uint64_t watDigest=0;
+        std::vector<uint64_t> watCodes;    // watN*watN packed WaterState
     };
 
     // Nearest-cell macro SurfaceState from the page descriptor (class fields must not be
@@ -19105,6 +19114,15 @@ namespace
         int j=(int)std::floor((y-p.minY)/p.surfStep+0.5);
         i=std::clamp(i,0,p.surfN-1);j=std::clamp(j,0,p.surfN-1);
         return Ms1::Unpack(p.surfCodes[(size_t)j*p.surfN+i]);
+    }
+    static Ms1::WaterState Mv2WaterAt(Mv2Page const& p,double x,double y)
+    {
+        if(p.watN<=0||p.watStep<=0||(int)p.watCodes.size()<p.watN*p.watN)
+            return Ms1::WaterState();
+        int i=(int)std::floor((x-p.minX)/p.watStep+0.5);
+        int j=(int)std::floor((y-p.minY)/p.watStep+0.5);
+        i=std::clamp(i,0,p.watN-1);j=std::clamp(j,0,p.watN-1);
+        return Ms1::UnpackWater(p.watCodes[(size_t)j*p.watN+i]);
     }
 
     static uint64_t Mv2ParseHex(std::string const& s)
@@ -19123,6 +19141,7 @@ namespace
         bool magic=false;
         std::string grid;
         std::string surfGrid;
+        std::string watGrid;
         size_t pos=0;
         while(pos<text.size())
         {
@@ -19145,6 +19164,10 @@ namespace
             else if(k=="surface_grid_n")out.surfN=atoi(v.c_str());
             else if(k=="surface_digest")out.surfDigest=Mv2ParseHex(v);
             else if(k=="surface_grid_row_major")surfGrid=v;
+            else if(k=="water_step_m")out.watStep=atof(v.c_str());
+            else if(k=="water_grid_n")out.watN=atoi(v.c_str());
+            else if(k=="water_digest")out.watDigest=Mv2ParseHex(v);
+            else if(k=="water_grid_row_major")watGrid=v;
         }
         if(out.n<=0||out.step<=0)return false;
         out.h.reserve((size_t)out.n*out.n);
@@ -19162,6 +19185,15 @@ namespace
              while(gp<surfGrid.size()&&surfGrid[gp]!=' ')++gp;
              if(gp>st)out.surfCodes.push_back(Mv2ParseHex(surfGrid.substr(st,gp-st)));}
             if((int)out.surfCodes.size()!=out.surfN*out.surfN){out.surfCodes.clear();out.surfN=0;}
+        }
+        if(out.watN>0&&!watGrid.empty())
+        {
+            out.watCodes.reserve((size_t)out.watN*out.watN);
+            size_t gp=0;while(gp<watGrid.size()&&(int)out.watCodes.size()<out.watN*out.watN)
+            {while(gp<watGrid.size()&&watGrid[gp]==' ')++gp;size_t st=gp;
+             while(gp<watGrid.size()&&watGrid[gp]!=' ')++gp;
+             if(gp>st)out.watCodes.push_back(Mv2ParseHex(watGrid.substr(st,gp-st)));}
+            if((int)out.watCodes.size()!=out.watN*out.watN){out.watCodes.clear();out.watN=0;}
         }
         return (int)out.h.size()==out.n*out.n;
     }
@@ -19240,6 +19272,7 @@ namespace
         GLuint vbo=0;int vertCount=0,tris=0;unsigned bytes=0;
         uint64_t regionId=0,digest=0;
         float cx=0,cy=0,halfM=0;
+        GLuint waterVbo=0;int waterVerts=0;unsigned waterBytes=0;   // WD1.B macro water overlay
     };
     std::unordered_map<uint64_t,Mv2Tile> mv2Tiles;   // key = mv2 cell key
     static uint64_t Mv2Key(int ri,int rj)
@@ -19283,11 +19316,58 @@ namespace
         out.regionId=p.regionId;out.digest=p.digest;
         out.cx=(float)(p.minX+kMv2RegionHalfM);out.cy=(float)(p.minY+kMv2RegionHalfM);
         out.halfM=(float)kMv2RegionHalfM;
+
+        // WD1.B macro water OVERLAY: for each descriptor cell with macro-authoritative STANDING
+        // water, emit a flat quad at surface_z (= terrain + depth) coloured by the shared water
+        // resolver — continuous optical depth over the MS1 bottom substrate. Overlay only; the
+        // terrain geometry/colour is untouched. Rivers are sub-cell at this scale and deferred
+        // (the representation doctrine: keep identity, don't exaggerate sub-pixel water).
+        if(g.wd1bEnabled&&p.watN>0&&ms1bOn)
+        {
+            auto Hbil=[&](double wx,double wy)->float{           // bilinear terrain height
+                double fx=(wx-p.minX)/s, fy=(wy-p.minY)/s;
+                int i0=(int)std::floor(fx),j0=(int)std::floor(fy);
+                double tx=fx-i0,ty=fy-j0;
+                return (float)(Z(i0,j0)*(1-tx)*(1-ty)+Z(i0+1,j0)*tx*(1-ty)
+                    +Z(i0,j0+1)*(1-tx)*ty+Z(i0+1,j0+1)*tx*ty);};
+            Ms1::RGB const sky={0.55f,0.68f,0.85f};
+            std::vector<float> wv;
+            double const hs=p.watStep*0.5;
+            for(int wj=0;wj<p.watN;++wj)for(int wi=0;wi<p.watN;++wi)
+            {
+                double const wx=p.minX+wi*p.watStep, wy=p.minY+wj*p.watStep;
+                Ms1::WaterState ws=Ms1::UnpackWater(p.watCodes[(size_t)wj*p.watN+wi]);
+                if(!Ms1::MacroStandingWater(ws))continue;
+                Ms1::SurfaceState bs=Mv2SurfaceAt(p,wx,wy);
+                Ms1::RGB bottom=bs.valid?Ms1::ResolveAppearance(bs,wx,wy,40000.f):Ms1::RGB{0.4f,0.4f,0.4f};
+                Ms1::RGB c=Ms1::ResolveWaterAppearance(ws,bottom,ws.depth_m,sky,0.30f);
+                float const tz=Hbil(wx,wy);
+                float const sz=tz+ws.depth_m*0.5f;              // surface just above terrain (macro scale)
+                float const x0=(float)(wx-hs),x1=(float)(wx+hs),y0=(float)(wy-hs),y1=(float)(wy+hs);
+                float const cr=c.r,cg=c.g,cb=c.b;
+                auto pw=[&](float px,float py){wv.push_back(px);wv.push_back(py);wv.push_back(sz);
+                    wv.push_back(cr);wv.push_back(cg);wv.push_back(cb);};
+                pw(x0,y0);pw(x1,y0);pw(x0,y1);pw(x1,y0);pw(x1,y1);pw(x0,y1);
+            }
+            if(!wv.empty())
+            {
+                GLuint wvbo=0;s_mv1GenBuffers(1,&wvbo);
+                if(wvbo)
+                {
+                    unsigned const wb=(unsigned)(wv.size()*sizeof(float));
+                    s_mv1BindBuffer(GL_ARRAY_BUFFER,wvbo);
+                    s_mv1BufferData(GL_ARRAY_BUFFER,(ptrdiff_t)wb,wv.data(),GL_STATIC_DRAW);
+                    s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
+                    out.waterVbo=wvbo;out.waterVerts=(int)(wv.size()/6);out.waterBytes=wb;
+                }
+            }
+        }
         return true;
     }
 
     void Mv2RetireTile(Mv2Tile const& t)
     {if(t.vbo&&s_mv1DeleteBuffers)s_mv1DeleteBuffers(1,&t.vbo);
+     if(t.waterVbo&&s_mv1DeleteBuffers)s_mv1DeleteBuffers(1,&t.waterVbo);
      g.mv2bResidentBytes-=(long long)t.bytes;++g.mv2bPageRetires;}
 
     void Mv2ReleaseAll()
@@ -19343,7 +19423,7 @@ namespace
         if(mv2Tiles.empty())return;
         float const fwx=g.pickFwdX,fwy=g.pickFwdY,rgx=g.pickRightX,rgy=g.pickRightY;
         constexpr float kCullTan=1.88f;
-        struct Vis{float cy,cx;uint64_t key;GLuint vbo;int vc,tris;};
+        struct Vis{float cy,cx;uint64_t key;GLuint vbo;int vc,tris;GLuint wvbo;int wvc;};
         std::vector<Vis> vis;vis.reserve(mv2Tiles.size());
         for(auto const& kv:mv2Tiles)
         {
@@ -19357,7 +19437,7 @@ namespace
                 if((std::abs)(sdot)-slack>(fdot+slack)*kCullTan)continue;
             }
             vis.push_back(Vis{kv.second.cy,kv.second.cx,kv.first,kv.second.vbo,
-                kv.second.vertCount,kv.second.tris});
+                kv.second.vertCount,kv.second.tris,kv.second.waterVbo,kv.second.waterVerts});
         }
         std::sort(vis.begin(),vis.end(),[](Vis const&a,Vis const&b){
             if(a.cy!=b.cy)return a.cy<b.cy;if(a.cx!=b.cx)return a.cx<b.cx;return a.key<b.key;});
@@ -19372,6 +19452,17 @@ namespace
             glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
             glDrawArrays(GL_TRIANGLES,0,v.vc);
             ++calls;tris+=v.tris;verts+=v.vc;
+        }
+        // WD1.B macro water overlay pass (drawn over the terrain at surface_z; opaque at macro
+        // range). Same vertex format; only present when --wd1b built water tiles.
+        for(Vis const& v:vis)
+        {
+            if(!v.wvbo||v.wvc<=0)continue;
+            s_mv1BindBuffer(GL_ARRAY_BUFFER,v.wvbo);
+            glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
+            glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
+            glDrawArrays(GL_TRIANGLES,0,v.wvc);
+            ++calls;verts+=v.wvc;
         }
         s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
         glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
@@ -20283,6 +20374,100 @@ namespace
             std::fclose(f);
         }
         g.certMs1b=false;PostQuitMessage(pass?0:2);ph=4;
+    }
+
+    // WD1.B — shared water appearance optical cert (headless: exercises the resolver + the macro
+    // water descriptor + geometry invariance; no pixel capture needed for the optical law).
+    void Wd1bCertTick()
+    {
+        if(!g.certWd1b||!g.playWorldgenInitialized||!g.regionalBiomeRuntime)return;
+        auto& ph=g.certMv2bPhase;
+        if(ph==0){SelectStage0PlayView(Stage0PlayView::RegionalBiome);g.certMv2bSettle=0;ph=1;return;}
+        if(ph==1){if(++g.certMv2bSettle>=15){g.certMv2bSettle=0;ph=2;}return;}
+        if(ph!=2)return;
+
+        auto luma=[](Ms1::RGB c){return 0.30f*c.r+0.59f*c.g+0.11f*c.b;};
+        Ms1::RGB const sky={0.55f,0.68f,0.85f};
+        Ms1::RGB const rockBottom={0.24f,0.22f,0.22f};   // dark basalt bottom (MS1)
+
+        // (1) OPTICAL DEPTH LAW — for a clear body over a fixed bottom, the observed colour must
+        // move CONTINUOUSLY from the bottom (shallow) toward the body optical (deep); bottom
+        // contribution attenuates monotonically. No depth bands.
+        Ms1::WaterState clearw; clearw.valid=true; clearw.body=Ms1::WB_ALPINE_LAKE;
+        clearw.presence=Ms1::WP_STANDING; clearw.clarity=0.9f; clearw.turbidity=0.08f; clearw.flow=1;
+        Ms1::RGB bodyC=Ms1::WaterBodyOptical(clearw);
+        float depths[6]={0.15f,0.5f,1.5f,3.0f,8.0f,20.0f};
+        float distToBottom[6]; bool monotone=true; float prevd=1e9f;
+        for(int i=0;i<6;++i)
+        {
+            Ms1::RGB obs=Ms1::ResolveWaterAppearance(clearw,rockBottom,depths[i],sky,0.3f);
+            // distance of observed from the bottom colour (should GROW with depth: bottom fades)
+            float dr=obs.r-rockBottom.r,dg=obs.g-rockBottom.g,db=obs.b-rockBottom.b;
+            distToBottom[i]=std::sqrt(dr*dr+dg*dg+db*db);
+        }
+        for(int i=1;i<6;++i)if(distToBottom[i]<distToBottom[i-1]-0.02f)monotone=false;
+        bool shallowShowsBottom=distToBottom[0]<0.18f;               // 0.15 m ~ bottom visible
+        // deep observed near the body optical
+        Ms1::RGB deep=Ms1::ResolveWaterAppearance(clearw,rockBottom,20.0f,sky,0.3f);
+        float deepToBody=std::sqrt((deep.r-bodyC.r)*(deep.r-bodyC.r)+(deep.g-bodyC.g)*(deep.g-bodyC.g)+(deep.b-bodyC.b)*(deep.b-bodyC.b));
+        bool depthLaw=monotone&&shallowShowsBottom&&deepToBody<0.30f;
+
+        // (2) FAMILIES DIVERGE — clear / sediment / organic / mineral deep-water colours differ.
+        auto mk=[&](int body,float clar,float turb,float sed,float org,float min,float temp){
+            Ms1::WaterState w; w.valid=true; w.body=(uint8_t)body; w.presence=Ms1::WP_STANDING;
+            w.clarity=clar; w.turbidity=turb; w.sediment=sed; w.organic=org; w.mineral=min; w.temperature=temp; w.flow=1;
+            return Ms1::WaterBodyOptical(w);};
+        Ms1::RGB fc=mk(Ms1::WB_ALPINE_LAKE,0.9f,0.08f,0.0f,0.0f,0.0f,0.2f);
+        Ms1::RGB fs=mk(Ms1::WB_SEDIMENT_RIVER,0.3f,0.7f,0.8f,0.0f,0.0f,0.6f);
+        Ms1::RGB fo=mk(Ms1::WB_ORGANIC,0.4f,0.4f,0.1f,0.85f,0.0f,0.6f);
+        Ms1::RGB fm=mk(Ms1::WB_VOLCANIC_POOL,0.7f,0.2f,0.1f,0.0f,0.85f,0.5f);
+        auto sep=[&](Ms1::RGB a,Ms1::RGB b){return std::sqrt((a.r-b.r)*(a.r-b.r)+(a.g-b.g)*(a.g-b.g)+(a.b-b.b)*(a.b-b.b));};
+        float minSep=1e9f; Ms1::RGB fam[4]={fc,fs,fo,fm};
+        for(int a=0;a<4;++a)for(int b=a+1;b<4;++b)minSep=(std::min)(minSep,sep(fam[a],fam[b]));
+        bool familiesDiverge=minSep>0.08f;
+
+        // (3) GEOMETRY / WATER-TRUTH INVARIANCE — WD1.B on/off leaves terrain ReconstructedZ
+        // bit-exact (water is an overlay; it changes no terrain sample or water ledger).
+        bool geomExact=true; double maxDz=0;
+        for(int r=4000;r<=120000;r+=8000)for(int a=0;a<8;++a)
+        {
+            double th=a*(3.14159265/4.0),x=r*std::cos(th),y=r*std::sin(th);
+            g.wd1bEnabled=true;  double z1=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+            g.wd1bEnabled=false; double z0=g.regionalBiomeRuntime->ReconstructedZ(x,y);
+            g.wd1bEnabled=true;
+            if(std::isfinite(z0)&&std::isfinite(z1)){double d=std::fabs(z1-z0);maxDz=(std::max)(maxDz,d);if(d!=0.0)geomExact=false;}
+        }
+
+        // (4) MACRO DESCRIPTOR CONSUMED — a resident page carries standing water the resolver reads.
+        int standingCells=0; { Mv2Page pg; if(Mv2LoadPage(1,-2,pg)&&pg.watN>0){
+            for(size_t k=0;k<pg.watCodes.size();++k) if(Ms1::MacroStandingWater(Ms1::UnpackWater(pg.watCodes[k])))++standingCells; } }
+
+        bool pass=depthLaw&&familiesDiverge&&geomExact&&standingCells>0;
+        FILE* f=nullptr;
+        if(fopen_s(&f,"Docs\\provenance_wd1b_water_appearance_cert.txt","wb")==0&&f)
+        {
+            std::fprintf(f,"WD1B_SHARED_WATER_APPEARANCE %s\n"
+                "scope=presentation_only_shared_resolver_macro_overlay  geometry+water_truth_untouched\n"
+                "resolver=Ms1::ResolveWaterAppearance(WaterState, MS1 bottom, depth, sky, fresnel)\n\n",
+                pass?"PASS":"FAIL");
+            std::fprintf(f,"fixture.optical_depth_law=%s  bottom->body distance by depth "
+                "(0.15m..20m)=[%.2f %.2f %.2f %.2f %.2f %.2f] monotone=%d shallow_shows_bottom=%d "
+                "deep_near_body(%.2f<0.30)\n",depthLaw?"PASS":"FAIL",
+                distToBottom[0],distToBottom[1],distToBottom[2],distToBottom[3],distToBottom[4],distToBottom[5],
+                (int)monotone,(int)shallowShowsBottom,deepToBody);
+            std::fprintf(f,"fixture.families_diverge=%s  min pairwise deep-colour separation "
+                "clear/sediment/organic/mineral=%.3f (need>0.08)\n",familiesDiverge?"PASS":"FAIL",minSep);
+            std::fprintf(f,"fixture.geometry_water_truth_invariant=%s  WD1.B on/off ReconstructedZ "
+                "bit-exact (max_dz=%.2e; overlay only, no water mass, 16D-16F/P5b untouched)\n",
+                geomExact?"PASS":"FAIL",maxDz);
+            std::fprintf(f,"fixture.macro_descriptor_consumed=%s  resident page(1,-2) standing-water "
+                "cells=%d (renderer reads the WD1.A descriptor; no recompute)\n",
+                standingCells>0?"PASS":"FAIL",standingCells);
+            std::fprintf(f,"\nno hard depth colour bands (continuous transmission); water is an OVERLAY over the "
+                "MS1 bottom substrate; detailed 16D-16F stays separately owned; waterfalls/foam/spray CLOSED.\n");
+            std::fclose(f);
+        }
+        g.certWd1b=false;PostQuitMessage(pass?0:2);ph=4;
     }
 
     void Mv2bCertTick()
@@ -48737,6 +48922,7 @@ namespace
             Mv2ShowcaseTick();
             Mv1CoverageCertTick();
             Ms1bCertTick();
+            Wd1bCertTick();
             LivingWorldLoadTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -54984,6 +55170,26 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
                 }
+                // WD1.B macro water appearance overlay (opt-in; default off == frozen no-macro-water).
+                if(_wcsicmp(argv[i],L"--wd1b-on")==0||_wcsicmp(argv[i],L"--wd1b")==0)
+                {g.wd1bEnabled=true;continue;}
+                if(_wcsicmp(argv[i],L"--wd1b-off")==0)
+                {g.wd1bEnabled=false;continue;}
+                if(_wcsicmp(argv[i],L"--play-wd1b")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;g.mv2bEnabled=true;
+                    g.ms1bEnabled=true;g.wd1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-wd1b")==0)
+                {
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certWd1b=true;g.mv2bEnabled=true;g.ms1bEnabled=true;g.wd1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
                 if(_wcsicmp(argv[i],L"--cert-ms1b")==0)
                 {
                     SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
@@ -55041,6 +55247,26 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                         {-100404, 6937, 8500, 1.5*PI, 25, 0.10, "mv3c_valley_floor"},   // towers over player
                         {-101977, 16836, 42000, 1.5*PI, 700, 0.0, "mv3c_range_40km"},   // peak->saddle->peak
                         {-101977, 16836, 100000, 1.5*PI, 2000, -0.01, "mv3c_skyline_100km"}, // summit ordering
+                    };
+                    s_showcaseN=(int)(sizeof(vs)/sizeof(vs[0]));
+                    for(int k=0;k<s_showcaseN;++k)s_showcase[k]=vs[k];
+                    ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--cert-wd1b-showcase")==0)
+                {
+                    // WD1.B macro water real-client proof. Origin footprint water bodies: a
+                    // closed-basin lake @(68,-120)km and a volcanic crater-lake cluster @(104,44)
+                    // km (committed +/-160km ring pages carry the WD1.A water descriptor).
+                    SetErrorMode(GetErrorMode()|SEM_NOGPFAULTERRORBOX);
+                    g.playWorldgenBaseline=true;g.playMw8Launch=true;
+                    g.certMv2Showcase=true;g.mv2bEnabled=true;g.mv2cEnabled=true;
+                    g.ms1bEnabled=true;g.wd1bEnabled=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    double const PI=3.14159265358979;
+                    ShowcaseView vs[]={
+                        {68000,-120000, 17000, PI,      450, 0.03, "wd1b_basin_lake"},   // lake from N
+                        {104000, 44000, 27000, 1.5*PI,  800, 0.02, "wd1b_crater_lakes"}, // crater cluster from E
+                        {68000,-120000, 44000, PI,     1400, 0.00, "wd1b_lowland_water"},// wider lowland
                     };
                     s_showcaseN=(int)(sizeof(vs)/sizeof(vs[0]));
                     for(int k=0;k<s_showcaseN;++k)s_showcase[k]=vs[k];
