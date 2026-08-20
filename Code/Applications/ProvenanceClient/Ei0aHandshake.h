@@ -21,7 +21,7 @@ namespace Ei0a
     constexpr char const* kDescriptorSchemaDigest = Ms1::kWorldDescriptorSchemaDigest;
     constexpr char const* kAuthorityMode = "local_server_authoritative";
     constexpr char const* kClientBuild =
-        "1c07ac022337774fe5e316b3ee9e20d0e8d65c9a+ei2";
+        "7fa70056006e6c8cb0d35e9e838da31bfcb8c0d7+ei3";
 
     struct PendingRequest
     {
@@ -175,6 +175,18 @@ namespace Ei0a
             requestId,laneRole,sessionToken,serverInstanceId,worldUuid,
             macroGenesisDigest,worldBaselineDigest,
             "[\"macro_manifest\",\"macro_page_v2\"]" );
+    }
+
+    inline std::string BuildDetailedWorldHelloParams(
+        std::string const& requestId, char const* laneRole = "control",
+        std::string const& sessionToken = {}, std::string const& serverInstanceId = {},
+        std::string const& worldUuid = {}, std::string const& macroGenesisDigest = {},
+        std::string const& worldBaselineDigest = {} )
+    {
+        return BuildClientHelloParams(
+            requestId, laneRole, sessionToken, serverInstanceId, worldUuid,
+            macroGenesisDigest, worldBaselineDigest,
+            "[\"macro_manifest\",\"macro_page_v2\",\"detailed_chunk_v1\",\"predictive_residency_v1\"]" );
     }
 
     struct BaselineComponent

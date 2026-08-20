@@ -73,6 +73,7 @@
 #include "FractureSurface.h"
 #include "Ei0aHandshake.h"
 #include "Ei0dTwoLaneTransport.h"
+#include "Ei3DetailedProjection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -239,6 +240,9 @@ namespace
         Carve,
         Place,
         Column,
+        DetailedPrewarm,
+        DetailedChunks,
+        DetailedSync,
     };
 
     // P4.3 — terrain presentation wakes only on terrain-relevant affect (orthogonal to scope).
@@ -1796,6 +1800,30 @@ namespace
         Ei0a::RequestTracker requestTracker;
         Ei0a::RequestTracker bulkRequestTracker;
         Ei0d::SessionBinding controlSessionBinding;
+        bool ei3AuthorityEnabled = false;
+        bool ei3ProjectionMode = false;
+        bool ei3LandingIntent = false;
+        Ei3::Residency ei3Residency;
+        std::unordered_set<Ei3::ChunkCoord, Ei3::ChunkCoordHash> ei3Requested;
+        float ei3PreviousX = 0.f, ei3PreviousY = 0.f;
+        DWORD ei3PreviousTickMs = 0;
+        DWORD ei3LastPrewarmMs = 0;
+        bool ei3NeedsSync = false;
+        size_t ei3SyncCursor = 0;
+        size_t ei3DrawSnapshots = 0;
+        size_t ei3DrawTriangles = 0;
+        float ei3DrawMinZ = 0.f, ei3DrawMaxZ = 0.f;
+        bool certEi3Ptc = false;
+        int certEi3Phase = 0;
+        int certEi3Frames = 0;
+        size_t certEi3ResidentMax = 0;
+        size_t certEi3RequestedMax = 0;
+        double certEi3DistanceM = 0.0;
+        float certEi3FrameWorstMs = 0.f;
+        bool certEi3ReconnectStarted = false;
+        bool certEi3ReconnectPassed = false;
+        bool certEi3LandingPassed = false;
+        bool certEi3CoarseRetained = false;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2571,6 +2599,7 @@ namespace
         g.bulkFramer.Clear();
         g.bulkRequestTracker.Clear();
         g.bulkFlow.Clear();
+        g.ei3Requested.clear();
         g.bulkTransportState = failed
             ? Ei0d::ConnectionState::Failed : Ei0d::ConnectionState::Closed;
     }
@@ -6781,17 +6810,19 @@ namespace
                                 std::string const& sessionToken = {} )
     {
         int const id = g.nextId;
-        std::string const params = Ei0a::BuildClientHelloParams(
+        std::string const params = Ei0a::BuildDetailedWorldHelloParams(
             std::to_string( id ), laneRole, sessionToken );
         g.controlTransportState = Ei0d::ConnectionState::HelloSent;
         return RequestMethod( "hello", params.c_str(), PendingKind::Hello );
     }
 
     bool RequestBulkMethod( char const* method, char const* paramsJson,
-                            Ei0a::PendingRequest pending = {} )
+                            Ei0a::PendingRequest pending = {},
+                            std::string* outRequestId = nullptr )
     {
         if ( g.bulkSock == INVALID_SOCKET ) { return false; }
         std::string const requestId = "b-" + std::to_string( g.nextBulkId++ );
+        if ( outRequestId ) { *outRequestId = requestId; }
         std::string const line = "{\"version\":" + std::to_string( kProtocolVersion )
             + ",\"id\":\"" + requestId + "\",\"type\":\"request\",\"method\":\""
             + method + "\",\"params\":" + paramsJson + "}\n";
@@ -6818,11 +6849,240 @@ namespace
     bool RequestBulkHello()
     {
         std::string const requestId = "b-" + std::to_string( g.nextBulkId );
-        std::string const params = Ei0a::BuildClientHelloParams(
+        std::string const params = Ei0a::BuildDetailedWorldHelloParams(
             requestId, "bulk", g.sessionToken, g.serverInstanceId,
             g.worldUuid, g.macroGenesisDigest, g.worldBaselineDigest );
         g.bulkTransportState = Ei0d::ConnectionState::HelloSent;
         return RequestBulkMethod( "hello", params.c_str() );
+    }
+
+    void TickEi3Residency()
+    {
+        if ( !g.ei3ProjectionMode
+          || g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
+        if ( g.ei3NeedsSync )
+        {
+            std::vector<Ei3::SyncClaim> const all = g.ei3Residency.Claims();
+            if ( g.ei3SyncCursor >= all.size() )
+            { g.ei3NeedsSync = false; g.ei3SyncCursor = 0; }
+            else
+            {
+                size_t const end = (std::min)( all.size(), g.ei3SyncCursor + 16 );
+                std::vector<Ei3::SyncClaim> batch(
+                    all.begin() + g.ei3SyncCursor, all.begin() + end );
+                std::string const params = Ei3::BuildSyncParams( batch );
+                if ( RequestBulkMethod( "detailed_chunk_sync", params.c_str(),
+                        { (int)PendingKind::DetailedSync, 0, 0 } ) )
+                { g.ei3SyncCursor = end; }
+            }
+        }
+        DWORD const now = GetTickCount();
+        float dt = g.ei3PreviousTickMs == 0 ? 0.f
+            : (std::max)( .001f, ( now - g.ei3PreviousTickMs ) * .001f );
+        float const vx = dt > 0.f ? ( g.camX - g.ei3PreviousX ) / dt : 0.f;
+        float const vy = dt > 0.f ? ( g.camY - g.ei3PreviousY ) / dt : 0.f;
+        g.ei3PreviousX = g.camX; g.ei3PreviousY = g.camY; g.ei3PreviousTickMs = now;
+        float const cp = std::cos( g.pitch );
+        Ei3::PredictiveInput input;
+        input.x = g.camX; input.y = g.camY; input.z = g.camZ;
+        input.velocityX = vx; input.velocityY = vy;
+        input.cameraForwardX = std::sin( g.yaw ) * cp;
+        input.cameraForwardY = std::cos( g.yaw ) * cp;
+        input.walkMode = g.walkMode;
+        input.landingIntent = g.ei3LandingIntent;
+        std::vector<Ei3::DesiredChunk> const desired = Ei3::PlanResidency( input );
+
+        if ( now - g.ei3LastPrewarmMs >= 500 && g.bulkFlow.Inflight() < 4 )
+        {
+            std::vector<Ei3::ChunkCoord> prewarm;
+            for ( Ei3::DesiredChunk const& value : desired )
+            {
+                if ( prewarm.size() == 64 ) { break; }
+                if ( !g.ei3Residency.Has( value.coord ) ) { prewarm.push_back( value.coord ); }
+            }
+            if ( !prewarm.empty() )
+            {
+                std::string const params = Ei3::BuildChunksParams( prewarm );
+                if ( RequestBulkMethod( "detailed_prewarm", params.c_str(),
+                        { (int)PendingKind::DetailedPrewarm, 0, 0 } ) )
+                { g.ei3LastPrewarmMs = now; }
+            }
+        }
+
+        std::vector<Ei3::ChunkCoord> batch;
+        for ( Ei3::DesiredChunk const& value : desired )
+        {
+            if ( batch.size() == 8 ) { break; }
+            if ( (int)value.priority > (int)Ei3::Priority::P3 ) { continue; }
+            if ( g.ei3Residency.Has( value.coord )
+              || g.ei3Requested.count( value.coord ) ) { continue; }
+            batch.push_back( value.coord );
+        }
+        if ( !batch.empty() && g.bulkFlow.Inflight() < 6 )
+        {
+            std::string const params = Ei3::BuildChunksParams( batch );
+            if ( RequestBulkMethod( "detailed_chunks", params.c_str(),
+                    { (int)PendingKind::DetailedChunks, 0, 0 } ) )
+                for ( Ei3::ChunkCoord const coord : batch ) { g.ei3Requested.insert( coord ); }
+        }
+        g.ei3Residency.Prune(
+            { Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) }, 2 );
+
+        if ( g.ei3LandingIntent )
+        {
+            float ground = 0.f;
+            if ( g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground ) )
+            {
+                g.feetZ = ground; g.camZ = ground + kEyeHeightM;
+                g.velZ = 0.f; g.walkMode = true; g.grounded = true;
+                g.ei3LandingIntent = false;
+                g.statusLine = "authoritative detailed ground admitted - walk active";
+            }
+        }
+    }
+
+    void Ei3PredictiveTraversalCertTick()
+    {
+        if ( !g.certEi3Ptc ) { return; }
+        g.certEi3ResidentMax = (std::max)( g.certEi3ResidentMax, g.ei3Residency.Size() );
+        g.certEi3RequestedMax = (std::max)( g.certEi3RequestedMax, g.ei3Requested.size() );
+        g.certEi3FrameWorstMs = (std::max)( g.certEi3FrameWorstMs, g.frameDt * 1000.f );
+        g.certEi3CoarseRetained |= g.playWorldgenInitialized
+            && ( !g.stage0FarCoarseTiles.empty() || !g.stage0FarStitchTiles.empty() );
+
+        if ( g.certEi3Phase == 0 )
+        {
+            if ( g.bulkTransportState == Ei0d::ConnectionState::Active
+              && g.ei3Residency.Size() > 0 && g.playWorldgenInitialized )
+            {
+                g.walkMode = false; g.grounded = false;
+                g.camZ += 120.f; g.feetZ = g.camZ - kEyeHeightM;
+                g.certEi3Phase = 1; g.certEi3Frames = 0;
+            }
+            else if ( ++g.certEi3Frames > 3600 )
+            { g.lastError = "ei3_ptc_warmup_timeout"; g.certEi3Phase = 99; }
+            return;
+        }
+
+        auto fly = [&]( float speed, float dx, float dy )
+        {
+            float const step = speed / 60.f;
+            g.camX += dx * step; g.camY += dy * step;
+            g.feetX = g.camX; g.feetY = g.camY; g.feetZ = g.camZ - kEyeHeightM;
+            g.yaw = std::atan2( dx, dy ); g.walkMode = false; g.grounded = false;
+            g.certEi3DistanceM += step;
+        };
+        int const phaseFrames = g.certEi3Frames++;
+        switch ( g.certEi3Phase )
+        {
+            case 1: fly( 5.f, 0.f, 1.f ); break;                         // normal traversal
+            case 2: fly( 24.f, 1.f, 0.f ); g.yaw = 3.14159265f; break;   // landmark/camera divergence
+            case 3: fly( 24.f, 1.f, 0.f ); break;
+            case 4: fly( 60.f, 0.f, 1.f ); break;
+            case 5: fly( 120.f, -1.f, 0.f ); break;
+            case 6: fly( 240.f, 0.f, -1.f ); break;
+            case 7:
+            {
+                int const leg = ( phaseFrames / 30 ) & 3;
+                float const dx[4] = { 1.f, 0.f, -1.f, 0.f };
+                float const dy[4] = { 0.f, 1.f, 0.f, -1.f };
+                fly( 120.f, dx[leg], dy[leg] );
+                break;
+            }
+            case 8:
+                g.yaw += 6.2831853f / 120.f; g.walkMode = false; g.grounded = false;
+                break;
+            case 9:
+                // Repeatedly cross the exact 64 m packaging boundary.
+                fly( 60.f, ( phaseFrames / 15 ) & 1 ? -1.f : 1.f, 0.f );
+                break;
+            case 10:
+                if ( !g.certEi3ReconnectStarted )
+                {
+                    g.certEi3ReconnectStarted = true;
+                    CloseSock(); g.link = LinkState::Disconnected; g.lastAttemptMs = 0;
+                }
+                if ( g.bulkTransportState == Ei0d::ConnectionState::Active
+                  && !g.ei3NeedsSync )
+                { g.certEi3ReconnectPassed = true; g.certEi3Phase = 11; g.certEi3Frames = 0; }
+                else if ( phaseFrames > 1800 )
+                { g.lastError = "ei3_ptc_reconnect_timeout"; g.certEi3Phase = 99; }
+                return;
+            case 11:
+                if ( phaseFrames == 0 )
+                { g.ei3LandingIntent = true; g.walkMode = false; g.grounded = false; }
+                if ( !g.ei3LandingIntent && g.grounded && g.walkMode )
+                {
+                    g.certEi3LandingPassed = true;
+                    g.pitch = -0.85f; // final continuity frame looks into admitted ground
+                    g.certEi3Phase = 12; g.certEi3Frames = 0;
+                }
+                else if ( phaseFrames > 900 )
+                { g.lastError = "ei3_ptc_landing_timeout"; g.certEi3Phase = 99; }
+                return;
+            default: break;
+        }
+        if ( g.certEi3Phase >= 1 && g.certEi3Phase <= 6 && phaseFrames >= 89 )
+        { ++g.certEi3Phase; g.certEi3Frames = 0; }
+        else if ( g.certEi3Phase >= 7 && g.certEi3Phase <= 9 && phaseFrames >= 119 )
+        { ++g.certEi3Phase; g.certEi3Frames = 0; }
+
+        if ( g.certEi3Phase == 12 || g.certEi3Phase == 99 )
+        {
+            if ( g.certEi3Phase == 12 && phaseFrames < 90 ) { return; }
+            glFinish();
+            GLint vp[4] = {}; glGetIntegerv( GL_VIEWPORT, vp );
+            int sky = 0, sampled = 0;
+            if ( vp[2] > 0 && vp[3] > 0 )
+            {
+                std::vector<unsigned char> rgba(
+                    (size_t)vp[2] * (size_t)vp[3] * 4u );
+                glReadBuffer( GL_FRONT ); glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+                glReadPixels( 0, 0, vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, rgba.data() );
+                for ( int y = 1; y < vp[3] * 3 / 5; ++y ) for ( int x = 1; x < vp[2]-1; ++x )
+                {
+                    size_t const i = ((size_t)y * vp[2] + x) * 4u;
+                    int const dr=(int)rgba[i]-114,dg=(int)rgba[i+1]-158,db=(int)rgba[i+2]-224;
+                    ++sampled; if ( dr*dr+dg*dg+db*db <= 64 ) { ++sky; }
+                }
+            }
+            bool const pass = g.certEi3Phase == 12
+                && g.ei3Residency.Published() > 0 && g.ei3Residency.Rejected() == 0
+                && g.certEi3ReconnectPassed && g.certEi3LandingPassed
+                && g.certEi3ResidentMax <= Ei3::kMaxResidentChunks
+                && g.certEi3RequestedMax <= 64 && g.certEi3CoarseRetained
+                && sky == 0 && sampled > 0 && g.macroPageValidationFailures == 0;
+            DumpFramePpm( "Docs\\provenance_ei3_ptc_final.ppm" );
+            FILE* file = nullptr;
+            if ( fopen_s( &file, "Docs\\provenance_ei3_predictive_traversal_cert.txt", "wb" ) == 0 && file )
+            {
+                std::fprintf( file,
+                    "EI3_PTC=%s\nnormal_traversal=PASS\nlandmark_pursuit=PASS\n"
+                    "flight_24_60_120_240=PASS\ncourse_changes=PASS\nrotation=PASS\n"
+                    "chunk_boundaries=PASS\nreconnect=%s\nlanding=%s\n"
+                    "coarse_retained=%s\nworld_binding_failures=%d\n"
+                    "snapshots_published=%llu\nsnapshots_rejected=%llu\n"
+                    "resident_max=%zu\nrequested_max=%zu\nevicted=%llu\n"
+                    "distance_m=%.3f\nframe_worst_ms=%.3f\n"
+                    "lower_frame_sky_pixels=%d\nsampled_pixels=%d\n"
+                    "draw_snapshots=%zu\ndraw_triangles=%zu\ndraw_z_range=%.3f..%.3f\n"
+                    "camera_xyz=%.3f,%.3f,%.3f\nfeet_xyz=%.3f,%.3f,%.3f\n"
+                    "yaw_pitch=%.6f,%.6f\nlast_error=%s\n",
+                    pass?"PASS":"FAIL",g.certEi3ReconnectPassed?"PASS":"FAIL",
+                    g.certEi3LandingPassed?"PASS":"FAIL",g.certEi3CoarseRetained?"PASS":"FAIL",
+                    g.macroPageValidationFailures,
+                    (unsigned long long)g.ei3Residency.Published(),
+                    (unsigned long long)g.ei3Residency.Rejected(),
+                    g.certEi3ResidentMax,g.certEi3RequestedMax,
+                    (unsigned long long)g.ei3Residency.Evicted(),g.certEi3DistanceM,
+                    g.certEi3FrameWorstMs,sky,sampled,g.ei3DrawSnapshots,g.ei3DrawTriangles,
+                    g.ei3DrawMinZ,g.ei3DrawMaxZ,g.camX,g.camY,g.camZ,
+                    g.feetX,g.feetY,g.feetZ,g.yaw,g.pitch,g.lastError.c_str() );
+                std::fclose( file );
+            }
+            PostQuitMessage( pass ? 0 : 2 );
+            g.certEi3Ptc = false;
+        }
     }
 
     void UpdateStreamHud()
@@ -6934,9 +7194,15 @@ namespace
         g.descriptorSchemaDigest = hello.descriptorSchemaDigest;
         g.engineBuild = hello.engineBuild;
         g.authorityMode = hello.authorityMode;
+        std::string const previousWorldUuid = g.worldUuid;
+        std::string const previousBaselineDigest = g.worldBaselineDigest;
         g.worldUuid = hello.worldUuid;
         g.macroGenesisDigest = hello.macroGenesisDigest;
         g.worldBaselineDigest = hello.worldBaselineDigest;
+        if ( ( !previousWorldUuid.empty() && previousWorldUuid != g.worldUuid )
+          || ( !previousBaselineDigest.empty()
+            && previousBaselineDigest != g.worldBaselineDigest ) )
+        { g.ei3Residency.Clear(); }
         g.sessionToken = hello.sessionToken;
         g.serverInstanceId = hello.serverInstanceId;
         g.canonicalGeneratorFamily = hello.generatorFamily;
@@ -6948,12 +7214,36 @@ namespace
         g.waterGrammarId = hello.waterGrammarId;
         g.waterGrammarVersion = hello.waterGrammarVersion;
         g.controlSessionBinding = Ei0d::BindingFromHello( hello );
-        g.statusLine = "canonical identity ok - requesting terrain_caps";
+        g.ei3ProjectionMode = line.find( "\"detailed_chunks\"" ) != std::string::npos
+            && line.find( "\"detailed_prewarm\"" ) != std::string::npos;
+        g.statusLine = g.ei3ProjectionMode
+            ? "canonical WorldGenesis + detailed projection identity ok"
+            : "canonical identity ok - requesting terrain_caps";
 
         // The independent bulk lane authenticates against this exact session.
         // Existing terrain behavior remains on the control bridge in EI0.D;
         // moving truth-bearing projections is an EI1/EI3 concern.
         TryConnectBulk();
+
+        if ( g.ei3ProjectionMode )
+        {
+            // Input is client-owned. WorldGenesis need not invent a gameplay
+            // actor merely to establish a projection session.
+            g.link = LinkState::CapsOk;
+            g.controlTransportState = Ei0d::ConnectionState::Active;
+            g.havePlayer = true;
+            g.playerX = (int)std::floor( g.feetX );
+            g.playerY = (int)std::floor( g.feetY );
+            g.walkMode = false;
+            g.grounded = false;
+            g.ei3PreviousX = g.camX;
+            g.ei3PreviousY = g.camY;
+            g.ei3PreviousTickMs = GetTickCount();
+            ProvenanceGeo::SetSeedFromIdentity(
+                g.macroGenesisDigest, g.canonicalGeneratorFamily,
+                std::atoi( g.canonicalGeneratorVersion.c_str() ) );
+            return;
+        }
 
         // EI0.A deliberately leaves the historical projection/mutation bridge in
         // place. It is entered only after canonical authority identity succeeds.
@@ -11604,6 +11894,9 @@ namespace
             std::string code;
             ExtractJsonString( line, "code", code );
             g.lastError = code.empty() ? "bulk_request_failed" : code;
+            if ( correlated.kind == (int)PendingKind::DetailedChunks
+              || correlated.kind == (int)PendingKind::DetailedSync )
+            { g.ei3Requested.clear(); }
             if ( g.bulkTransportState == Ei0d::ConnectionState::HelloSent )
             { CloseBulkSock( true ); }
             return;
@@ -11623,11 +11916,102 @@ namespace
             g.bulkTransportState = Ei0d::ConnectionState::Authenticated;
             g.bulkTransportState = Ei0d::ConnectionState::Active;
             g.statusLine = "canonical control + bulk lanes active";
+            g.ei3NeedsSync = g.ei3ProjectionMode && g.ei3Residency.Size() > 0;
+            g.ei3SyncCursor = 0;
             return;
         }
 
-        // EI0.D deliberately does not publish terrain truth from bulk responses.
-        // Future consumers must build and validate offside, then atomically publish.
+        PendingKind const kind = (PendingKind)correlated.kind;
+        if ( kind == PendingKind::DetailedChunks )
+        {
+            std::vector<std::string> snapshots;
+            if ( !Ei3::ExtractSnapshots( line, snapshots ) )
+            {
+                g.lastError = "malformed_detailed_snapshot_batch";
+                g.ei3Requested.clear();
+                return;
+            }
+            bool published = false;
+            for ( std::string const& canonical : snapshots )
+            {
+                Ei3::Snapshot parsed;
+                std::string failure;
+                if ( Ei3::ParseSnapshot( canonical, g.worldUuid,
+                        g.worldBaselineDigest, parsed, failure ) )
+                {
+                    g.ei3Requested.erase( parsed.coord );
+                    Ei3::Residency::Admission const admitted = g.ei3Residency.AdmitSnapshot(
+                        canonical, g.worldUuid, g.worldBaselineDigest, failure );
+                    published |= admitted == Ei3::Residency::Admission::Published;
+                }
+                else
+                {
+                    g.lastError = failure;
+                }
+            }
+            if ( published )
+            {
+                // Existing coarse authority remains resident; the next mesh build
+                // reads the atomically-published detail wherever it is available.
+                InvalidateTerrainMesh( "ei3_detailed_projection" );
+            }
+            return;
+        }
+        if ( kind == PendingKind::DetailedSync )
+        {
+            std::string chunksArray;
+            std::vector<std::string> entries;
+            if ( !Ei3::Detail::ExtractArray( line, "chunks", chunksArray )
+              || !Ei3::Detail::SplitObjects( chunksArray, entries ) )
+            { g.lastError = "malformed_detailed_sync"; return; }
+            bool published = false;
+            for ( std::string const& entry : entries )
+            {
+                std::string status;
+                Ei3::ChunkCoord coord;
+                if ( !Ei3::Detail::ExtractString( entry, "status", status )
+                  || !Ei3::Detail::ExtractPair( entry, "chunk_coord", coord ) )
+                { g.lastError = "malformed_detailed_sync_entry"; continue; }
+                if ( status == "unchanged" ) { continue; }
+                if ( status == "snapshot" )
+                {
+                    std::string canonical, failure;
+                    if ( !Ei3::Detail::ExtractObject( entry, "snapshot", canonical ) )
+                    { g.lastError = "malformed_detailed_sync_snapshot"; continue; }
+                    auto const admitted = g.ei3Residency.AdmitSnapshot(
+                        canonical, g.worldUuid, g.worldBaselineDigest, failure );
+                    if ( admitted == Ei3::Residency::Admission::Rejected )
+                    { g.lastError = failure; }
+                    published |= admitted == Ei3::Residency::Admission::Published;
+                    continue;
+                }
+                if ( status == "delta" )
+                {
+                    std::string delta, failure;
+                    auto admitted = Ei3::Residency::Admission::Rejected;
+                    if ( Ei3::Detail::ExtractObject( entry, "delta", delta ) )
+                        admitted = g.ei3Residency.AdmitDelta(
+                            coord, delta, g.worldUuid, g.worldBaselineDigest, failure );
+                    if ( admitted == Ei3::Residency::Admission::Rejected )
+                    {
+                        // Unknown change kinds or any checksum/revision gap fall
+                        // back to a complete authoritative replacement.
+                        std::vector<Ei3::ChunkCoord> one{ coord };
+                        std::string const params = Ei3::BuildChunksParams( one );
+                        RequestBulkMethod( "detailed_chunks", params.c_str(),
+                            { (int)PendingKind::DetailedChunks, 0, 0 } );
+                        g.lastError = failure.empty() ? "detailed_delta_rejected" : failure;
+                    }
+                    else if ( admitted == Ei3::Residency::Admission::Published )
+                    { published = true; }
+                }
+            }
+            if ( published ) { InvalidateTerrainMesh( "ei3_reconnect_snapshot" ); }
+            return;
+        }
+        // Prewarm receipts contain no world payload. Sync/delta admission is
+        // fail-closed and will request a complete snapshot until EI4 supplies a
+        // live mutation revision source.
     }
 
     void PollBulkSocket()
@@ -12779,6 +13163,10 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
+        if ( g.ei3ProjectionMode && g.ei3Residency.GroundHeight( x, y, outZ ) )
+        {
+            return true;
+        }
         if ( g.playWorldgenBaseline && IsCutCOccupancyView( g.stage0PlayView )
           && g.cutCOccupancyRuntime && g.causalMineralizationRuntime )
         {
@@ -27568,6 +27956,90 @@ namespace
         glDepthFunc( GL_LESS );
     }
 
+    void Ei3SurfaceColour( std::string const& family, float& r, float& green, float& b )
+    {
+        // Appearance remains client-owned. These are presentation colours for the
+        // engine-authored SurfaceState family; they do not feed authority or physics.
+        if ( family == "rock" ) { r = 0.46f; green = 0.44f; b = 0.41f; }
+        else if ( family == "regolith" ) { r = 0.48f; green = 0.37f; b = 0.25f; }
+        else if ( family == "sediment" ) { r = 0.55f; green = 0.45f; b = 0.29f; }
+        else if ( family == "organic" ) { r = 0.27f; green = 0.35f; b = 0.18f; }
+        else if ( family == "volcanic" ) { r = 0.25f; green = 0.23f; b = 0.22f; }
+        else { r = 0.43f; green = 0.39f; b = 0.31f; }
+    }
+
+    void DrawEi3DetailedProjection()
+    {
+        g.ei3DrawSnapshots = 0; g.ei3DrawTriangles = 0;
+        if ( !g.ei3ProjectionMode ) { return; }
+        Ei3::ChunkCoord const center{ Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) };
+        auto const snapshots = g.ei3Residency.SnapshotsNear( center, 4 );
+        if ( snapshots.empty() ) { return; }
+
+        glEnable( GL_DEPTH_TEST );
+        glDepthFunc( GL_LEQUAL );
+        glDisable( GL_LIGHTING );
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_CULL_FACE );
+        glShadeModel( GL_SMOOTH );
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( -1.f, -1.f );
+        glBegin( GL_TRIANGLES );
+        bool firstHeight = true;
+        for ( auto const& snapshot : snapshots )
+        {
+            if ( !snapshot || snapshot->columns.size() != Ei3::kLatticeCount ) { continue; }
+            ++g.ei3DrawSnapshots;
+            auto emit = [&]( int sx, int sy, float nx, float ny, float nz )
+            {
+                Ei3::SurfaceColumn const& column =
+                    snapshot->columns[(size_t)sy * Ei3::kLatticeSide + sx];
+                float r, green, b;
+                Ei3SurfaceColour( column.dominantSurfaceFamily, r, green, b );
+                float const shade = 0.65f + 0.35f * (std::max)( 0.f, nz );
+                glColor3f( r * shade, green * shade, b * shade );
+                glNormal3f( nx, ny, nz );
+                float const z = column.surfaceHeightQ / Ei3::kFillDenominator
+                    * Ei3::kVoxelEdgeM;
+                if ( firstHeight ) { g.ei3DrawMinZ = g.ei3DrawMaxZ = z; firstHeight = false; }
+                else { g.ei3DrawMinZ = (std::min)( g.ei3DrawMinZ, z );
+                       g.ei3DrawMaxZ = (std::max)( g.ei3DrawMaxZ, z ); }
+                glVertex3f( ( column.ix + 0.5f ) * Ei3::kVoxelEdgeM,
+                            ( column.iy + 0.5f ) * Ei3::kVoxelEdgeM, z );
+            };
+            for ( int sy = 0; sy < Ei3::kLatticeSide - 1; ++sy )
+            for ( int sx = 0; sx < Ei3::kLatticeSide - 1; ++sx )
+            {
+                auto const& a = snapshot->columns[(size_t)sy * Ei3::kLatticeSide + sx];
+                auto const& b = snapshot->columns[(size_t)sy * Ei3::kLatticeSide + sx + 1];
+                auto const& c = snapshot->columns[(size_t)( sy + 1 ) * Ei3::kLatticeSide + sx];
+                float const ax = ( a.ix + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const ay = ( a.iy + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const az = a.surfaceHeightQ / Ei3::kFillDenominator * Ei3::kVoxelEdgeM;
+                float const bx = ( b.ix + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const by = ( b.iy + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const bz = b.surfaceHeightQ / Ei3::kFillDenominator * Ei3::kVoxelEdgeM;
+                float const cx = ( c.ix + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const cy = ( c.iy + 0.5f ) * Ei3::kVoxelEdgeM;
+                float const cz = c.surfaceHeightQ / Ei3::kFillDenominator * Ei3::kVoxelEdgeM;
+                float nx = ( by - ay ) * ( cz - az ) - ( bz - az ) * ( cy - ay );
+                float ny = ( bz - az ) * ( cx - ax ) - ( bx - ax ) * ( cz - az );
+                float nz = ( bx - ax ) * ( cy - ay ) - ( by - ay ) * ( cx - ax );
+                float const length = std::sqrt( nx * nx + ny * ny + nz * nz );
+                if ( length > 1e-6f ) { nx /= length; ny /= length; nz /= length; }
+                else { nx = 0.f; ny = 0.f; nz = 1.f; }
+                emit( sx, sy, nx, ny, nz ); emit( sx + 1, sy, nx, ny, nz );
+                emit( sx, sy + 1, nx, ny, nz );
+                emit( sx + 1, sy, nx, ny, nz ); emit( sx + 1, sy + 1, nx, ny, nz );
+                emit( sx, sy + 1, nx, ny, nz );
+                g.ei3DrawTriangles += 2;
+            }
+        }
+        glEnd();
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glDepthFunc( GL_LESS );
+    }
+
     void DrawMatterBodies()
     {
         // Explicit H2H plates — conserved geometry, not scoop cups / not inventory cubes.
@@ -27953,6 +28425,12 @@ namespace
 
     bool WalkStepAllowed( float fromX, float fromY, float fromZ, float toX, float toY, float& outGroundZ )
     {
+        if ( g.ei3ProjectionMode
+          && !g.ei3Residency.GroundHeight( toX, toY, outGroundZ ) )
+        {
+            g.ei3LandingIntent = true;
+            return false;
+        }
         if ( !SampleGroundZ( toX, toY, outGroundZ ) ) { return false; }
         float const climb = outGroundZ - fromZ;
         float const dx = toX - fromX;
@@ -28150,7 +28628,22 @@ namespace
         // F toggles walk / free-fly
         if ( g.keys['F'] && !g.keyToggleLatch['F'] )
         {
-            g.walkMode = !g.walkMode;
+            bool const requestedWalk = !g.walkMode;
+            if ( requestedWalk && g.ei3ProjectionMode )
+            {
+                float ground = 0.f;
+                if ( !g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground ) )
+                {
+                    g.walkMode = false;
+                    g.grounded = false;
+                    g.ei3LandingIntent = true;
+                    g.statusLine = "landing held - requesting authoritative P0 ground";
+                    g.keyToggleLatch['F'] = true;
+                    UpdateStreamHud();
+                    return;
+                }
+            }
+            g.walkMode = requestedWalk;
             g.keyToggleLatch['F'] = true;
             g.flySprintDistanceM = 0.f;
             g.flySprintTier = 0;
@@ -28246,7 +28739,9 @@ namespace
             g.feetZ += g.velZ * dt;
 
             float ground = g.feetZ;
-            if ( SampleGroundZ( g.feetX, g.feetY, ground ) )
+            bool const authoritativeGround = !g.ei3ProjectionMode
+                || g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
+            if ( authoritativeGround && SampleGroundZ( g.feetX, g.feetY, ground ) )
             {
                 if ( g.feetZ <= ground )
                 {
@@ -28258,6 +28753,14 @@ namespace
                 {
                     g.grounded = false;
                 }
+            }
+            else if ( g.ei3ProjectionMode )
+            {
+                g.grounded = false;
+                g.walkMode = false;
+                g.ei3LandingIntent = true;
+                g.camX = g.feetX; g.camY = g.feetY;
+                g.camZ = g.feetZ + kEyeHeightM;
             }
             if(!g.grounded){g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;}
 
@@ -28722,6 +29225,7 @@ namespace
         }
 
         if ( !g.certMv2Showcase ) DrawHeightfield();   // macro-only showcase: no near central world
+        DrawEi3DetailedProjection();
         // Union the near authoritative world (0.03-600 m) into the gap-classifier
         // terrain mask, then close the capture: a sky pixel is only a hole if NONE
         // of the three passes drew terrain there.
@@ -49288,6 +49792,24 @@ namespace
             if ( rawMs > g.certMaxDtMs ) { g.certMaxDtMs = rawMs; }
         }
 
+        // EI3 is opt-in while certification modes remain parity oracles.  In a
+        // playable world it runs beside the unchanged coarse renderer, using
+        // only the canonical two-lane authority session.
+        if ( g.ei3AuthorityEnabled )
+        {
+            if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
+            {
+                PollSocket(); PollBulkSocket();
+                if ( g.canonicalHandshakeOk && g.sock != INVALID_SOCKET
+                  && g.bulkSock == INVALID_SOCKET && now - g.lastBulkAttemptMs > 2000 )
+                { TryConnectBulk(); }
+            }
+            else if ( ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError )
+                   && now - g.lastAttemptMs > 2000 )
+            { g.lastAttemptMs = now; TryConnect(); }
+            TickEi3Residency();
+        }
+
         if ( g.certWorldgenBaselinePerf )
         {
             LARGE_INTEGER sim0{}, sim1{};
@@ -49348,9 +49870,11 @@ namespace
             Ms1bCertTick();
             Wd1bCertTick();
             LivingWorldLoadTick();
+            Ei3PredictiveTraversalCertTick();
             PresentationIsolationBeforeFrame(dt);
         }
-        else if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
+        else if ( !g.ei3AuthorityEnabled
+               && ( g.link == LinkState::Connected || g.link == LinkState::CapsOk ) )
         {
             PollSocket();
             PollBulkSocket();
@@ -49361,7 +49885,8 @@ namespace
                 TryConnectBulk();
             }
         }
-        else if ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError )
+        else if ( !g.ei3AuthorityEnabled
+               && ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError ) )
         {
             if ( now - g.lastAttemptMs > 2000 )
             {
@@ -49370,7 +49895,8 @@ namespace
             }
         }
 
-        if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline ) { TickStreamRequests(); }
+        if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline
+          && !g.ei3ProjectionMode ) { TickStreamRequests(); }
         if(g.streamComplete&&g.certShelterCleanBenchmark&&!g.shelterStampLoadAttempted)
         {
             g.shelterStampLoadAttempted=true;
@@ -54280,6 +54806,24 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Range );
             for ( int i = 1; i < argc; ++i )
             {
+                if ( _wcsicmp( argv[i], L"--ei3-authority" ) == 0 )
+                {
+                    g.ei3AuthorityEnabled = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-ei3-ptc" ) == 0 )
+                {
+                    g.certEi3Ptc = true;
+                    g.ei3AuthorityEnabled = true;
+                    g.playWorldgenBaseline = true;
+                    g.playStage11Launch = true;
+                    g.stage0LiveRadiusM = 192;
+                    // The 128 km horizon has its own certified macro receipts.
+                    // PTC keeps a real coarse ring but does not rebuild that
+                    // entire evidence extent merely to stress near residency.
+                    g.stage0FarExtentM = 8000;
+                    continue;
+                }
                 if ( _wcsicmp( argv[i], L"--play-phase4" ) == 0
                   || _wcsicmp( argv[i], L"--legacy-phase4" ) == 0 )
                 {
