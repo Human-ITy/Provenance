@@ -33,6 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import generated_world_descriptors as descriptor_schema
+from macro_page_contract import LEGACY_MAGIC as PAGE_MAGIC, upgrade_legacy_page_text
+
 GENERATOR_VERSION = 5
 REGION_M = 64000.0          # serialization / ownership cell size (NOT feature scale)
 REGION_HALF_M = 32000.0     # frozen central region half-extent
@@ -1108,23 +1111,16 @@ def macro_z_incised(central: "CentralProgram", fieldf: "MacroField", x: float, y
 #     MW detail at macro range and does not modify the frozen fine authorities.
 # Distance may SIMPLIFY the presentation; it may never change the semantic identity.
 
-SURFACE_DESCRIPTOR_VERSION = 1
+SURFACE_DESCRIPTOR_VERSION = descriptor_schema.SURFACE_ENCODING_VERSION
 
 # Substrate class vocabulary (MW7 RegolithProfileClass-style, + the volcanic substrates
 # MV3.B2 ancestry needs). Order is the on-page integer code; append-only.
-SUBSTRATE_CLASSES = [
-    "bare_bedrock", "weathered_bedrock", "thin_regolith", "colluvium", "talus",
-    "alluvium", "floodplain_sediment", "basin_fill", "organic_capable", "waterlogged_mineral",
-    "fresh_lava", "scoria_ash", "weathered_basalt", "volcanic_soil",
-]
+SUBSTRATE_CLASSES = list(descriptor_schema.SURFACE_SUBSTRATE_NAMES)
 # Lithology families (what the rock/parent sediment IS; compact by decree).
-LITHOLOGY_CLASSES = [
-    "granite", "basalt", "sandstone", "shale", "limestone", "quartzite",
-    "metamorphic", "mixed_unknown",
-]
+LITHOLOGY_CLASSES = list(descriptor_schema.SURFACE_LITHOLOGY_NAMES)
 # Coarse dominant surface family -- the near/far agreement axis (Certificate C). Distance
 # collapses substrate sub-classes toward THIS; it is what may never contradict near vs far.
-SURFACE_FAMILIES = ["rock", "regolith", "sediment", "volcanic", "organic"]
+SURFACE_FAMILIES = list(descriptor_schema.SURFACE_FAMILY_NAMES)
 
 _SUBSTRATE_IDX = {n: i for i, n in enumerate(SUBSTRATE_CLASSES)}
 _LITHOLOGY_IDX = {n: i for i, n in enumerate(LITHOLOGY_CLASSES)}
@@ -1189,36 +1185,24 @@ class SurfaceState:
 
     def pack(self) -> int:
         """Pack to a single uint (<=40 bits): 4b substrate,3b lith,3b family,7x4b axes."""
-        (su, li, fa, we, wx, so, st, orn, ex, ro) = self.code_tuple()
-        v = (su & 0xF)
-        v |= (li & 0x7) << 4
-        v |= (fa & 0x7) << 7
-        v |= (we & 0xF) << 10
-        v |= (wx & 0xF) << 14
-        v |= (so & 0xF) << 18
-        v |= (st & 0xF) << 22
-        v |= (orn & 0xF) << 26
-        v |= (ex & 0xF) << 30
-        v |= (ro & 0xF) << 34
-        return v
+        return descriptor_schema.encode_surface(
+            _SUBSTRATE_IDX[self.substrate_class], _LITHOLOGY_IDX[self.lithology_class],
+            _FAMILY_IDX[self.dominant_surface_family], self.wetness, self.weathering,
+            self.soil_depth, self.stability, self.organic_potential, self.exposure,
+            self.roughness_proxy, version=SURFACE_DESCRIPTOR_VERSION)
 
 
 def unpack_surface(v: int, source_rev: str = "") -> SurfaceState:
-    su = v & 0xF
-    li = (v >> 4) & 0x7
-    fa = (v >> 7) & 0x7
-    we = (v >> 10) & 0xF
-    wx = (v >> 14) & 0xF
-    so = (v >> 18) & 0xF
-    st = (v >> 22) & 0xF
-    orn = (v >> 26) & 0xF
-    ex = (v >> 30) & 0xF
-    ro = (v >> 34) & 0xF
+    decoded = descriptor_schema.decode_surface(SURFACE_DESCRIPTOR_VERSION, v)
     return SurfaceState(
-        substrate_class=SUBSTRATE_CLASSES[su], lithology_class=LITHOLOGY_CLASSES[li],
-        wetness=_dq4(we), weathering=_dq4(wx), soil_depth=_dq4(so), stability=_dq4(st),
-        organic_potential=_dq4(orn), exposure=_dq4(ex), roughness_proxy=_dq4(ro),
-        dominant_surface_family=SURFACE_FAMILIES[fa], source_rev=source_rev)
+        substrate_class=SUBSTRATE_CLASSES[int(decoded.substrate_class)],
+        lithology_class=LITHOLOGY_CLASSES[int(decoded.lithology_class)],
+        wetness=decoded.wetness, weathering=decoded.weathering,
+        soil_depth=decoded.soil_depth, stability=decoded.stability,
+        organic_potential=decoded.organic_potential, exposure=decoded.exposure,
+        roughness_proxy=decoded.roughness_proxy,
+        dominant_surface_family=SURFACE_FAMILIES[int(decoded.dominant_surface_family)],
+        source_rev=source_rev)
 
 
 @dataclass
@@ -1503,24 +1487,20 @@ def central_surface_family(central: "CentralProgram", x: float, y: float) -> str
 # POTENTIAL (climate/substrate), never WaterState itself (no circular input). MS1 owns the
 # bottom substrate; water OCCUPIES it (recoverable through shallow water in WD1.B).
 
-WATER_DESCRIPTOR_VERSION = 1
+WATER_DESCRIPTOR_VERSION = descriptor_schema.WATER_ENCODING_VERSION
 
 # presence regimes (ordered dry..standing); body/regime families (consequences, not presets);
 # flow regimes (hydrologic context only, no fluid sim). Index order = on-page code; append-only.
-PRESENCE_REGIMES = ["dry", "damp_substrate", "ephemeral", "seasonal", "perennial", "standing"]
-BODY_CLASSES = [
-    "none", "headwater_stream", "perennial_river", "sediment_river", "braided_reach",
-    "alpine_lake", "closed_basin_lake", "floodplain_water", "wetland_marsh",
-    "organic_darkwater", "arid_wash", "spring_pool", "volcanic_mineral_pool", "crater_lake",
-]
-FLOW_REGIMES = ["none", "still", "slow", "channelized", "fast", "turbulent"]
+PRESENCE_REGIMES = list(descriptor_schema.WATER_PRESENCE_NAMES)
+BODY_CLASSES = list(descriptor_schema.WATER_BODY_NAMES)
+FLOW_REGIMES = list(descriptor_schema.WATER_FLOW_NAMES)
 
 # Macro-water authority SCOPE: whether the macro descriptor OWNS the water conclusion here, or
 # defers to the frozen detailed authority (16D-16F). DEFER_TO_DETAILED is NOT `dry` — `dry` is a
 # real hydrologic state, whereas defer means "macro does not assert; the detailed system owns
 # this location". A consumer must check the scope BEFORE reading presence, so a detailed lake in
 # the frozen centre is never read as contradicting a macro `dry`.
-MACRO_WATER_AUTHORITY = ["valid_macro", "defer_to_detailed"]
+MACRO_WATER_AUTHORITY = list(descriptor_schema.WATER_AUTHORITY_NAMES)
 
 _PRESENCE_IDX = {n: i for i, n in enumerate(PRESENCE_REGIMES)}
 _BODY_IDX = {n: i for i, n in enumerate(BODY_CLASSES)}
@@ -1579,40 +1559,34 @@ class WaterState:
 
     def pack(self) -> int:
         """Pack to an integer (~60 bits; hex on the page). Layout documented on the page."""
-        de = min(511, int(round(max(0.0, self.depth_m) * 4.0)))     # 0..127.75 m at 0.25 m (9 bits)
-        v = _PRESENCE_IDX[self.presence_regime] & 0x7
-        v |= (_BODY_IDX[self.body_class] & 0xF) << 3
-        v |= (_FLOW_IDX[self.flow_regime] & 0x7) << 7
-        v |= (_FAMILY_IDX[self.bottom_family] & 0x7) << 10
-        v |= (de & 0x1FF) << 13
-        v |= (_q4(self.discharge_proxy) & 0xF) << 22
-        v |= (_q4(self.seasonality_index) & 0xF) << 26
-        v |= (_q4(self.clarity) & 0xF) << 30
-        v |= (_q4(self.turbidity) & 0xF) << 34
-        v |= (_q4(self.suspended_sediment) & 0xF) << 38
-        v |= (_q4(self.mineral_load) & 0xF) << 42
-        v |= (_q4(self.organic_load) & 0xF) << 46
-        v |= (_q4(self.temperature_proxy) & 0xF) << 50
-        v |= (min(3, int(round(self.waterfall_potential * 3.0))) & 0x3) << 54
-        v |= (min(3, int(round(self.mineral_potential * 3.0))) & 0x3) << 56
-        v |= (_WAUTH_IDX[self.macro_authority] & 0x1) << 58
-        return v
+        return descriptor_schema.encode_water(
+            _PRESENCE_IDX[self.presence_regime], _BODY_IDX[self.body_class],
+            _FLOW_IDX[self.flow_regime], _FAMILY_IDX[self.bottom_family], self.depth_m,
+            self.discharge_proxy, self.seasonality_index, self.clarity, self.turbidity,
+            self.suspended_sediment, self.mineral_load, self.organic_load,
+            self.temperature_proxy, self.waterfall_potential, self.mineral_potential,
+            _WAUTH_IDX[self.macro_authority], version=WATER_DESCRIPTOR_VERSION)
 
 
 def unpack_water(v: int, source_rev: str = "") -> WaterState:
-    de = (v >> 13) & 0x1FF
+    decoded = descriptor_schema.decode_water(WATER_DESCRIPTOR_VERSION, v)
+    # The legacy WaterState carrier still stores the dry wire placeholder on a
+    # deferred cell. New schema consumers must use decoded.presence, which is None.
     return WaterState(
-        presence_regime=PRESENCE_REGIMES[v & 0x7], body_class=BODY_CLASSES[(v >> 3) & 0xF],
-        flow_regime=FLOW_REGIMES[(v >> 7) & 0x7], depth_m=de / 4.0,
-        bottom_elev_m=0.0, surface_elev_m=de / 4.0,
-        discharge_proxy=_dq4((v >> 22) & 0xF), mean_supply=_dq4((v >> 22) & 0xF),
-        seasonality_index=_dq4((v >> 26) & 0xF), persistence_margin=0.0,
-        clarity=_dq4((v >> 30) & 0xF), turbidity=_dq4((v >> 34) & 0xF),
-        suspended_sediment=_dq4((v >> 38) & 0xF), mineral_load=_dq4((v >> 42) & 0xF),
-        organic_load=_dq4((v >> 46) & 0xF), temperature_proxy=_dq4((v >> 50) & 0xF),
-        bottom_family=SURFACE_FAMILIES[(v >> 10) & 0x7],
-        waterfall_potential=((v >> 54) & 0x3) / 3.0, mineral_potential=((v >> 56) & 0x3) / 3.0,
-        macro_authority=MACRO_WATER_AUTHORITY[(v >> 58) & 0x1], source_rev=source_rev)
+        presence_regime=PRESENCE_REGIMES[int(decoded.encoded_presence)],
+        body_class=BODY_CLASSES[int(decoded.body_class)],
+        flow_regime=FLOW_REGIMES[int(decoded.flow_regime)], depth_m=decoded.depth_m,
+        bottom_elev_m=0.0, surface_elev_m=decoded.depth_m,
+        discharge_proxy=decoded.discharge_proxy, mean_supply=decoded.discharge_proxy,
+        seasonality_index=decoded.seasonality_index, persistence_margin=0.0,
+        clarity=decoded.clarity, turbidity=decoded.turbidity,
+        suspended_sediment=decoded.suspended_sediment, mineral_load=decoded.mineral_load,
+        organic_load=decoded.organic_load, temperature_proxy=decoded.temperature_proxy,
+        bottom_family=SURFACE_FAMILIES[int(decoded.bottom_family)],
+        waterfall_potential=decoded.waterfall_potential,
+        mineral_potential=decoded.mineral_potential,
+        macro_authority=MACRO_WATER_AUTHORITY[int(decoded.macro_authority)],
+        source_rev=source_rev)
 
 
 def _clip01(v: float) -> float:
@@ -1835,7 +1809,6 @@ def water_state_at(central: "CentralProgram", fieldf: "MacroField", x: float, y:
 # Compiled macro PAGES (64 km serialization cells)
 # --------------------------------------------------------------------------- #
 
-PAGE_MAGIC = "PROVENANCE_MACRO_AUTHORITY_PAGE_V1"
 PAGE_STEP_M = 1000.0        # coarse macro sample step (macro silhouette, not grooves)
 SURFACE_STEP_M = 4000.0     # coarse SurfaceState descriptor step (state varies on 200-500 km
                             # control wavelengths, so a 4 km grid is ample; keeps pages small)
@@ -1975,4 +1948,6 @@ def serialize_page(page: MacroPage) -> str:
         f"water_grid_row_major={' '.join(f'{c:x}' for c in page.water_codes)}",
         "",
     ]
-    return "\n".join(lines)
+    # EI0.C adds only canonical representation/authority metadata.  The payload
+    # strings above remain the parity oracle and are byte-identical to V1.
+    return upgrade_legacy_page_text("\n".join(lines))

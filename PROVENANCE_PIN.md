@@ -13,10 +13,13 @@ Branches:
 
 ```
 EI0.A  identity + handshake          CERTIFIED
-EI0.B  generated schemas             NEXT
-EI0.C  fail-closed page validation   CLOSED
-EI0.D  two-lane transport            CLOSED
-EI1+                                 CLOSED
+EI0.B  generated schemas             CERTIFIED locally
+EI0.C  fail-closed page validation   CERTIFIED locally
+EI0.D  two-lane transport            CERTIFIED locally
+EI0.E  reproducible genesis identity CERTIFIED locally
+EI1    WorldGenesis adoption         CERTIFIED locally
+EI2    macro -> micro substrate      NEXT
+EI3+                                 CLOSED
 ```
 
 Canonical protocol: `fablescript.embodied-terrain` `1.0.0`. FableScript remains
@@ -32,6 +35,68 @@ residency/LOD/meshes/GPU/culling, and presentation. EI0.A moves no world truth.
 - FableScript EI0.A bulk-lane closure: `b74f20ee216df310c99a414a3f3330a439fdedab`
 - Provenance EI0.A: `4cc674c9a97f72d8c8cbb4d7cdbaf1c16a731494`
 - Handoff: `EI0A_CANONICAL_IDENTITY_HANDOFF.md`
+
+EI0.B canonical schema source is engine-owned at
+`fablescript/schemas/world_descriptors.json`; deterministic generated Python and
+C++ bindings share schema digest
+`8857189f2dfb5fe3ba73d470ca653248188a0717469963d64d6d5003bad6dac5`.
+SurfaceState encoding v1 references grammar `provenance.surface-state.ms1a`
+`ms1a.1`; WaterState encoding v1 references grammar
+`provenance.water-state.wd1a` `wd1a.1`. Encoding identity is not genesis
+identity. FableScript EI0.B commit:
+`17899ad3f6c8ecf611206348d61f01cfedf2ebfe`. Handoff:
+`EI0B_GENERATED_DESCRIPTOR_SCHEMAS_HANDOFF.md`.
+
+EI0.C upgraded the 25 immutable macro artifacts to page schema 2. Its original
+opaque macro genesis `17405cbecb97d55aee9e85408e8735c7f055f6ad87369dfa94bee4762c67e994`
+is superseded evidence after EI0.E, not canonical authority.
+Client admission now recomputes source/surface/water and whole-page digests,
+validates absolute coordinate/bounds, EI0.B descriptor contracts, and
+region/neighbor/384 km parent lineage, then atomically publishes only
+`VALID_AUTHORITY`. Legacy V1 is rejected for authority and can only be
+`DIAGNOSTIC_ONLY` through the explicit validator path. All 25 pages and the
+20-case corruption matrix pass; semantic height/surface/water payload hashes
+are unchanged. Handoff: `EI0C_FAIL_CLOSED_MACRO_PAGE_VALIDATION_HANDOFF.md`.
+
+EI0.D adds the canonical localhost TCP carrier without moving truth: independent
+control `:8765` and bulk `:8766` lanes prove one server/session/world/genesis;
+strict UTF-8 JSON-lines framing, exact per-lane request correlation, bounded
+4-worker / 8-in-flight bulk work, byte-accounted queues, coherent revision-
+stamped read capture, control-priority scheduling, bulk reattach, and control-
+disconnect token invalidation are certified. Existing stdio tools remain green;
+the client still consumes its current terrain path, so macro/worldgen/material/
+water/render output and performance behavior are unchanged. Handoff:
+`EI0D_TWO_LANE_LOCAL_TRANSPORT_HANDOFF.md`. **NEXT = EI1 WorldGenesis adoption.**
+
+EI0.E corrects the pre-production opaque generator identity. The semantic
+generator manifest derives build/config/material digests without paths,
+timestamps, transport, or representation schema. Corrected canonical genesis:
+`8394bfefb6955cfffec1c927721d2e6da1b4a24c5525dce4cd238640c2ecd801`.
+The reissued 25-page ring preserves exact height/SurfaceState/WaterState and
+lineage payloads; only identity metadata and whole-page digests change. Old
+opaque-identity pages quarantine in canonical mode and are diagnostic-only
+when explicitly requested. Static geographic IDs remain seed + absolute
+feature-fact hashes and do not depend on either genesis digest. Handoff:
+`EI0E_REPRODUCIBLE_GENESIS_IDENTITY_HANDOFF.md`. Current MV2.B regression is
+green with presentation build 43.995 ms under the unchanged `<50 ms` gate.
+
+EI1 promotes the byte-exact macro semantic implementation behind FableScript
+`WorldGenesis`. Engine direct queries, Page V2 compilation, static ancestry,
+content-addressed cache publication, and the genesis-bound `MacroManifest` now
+share that one implementation. The manifest producer is
+`FABLESCRIPT_WORLDGENESIS`; canonical client loading requires its page/content
+binding before the unchanged EI0.C admission path and never falls back to local
+generation. The Provenance Python implementation remains available only to the
+explicit development parity harness. All 25 engine pages are byte-exact to the
+oracle, with unchanged height/SurfaceState/WaterState aggregates and 5.265 m
+seam evidence. MV2.B remains green at 45.786 ms presentation build under the
+unchanged 50 ms gate. Handoff: `EI1_WORLDGENESIS_ADOPTION_HANDOFF.md`.
+Engine commits: `969831e3d0e5a7f3dfb6b38533e3309a6814cbd0`,
+`033ed892f9a48761bcc54bfc93a73a6ba002e2b5`,
+`b4496afbf9ed8345a9c9c7503b440323aae6ea00`. The complete retained
+MV2/MV3/MS1.A/WD1.A replay passed all world-behavior assertions; its historical
+stdlib-only monolith source check is replaced by an exact package dependency
+and forbidden-fine-authority audit, with no behavior threshold changed.
 
 Historical unqualified `v1` is not canonical and is never an implicit
 downgrade. No new world-authority stage is open: WD1.C existence, FL1
@@ -311,7 +376,7 @@ MS1.B1  semantic surface default          CERTIFIED (MS1.B now ON BY DEFAULT —
 WD1     water diversity                   DESIGN LOCKED @ c2f9bd55 (WD1_WATER_DIVERSITY_DESIGN.md): CHANNEL_EXISTS!=WATER_PRESENT!=WATER_BODY_TYPE!=WATER_OPTICAL_STATE; two-stage presence (supply vs accommodation); 16D/16E/16F/P5b stay authoritative; WD1.B = continuous optical transmission over MS1 bottom substrate; reserved hooks waterfalls/volcanic-chem/season/glacial
 WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage presence supply(macro_humidity+catchment−permeability/evap) then accommodation(channel gradient/basin closure) → dry/damp/ephemeral/seasonal/perennial/standing + body/regime; discharge_proxy first-class; optical axes clarity/turbidity/sediment/mineral/organic over MS1 bottom substrate; MacroWaterBodyId keyed to watershed sink, rivers inherit MacroChannelId; 17x17@4km page water descriptor; anchor-window gated (centre macro_authority=defer_to_detailed, NOT dry; 16D-16F owns detailed); mass law = no water mass/no geometry; 15 fixtures + MV2.B 0-holes green; surface_digest byte-identical; NEXT = WD1.B appearance)
 WD1.B   shared water appearance           CERTIFIED (one C++ Ms1::ResolveWaterAppearance resolver: observed = MS1 bottom·T(depth) + body_optical·(1-T) + reflection, T=exp(-k·depth), k from turbidity/organic/sediment; continuous optical depth, NEVER bands; clear/sediment/organic/mineral bodies diverge; macro STANDING water rendered as an overlay at surface_z over the MS1 substrate (terrain untouched); macro_authority respected (centre defers, no macro water); opt-in --wd1b (default off==frozen); optical cert PASS + real-client showcase (turquoise crater lakes over basalt, organic lowland) + MW8 24m/s Test B PX2 green; geometry/water-truth bit-exact; NEXT = WD1.C)
-WD1.C   waterfalls / cascades             NEXT / READY FOR DESIGN (hook: channel + discharge + abrupt drop + resistant lip)
+WD1.C   waterfalls / cascades             HOLD (presentation design/fixtures only; existence authority waits for engine ownership)
 MV3.C-testB  24m/s Test B on gen-5 pages   PASS (engine_cpu 0-over worst 11.7ms, 0 presented/stage-owned/os-gap, cadence no-regression, 0 movement frames over)
 MW9     flora / fauna                     CLOSED
 ```

@@ -7,9 +7,8 @@
 // There is exactly one palette here and it is derived from MATERIAL, not from elevation
 // or from which render path is drawing. This retires far=olive / mid=white / near=gray.
 //
-// The packed-code bit layout MIRRORS the MS1.A Python authority
-// (Tools/Worldgen/macro_authority.py :: SurfaceState.pack); the class index order MUST
-// stay identical to SUBSTRATE_CLASSES / LITHOLOGY_CLASSES / SURFACE_FAMILIES there.
+// Descriptor vocabulary and bit layouts come from the EI0.B generated contract
+// (`WorldDescriptors.generated.h`). This file owns presentation only.
 //
 // Presentation only: no geometry, no authority. MW9 flora / water / snow remain closed —
 // organic_potential is NOT vegetation and is never painted green; waterlogged/wet is a
@@ -19,22 +18,10 @@
 #include <cmath>
 #include <algorithm>
 
+#include "WorldDescriptors.generated.h"
+
 namespace Ms1
 {
-    // ---- vocabulary (index order == Python authority; do not reorder) ---------------- #
-    enum Substrate : uint8_t {
-        SUB_BARE_BEDROCK=0, SUB_WEATHERED_BEDROCK, SUB_THIN_REGOLITH, SUB_COLLUVIUM, SUB_TALUS,
-        SUB_ALLUVIUM, SUB_FLOODPLAIN, SUB_BASIN_FILL, SUB_ORGANIC_CAPABLE, SUB_WATERLOGGED,
-        SUB_FRESH_LAVA, SUB_SCORIA_ASH, SUB_WEATHERED_BASALT, SUB_VOLCANIC_SOIL, SUB_COUNT
-    };
-    enum Lithology : uint8_t {
-        LIT_GRANITE=0, LIT_BASALT, LIT_SANDSTONE, LIT_SHALE, LIT_LIMESTONE, LIT_QUARTZITE,
-        LIT_METAMORPHIC, LIT_MIXED, LIT_COUNT
-    };
-    enum Family : uint8_t {
-        FAM_ROCK=0, FAM_REGOLITH, FAM_SEDIMENT, FAM_VOLCANIC, FAM_ORGANIC, FAM_COUNT
-    };
-
     struct SurfaceState
     {
         uint8_t substrate = SUB_BARE_BEDROCK;
@@ -45,26 +32,15 @@ namespace Ms1
         bool valid = false;
     };
 
-    inline float nib(int n) { return (float)n / 15.f; }
-
-    // Mirror of Python unpack_surface(). Bit layout:
-    // [0:4]=substrate [4:7]=lith [7:10]=family [10:14]=wetness [14:18]=weathering
-    // [18:22]=soil_depth [22:26]=stability [26:30]=organic [30:34]=exposure [34:38]=roughness
-    inline SurfaceState Unpack(uint64_t v)
+    inline SurfaceState Unpack(uint64_t v, uint32_t encodingVersion=kSurfaceEncodingVersion)
     {
+        SurfaceDescriptorWire wire;
+        if(!DecodeSurfaceDescriptor(encodingVersion,v,wire))return SurfaceState();
         SurfaceState s;
-        s.substrate = (uint8_t)(v & 0xF);
-        s.lith      = (uint8_t)((v >> 4) & 0x7);
-        s.family    = (uint8_t)((v >> 7) & 0x7);
-        s.wetness   = nib((int)((v >> 10) & 0xF));
-        s.weathering= nib((int)((v >> 14) & 0xF));
-        s.soilDepth = nib((int)((v >> 18) & 0xF));
-        s.stability = nib((int)((v >> 22) & 0xF));
-        s.organic   = nib((int)((v >> 26) & 0xF));
-        s.exposure  = nib((int)((v >> 30) & 0xF));
-        s.roughness = nib((int)((v >> 34) & 0xF));
-        if (s.substrate >= SUB_COUNT || s.lith >= LIT_COUNT || s.family >= FAM_COUNT)
-            return SurfaceState();          // malformed -> invalid (fail-closed)
+        s.substrate=wire.substrate;s.lith=wire.lith;s.family=wire.family;
+        s.wetness=wire.wetness;s.weathering=wire.weathering;s.soilDepth=wire.soilDepth;
+        s.stability=wire.stability;s.organic=wire.organic;s.exposure=wire.exposure;
+        s.roughness=wire.roughness;
         s.valid = true;
         return s;
     }
@@ -207,16 +183,8 @@ namespace Ms1
     // WD1.B — shared Water Appearance. Water is an OVERLAY over the MS1 substrate: what you
     // see = the bottom (MS1) transmitted through the water column + the body's own optical
     // character + surface reflection. Continuous optical DEPTH, never colour bands. The
-    // WaterState mirrors the WD1.A Python descriptor (macro_authority.py :: WaterState.pack).
+    // WaterState consumes the generated WD1.A wire descriptor contract.
     // ===================================================================================
-    enum WPresence : uint8_t { WP_DRY=0, WP_DAMP, WP_EPHEMERAL, WP_SEASONAL, WP_PERENNIAL, WP_STANDING };
-    enum WBody : uint8_t {
-        WB_NONE=0, WB_HEADWATER, WB_PERENNIAL_RIVER, WB_SEDIMENT_RIVER, WB_BRAIDED, WB_ALPINE_LAKE,
-        WB_CLOSED_LAKE, WB_FLOODPLAIN, WB_WETLAND, WB_ORGANIC, WB_ARID_WASH, WB_SPRING,
-        WB_VOLCANIC_POOL, WB_CRATER, WB_COUNT
-    };
-    enum WAuthority : uint8_t { WA_VALID_MACRO=0, WA_DEFER_TO_DETAILED=1 };
-
     struct WaterState {
         uint8_t presence = WP_DRY, body = WB_NONE, flow = 0, bottomFamily = FAM_ROCK, authority = WA_VALID_MACRO;
         float depth_m = 0.f, discharge = 0.f, seasonality = 0.f, clarity = 1.f, turbidity = 0.f;
@@ -225,27 +193,17 @@ namespace Ms1
         bool valid = false;
     };
 
-    // mirror of Python WaterState.pack() bit layout (see the .mcp water_code comment)
-    inline WaterState UnpackWater(uint64_t v)
+    inline WaterState UnpackWater(uint64_t v, uint32_t encodingVersion=kWaterEncodingVersion)
     {
+        WaterDescriptorWire wire;
+        if(!DecodeWaterDescriptor(encodingVersion,v,wire))return WaterState();
         WaterState w;
-        w.presence     = (uint8_t)(v & 0x7);
-        w.body         = (uint8_t)((v >> 3) & 0xF);
-        w.flow         = (uint8_t)((v >> 7) & 0x7);
-        w.bottomFamily = (uint8_t)((v >> 10) & 0x7);
-        w.depth_m      = ((v >> 13) & 0x1FF) / 4.f;
-        w.discharge    = nib((int)((v >> 22) & 0xF));
-        w.seasonality  = nib((int)((v >> 26) & 0xF));
-        w.clarity      = nib((int)((v >> 30) & 0xF));
-        w.turbidity    = nib((int)((v >> 34) & 0xF));
-        w.sediment     = nib((int)((v >> 38) & 0xF));
-        w.mineral      = nib((int)((v >> 42) & 0xF));
-        w.organic      = nib((int)((v >> 46) & 0xF));
-        w.temperature  = nib((int)((v >> 50) & 0xF));
-        w.waterfallPot = ((v >> 54) & 0x3) / 3.f;
-        w.mineralPot   = ((v >> 56) & 0x3) / 3.f;
-        w.authority    = (uint8_t)((v >> 58) & 0x1);
-        if (w.body >= WB_COUNT) { return WaterState(); }
+        w.presence=wire.presence;w.body=wire.body;w.flow=wire.flow;
+        w.bottomFamily=wire.bottomFamily;w.authority=wire.authority;
+        w.depth_m=wire.depthM;w.discharge=wire.discharge;w.seasonality=wire.seasonality;
+        w.clarity=wire.clarity;w.turbidity=wire.turbidity;w.sediment=wire.sediment;
+        w.mineral=wire.mineral;w.organic=wire.organic;w.temperature=wire.temperature;
+        w.waterfallPot=wire.waterfallPot;w.mineralPot=wire.mineralPot;
         w.valid = true;
         return w;
     }

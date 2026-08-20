@@ -22,6 +22,8 @@
 #include "ProvenanceGeography.h"
 #include "CausalWorldGeology.h"
 #include "Ms1SurfaceAppearance.h"
+#include "MacroPageAuthority.h"
+#include "MacroManifestAuthority.h"
 #include "CausalWorldExposure.h"
 #include "CausalVisibleExposure.h"
 #include "CausalDifferentialErosion.h"
@@ -70,6 +72,7 @@
 #include "PickFracture.h"
 #include "FractureSurface.h"
 #include "Ei0aHandshake.h"
+#include "Ei0dTwoLaneTransport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -86,6 +89,7 @@
 #include <deque>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <mutex>
 #include <numeric>
 #include <string>
@@ -713,16 +717,26 @@ namespace
         HDC hdc = nullptr;
         HGLRC glrc = nullptr;
         SOCKET sock = INVALID_SOCKET;
+        SOCKET bulkSock = INVALID_SOCKET;
         LinkState link = LinkState::Disconnected;
         std::string statusLine = "Provenance Phase 4 - starting...";
         std::string detail;
         std::string digestLine = "Interaction digest idle - LMB dig into stock, RMB place one scoop, Tab unlock cursor";
         std::string recvBuf;
         int nextId = 1;
+        int nextBulkId = 1;
         std::string host = kDefaultHost;
         int port = kDefaultPort;
+        int bulkPort = kDefaultPort + 1;
         DWORD lastAttemptMs = 0;
+        DWORD lastBulkAttemptMs = 0;
         int attempts = 0;
+        Ei0d::ConnectionState controlTransportState = Ei0d::ConnectionState::Disconnected;
+        Ei0d::ConnectionState bulkTransportState = Ei0d::ConnectionState::Disconnected;
+        Ei0d::JsonLineAccumulator controlFramer{ Ei0d::kMaxControlResponseBytes };
+        Ei0d::JsonLineAccumulator bulkFramer{ Ei0d::kMaxBulkResponseBytes };
+        Ei0d::LaneFlow controlFlow{ 64, Ei0d::kMaxControlQueuedBytes };
+        Ei0d::LaneFlow bulkFlow{ Ei0d::kMaxBulkInflight, Ei0d::kMaxBulkQueuedBytes };
         // --cert-dig: auto tour digs (move + strike), dump PPMs, quit.
         bool certDig = false;
         int certPhase = 0;
@@ -1071,6 +1085,9 @@ namespace
         int mv2bDrawCallsFrame = 0; long long mv2bTrisFrame = 0;
         long long mv2bVerts = 0;
         double mv2bBuildMsFrame = 0.0, mv2bBuildMsHigh = 0.0, mv2bCpuSubmitMsFrame = 0.0;
+        double macroPageValidationMsFrame = 0.0, macroPageValidationMsHigh = 0.0;
+        double mv2bPresentationBuildMsHigh = 0.0;
+        long long macroPageValidations = 0;
         bool mv2bWarmed = false;
         // MV3.B2 landform showcase: render the macro pages ONLY (macro pass with a low
         // near plane, MV1 far + near heightfield skipped) so a macro landform can be
@@ -1757,6 +1774,8 @@ namespace
         std::string surfaceGrammarVersion;
         std::string waterGrammarId;
         std::string waterGrammarVersion;
+        int macroPageValidationFailures = 0;
+        std::string macroPageValidationFailure;
         float reliefVoxels = 64.f;
         float gradeDatum = 0.5f;
         float voxelEdgeM = 0.125f;
@@ -1773,6 +1792,8 @@ namespace
         int pendingBx = 0;
         int pendingBy = 0;
         Ei0a::RequestTracker requestTracker;
+        Ei0a::RequestTracker bulkRequestTracker;
+        Ei0d::SessionBinding controlSessionBinding;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2537,17 +2558,38 @@ namespace
         return "?";
     }
 
+    void CloseBulkSock( bool failed = false )
+    {
+        if ( g.bulkSock != INVALID_SOCKET )
+        {
+            g.bulkTransportState = Ei0d::ConnectionState::Draining;
+            closesocket( g.bulkSock );
+            g.bulkSock = INVALID_SOCKET;
+        }
+        g.bulkFramer.Clear();
+        g.bulkRequestTracker.Clear();
+        g.bulkFlow.Clear();
+        g.bulkTransportState = failed
+            ? Ei0d::ConnectionState::Failed : Ei0d::ConnectionState::Closed;
+    }
+
     void CloseSock()
     {
+        CloseBulkSock();
         if ( g.sock != INVALID_SOCKET )
         {
+            g.controlTransportState = Ei0d::ConnectionState::Draining;
             closesocket( g.sock );
             g.sock = INVALID_SOCKET;
         }
         g.recvBuf.clear();
+        g.controlFramer.Clear();
         g.pending = PendingKind::None;
         g.requestTracker.Clear();
+        g.controlFlow.Clear();
+        g.controlSessionBinding = {};
         g.canonicalHandshakeOk = false;
+        g.controlTransportState = Ei0d::ConnectionState::Closed;
     }
 
     bool ExtractJsonString( std::string const& json, char const* key, std::string& out )
@@ -6683,18 +6725,20 @@ namespace
                           float radius, float cr, float cg, float cb, int seg );
     void DrawHorizontalRing( float cx, float cy, float cz, float radius, float cr, float cg, float cb, int seg );
 
-    bool SendLine( std::string const& line )
+    bool SendLineOn( SOCKET socketHandle, std::string const& line )
     {
-        if ( g.sock == INVALID_SOCKET ) { return false; }
+        if ( socketHandle == INVALID_SOCKET ) { return false; }
         size_t sent = 0;
         while ( sent < line.size() )
         {
-            int n = send( g.sock, line.data() + sent, (int)( line.size() - sent ), 0 );
+            int n = send( socketHandle, line.data() + sent, (int)( line.size() - sent ), 0 );
             if ( n <= 0 ) { return false; }
             sent += (size_t)n;
         }
         return true;
     }
+
+    bool SendLine( std::string const& line ) { return SendLineOn( g.sock, line ); }
 
     bool RequestMethod( char const* method, char const* paramsJson, PendingKind kind, int bx = 0, int by = 0 )
     {
@@ -6703,13 +6747,27 @@ namespace
         std::string line = "{\"version\":" + std::to_string( kProtocolVersion )
             + ",\"id\":\"" + requestId + "\",\"type\":\"request\",\"method\":\""
             + method + "\",\"params\":" + paramsJson + "}\n";
-        if ( !SendLine( line ) ) { return false; }
         if ( !g.requestTracker.Register(
                 requestId, { (int)kind, bx, by } ) )
         {
             g.lastError = "duplicate local request_id";
             return false;
         }
+        std::string flowError;
+        if ( !g.controlFlow.ReserveRequest( line.size(), flowError ) )
+        {
+            g.requestTracker.Cancel( requestId );
+            g.lastError = flowError;
+            return false;
+        }
+        if ( !SendLine( line ) )
+        {
+            g.controlFlow.Sent( line.size() );
+            g.controlFlow.Complete();
+            g.requestTracker.Cancel( requestId );
+            return false;
+        }
+        g.controlFlow.Sent( line.size() );
         g.pending = kind;
         g.pendingId = id;
         g.pendingBx = bx;
@@ -6723,7 +6781,46 @@ namespace
         int const id = g.nextId;
         std::string const params = Ei0a::BuildClientHelloParams(
             std::to_string( id ), laneRole, sessionToken );
+        g.controlTransportState = Ei0d::ConnectionState::HelloSent;
         return RequestMethod( "hello", params.c_str(), PendingKind::Hello );
+    }
+
+    bool RequestBulkMethod( char const* method, char const* paramsJson,
+                            Ei0a::PendingRequest pending = {} )
+    {
+        if ( g.bulkSock == INVALID_SOCKET ) { return false; }
+        std::string const requestId = "b-" + std::to_string( g.nextBulkId++ );
+        std::string const line = "{\"version\":" + std::to_string( kProtocolVersion )
+            + ",\"id\":\"" + requestId + "\",\"type\":\"request\",\"method\":\""
+            + method + "\",\"params\":" + paramsJson + "}\n";
+        if ( !g.bulkRequestTracker.Register( requestId, pending ) )
+        { g.lastError = "duplicate bulk request_id"; return false; }
+        std::string flowError;
+        if ( !g.bulkFlow.ReserveRequest( line.size(), flowError ) )
+        {
+            g.bulkRequestTracker.Cancel( requestId );
+            g.lastError = flowError;
+            return false;
+        }
+        if ( !SendLineOn( g.bulkSock, line ) )
+        {
+            g.bulkFlow.Sent( line.size() );
+            g.bulkFlow.Complete();
+            g.bulkRequestTracker.Cancel( requestId );
+            return false;
+        }
+        g.bulkFlow.Sent( line.size() );
+        return true;
+    }
+
+    bool RequestBulkHello()
+    {
+        std::string const requestId = "b-" + std::to_string( g.nextBulkId );
+        std::string const params = Ei0a::BuildClientHelloParams(
+            requestId, "bulk", g.sessionToken, g.serverInstanceId,
+            g.worldUuid, g.genesisDigest );
+        g.bulkTransportState = Ei0d::ConnectionState::HelloSent;
+        return RequestBulkMethod( "hello", params.c_str() );
     }
 
     void UpdateStreamHud()
@@ -6784,6 +6881,8 @@ namespace
         g.detail = d;
     }
 
+    void TryConnectBulk();
+
     void ParseHelloReply( std::string const& line, std::string const& requestId )
     {
         bool ok = false;
@@ -6813,8 +6912,20 @@ namespace
             g.detail = errorCode;
             return;
         }
+        if ( hello.laneRole != "control"
+          || hello.transportProfileId != Ei0d::kTransportProfileId
+          || hello.transportFraming != Ei0d::kFraming )
+        {
+            g.link = LinkState::CapsError;
+            g.controlTransportState = Ei0d::ConnectionState::Failed;
+            g.canonicalHandshakeOk = false;
+            g.statusLine = "canonical transport profile invalid";
+            g.lastError = "transport_profile_mismatch";
+            return;
+        }
 
         g.canonicalHandshakeOk = true;
+        g.controlTransportState = Ei0d::ConnectionState::Authenticated;
         g.protocolId = hello.protocolId;
         g.protocolSemver = hello.protocolSemver;
         g.protocolSchemaDigest = hello.schemaDigest;
@@ -6832,7 +6943,13 @@ namespace
         g.surfaceGrammarVersion = hello.surfaceGrammarVersion;
         g.waterGrammarId = hello.waterGrammarId;
         g.waterGrammarVersion = hello.waterGrammarVersion;
+        g.controlSessionBinding = Ei0d::BindingFromHello( hello );
         g.statusLine = "canonical identity ok - requesting terrain_caps";
+
+        // The independent bulk lane authenticates against this exact session.
+        // Existing terrain behavior remains on the control bridge in EI0.D;
+        // moving truth-bearing projections is an EI1/EI3 concern.
+        TryConnectBulk();
 
         // EI0.A deliberately leaves the historical projection/mutation bridge in
         // place. It is entered only after canonical authority identity succeeds.
@@ -6887,6 +7004,7 @@ namespace
         ProvenanceGeo::SetSeedFromIdentity( g.worldIdentityHash, g.generatorId, g.generatorVersion );
 
         g.link = LinkState::CapsOk;
+        g.controlTransportState = Ei0d::ConnectionState::Active;
         g.statusLine = "Phase 4 - caps ok, locating player";
         UpdateStreamHud();
 
@@ -11375,6 +11493,7 @@ namespace
             g.detail = g.lastError;
             return;
         }
+        g.controlFlow.Complete();
 
         PendingKind const kind = (PendingKind)correlated.kind;
         g.pendingBx = correlated.bx;
@@ -11412,20 +11531,33 @@ namespace
     {
         if ( g.sock == INVALID_SOCKET ) { return; }
 
+        std::vector<std::string> frames;
         for ( ;; )
         {
             char chunk[65536];
             int n = recv( g.sock, chunk, sizeof( chunk ), 0 );
             if ( n > 0 )
             {
-                g.recvBuf.append( chunk, chunk + n );
+                std::string frameError;
+                if ( !g.controlFramer.Feed( chunk, (size_t)n, frames, frameError ) )
+                {
+                    CloseSock();
+                    g.link = LinkState::CapsError;
+                    g.controlTransportState = Ei0d::ConnectionState::Failed;
+                    g.lastError = frameError;
+                    g.statusLine = "control framing failed closed";
+                    return;
+                }
                 continue;
             }
             if ( n == 0 )
             {
+                std::string frameError;
+                bool const clean = g.controlFramer.Finish( frameError );
                 CloseSock();
-                g.link = LinkState::Disconnected;
-                g.statusLine = "engine closed connection";
+                g.link = clean ? LinkState::Disconnected : LinkState::CapsError;
+                g.statusLine = clean ? "engine closed connection" : "truncated control frame";
+                if ( !clean ) { g.lastError = frameError; }
                 return;
             }
             int err = WSAGetLastError();
@@ -11438,14 +11570,97 @@ namespace
             return;
         }
 
-        while ( true )
+        for ( std::string const& line : frames )
         {
-            size_t nl = g.recvBuf.find( '\n' );
-            if ( nl == std::string::npos ) { break; }
-            std::string line = g.recvBuf.substr( 0, nl );
-            g.recvBuf.erase( 0, nl + 1 );
             HandleReply( line );
         }
+    }
+
+    void HandleBulkReply( std::string const& line )
+    {
+        Ei0a::PendingRequest correlated;
+        std::string responseId;
+        Ei0a::Correlation const correlation =
+            g.bulkRequestTracker.Complete( line, correlated, responseId );
+        if ( correlation != Ei0a::Correlation::Matched )
+        {
+            g.lastError = correlation == Ei0a::Correlation::DuplicateCompletedId
+                ? "bulk_duplicate_completed_request_id"
+                : ( correlation == Ei0a::Correlation::UnknownId
+                    ? "bulk_unknown_request_id" : "bulk_missing_request_id" );
+            g.statusLine = "bulk protocol response rejected";
+            return;
+        }
+        g.bulkFlow.Complete();
+
+        bool ok = false;
+        ExtractJsonBool( line, "ok", ok );
+        if ( !ok )
+        {
+            std::string code;
+            ExtractJsonString( line, "code", code );
+            g.lastError = code.empty() ? "bulk_request_failed" : code;
+            if ( g.bulkTransportState == Ei0d::ConnectionState::HelloSent )
+            { CloseBulkSock( true ); }
+            return;
+        }
+
+        if ( g.bulkTransportState == Ei0d::ConnectionState::HelloSent )
+        {
+            Ei0a::EngineHello hello;
+            std::string errorCode;
+            if ( !Ei0a::ParseAndValidateEngineHello( line, responseId, hello, errorCode )
+              || !Ei0d::ValidateBulkBinding( g.controlSessionBinding, hello, errorCode ) )
+            {
+                g.lastError = errorCode.empty() ? "bulk_session_mismatch" : errorCode;
+                CloseBulkSock( true );
+                return;
+            }
+            g.bulkTransportState = Ei0d::ConnectionState::Authenticated;
+            g.bulkTransportState = Ei0d::ConnectionState::Active;
+            g.statusLine = "canonical control + bulk lanes active";
+            return;
+        }
+
+        // EI0.D deliberately does not publish terrain truth from bulk responses.
+        // Future consumers must build and validate offside, then atomically publish.
+    }
+
+    void PollBulkSocket()
+    {
+        if ( g.bulkSock == INVALID_SOCKET ) { return; }
+        std::vector<std::string> frames;
+        for ( ;; )
+        {
+            char chunk[65536];
+            int n = recv( g.bulkSock, chunk, sizeof( chunk ), 0 );
+            if ( n > 0 )
+            {
+                std::string frameError;
+                if ( !g.bulkFramer.Feed( chunk, (size_t)n, frames, frameError ) )
+                {
+                    g.lastError = frameError;
+                    CloseBulkSock( true );
+                    return;
+                }
+                continue;
+            }
+            if ( n == 0 )
+            {
+                std::string frameError;
+                bool const clean = g.bulkFramer.Finish( frameError );
+                if ( !clean ) { g.lastError = frameError; }
+                CloseBulkSock( !clean );
+                return;
+            }
+            int err = WSAGetLastError();
+            if ( err == WSAEWOULDBLOCK ) { break; }
+            char e[64]; std::snprintf( e, sizeof( e ), "bulk WSA %d", err );
+            g.lastError = e;
+            CloseBulkSock( true );
+            return;
+        }
+        for ( std::string const& line : frames ) { HandleBulkReply( line ); }
     }
 
     void ResetWorldCache()
@@ -11459,6 +11674,9 @@ namespace
         g.havePlayer = false;
         g.pending = PendingKind::None;
         g.requestTracker.Clear();
+        g.bulkRequestTracker.Clear();
+        g.controlFlow.Clear();
+        g.bulkFlow.Clear();
         g.heldBite.clear();
         g.heldTotalG = 0;
         g.heldDominant.clear();
@@ -11522,6 +11740,7 @@ namespace
         CloseSock();
         ResetWorldCache();
         g.link = LinkState::Connecting;
+        g.controlTransportState = Ei0d::ConnectionState::Connecting;
         g.statusLine = "connecting...";
         g.detail.clear();
         g.attempts++;
@@ -11573,6 +11792,51 @@ namespace
             CloseSock();
             g.link = LinkState::SocketError;
             g.statusLine = "failed to send canonical hello";
+        }
+    }
+
+    void TryConnectBulk()
+    {
+        if ( !g.canonicalHandshakeOk || !g.controlSessionBinding.Complete()
+          || g.sock == INVALID_SOCKET )
+        {
+            g.bulkTransportState = Ei0d::ConnectionState::WaitingForControlSession;
+            return;
+        }
+        CloseBulkSock();
+        g.bulkTransportState = Ei0d::ConnectionState::Connecting;
+        g.lastBulkAttemptMs = GetTickCount();
+
+        addrinfo hints = {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        char portStr[16];
+        std::snprintf( portStr, sizeof( portStr ), "%d", g.bulkPort );
+        addrinfo* res = nullptr;
+        if ( getaddrinfo( g.host.c_str(), portStr, &hints, &res ) != 0 || !res )
+        {
+            g.bulkTransportState = Ei0d::ConnectionState::Failed;
+            g.lastError = "bulk getaddrinfo failed";
+            return;
+        }
+        SOCKET s = socket( res->ai_family, res->ai_socktype, res->ai_protocol );
+        if ( s == INVALID_SOCKET || connect( s, res->ai_addr, (int)res->ai_addrlen ) != 0 )
+        {
+            if ( s != INVALID_SOCKET ) { closesocket( s ); }
+            freeaddrinfo( res );
+            g.bulkTransportState = Ei0d::ConnectionState::Failed;
+            g.lastError = "bulk connect failed";
+            return;
+        }
+        freeaddrinfo( res );
+        u_long nonBlock = 1;
+        ioctlsocket( s, FIONBIO, &nonBlock );
+        g.bulkSock = s;
+        if ( !RequestBulkHello() )
+        {
+            g.lastError = "failed to send bulk canonical hello";
+            CloseBulkSock( true );
         }
     }
 
@@ -19214,11 +19478,14 @@ namespace
         uint64_t regionId=0,digest=0;
         std::vector<float> h;   // n*n absolute macro Z
         // MS1.A SurfaceState descriptor (consumed by MS1.B; inert otherwise).
-        int surfN=0; double surfStep=0; uint64_t surfDigest=0;
+        int surfN=0; uint32_t surfVersion=0; double surfStep=0; uint64_t surfDigest=0;
         std::vector<uint64_t> surfCodes;   // surfN*surfN packed SurfaceState
         // WD1.A WaterState descriptor (consumed by WD1.B; inert otherwise).
-        int watN=0; double watStep=0; uint64_t watDigest=0;
+        int watN=0; uint32_t watVersion=0; double watStep=0; uint64_t watDigest=0;
         std::vector<uint64_t> watCodes;    // watN*watN packed WaterState
+        MacroPageAuthority::Trust trust=MacroPageAuthority::Trust::Unloaded;
+        MacroPageAuthority::Failure failure=MacroPageAuthority::Failure::None;
+        std::string authorityDetail;
     };
 
     // Nearest-cell macro SurfaceState from the page descriptor (class fields must not be
@@ -19230,7 +19497,7 @@ namespace
         int i=(int)std::floor((x-p.minX)/p.surfStep+0.5);
         int j=(int)std::floor((y-p.minY)/p.surfStep+0.5);
         i=std::clamp(i,0,p.surfN-1);j=std::clamp(j,0,p.surfN-1);
-        return Ms1::Unpack(p.surfCodes[(size_t)j*p.surfN+i]);
+        return Ms1::Unpack(p.surfCodes[(size_t)j*p.surfN+i],p.surfVersion);
     }
     static Ms1::WaterState Mv2WaterAt(Mv2Page const& p,double x,double y)
     {
@@ -19239,80 +19506,109 @@ namespace
         int i=(int)std::floor((x-p.minX)/p.watStep+0.5);
         int j=(int)std::floor((y-p.minY)/p.watStep+0.5);
         i=std::clamp(i,0,p.watN-1);j=std::clamp(j,0,p.watN-1);
-        return Ms1::UnpackWater(p.watCodes[(size_t)j*p.watN+i]);
+        return Ms1::UnpackWater(p.watCodes[(size_t)j*p.watN+i],p.watVersion);
     }
-
-    static uint64_t Mv2ParseHex(std::string const& s)
-    {uint64_t v=0;for(char c:s){v<<=4;if(c>='0'&&c<='9')v|=(c-'0');
-        else if(c>='a'&&c<='f')v|=(c-'a'+10);else if(c>='A'&&c<='F')v|=(c-'A'+10);}return v;}
 
     bool Mv2LoadPage(int ri,int rj,Mv2Page& out)
     {
         char path[256];
         std::snprintf(path,sizeof(path),
             "Data\\Worldgen\\MacroAuthority\\page_%d_%d.mcp",ri,rj);
-        FILE* f=nullptr;if(fopen_s(&f,path,"rb")!=0||!f)return false;
-        std::string text;{fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);
-            if(sz>0){text.resize((size_t)sz);size_t rd=fread(&text[0],1,(size_t)sz,f);text.resize(rd);}fclose(f);}
-        out=Mv2Page();out.ri=ri;out.rj=rj;
-        bool magic=false;
-        std::string grid;
-        std::string surfGrid;
-        std::string watGrid;
-        size_t pos=0;
-        while(pos<text.size())
+        MacroPageAuthority::Context context; // exact pinned projection context until EI0.D supplies a session
+        if(g.canonicalHandshakeOk)
         {
-            size_t const eol=text.find('\n',pos);
-            std::string line=text.substr(pos,eol==std::string::npos?std::string::npos:eol-pos);
-            pos=(eol==std::string::npos)?text.size():eol+1;
-            if(!line.empty()&&line.back()=='\r')line.pop_back();
-            if(line.empty()||line[0]=='#')continue;
-            if(!magic){magic=(line=="PROVENANCE_MACRO_AUTHORITY_PAGE_V1");if(!magic)return false;continue;}
-            size_t const eq=line.find('=');if(eq==std::string::npos)continue;
-            std::string const k=line.substr(0,eq),v=line.substr(eq+1);
-            if(k=="region_min_x_m")out.minX=atof(v.c_str());
-            else if(k=="region_min_y_m")out.minY=atof(v.c_str());
-            else if(k=="sample_step_m")out.step=atof(v.c_str());
-            else if(k=="grid_n")out.n=atoi(v.c_str());
-            else if(k=="region_id")out.regionId=Mv2ParseHex(v);
-            else if(k=="source_digest")out.digest=Mv2ParseHex(v);
-            else if(k=="height_grid_row_major")grid=v;
-            else if(k=="surface_step_m")out.surfStep=atof(v.c_str());
-            else if(k=="surface_grid_n")out.surfN=atoi(v.c_str());
-            else if(k=="surface_digest")out.surfDigest=Mv2ParseHex(v);
-            else if(k=="surface_grid_row_major")surfGrid=v;
-            else if(k=="water_step_m")out.watStep=atof(v.c_str());
-            else if(k=="water_grid_n")out.watN=atoi(v.c_str());
-            else if(k=="water_digest")out.watDigest=Mv2ParseHex(v);
-            else if(k=="water_grid_row_major")watGrid=v;
+            context.genesisDigest=g.genesisDigest;
+            context.generatorFamily=g.canonicalGeneratorFamily;
+            context.generatorVersion=g.canonicalGeneratorVersion;
+            context.materialRegistryId=g.materialRegistryId;
+            context.materialRegistryDigest=g.materialRegistryDigest;
+            context.surfaceGrammarId=g.surfaceGrammarId;
+            context.surfaceGrammarVersion=g.surfaceGrammarVersion;
+            context.waterGrammarId=g.waterGrammarId;
+            context.waterGrammarVersion=g.waterGrammarVersion;
+            context.descriptorSchemaDigest=g.protocolSchemaDigest;
         }
-        if(out.n<=0||out.step<=0)return false;
-        out.h.reserve((size_t)out.n*out.n);
-        {size_t gp=0;while(gp<grid.size()&&(int)out.h.size()<out.n*out.n)
-            {while(gp<grid.size()&&grid[gp]==' ')++gp;size_t st=gp;
-             while(gp<grid.size()&&grid[gp]!=' ')++gp;
-             if(gp>st)out.h.push_back((float)atof(grid.substr(st,gp-st).c_str()));}}
-        // MS1.A SurfaceState descriptor (hex tokens). Parsed if present; absent on legacy
-        // pages -> surfCodes empty -> MS1.B falls back to the frozen palette for that page.
-        if(out.surfN>0&&!surfGrid.empty())
+        auto const validationStart=std::chrono::steady_clock::now();
+        bool validationRecorded=false;
+        auto recordValidation=[&]()
         {
-            out.surfCodes.reserve((size_t)out.surfN*out.surfN);
-            size_t gp=0;while(gp<surfGrid.size()&&(int)out.surfCodes.size()<out.surfN*out.surfN)
-            {while(gp<surfGrid.size()&&surfGrid[gp]==' ')++gp;size_t st=gp;
-             while(gp<surfGrid.size()&&surfGrid[gp]!=' ')++gp;
-             if(gp>st)out.surfCodes.push_back(Mv2ParseHex(surfGrid.substr(st,gp-st)));}
-            if((int)out.surfCodes.size()!=out.surfN*out.surfN){out.surfCodes.clear();out.surfN=0;}
-        }
-        if(out.watN>0&&!watGrid.empty())
+            if(validationRecorded)return;
+            validationRecorded=true;
+            g.macroPageValidationMsFrame+=std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-validationStart).count();
+            ++g.macroPageValidations;
+        };
+        // Canonical EI1 source selection is manifest-driven. The manifest proves
+        // FableScript WorldGenesis produced the immutable cache. Missing or
+        // incompatible engine authority never falls back to local generation.
+        // Immutable per-genesis manifest admission is cached for the session.
+        // Re-reading and re-hashing it for every resident page would make a
+        // representation check part of the 128 km presentation hot path.
+        static MacroManifestAuthority::Manifest manifest;
+        static std::string manifestGenesis,manifestSchema;
+        if(!manifest.valid||manifestGenesis!=context.genesisDigest
+           ||manifestSchema!=context.descriptorSchemaDigest)
         {
-            out.watCodes.reserve((size_t)out.watN*out.watN);
-            size_t gp=0;while(gp<watGrid.size()&&(int)out.watCodes.size()<out.watN*out.watN)
-            {while(gp<watGrid.size()&&watGrid[gp]==' ')++gp;size_t st=gp;
-             while(gp<watGrid.size()&&watGrid[gp]!=' ')++gp;
-             if(gp>st)out.watCodes.push_back(Mv2ParseHex(watGrid.substr(st,gp-st)));}
-            if((int)out.watCodes.size()!=out.watN*out.watN){out.watCodes.clear();out.watN=0;}
+            manifest=MacroManifestAuthority::Load(
+                "Data\\Worldgen\\MacroAuthority\\macro_manifest.mcm",context);
+            manifestGenesis=context.genesisDigest;
+            manifestSchema=context.descriptorSchemaDigest;
         }
-        return (int)out.h.size()==out.n*out.n;
+        auto const bindingIt=manifest.pages.find(std::make_pair(ri,rj));
+        if(!manifest.valid||bindingIt==manifest.pages.end())
+        {
+            recordValidation();
+            out=Mv2Page();out.ri=ri;out.rj=rj;
+            out.trust=MacroPageAuthority::Trust::Quarantined;
+            out.failure=MacroPageAuthority::Failure::MalformedHeader;
+            out.authorityDetail=manifest.valid?"engine manifest has no requested page":manifest.failure;
+            if(g.canonicalHandshakeOk){g.canonicalHandshakeOk=false;g.lastError="macro_manifest_authority_invalid:"+out.authorityDetail;}
+            return false;
+        }
+        // Validate/build offside.  Only a fully trusted candidate is published to
+        // the caller/cache; a corrupt replacement therefore cannot displace a
+        // previously published page.
+        MacroPageAuthority::Page const candidate=MacroPageAuthority::Load(path,ri,rj,context);
+        out=Mv2Page();out.ri=ri;out.rj=rj;out.trust=candidate.trust;
+        out.failure=candidate.failure;out.authorityDetail=candidate.detail;
+        if(!candidate.Authoritative())
+        {
+            recordValidation();
+            g.macroPageValidationFailure=MacroPageAuthority::FailureName(candidate.failure);
+            if(g.canonicalHandshakeOk)
+            {
+                ++g.macroPageValidationFailures;
+                // A different genesis invalidates the session immediately.  Other
+                // repeated invalid artifacts escalate after deterministic retries;
+                // EI0.D supplies the replacement/recompile request transport.
+                if(candidate.failure==MacroPageAuthority::Failure::WrongGenesis
+                   ||g.macroPageValidationFailures>=3)
+                {
+                    g.canonicalHandshakeOk=false;
+                    g.lastError="macro_page_authority_invalid:"+g.macroPageValidationFailure;
+                    g.statusLine="macro page authority session failed closed";
+                }
+            }
+            return false;
+        }
+        std::string bindingFailure;
+        if(!MacroManifestAuthority::ValidatePageBinding(
+            manifest,bindingIt->second,path,candidate,bindingFailure))
+        {
+            recordValidation();
+            out.authorityDetail=bindingFailure;out.failure=MacroPageAuthority::Failure::PageDigestMismatch;
+            if(g.canonicalHandshakeOk){g.canonicalHandshakeOk=false;g.lastError="macro_manifest_page_binding_invalid:"+bindingFailure;}
+            return false;
+        }
+        recordValidation();
+        g.macroPageValidationFailures=0;g.macroPageValidationFailure.clear();
+        out.n=candidate.n;out.minX=candidate.minX;out.minY=candidate.minY;out.step=candidate.step;
+        out.regionId=candidate.regionId;out.digest=candidate.sourceDigest;out.h=candidate.heights;
+        out.surfN=candidate.surfaceN;out.surfVersion=candidate.surfaceVersion;out.surfStep=candidate.surfaceStep;
+        out.surfDigest=candidate.surfaceDigest;out.surfCodes=candidate.surfaceCodes;
+        out.watN=candidate.waterN;out.watVersion=candidate.waterVersion;out.watStep=candidate.waterStep;
+        out.watDigest=candidate.waterDigest;out.watCodes=candidate.waterCodes;
+        return true;
     }
 
     // Macro surface colour + hillshade. Macro presentation only; not fine geology.
@@ -19453,7 +19749,7 @@ namespace
             for(int wj=0;wj<p.watN;++wj)for(int wi=0;wi<p.watN;++wi)
             {
                 double const wx=p.minX+wi*p.watStep, wy=p.minY+wj*p.watStep;
-                Ms1::WaterState ws=Ms1::UnpackWater(p.watCodes[(size_t)wj*p.watN+wi]);
+                Ms1::WaterState ws=Ms1::UnpackWater(p.watCodes[(size_t)wj*p.watN+wi],p.watVersion);
                 if(!Ms1::MacroStandingWater(ws))continue;
                 Ms1::SurfaceState bs=Mv2SurfaceAt(p,wx,wy);
                 Ms1::RGB bottom=bs.valid?Ms1::ResolveAppearance(bs,wx,wy,40000.f):Ms1::RGB{0.4f,0.4f,0.4f};
@@ -19496,7 +19792,7 @@ namespace
     // this frame from the compiled authority (cheap; no ReconstructedZ).
     void UpdateMv2Residency()
     {
-        g.mv2bBuildMsFrame=0.0;
+        g.mv2bBuildMsFrame=0.0;g.macroPageValidationMsFrame=0.0;
         if(!g.mv2bEnabled){if(!mv2Tiles.empty())Mv2ReleaseAll();return;}
         int const cri=(int)std::floor((g.camX+kMv2RegionHalfM)/kMv2RegionM);
         int const crj=(int)std::floor((g.camY+kMv2RegionHalfM)/kMv2RegionM);
@@ -19531,6 +19827,9 @@ namespace
         LARGE_INTEGER t1{};QueryPerformanceCounter(&t1);
         g.mv2bBuildMsFrame=qpf.QuadPart>0?1000.0*(double)(t1.QuadPart-t0.QuadPart)/(double)qpf.QuadPart:0.0;
         g.mv2bBuildMsHigh=(std::max)(g.mv2bBuildMsHigh,g.mv2bBuildMsFrame);
+        g.macroPageValidationMsHigh=(std::max)(g.macroPageValidationMsHigh,g.macroPageValidationMsFrame);
+        g.mv2bPresentationBuildMsHigh=(std::max)(g.mv2bPresentationBuildMsHigh,
+            (std::max)(0.0,g.mv2bBuildMsFrame-g.macroPageValidationMsFrame));
     }
 
     // Draw resident macro pages (frustum cull + canonical order, per-tile VBO).
@@ -20044,7 +20343,10 @@ namespace
         bool const f11_nogap=holeFrac<0.01;   // <1% of sky pixels are MV2-domain (>=32km) holes
         bool const f10_bounded=g.mv2bPagesResidentHigh<=(2*kMv2RingCells+1)*(2*kMv2RingCells+1)
             &&g.mv2bRuntimeAllocsAfterWarmup<=(long long)((2*kMv2RingCells+1)*(2*kMv2RingCells+1));
-        bool const f9_cheap=g.mv2bBuildMsHigh<50.0;  // page load+mesh only; no ReconstructedZ
+        // Preserve the historical <50 ms presentation-build gate while measuring
+        // the newly mandatory load-time trust proof separately. Digest work is
+        // cached page admission, not fine ReconstructedZ world generation.
+        bool const f9_cheap=g.mv2bPresentationBuildMsHigh<50.0&&g.macroPageValidations>0;
         // MV2.C far-band presence: mean luminance + contrast over the 50-128 km bands
         // (aggregated across views that saw far terrain). Reported by BOTH the MV2.B
         // baseline (mv2c off) and MV2.C (mv2c on) runs for the A/B comparison.
@@ -20086,7 +20388,7 @@ namespace
             "stations_with_far_terrain=%d/10  cardinal_directions_with_far_terrain=%d/4\n"
             "seam_max_delta_at_32km_m=%.3f (macro vs frozen MV1 ReconstructedZ; need<25)\n"
             "pages_resident=%d high_water=%d creates=%lld retires=%lld runtime_allocs_after_warmup=%lld\n"
-            "resident_bytes=%lld bytes_high_water=%lld build_ms_high=%.3f cpu_submit_ms=%.3f refusals=%lld\n"
+            "resident_bytes=%lld bytes_high_water=%lld build_ms_high=%.3f validation_ms_frame_high=%.3f presentation_build_ms_high=%.3f validations=%lld cpu_submit_ms=%.3f refusals=%lld\n"
             "fixture.1_real_128km_raster=%s\n"
             "fixture.2_non_repetition=%s (resident_pages=%d unique_digests=%zu)\n"
             "fixture.3_32km_seam_continuous=%s\n"
@@ -20100,7 +20402,8 @@ namespace
             agg[0],agg[1],agg[2],agg[3],stationsFar,cardinalsFar,seam,
             g.mv2bPagesResident,g.mv2bPagesResidentHigh,g.mv2bPageCreates,g.mv2bPageRetires,
             g.mv2bRuntimeAllocsAfterWarmup,g.mv2bResidentBytes,g.mv2bBytesHighWater,
-            g.mv2bBuildMsHigh,g.mv2bCpuSubmitMsFrame,g.mv2bRefusals,
+            g.mv2bBuildMsHigh,g.macroPageValidationMsHigh,g.mv2bPresentationBuildMsHigh,
+            g.macroPageValidations,g.mv2bCpuSubmitMsFrame,g.mv2bRefusals,
             f1_raster?"PASS":"FAIL",f2_nonrep?"PASS":"FAIL",(int)pageCount,digs.size(),
             f3_seam?"PASS":"FAIL",f9_cheap?"PASS":"FAIL",f10_bounded?"PASS":"FAIL",
             f11_nogap?"PASS":"FAIL",holes,neg,holeFrac,worstHole,mv1lod,
@@ -20557,7 +20860,7 @@ namespace
 
         // (4) MACRO DESCRIPTOR CONSUMED — a resident page carries standing water the resolver reads.
         int standingCells=0; { Mv2Page pg; if(Mv2LoadPage(1,-2,pg)&&pg.watN>0){
-            for(size_t k=0;k<pg.watCodes.size();++k) if(Ms1::MacroStandingWater(Ms1::UnpackWater(pg.watCodes[k])))++standingCells; } }
+            for(size_t k=0;k<pg.watCodes.size();++k) if(Ms1::MacroStandingWater(Ms1::UnpackWater(pg.watCodes[k],pg.watVersion)))++standingCells; } }
 
         bool pass=depthLaw&&familiesDiverge&&geomExact&&standingCells>0;
         FILE* f=nullptr;
@@ -49046,6 +49349,13 @@ namespace
         else if ( g.link == LinkState::Connected || g.link == LinkState::CapsOk )
         {
             PollSocket();
+            PollBulkSocket();
+            if ( g.canonicalHandshakeOk && g.sock != INVALID_SOCKET
+              && g.bulkSock == INVALID_SOCKET
+              && now - g.lastBulkAttemptMs > 2000 )
+            {
+                TryConnectBulk();
+            }
         }
         else if ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError )
         {
@@ -55745,6 +56055,11 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 else if ( i == 2 && argv[i][0] != L'-' )
                 {
                     g.port = _wtoi( argv[i] );
+                    g.bulkPort = g.port + 1;
+                }
+                else if ( wcsncmp( argv[i], L"--bulk-port=", 12 ) == 0 )
+                {
+                    g.bulkPort = _wtoi( argv[i] + 12 );
                 }
             }
 

@@ -1,0 +1,16 @@
+{
+  "identity_schema_version": "1",
+  "seed": "mw1-64km-01",
+  "coordinate_frame_id": "provenance.absolute.xy-meters.v1",
+  "generator_family": "provenance.macro-authority",
+  "generator_version": "5",
+  "generator_build_digest": "5d7c1636de50e62dabbae43233e7fc4abdb6d16bc06e79874a92f0010f697d08",
+  "generator_config_digest": "bd88947d297f3c231f94e5213ec7da67d03853a6882f56bcfb184f33b285ab1a",
+  "material_registry_id": "provenance.material-registry.ms1a-v1",
+  "material_registry_digest": "f095c59862b3856a3c71761ea0e8d9b56e24a08f4530a37e589713ba8ed3eaaf",
+  "surface_grammar_id": "provenance.surface-state.ms1a",
+  "surface_grammar_version": "ms1a.1",
+  "water_grammar_id": "provenance.water-state.wd1a",
+  "water_grammar_version": "wd1a.1",
+  "genesis_digest": "8394bfefb6955cfffec1c927721d2e6da1b4a24c5525dce4cd238640c2ecd801"
+}

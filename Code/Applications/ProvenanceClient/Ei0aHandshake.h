@@ -8,15 +8,16 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "WorldDescriptors.generated.h"
+
 namespace Ei0a
 {
     constexpr char const* kProtocolId = "fablescript.embodied-terrain";
     constexpr char const* kProtocolSemver = "1.0.0";
-    constexpr char const* kSchemaDigest =
-        "daa0858a8bf5aca01fea53bea46cae07f9a082672dc107af7ede2b820f0c5544";
+    constexpr char const* kSchemaDigest = Ms1::kWorldDescriptorSchemaDigest;
     constexpr char const* kAuthorityMode = "local_server_authoritative";
     constexpr char const* kClientBuild =
-        "5073baa73905e731eb72c17ae026685b25a9e812+ei0a";
+        "5073baa73905e731eb72c17ae026685b25a9e812+ei0d";
 
     struct PendingRequest
     {
@@ -89,6 +90,10 @@ namespace Ei0a
             completed_.clear();
         }
 
+        size_t ActiveCount() const { return active_.size(); }
+        size_t CompletedCount() const { return completed_.size(); }
+        void Cancel( std::string const& requestId ) { active_.erase( requestId ); }
+
     private:
         std::unordered_map<std::string, PendingRequest> active_;
         std::unordered_set<std::string> completed_;
@@ -96,7 +101,12 @@ namespace Ei0a
 
     inline std::string BuildClientHelloParams( std::string const& requestId,
                                                char const* laneRole = "control",
-                                               std::string const& sessionToken = {} )
+                                               std::string const& sessionToken = {},
+                                               std::string const& serverInstanceId = {},
+                                               std::string const& worldUuid = {},
+                                               std::string const& genesisDigest = {},
+                                               char const* projectionModesJson =
+                                                   "[\"surface_field\",\"world_snapshot\",\"cell_surface\"]" )
     {
         std::string result =
             "{\"request_id\":\"" + requestId
@@ -105,12 +115,28 @@ namespace Ei0a
             + "\",\"supported_schema_digest\":\"" + kSchemaDigest
             + "\",\"client_build\":\"" + kClientBuild
             + "\",\"requested_authority_mode\":\"" + kAuthorityMode
-            + "\",\"requested_projection_modes\":[\"surface_field\",\"world_snapshot\",\"cell_surface\"]"
+            + "\",\"requested_projection_modes\":" + projectionModesJson
             + ",\"lane_role\":\"" + laneRole + "\"";
         if ( !sessionToken.empty() )
         { result += ",\"session_token\":\"" + sessionToken + "\""; }
+        if ( !serverInstanceId.empty() )
+        { result += ",\"server_instance_id\":\"" + serverInstanceId + "\""; }
+        if ( !worldUuid.empty() )
+        { result += ",\"world_uuid\":\"" + worldUuid + "\""; }
+        if ( !genesisDigest.empty() )
+        { result += ",\"genesis_digest\":\"" + genesisDigest + "\""; }
         result += "}";
         return result;
+    }
+
+    inline std::string BuildMacroWorldGenesisHelloParams(
+        std::string const& requestId, char const* laneRole = "control",
+        std::string const& sessionToken = {}, std::string const& serverInstanceId = {},
+        std::string const& worldUuid = {}, std::string const& genesisDigest = {} )
+    {
+        return BuildClientHelloParams(
+            requestId,laneRole,sessionToken,serverInstanceId,worldUuid,genesisDigest,
+            "[\"macro_manifest\",\"macro_page_v2\"]" );
     }
 
     struct EngineHello
@@ -134,6 +160,8 @@ namespace Ei0a
         std::string sessionToken;
         std::string laneRole;
         std::string serverInstanceId;
+        std::string transportProfileId;
+        std::string transportFraming;
     };
 
     inline bool IsHexDigest( std::string const& value )
@@ -194,6 +222,10 @@ namespace Ei0a
          && ExtractString( json, "lane_role", hello.laneRole )
          && ExtractString( json, "server_instance_id", hello.serverInstanceId );
         if ( !complete ) { errorCode = "malformed_identity"; return false; }
+        // EI0.D fields are additive to the 1.0 EngineHello.  EI0.A tools may
+        // still parse a transport-free fixture; EI0.D validates these fields.
+        ExtractString( json, "profile_id", hello.transportProfileId );
+        ExtractString( json, "framing", hello.transportFraming );
         if ( hello.protocolId != kProtocolId )
         { errorCode = "protocol_id_mismatch"; return false; }
         if ( hello.protocolSemver != kProtocolSemver )
