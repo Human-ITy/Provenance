@@ -55,6 +55,17 @@ namespace Ei3
         std::vector<MaterialPart> surfaceMaterialMix;
     };
 
+    struct LandformStructureSemantic
+    {
+        std::string elementId;
+        std::string structureClass;
+        std::string formationId;
+        std::string stratumId;
+        std::string supportMaterialId;
+        bool staticAncestry = false;
+        bool cavityPresent = false;
+    };
+
     struct ChunkCoord
     {
         int x = 0, y = 0;
@@ -117,6 +128,12 @@ namespace Ei3
         float soilDepthM = 0.f;
         float wetness = 0.f;
         float roughness = 0.f;
+        float structuralComplexity = 0.f;
+        std::string landformElementId;
+        std::string structureClass;
+        std::string supportStratumId;
+        std::string supportMaterialId;
+        bool richLandform = false;
         std::vector<MaterialPart> surfaceMaterialMix;
         ChunkCoord chunkCoord;
         int64_t chunkRevision = -1;
@@ -143,6 +160,11 @@ namespace Ei3
         // the same authoritative lattice without retaining JSON indices in
         // the render path.
         std::vector<SurfaceSemantic> detailSurfaceSemantics;
+        // EI3.Q.B detailed-physical extension. These arrays are admitted as
+        // one atomic set; absence retains the byte-compatible Q.A carrier.
+        std::vector<int> detailRefinedSurfaceHeightQ;
+        std::vector<LandformStructureSemantic> detailLandformStructures;
+        std::vector<float> detailStructuralComplexity;
         std::string canonicalJson;
     };
 
@@ -203,6 +225,17 @@ namespace Ei3
             char* end = nullptr;
             out = std::strtof( json.c_str() + p, &end );
             return end != json.c_str() + p && std::isfinite( out );
+        }
+
+        inline bool ExtractBool( std::string const& json, char const* key, bool& out )
+        {
+            std::string const needle = std::string( "\"" ) + key + "\":";
+            size_t p = json.find( needle );
+            if ( p == std::string::npos ) { return false; }
+            p += needle.size();
+            if ( json.compare( p, 4, "true" ) == 0 ) { out = true; return true; }
+            if ( json.compare( p, 5, "false" ) == 0 ) { out = false; return true; }
+            return false;
         }
 
         inline bool ExtractArray( std::string const& json, char const* key, std::string& out )
@@ -382,6 +415,22 @@ namespace Ei3
                 && !out.lithologyClass.empty()
                 && !out.substrateClass.empty()
                 && !out.landformClass.empty();
+        }
+
+        inline bool ParseLandformStructureSemantic(
+            std::string const& object, LandformStructureSemantic& out )
+        {
+            return ExtractString( object, "element_id", out.elementId )
+                && ExtractString( object, "structure_class", out.structureClass )
+                && ExtractString( object, "formation_id", out.formationId )
+                && ExtractString( object, "stratum_id", out.stratumId )
+                && ExtractString( object, "support_material_id", out.supportMaterialId )
+                && ExtractBool( object, "static_ancestry", out.staticAncestry )
+                && ExtractBool( object, "cavity_present", out.cavityPresent )
+                && !out.elementId.empty() && !out.structureClass.empty()
+                && !out.formationId.empty() && !out.stratumId.empty()
+                && !out.supportMaterialId.empty()
+                && out.staticAncestry && !out.cavityPresent;
         }
 
         inline bool ExtractPair( std::string const& json, char const* key, ChunkCoord& out )
@@ -577,6 +626,74 @@ namespace Ei3
                     semantic.wetness = wetness[sampleIndex];
                     semantic.roughness = roughness[sampleIndex];
                     candidate.detailSurfaceSemantics.push_back( std::move( semantic ) );
+                }
+            }
+
+            std::string landformObject;
+            if ( Detail::ExtractObject( detailObject, "landform_structure", landformObject ) )
+            {
+                std::string extensionId, authorityScope, structureEncoding;
+                std::string refinedHeightsArray, structurePaletteArray;
+                std::string structureIndicesArray, complexityArray, cavitiesObject;
+                int extensionVersion = 0;
+                if ( !Detail::ExtractString( landformObject, "extension_id", extensionId )
+                  || !Detail::ExtractInt( landformObject, "extension_version", extensionVersion )
+                  || !Detail::ExtractString( landformObject, "authority_scope", authorityScope )
+                  || !Detail::ExtractString( landformObject, "encoding", structureEncoding )
+                  || !Detail::ExtractArray( landformObject, "refined_surface_height_q",
+                                             refinedHeightsArray )
+                  || !Detail::ExtractArray( landformObject, "structure_palette",
+                                             structurePaletteArray )
+                  || !Detail::ExtractArray( landformObject, "structure_indices",
+                                             structureIndicesArray )
+                  || !Detail::ExtractArray( landformObject, "structural_complexity",
+                                             complexityArray )
+                  || !Detail::ExtractObject( landformObject, "cavities", cavitiesObject )
+                  || extensionId != "fablescript.rich-causal-landforms"
+                  || extensionVersion != 1
+                  || authorityScope != "detailed-physical-baseline"
+                  || structureEncoding != "palette-indexed-causal-surface-v1"
+                  || !Detail::SplitInts( refinedHeightsArray,
+                                          candidate.detailRefinedSurfaceHeightQ )
+                  || candidate.detailRefinedSurfaceHeightQ.size() != kDetailLatticeCount
+                  || !Detail::SplitFloats( complexityArray,
+                                            candidate.detailStructuralComplexity )
+                  || candidate.detailStructuralComplexity.size() != kDetailLatticeCount )
+                { failure = "malformed_rich_landform_structure"; return false; }
+
+                std::string cavityPolicy, cavityItems;
+                if ( !Detail::ExtractString( cavitiesObject, "authority_status", cavityPolicy )
+                  || !Detail::ExtractArray( cavitiesObject, "items", cavityItems )
+                  || cavityPolicy != "not_emitted_without_topology" || cavityItems != "[]" )
+                { failure = "unsupported_rich_landform_cavity"; return false; }
+
+                std::vector<std::string> structureObjects;
+                std::vector<int> structureIndices;
+                if ( !Detail::SplitObjects( structurePaletteArray, structureObjects )
+                  || structureObjects.empty()
+                  || !Detail::SplitInts( structureIndicesArray, structureIndices )
+                  || structureIndices.size() != kDetailLatticeCount )
+                { failure = "malformed_rich_landform_palette"; return false; }
+                std::vector<LandformStructureSemantic> structurePalette;
+                structurePalette.reserve( structureObjects.size() );
+                for ( std::string const& structureObject : structureObjects )
+                {
+                    LandformStructureSemantic semantic;
+                    if ( !Detail::ParseLandformStructureSemantic( structureObject, semantic ) )
+                    { failure = "malformed_rich_landform_semantic"; return false; }
+                    structurePalette.push_back( std::move( semantic ) );
+                }
+                candidate.detailLandformStructures.reserve( kDetailLatticeCount );
+                for ( size_t sampleIndex = 0; sampleIndex < structureIndices.size();
+                      ++sampleIndex )
+                {
+                    int const paletteIndex = structureIndices[sampleIndex];
+                    if ( paletteIndex < 0 || paletteIndex >= (int)structurePalette.size()
+                      || candidate.detailStructuralComplexity[sampleIndex] < 0.f
+                      || candidate.detailStructuralComplexity[sampleIndex] > 1.f )
+                    { failure = "malformed_rich_landform_index"; return false; }
+                    candidate.detailLandformStructures.push_back(
+                        structurePalette[(size_t)paletteIndex] );
                 }
             }
         }
@@ -908,6 +1025,10 @@ namespace Ei3
             float const a = height( ix, iy ), b = height( ix + 1, iy );
             float const c = height( ix, iy + 1 ), d = height( ix + 1, iy + 1 );
             bool const hasDetail = snapshot->detailSurfaceHeightQ.size() == kDetailLatticeCount;
+            bool const hasRichLandform = hasDetail
+              && snapshot->detailRefinedSurfaceHeightQ.size() == kDetailLatticeCount
+              && snapshot->detailLandformStructures.size() == kDetailLatticeCount
+              && snapshot->detailStructuralComplexity.size() == kDetailLatticeCount;
             int dx = 0, dy = 0; float dtx = 0.f, dty = 0.f;
             if ( hasDetail )
             {
@@ -924,7 +1045,8 @@ namespace Ei3
                 };
                 detailAxis( localX, dx, dtx ); detailAxis( localY, dy, dty );
                 auto detailHeight = [&]( int sx, int sy )
-                { return snapshot->detailSurfaceHeightQ[
+                { return ( hasRichLandform ? snapshot->detailRefinedSurfaceHeightQ
+                                           : snapshot->detailSurfaceHeightQ )[
                         (size_t)sy * kDetailLatticeSide + sx]
                         / kFillDenominator * kVoxelEdgeM; };
                 float const da = detailHeight( dx, dy ), db = detailHeight( dx + 1, dy );
@@ -1023,6 +1145,21 @@ namespace Ei3
                 }
                 if ( assigned != 65535 || out.surfaceMaterialMix.empty() )
                     out.surfaceMaterialMix = semantic.surfaceMaterialMix;
+            }
+            if ( hasRichLandform )
+            {
+                int const nearestDetailX = dtx < .5f ? dx : dx + 1;
+                int const nearestDetailY = dty < .5f ? dy : dy + 1;
+                size_t const structureIndex = (size_t)nearestDetailY
+                    * kDetailLatticeSide + nearestDetailX;
+                LandformStructureSemantic const& structure =
+                    snapshot->detailLandformStructures[structureIndex];
+                out.landformElementId = structure.elementId;
+                out.structureClass = structure.structureClass;
+                out.supportStratumId = structure.stratumId;
+                out.supportMaterialId = structure.supportMaterialId;
+                out.structuralComplexity = snapshot->detailStructuralComplexity[structureIndex];
+                out.richLandform = true;
             }
             out.chunkCoord = coord;
             out.chunkRevision = snapshot->chunkRevision;

@@ -10,11 +10,14 @@ int main( int argc, char** argv )
     std::ifstream input( argv[1], std::ios::binary );
     std::string fixture( (std::istreambuf_iterator<char>( input )), {} );
     std::string baseResponse, delta, world, baseline;
+    bool richLandforms = false;
     bool pass = input.good() || input.eof();
     pass = pass && Ei3::Detail::ExtractObject( fixture, "base_response", baseResponse );
     pass = pass && Ei3::Detail::ExtractObject( fixture, "delta", delta );
     pass = pass && Ei3::Detail::ExtractString( fixture, "world_uuid", world );
     pass = pass && Ei3::Detail::ExtractString( fixture, "world_baseline_digest", baseline );
+    bool const fixtureDeclaresRich = Ei3::Detail::ExtractBool(
+        fixture, "rich_landforms", richLandforms );
 
     std::vector<std::string> snapshots;
     pass = pass && Ei3::ExtractSnapshots( baseResponse, snapshots ) && snapshots.size() == 1;
@@ -24,6 +27,13 @@ int main( int argc, char** argv )
     pass = pass && parsed.columns.size() == Ei3::kLatticeCount;
     pass = pass && parsed.detailSurfaceHeightQ.size() == Ei3::kDetailLatticeCount;
     pass = pass && parsed.detailSurfaceSemantics.size() == Ei3::kDetailLatticeCount;
+    if ( fixtureDeclaresRich && richLandforms )
+    {
+        pass = pass
+            && parsed.detailRefinedSurfaceHeightQ.size() == Ei3::kDetailLatticeCount
+            && parsed.detailLandformStructures.size() == Ei3::kDetailLatticeCount
+            && parsed.detailStructuralComplexity.size() == Ei3::kDetailLatticeCount;
+    }
     pass = pass && !parsed.columns.empty()
         && !parsed.columns[0].landformClass.empty()
         && parsed.columns[0].weathering >= 0.f
@@ -46,6 +56,16 @@ int main( int argc, char** argv )
         && !ancestry.macroPeakId.empty()
         && !ancestry.lithologyClass.empty()
         && !ancestry.surfaceMaterialMix.empty();
+    if ( fixtureDeclaresRich && richLandforms )
+    {
+        pass = pass && ancestry.richLandform
+            && !ancestry.landformElementId.empty()
+            && !ancestry.structureClass.empty()
+            && !ancestry.supportStratumId.empty()
+            && !ancestry.supportMaterialId.empty()
+            && ancestry.structuralComplexity >= 0.f
+            && ancestry.structuralComplexity <= 1.f;
+    }
     int ancestryParts = 0;
     for ( auto const& part : ancestry.surfaceMaterialMix ) { ancestryParts += part.parts; }
     pass = pass && ancestryParts == 65535;
@@ -94,10 +114,12 @@ int main( int argc, char** argv )
         "EI3_CLIENT_CONTRACT=%s\nSNAPSHOT_ADMISSION=%s\nDELTA_CONTIGUITY=%s\n"
         "STATIC_ANCESTRY=%s\nPREDICTIVE_24_60_120_240=%s\n"
         "MATTER_DETAIL_4M=%s\nSURFACE_CONTEXT_4M=%s\nSURFACE_MIX_4M=%s\n"
-        "LANDING_P0=%s\nCOURSE_CHANGE=%s\n",
+        "RICH_LANDFORM_AUTHORITY=%s\nLANDING_P0=%s\nCOURSE_CHANGE=%s\n",
         pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL",
+        pass ? "PASS" : "FAIL",
+        ( !fixtureDeclaresRich || !richLandforms || ancestry.richLandform ) ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL" );
     return pass ? 0 : 1;

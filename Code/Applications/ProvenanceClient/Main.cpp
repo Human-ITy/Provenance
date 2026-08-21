@@ -7685,6 +7685,38 @@ namespace
             && !g.worldUuid.empty() && !g.macroGenesisDigest.empty();
 
         DumpFramePpm( "Docs\\provenance_ei3v_final.ppm" );
+        double const diagnosticSx = (double)g.feetX
+            + 0.5 * CausalVisibleExposure::kDualStepM;
+        double const diagnosticSy = (double)g.feetY
+            + 0.5 * CausalVisibleExposure::kDualStepM;
+        int const diagnosticBx = (int)std::floor(
+            diagnosticSx / CausalVisibleExposure::kBlockSizeM );
+        int const diagnosticBy = (int)std::floor(
+            diagnosticSy / CausalVisibleExposure::kBlockSizeM );
+        auto const diagnosticBlock = g.stage8TerrainBlocks.find(
+            CellKey( diagnosticBx, diagnosticBy ) );
+        bool const diagnosticBlockPresent =
+            diagnosticBlock != g.stage8TerrainBlocks.end();
+        bool const diagnosticCollisionPresent = diagnosticBlockPresent
+            && diagnosticBlock->second.collisionSurface != nullptr;
+        double const diagnosticMinX = diagnosticBx
+            * CausalVisibleExposure::kBlockSizeM
+            - 0.5 * CausalVisibleExposure::kDualStepM;
+        double const diagnosticMinY = diagnosticBy
+            * CausalVisibleExposure::kBlockSizeM
+            - 0.5 * CausalVisibleExposure::kDualStepM;
+        double const diagnosticMaxX = diagnosticMinX
+            + CausalVisibleExposure::kBlockSizeM;
+        double const diagnosticMaxY = diagnosticMinY
+            + CausalVisibleExposure::kBlockSizeM;
+        int const diagnosticCx0 = Ei3::FloorChunk( (float)diagnosticMinX );
+        int const diagnosticCy0 = Ei3::FloorChunk( (float)diagnosticMinY );
+        int const diagnosticCx1 = Ei3::FloorChunk( (float)diagnosticMaxX );
+        int const diagnosticCy1 = Ei3::FloorChunk( (float)diagnosticMaxY );
+        int diagnosticChunksPresent = 0;
+        for ( int cy = diagnosticCy0; cy <= diagnosticCy1; ++cy )
+        for ( int cx = diagnosticCx0; cx <= diagnosticCx1; ++cx )
+        { diagnosticChunksPresent += g.ei3Residency.Has( { cx, cy } ) ? 1 : 0; }
         FILE* file = nullptr;
         if ( fopen_s( &file,
                 "Docs\\provenance_ei3v_traversal_cert.txt", "wb" ) == 0
@@ -7706,6 +7738,8 @@ namespace
                 "support_hold_delta=%d\nresident_max=%zu\nrequested_max=%zu\n"
                 "snapshots_published=%llu\nsnapshots_rejected=%llu\n"
                 "frame_worst_ms=%.3f\nworld_uuid=%s\ngenesis_digest=%s\n"
+                "endpoint_block=%d,%d block_present=%d collision_present=%d\n"
+                "endpoint_chunks=%d,%d..%d,%d chunks_present=%d\n"
                 "start_xy=%.3f,%.3f\nfinal_xyz=%.3f,%.3f,%.3f\n"
                 "last_error=%s\n",
                 pass ? "PASS" : "FAIL", g.certEi3VLeg,
@@ -7727,6 +7761,11 @@ namespace
                 (unsigned long long)g.ei3Residency.Rejected(),
                 g.certEi3VFrameWorstMs, g.worldUuid.c_str(),
                 g.macroGenesisDigest.c_str(),
+                diagnosticBx, diagnosticBy,
+                diagnosticBlockPresent ? 1 : 0,
+                diagnosticCollisionPresent ? 1 : 0,
+                diagnosticCx0, diagnosticCy0, diagnosticCx1, diagnosticCy1,
+                diagnosticChunksPresent,
                 g.certEi3VStartX, g.certEi3VStartY,
                 g.feetX, g.feetY, g.feetZ, g.lastError.c_str() );
             std::fclose( file );

@@ -6,7 +6,7 @@
 EI3.A — Authority / coverage mechanics                 CERTIFIED
 EI3.V — Player-view traversal continuity               CERTIFIED
 EI3.Q.A — 4 m matter reconstruction + appearance       CERTIFIED
-EI3.Q.B — richer authoritative landform structure      CLOSED
+EI3.Q.B — richer authoritative landform structure      IMPLEMENTED / VISUAL CERT PENDING
 ```
 
 EI3.Q.A improves the visible use of truth already supplied by FableScript. It
@@ -123,9 +123,36 @@ client.
   challenge matrix prevents that one locale from becoming the visual-quality
   oracle for the whole world.
 
+## EI3.Q.B extension
+
+EI3.Q.B is an opt-in detailed physical baseline extension. FableScript now
+derives stable local landform structure from the certified formation,
+lithology, slope, soil, wetness and weathering facts. The additive projection
+can describe resistant outcrops, sedimentary ledges, volcanic steps, weathered
+residuals, talus aprons, depositional banks and subdued ground. Provenance
+validates and reconstructs those facts; it does not decide that they exist.
+
+The launcher selects the new baseline with `-RichLandforms`. Without that
+switch, the Q.A baseline and projection remain exact. With it, the macro genesis
+identity remains unchanged while the substrate/world baseline identity changes
+to admit the richer untouched physical truth.
+
+Visible geometry and grounding use the same refined matter-surface sampler.
+Missing Q.B data falls back to Q.A, and malformed optional data is rejected.
+The client cannot publish a detached body or cavity through this extension.
+FableScript explicitly reports that cavity topology is not emitted and supplies
+an empty body/cavity set.
+
+The geology/mineral donor documentation at
+`claude/seasonal-scar-color-recovery-bqktcv` (SHA
+`fef8065def19125aab07416348adc8d4d3397a4e`) was used selectively as design
+reference. It reinforced the fact/presentation split and the distinction
+between structural/angular rock, granular/slumped deposits and aggregate/rough
+ground. No donor implementation was merged wholesale.
+
 ## Next dependency
 
-EI3.Q.B may open only when WorldSubstrate provides the additional truth needed
-for non-heightfield geological structure. Its first design task should map the
-reference families to explicit engine-owned landform, body and surface-state
-contracts rather than to new renderer heuristics.
+Detached boulders, occupancy-changing caves/overhangs, deeper channel incision,
+waterfalls, flora, snow/ice and atmosphere remain closed. Each needs its own
+engine-owned law, identity report and golden evidence before the client may
+present it as physical world truth.

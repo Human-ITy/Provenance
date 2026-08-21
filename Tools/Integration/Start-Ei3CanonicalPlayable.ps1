@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch] $ProbeOnly,
+    [switch] $RichLandforms,
     [string[]] $ClientArgument = @('--ei3-authority'),
     [string] $CanonicalWorkspaceRoot = '',
     [int] $ControlPort = 8765,
@@ -45,7 +46,12 @@ $enginePackage = Join-Path $engineRoot 'fablescript'
 $clientExe = Join-Path $clientRoot 'Build\x64_Release\ProvenanceClient.exe'
 $macroCache = Join-Path $clientRoot 'Data\Worldgen\MacroAuthority'
 $worldStateRoot = Join-Path $workspaceRoot 'State\canonical-playable'
-$worldInstance = Join-Path $worldStateRoot 'world-instance.json'
+$worldInstanceName = if ($RichLandforms) {
+    'world-instance-ei3qb-rich-landforms.json'
+} else {
+    'world-instance.json'
+}
+$worldInstance = Join-Path $worldStateRoot $worldInstanceName
 $compiledContexts = Join-Path $workspaceRoot 'Cache\Worldgen\compiled_context\drainage'
 $evidenceRoot = Join-Path $workspaceRoot 'Evidence\Playable\launcher-runs'
 $workspaceManifest = Join-Path $workspaceRoot 'CANONICAL_WORKSPACE.json'
@@ -88,6 +94,7 @@ try {
         '--bulk-port', "$BulkPort",
         '--shutdown-file', $shutdownFile
     )
+    if ($RichLandforms) { $authorityArgs += '--rich-landforms' }
     $authority = Start-Process -FilePath $python -ArgumentList $authorityArgs `
         -WorkingDirectory $enginePackage -WindowStyle Hidden `
         -RedirectStandardOutput $authorityStdout -RedirectStandardError $authorityStderr `
@@ -138,6 +145,7 @@ try {
     Write-Host ("MACRO PAGES: {0}/25 VALID" -f $identity.macro_pages_valid)
     Write-Host 'DETAIL PROJECTION: ACTIVE'
     Write-Host 'PRESENTATION PATH: EI3 AUTHORITATIVE'
+    Write-Host ("LANDFORM STAGE: {0}" -f $(if ($RichLandforms) { 'EI3.Q.B RICH' } else { 'EI3.Q.A CERTIFIED' }))
 
     if (-not $ProbeOnly) {
         $client = Start-Process -FilePath $clientExe -ArgumentList $ClientArgument `
@@ -173,6 +181,7 @@ finally {
         certificate = 'EI3_CANONICAL_PLAYABLE_LAUNCHER/1'
         status = $launcherStatus
         probe_only = [bool]$ProbeOnly
+        rich_landforms = [bool]$RichLandforms
         authority_pid = if ($authority) { $authority.Id } else { $null }
         owned_authority_shutdown = $cleanShutdown
         client_exit_code = $clientExitCode
