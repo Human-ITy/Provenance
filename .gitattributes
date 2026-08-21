@@ -1,0 +1,4 @@
+# Engine-issued macro authority artifacts are byte-addressed, not text files.
+# In particular, core.autocrlf must not rewrite canonical LF bytes on Windows.
+*.mcp -text
+*.mcm -text
