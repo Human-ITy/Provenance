@@ -1,0 +1,4 @@
+EI3_HUMAN_PLAY_SMOKE=PENDING
+required_actions=stand/look; move; turn/look-behind; short-flight; descend; walk; exit; relaunch
+required_persistence=same world_uuid after relaunch
+automation_is_not_human_confirmation=1
