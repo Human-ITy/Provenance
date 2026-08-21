@@ -16,6 +16,9 @@ output, or the visual-quality target reserved for EI3.Q.
 
 - Client branch: `integration/ei3-playable-launch-mode-fix-client`
 - Client source SHA before this cut: `93f55017331a188d864d6ea7fcf957f7abce1b58`
+- Client EI3.V implementation commit: `f038ab8d0533e5c64d43920a37717da700c6d767`
+- Canonical client promotion branch: `integration/ei3-recovery-byte-integrity-client`
+- Canonical client promotion commit: `863479fa3f493f3216b8b8eeb7db7597121e5e6b`
 - Engine branch: `integration/ei3-recovery-byte-integrity`
 - Engine source SHA before this cut: `140720bf62b3c86eb98d635b168c19d1b06812ef`
 - Engine EI3.V commit: `0ccee15ace0f39316b227a4b61ad34839bd447de`
@@ -80,8 +83,10 @@ snapshots_rejected=0
 Additional exact receipts:
 
 - client release build: PASS (39 pre-existing warnings, 0 errors);
-- client executable SHA-256:
+- certified integration executable SHA-256:
   `6D64C1781D4B4DF3659522EA8B2F324EA5B764BC7BC51F0F78C3D4AEA638D42F`;
+- canonical promoted executable SHA-256:
+  `D26363EDE5FA423C63AB7C0967C5A46DA350AC718B8E8446311A3B9C8C88C0D4`;
 - FableScript detailed-projection tests: 7/7 PASS;
 - client snapshot/delta contract: PASS;
 - static ancestry transfer: PASS;
