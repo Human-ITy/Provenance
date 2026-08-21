@@ -114,6 +114,10 @@ namespace Ei3
     struct MatterSurfaceSample
     {
         float z = 0.f;
+        // Certified Q.A parent carrier at the same absolute sample.  Q.B may
+        // refine z, but retaining parentZ lets player-view evidence prove the
+        // extension stayed attached to the same matter-aware landscape.
+        float parentZ = 0.f;
         std::string dominantMaterialId;
         std::string dominantSurfaceFamily;
         std::string formationId;
@@ -1049,10 +1053,21 @@ namespace Ei3
                                            : snapshot->detailSurfaceHeightQ )[
                         (size_t)sy * kDetailLatticeSide + sx]
                         / kFillDenominator * kVoxelEdgeM; };
+                auto parentDetailHeight = [&]( int sx, int sy )
+                { return snapshot->detailSurfaceHeightQ[
+                        (size_t)sy * kDetailLatticeSide + sx]
+                        / kFillDenominator * kVoxelEdgeM; };
                 float const da = detailHeight( dx, dy ), db = detailHeight( dx + 1, dy );
                 float const dc = detailHeight( dx, dy + 1 ), dd = detailHeight( dx + 1, dy + 1 );
                 out.z = da * ( 1 - dtx ) * ( 1 - dty ) + db * dtx * ( 1 - dty )
                   + dc * ( 1 - dtx ) * dty + dd * dtx * dty;
+                float const pa = parentDetailHeight( dx, dy );
+                float const pb = parentDetailHeight( dx + 1, dy );
+                float const pc = parentDetailHeight( dx, dy + 1 );
+                float const pd = parentDetailHeight( dx + 1, dy + 1 );
+                out.parentZ = pa * ( 1 - dtx ) * ( 1 - dty )
+                  + pb * dtx * ( 1 - dty ) + pc * ( 1 - dtx ) * dty
+                  + pd * dtx * dty;
             }
             else
             {
@@ -1146,6 +1161,7 @@ namespace Ei3
                 if ( assigned != 65535 || out.surfaceMaterialMix.empty() )
                     out.surfaceMaterialMix = semantic.surfaceMaterialMix;
             }
+            if ( !hasDetail ) { out.parentZ = out.z; }
             if ( hasRichLandform )
             {
                 int const nearestDetailX = dtx < .5f ? dx : dx + 1;

@@ -2,7 +2,9 @@
 param(
     [switch] $ProbeOnly,
     [switch] $RichLandforms,
+    [switch] $ColdCertification,
     [string[]] $ClientArgument = @('--ei3-authority'),
+    [string] $ValidatedMacroCacheRoot = '',
     [string] $CanonicalWorkspaceRoot = '',
     [int] $ControlPort = 8765,
     [int] $BulkPort = 8766
@@ -10,6 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$launchClock = [Diagnostics.Stopwatch]::StartNew()
 
 function Find-Ei3Python {
     $candidates = @(
@@ -71,6 +74,49 @@ Assert-Ei3PortsFree
 $python = Find-Ei3Python
 $runId = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N'))
 $runRoot = Join-Path $evidenceRoot $runId
+$validatedMacroCacheSource = $null
+$macroCacheAccessAlias = $null
+$effectiveClientArgument = @($ClientArgument)
+if ($RichLandforms -and
+        -not ($effectiveClientArgument -contains '--ei3-rich-landforms-stage')) {
+    $effectiveClientArgument += '--ei3-rich-landforms-stage'
+}
+$isQbVisualCertificate = $effectiveClientArgument -contains '--cert-ei3qb-visual-qa' -or
+    $effectiveClientArgument -contains '--cert-ei3qb-visual-qb'
+if ($isQbVisualCertificate -and
+        -not ($effectiveClientArgument -contains '--cert-out-dir')) {
+    $effectiveClientArgument += @('--cert-out-dir', $runRoot)
+}
+$effectiveMacroCache = $macroCache
+$expectedReadinessPages = 25
+$projectedCachePages = 25
+if ($ColdCertification) {
+    # Detailed context is always isolated so this run cannot borrow readiness
+    # from an earlier authority process.
+    $compiledContexts = Join-Path $runRoot 'cold-cache\compiled_context\drainage'
+    if ($isQbVisualCertificate) {
+        # Build a disposable engine-owned projection cache around every matched
+        # Q.A/Q.B station.  This is a representation prewarm from the pinned
+        # WorldGenesis, not a client generator and not a world-law change.
+        $effectiveMacroCache = if ($ValidatedMacroCacheRoot) {
+            $validatedMacroCacheSource = (Resolve-Path -LiteralPath $ValidatedMacroCacheRoot).Path
+            # Page V2 manifests address immutable artifacts below sha256/<digest>.mcp.
+            # A deeply nested evidence root can push those valid files beyond the
+            # legacy Win32 path limit.  A temporary directory junction supplies a
+            # short spelling for the exact same cache; it does not copy, regenerate,
+            # or alter any authority artifact or manifest.
+            $macroCacheAccessAlias = Join-Path ([IO.Path]::GetTempPath()) `
+                ('provenance-macro-cache-{0}' -f ([guid]::NewGuid().ToString('N')))
+            New-Item -ItemType Junction -Path $macroCacheAccessAlias `
+                -Target $validatedMacroCacheSource | Out-Null
+            $macroCacheAccessAlias
+        } else {
+            Join-Path $runRoot 'cold-cache\macro-authority'
+        }
+        $projectedCachePages = 34
+    }
+}
+$effectiveClientArgument += @('--macro-authority-root', $effectiveMacroCache)
 $shutdownFile = Join-Path $runRoot 'owned-authority.shutdown'
 $authorityStdout = Join-Path $runRoot 'authority.stdout.log'
 $authorityStderr = Join-Path $runRoot 'authority.stderr.log'
@@ -84,10 +130,31 @@ $identity = $null
 $clientExitCode = $null
 $cleanShutdown = $false
 $launcherStatus = 'FAIL'
+$authorityStartedMs = $null
+$prewarmStartedMs = $null
+$prewarmCompletedMs = $null
+$firstDetailedPublicationMs = $null
+$timeUntilPlayableMs = $null
+$clientStartedMs = $null
 try {
+    $prewarmStartedMs = $launchClock.ElapsedMilliseconds
+    if ($ColdCertification -and $isQbVisualCertificate -and -not $ValidatedMacroCacheRoot) {
+        $projectionCoords = @()
+        foreach ($ri in ((-9)..(-7))) {
+            foreach ($rj in ((-9)..(-7))) { $projectionCoords += ("{0},{1}" -f $ri, $rj) }
+        }
+        $compileTool = Join-Path $enginePackage 'tools\ei1_worldgenesis.py'
+        $compileArgs = @($compileTool, 'compile-cache', $effectiveMacroCache,
+            '--source-cache', $macroCache, '--jobs', '9', '--coords') + $projectionCoords
+        $compileOutput = & $python @compileArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Cold WorldGenesis macro projection prewarm failed.'
+        }
+        $compileOutput | Set-Content -LiteralPath (Join-Path $runRoot 'macro-cache-compile.json') -Encoding utf8
+    }
     $authorityArgs = @(
         '-m', 'tools.serve_worldgen_projection',
-        '--cache-root', $macroCache,
+        '--cache-root', $effectiveMacroCache,
         '--compiled-context-root', $compiledContexts,
         '--world-instance', $worldInstance,
         '--control-port', "$ControlPort",
@@ -99,6 +166,7 @@ try {
         -WorkingDirectory $enginePackage -WindowStyle Hidden `
         -RedirectStandardOutput $authorityStdout -RedirectStandardError $authorityStderr `
         -PassThru
+    $authorityStartedMs = $launchClock.ElapsedMilliseconds
     @{
         owner_pid = $PID
         authority_pid = $authority.Id
@@ -133,22 +201,29 @@ try {
     $identity = Get-Content -LiteralPath $probeReceipt -Raw | ConvertFrom-Json
     if ($identity.status -ne 'PASS' -or $identity.authority_session -ne 'VALID' -or
             $identity.control_bulk_same_session -ne $true -or
-            $identity.macro_pages_valid -ne 25 -or
+            $identity.macro_pages_valid -ne $expectedReadinessPages -or
             $identity.detailed_projection -ne 'ACTIVE') {
         throw 'Canonical authority readiness receipt is incomplete or incompatible.'
     }
+    $prewarmCompletedMs = $launchClock.ElapsedMilliseconds
+    # The readiness probe validates a published detailed snapshot; this is the
+    # first detailed publication intentionally exposed by the normal launcher.
+    $firstDetailedPublicationMs = $prewarmCompletedMs
 
     Write-Host 'AUTHORITY SESSION: VALID' -ForegroundColor Green
     Write-Host ("WORLD UUID: {0}" -f $identity.world_uuid)
     Write-Host ("MACRO GENESIS: {0}" -f $identity.macro_genesis_digest)
     Write-Host ("WORLD BASELINE: {0}" -f $identity.world_baseline_digest)
-    Write-Host ("MACRO PAGES: {0}/25 VALID" -f $identity.macro_pages_valid)
+    Write-Host ("READINESS PAGES: {0}/{1} VALID" -f $identity.macro_pages_valid, $expectedReadinessPages)
+    Write-Host ("PROJECTED CACHE PAGES: {0}" -f $projectedCachePages)
     Write-Host 'DETAIL PROJECTION: ACTIVE'
     Write-Host 'PRESENTATION PATH: EI3 AUTHORITATIVE'
     Write-Host ("LANDFORM STAGE: {0}" -f $(if ($RichLandforms) { 'EI3.Q.B RICH' } else { 'EI3.Q.A CERTIFIED' }))
 
     if (-not $ProbeOnly) {
-        $client = Start-Process -FilePath $clientExe -ArgumentList $ClientArgument `
+        $timeUntilPlayableMs = $launchClock.ElapsedMilliseconds
+        $clientStartedMs = $timeUntilPlayableMs
+        $client = Start-Process -FilePath $clientExe -ArgumentList $effectiveClientArgument `
             -WorkingDirectory $clientRoot -PassThru -Wait
         $clientExitCode = $client.ExitCode
         if ($clientExitCode -ne 0) {
@@ -177,21 +252,43 @@ finally {
         $authority.Refresh()
         $cleanShutdown = $authority.HasExited
     }
+    if ($macroCacheAccessAlias -and [IO.Directory]::Exists($macroCacheAccessAlias)) {
+        # Delete only the temporary junction.  The persistent cache target and all
+        # 34 validated authority pages remain untouched.
+        [IO.Directory]::Delete($macroCacheAccessAlias)
+    }
     @{
         certificate = 'EI3_CANONICAL_PLAYABLE_LAUNCHER/1'
         status = $launcherStatus
         probe_only = [bool]$ProbeOnly
         rich_landforms = [bool]$RichLandforms
+        cold_certification = [bool]$ColdCertification
         authority_pid = if ($authority) { $authority.Id } else { $null }
         owned_authority_shutdown = $cleanShutdown
         client_exit_code = $clientExitCode
-        client_arguments = $ClientArgument
+        client_arguments = $effectiveClientArgument
+        cold_startup_ms = $authorityStartedMs
+        prewarm_ms = if ($prewarmCompletedMs -ne $null) {
+            $prewarmCompletedMs - $prewarmStartedMs
+        } else { $null }
+        time_until_playable_ms = $timeUntilPlayableMs
+        first_detailed_publication_ms = $firstDetailedPublicationMs
+        client_started_ms = $clientStartedMs
         control_port = $ControlPort
         bulk_port = $BulkPort
         world_uuid = if ($identity) { $identity.world_uuid } else { $null }
         macro_genesis_digest = if ($identity) { $identity.macro_genesis_digest } else { $null }
         world_baseline_digest = if ($identity) { $identity.world_baseline_digest } else { $null }
         macro_pages_valid = if ($identity) { $identity.macro_pages_valid } else { 0 }
+        expected_readiness_pages = $expectedReadinessPages
+        projected_cache_pages = $projectedCachePages
+        macro_cache_root = $effectiveMacroCache
+        persistent_macro_cache_root = if ($validatedMacroCacheSource) {
+            $validatedMacroCacheSource
+        } else { $effectiveMacroCache }
+        macro_cache_access_strategy = if ($macroCacheAccessAlias) {
+            'TEMPORARY_DIRECTORY_JUNCTION'
+        } else { 'DIRECT' }
         detailed_projection = if ($identity) { $identity.detailed_projection } else { 'UNKNOWN' }
         world_instance_path = $worldInstance
         client_executable = $clientExe

@@ -590,7 +590,8 @@ namespace
         RegionalDeposition = 39,
         RegionalHydroclimate = 40,
         RegionalRegolith = 41,
-        RegionalBiome = 42
+        RegionalBiome = 42,
+        RichCausalLandforms = 43
     };
 
     enum class Stage0ToolKind : uint8_t
@@ -1546,6 +1547,9 @@ namespace
         long long mv1BandTris[3] = {0,0,0};
         int mv1TilesBuilt = 0, mv1TilesRetired = 0, mv1PendingMax = 0, mv1PendingNow = 0;
         int mv1RevMismatchRefusals = 0, mv1SeamFailures = 0;
+        long long mv1AuthoritySampleFailures = 0;
+        long long mv1BufferProcFailures = 0;
+        long long mv1VboAllocationFailures = 0;
         int mv1ResidentHighWater = 0;
         double mv1BuildMsThisFrame = 0.0;
         // Geometric fidelity of the derived mesh vs the MW authority surface.
@@ -1753,6 +1757,7 @@ namespace
         bool residencyTrackDirtyCells = false;
         std::unordered_set<uint64_t> residencyDirtyCellKeys;
         char certOutDir[MAX_PATH] = {};
+        std::string macroAuthorityRoot = "Data\\Worldgen\\MacroAuthority";
 
         // terrain_caps
         int wireVersion = 0;
@@ -1805,6 +1810,10 @@ namespace
         Ei0a::RequestTracker bulkRequestTracker;
         Ei0d::SessionBinding controlSessionBinding;
         bool ei3AuthorityEnabled = false;
+        // Set only by the canonical rich-landforms launcher.  The stage selector
+        // may select the presentation, but it may not silently change the
+        // FableScript world baseline underneath an existing authority session.
+        bool ei3RichLandformsSession = false;
         bool certEi3LaunchMode = false;
         bool ei3ProjectionMode = false;
         bool ei3LandingIntent = false;
@@ -1881,6 +1890,18 @@ namespace
         size_t certEi3VResidentMax = 0;
         size_t certEi3VRequestedMax = 0;
         float certEi3VFrameWorstMs = 0.f;
+        bool certEi3QBVisual = false;
+        bool certEi3QBVisualRichExpected = false;
+        int certEi3QBVisualStation = 0;
+        int certEi3QBVisualPhase = 0;
+        int certEi3QBVisualFrames = 0;
+        int certEi3QBVisualCaptures = 0;
+        int certEi3QBVisualFailures = 0;
+        long long certEi3QBVisualSkyHoles = 0;
+        int certEi3QBVisualCompositionFailures = 0;
+        int certEi3QBVisualStagingFramesMasked = 0;
+        DWORD certEi3QBVisualStartMs = 0;
+        DWORD certEi3QBVisualStationMs = 0;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2509,6 +2530,8 @@ namespace
     bool DumpFramePpm( char const* path );
     void Mv1CoverageCount( long long& holes, long long& sky, long long& terr );
     int CountLowerFrameSkyPixels();
+    int CountSkyPixelsBelowTerrainSilhouette();
+    int CountClearSkyPixels();
     void FollowStreamCenter();
     int CountLowerPpmSkyPixels( char const* path );
     int CountLowerPpmDarkPixels( char const* path, int* sampled );
@@ -3701,7 +3724,8 @@ namespace
 
     bool IsRegionalBiomeView( Stage0PlayView view )
     {
-        return view == Stage0PlayView::RegionalBiome;
+        return view == Stage0PlayView::RegionalBiome
+            || view == Stage0PlayView::RichCausalLandforms;
     }
 
     bool UsesMacroProvincesTerrain( Stage0PlayView view )
@@ -7154,7 +7178,13 @@ namespace
         input.landingIntent = g.ei3LandingIntent;
         std::vector<Ei3::DesiredChunk> const desired = Ei3::PlanResidency( input );
 
-        if ( now - g.ei3LastPrewarmMs >= 500 && g.bulkFlow.Inflight() < 4 )
+        // The matched Q.A/Q.B matrix teleports between deliberately distant
+        // causal formations.  Do not let a 64-chunk speculative prewarm from
+        // one fixed camera station queue ahead of that station's interactive
+        // P0/P1 snapshots.  This is certificate scheduling only; ordinary
+        // playable traversal retains the predictive prewarm path below.
+        if ( !g.certEi3QBVisual
+          && now - g.ei3LastPrewarmMs >= 500 && g.bulkFlow.Inflight() < 4 )
         {
             std::vector<Ei3::ChunkCoord> prewarm;
             for ( Ei3::DesiredChunk const& value : desired )
@@ -7172,20 +7202,24 @@ namespace
         }
 
         std::vector<Ei3::ChunkCoord> batch;
-        for ( Ei3::DesiredChunk const& value : desired )
+        if ( !g.certEi3QBVisual )
         {
-            if ( batch.size() == 8 ) { break; }
-            if ( (int)value.priority > (int)Ei3::Priority::P3 ) { continue; }
-            if ( g.ei3Residency.Has( value.coord )
-              || g.ei3Requested.count( value.coord ) ) { continue; }
-            batch.push_back( value.coord );
-        }
-        if ( !batch.empty() && g.bulkFlow.Inflight() < 6 )
-        {
-            std::string const params = Ei3::BuildChunksParams( batch );
-            if ( RequestBulkMethod( "detailed_chunks", params.c_str(),
-                    { (int)PendingKind::DetailedChunks, 0, 0 } ) )
-                for ( Ei3::ChunkCoord const coord : batch ) { g.ei3Requested.insert( coord ); }
+            for ( Ei3::DesiredChunk const& value : desired )
+            {
+                if ( batch.size() == 8 ) { break; }
+                if ( (int)value.priority > (int)Ei3::Priority::P3 ) { continue; }
+                if ( g.ei3Residency.Has( value.coord )
+                  || g.ei3Requested.count( value.coord ) ) { continue; }
+                batch.push_back( value.coord );
+            }
+            if ( !batch.empty() && g.bulkFlow.Inflight() < 6 )
+            {
+                std::string const params = Ei3::BuildChunksParams( batch );
+                if ( RequestBulkMethod( "detailed_chunks", params.c_str(),
+                        { (int)PendingKind::DetailedChunks, 0, 0 } ) )
+                    for ( Ei3::ChunkCoord const coord : batch )
+                    { g.ei3Requested.insert( coord ); }
+            }
         }
         g.ei3Residency.Prune(
             { Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) }, 2 );
@@ -7360,6 +7394,374 @@ namespace
             PostQuitMessage( pass ? 0 : 2 );
             g.certEi3Ptc = false;
         }
+    }
+
+    void Ei3QbPlayerViewVisualCertTick()
+    {
+        if ( !g.certEi3QBVisual ) { return; }
+        struct Station
+        {
+            char const* tag;
+            char const* expectedClass;
+            float x, y, yaw, pitch;
+        };
+        // Absolute deterministic authority locations.  Camera orientation is
+        // deliberately fixed in the binary so Q.A and Q.B cannot be matched by
+        // eye after the fact.  The final station reuses the alpine formation at
+        // a hiking pitch to prove local-to-horizon membership in one landscape.
+        static Station const kStations[] = {
+            // Each azimuth follows the formation-conditioned u axis used by
+            // WorldSubstrate.  Q.A and Q.B still use these exact same cameras;
+            // the alignment simply makes real Q.B relief legible in profile.
+            // The local stations use a normal downward hiking glance so the
+            // sub-metre authoritative structure occupies enough of the frame
+            // to be judged.  This changes neither geometry nor Q.A/Q.B parity:
+            // both modes still use these byte-identical player cameras.
+            { "resistant_outcrop", "resistant_outcrop", -44000.f, -44000.f, 2.881507f, -0.30f },
+            { "sedimentary_ledge", "sedimentary_ledge", -92000.f, -96000.f, 2.190438f, -0.30f },
+            { "volcanic_step", "volcanic_step", -84000.f, -72000.f, 4.229993f, -0.26f },
+            { "weathered_residual", "weathered_residual", -512000.f, -512000.f, 1.841165f, -0.30f },
+            { "talus_apron", "talus_apron", -88000.f, -76000.f, 0.290957f, -0.30f },
+            { "depositional_bank", "depositional_bank", -64000.f, 60000.f, 6.055745f, -0.30f },
+            { "cross_scale_hiking", "resistant_outcrop", -44000.f, -44000.f, 6.023100f, -0.12f },
+        };
+        int const stationCount = (int)( sizeof( kStations ) / sizeof( kStations[0] ) );
+        DWORD const now = GetTickCount();
+        if ( !g.certEi3QBVisualStartMs ) { g.certEi3QBVisualStartMs = now; }
+
+        if ( g.certEi3QBVisualStation >= stationCount )
+        {
+            char summary[MAX_PATH] = {};
+            std::snprintf( summary, sizeof( summary ),
+                "%s\\ei3qb_player_view_%s_summary.txt", g.certOutDir,
+                g.certEi3QBVisualRichExpected ? "qb" : "qa" );
+            FILE* file = nullptr;
+            bool const pass = g.certEi3QBVisualCaptures == stationCount
+                && g.certEi3QBVisualFailures == 0
+                && g.certEi3QBVisualSkyHoles == 0
+                && g.certEi3QBVisualCompositionFailures == 0
+                && g.ei3Residency.Rejected() == 0
+                && g.macroPageValidationFailures == 0;
+            if ( fopen_s( &file, summary, "w" ) == 0 && file )
+            {
+                std::fprintf( file,
+                    "EI3_QB_PLAYER_VIEW=%s\nmode=%s\ncaptures=%d/%d\n"
+                    "sky_hole_pixels=%lld\ncomposition_failures=%d\n"
+                    "staging_frames_masked=%d\n"
+                    "rejected_snapshots=%llu\n"
+                    "macro_validation_failures=%d\nworld_uuid=%s\n"
+                    "macro_genesis_digest=%s\nworld_baseline_digest=%s\n"
+                    "elapsed_ms=%lu\nlast_error=%s\n",
+                    pass ? "PASS" : "FAIL",
+                    g.certEi3QBVisualRichExpected ? "QB" : "QA",
+                    g.certEi3QBVisualCaptures, stationCount,
+                    g.certEi3QBVisualSkyHoles,
+                    g.certEi3QBVisualCompositionFailures,
+                    g.certEi3QBVisualStagingFramesMasked,
+                    (unsigned long long)g.ei3Residency.Rejected(),
+                    g.macroPageValidationFailures, g.worldUuid.c_str(),
+                    g.macroGenesisDigest.c_str(), g.worldBaselineDigest.c_str(),
+                    (unsigned long)( now - g.certEi3QBVisualStartMs ),
+                    g.lastError.c_str() );
+                std::fclose( file );
+            }
+            PostQuitMessage( pass ? 0 : 2 );
+            g.certEi3QBVisual = false;
+            return;
+        }
+
+        Station const& station = kStations[g.certEi3QBVisualStation];
+        if ( g.certEi3QBVisualPhase == 0 )
+        {
+            if ( !g.canonicalHandshakeOk
+              || g.bulkTransportState != Ei0d::ConnectionState::Active )
+            {
+                if ( now - g.certEi3QBVisualStartMs > 900000 )
+                {
+                    std::string const prior = g.lastError.empty()
+                        ? g.detail : g.lastError + ":" + g.detail;
+                    g.lastError = "ei3qb_visual_authority_timeout:" + prior;
+                    ++g.certEi3QBVisualFailures;
+                    g.certEi3QBVisualStation = stationCount;
+                }
+                return;
+            }
+            // Certificate scheduling: request one explicit 3x3 authority window.
+            // The earlier one-block request proved support at the camera but left
+            // almost the entire composition on the Q.A carrier, making the Q.B
+            // landform structure practically invisible.  A 3x3 set is the normal
+            // 192 m detailed scene footprint, remains bounded, and is still wholly
+            // server-authored.  It is presentation support, never client truth.
+            Ei3::ChunkCoord const stationChunk{
+                Ei3::FloorChunk( station.x ), Ei3::FloorChunk( station.y ) };
+            std::vector<Ei3::ChunkCoord> sourceChunks;
+            for ( int dy = -1; dy <= 1; ++dy )
+            for ( int dx = -1; dx <= 1; ++dx )
+            {
+                Ei3::ChunkCoord const coord{
+                    stationChunk.x + dx, stationChunk.y + dy };
+                if ( !g.ei3Residency.Has( coord )
+                  && !g.ei3Requested.count( coord ) )
+                    sourceChunks.push_back( coord );
+            }
+            if ( !sourceChunks.empty() )
+            {
+                std::string const params = Ei3::BuildChunksParams( sourceChunks );
+                if ( !RequestBulkMethod( "detailed_chunks", params.c_str(),
+                        { (int)PendingKind::DetailedChunks, 0, 0 } ) )
+                    return;
+                for ( Ei3::ChunkCoord const coord : sourceChunks )
+                { g.ei3Requested.insert( coord ); }
+            }
+            g.certEi3QBVisualStationMs = now;
+            g.certEi3QBVisualFrames = 0;
+            // Phase 1 preloads detailed authority without moving the player.
+            // The last valid world view therefore remains presented during the
+            // potentially long remote generation interval.
+            g.certEi3QBVisualPhase = 1;
+            return;
+        }
+
+        Ei3::MatterSurfaceSample matter;
+        float supportZ = 0.f;
+        bool const matterReady = g.ei3Residency.SampleMatterSurface(
+            station.x, station.y, matter );
+        bool const supportReady = SamplePublishedMatterGround(
+            station.x, station.y, supportZ );
+        bool const expectedAuthority = matterReady
+            && matter.richLandform == g.certEi3QBVisualRichExpected
+            && ( !g.certEi3QBVisualRichExpected
+              || matter.structureClass == station.expectedClass );
+        Ei3::ChunkCoord const stationChunk{
+            Ei3::FloorChunk( station.x ), Ei3::FloorChunk( station.y ) };
+        bool const centerResident = g.ei3Residency.Has( stationChunk );
+        bool const centerRequested = g.ei3Requested.count( stationChunk ) != 0;
+        int visualSupportResident = 0;
+        for ( int dy = -1; dy <= 1; ++dy )
+        for ( int dx = -1; dx <= 1; ++dx )
+            if ( g.ei3Residency.Has( {
+                    stationChunk.x + dx, stationChunk.y + dy } ) )
+                ++visualSupportResident;
+        bool const visualSupportReady = visualSupportResident == 9;
+        // A published detailed surface is not by itself a complete player view.
+        // The canonical MV1 carrier must have finished the desired field around
+        // this absolute station before a visual certificate can be taken.  This
+        // is presentation readiness only: it neither changes authority nor lets
+        // the client manufacture missing world truth.
+        bool const coarseWorldReady = g.playWorldgenInitialized
+            && g.regionalBiomeRuntime
+            && g.mv1Warmed
+            && g.mv1PendingNow == 0
+            && !g.mv1Tiles.empty();
+        static DWORD lastStatusMs = 0;
+        if ( now - lastStatusMs >= 1000 )
+        {
+            lastStatusMs = now;
+            char statusPath[MAX_PATH] = {};
+            std::snprintf( statusPath, sizeof( statusPath ),
+                "%s\\ei3qb_visual_status.txt", g.certOutDir );
+            FILE* status = nullptr;
+            if ( fopen_s( &status, statusPath, "w" ) == 0 && status )
+            {
+                std::fprintf( status,
+                    "station=%s\nphase=%d\nstation_x=%.3f\nstation_y=%.3f\n"
+                    "camera_x=%.3f\ncamera_y=%.3f\nstation_chunk=%d,%d\n"
+                    "center_resident=%d\ncenter_requested=%d\n"
+                    "matter_ready=%d\nsupport_ready=%d\n"
+                    "expected_authority=%d\ncoarse_world_ready=%d\n"
+                    "visual_support_resident=%d/9\nvisual_support_ready=%d\n"
+                    "play_worldgen_initialized=%d\nregional_runtime=%d\nview=%d\n"
+                    "mv1_tiles=%zu\nmv1_pending=%d\nmv1_warmed=%d\n"
+                    "mv1_source_rev=%llu\nmv1_authority_failures=%lld\n"
+                    "mv1_buffer_failures=%lld\nmv1_vbo_failures=%lld\n"
+                    "canonical_handshake=%d\nlast_error=%s\nresident=%zu\npublished=%llu\n"
+                    "requested=%zu\nbulk_inflight=%zu\nelapsed_station_ms=%lu\n",
+                    station.tag, g.certEi3QBVisualPhase,
+                    station.x, station.y, g.camX, g.camY,
+                    stationChunk.x, stationChunk.y,
+                    centerResident ? 1 : 0, centerRequested ? 1 : 0,
+                    matterReady ? 1 : 0,
+                    supportReady ? 1 : 0, expectedAuthority ? 1 : 0,
+                    coarseWorldReady ? 1 : 0,
+                    visualSupportResident, visualSupportReady ? 1 : 0,
+                    g.playWorldgenInitialized ? 1 : 0,
+                    g.regionalBiomeRuntime ? 1 : 0, (int)g.stage0PlayView,
+                    g.mv1Tiles.size(), g.mv1PendingNow, g.mv1Warmed ? 1 : 0,
+                    (unsigned long long)g.mv1SourceRev,
+                    g.mv1AuthoritySampleFailures, g.mv1BufferProcFailures,
+                    g.mv1VboAllocationFailures, g.canonicalHandshakeOk ? 1 : 0,
+                    g.lastError.c_str(),
+                    g.ei3Residency.Size(),
+                    (unsigned long long)g.ei3Residency.Published(),
+                    g.ei3Requested.size(), g.bulkFlow.Inflight(),
+                    (unsigned long)( now - g.certEi3QBVisualStationMs ) );
+                std::fclose( status );
+            }
+        }
+        if ( g.certEi3QBVisualPhase == 1 )
+        {
+            if ( !matterReady || !expectedAuthority || !visualSupportReady )
+            {
+                if ( now - g.certEi3QBVisualStationMs > 300000 )
+                {
+                    char detail[512] = {};
+                    std::snprintf( detail, sizeof( detail ),
+                        "ei3qb_visual_preload_timeout:station=%s,matter=%d,"
+                        "rich=%d,expected=%s,actual=%s,visual_support=%d/9,"
+                        "resident=%zu,published=%llu,rejected=%llu,requested=%zu,"
+                        "bulk_inflight=%zu",
+                        station.tag, matterReady ? 1 : 0,
+                        matter.richLandform ? 1 : 0, station.expectedClass,
+                        matter.structureClass.c_str(), visualSupportResident,
+                        g.ei3Residency.Size(),
+                        (unsigned long long)g.ei3Residency.Published(),
+                        (unsigned long long)g.ei3Residency.Rejected(),
+                        g.ei3Requested.size(), g.bulkFlow.Inflight() );
+                    g.lastError = detail;
+                    ++g.certEi3QBVisualFailures;
+                    g.certEi3QBVisualStation = stationCount;
+                }
+                return;
+            }
+
+            // Authority is now complete.  Relocate once, then mask only the
+            // short interval in which MV1 and the published collision surface
+            // catch up to the already-admitted destination truth.
+            g.camX = g.feetX = station.x;
+            g.camY = g.feetY = station.y;
+            g.camZ = matter.parentZ + 2.05f;
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.yaw = station.yaw;
+            g.pitch = station.pitch;
+            g.walkMode = false;
+            g.grounded = false;
+            g.ei3LandingIntent = false;
+            FollowStreamCenter();
+            g.certEi3QBVisualStationMs = now;
+            g.certEi3QBVisualPhase = 2;
+            return;
+        }
+        if ( !matterReady || !supportReady || !expectedAuthority
+          || !visualSupportReady
+          || !coarseWorldReady )
+        {
+            if ( now - g.certEi3QBVisualStationMs > 120000 )
+            {
+                char detail[512] = {};
+                std::snprintf( detail, sizeof( detail ),
+                    "ei3qb_visual_station_timeout:station=%s,matter=%d,support=%d,"
+                    "rich=%d,expected=%s,actual=%s,coarse_world=%d,"
+                    "visual_support=%d/9,resident=%zu,"
+                    "published=%llu,rejected=%llu,requested=%zu,bulk_inflight=%zu,"
+                    "mv1_tiles=%zu,mv1_pending=%d,mv1_warmed=%d,view=%d,runtime=%d",
+                    station.tag, matterReady ? 1 : 0, supportReady ? 1 : 0,
+                    matter.richLandform ? 1 : 0, station.expectedClass,
+                    matter.structureClass.c_str(), coarseWorldReady ? 1 : 0,
+                    visualSupportResident,
+                    g.ei3Residency.Size(),
+                    (unsigned long long)g.ei3Residency.Published(),
+                    (unsigned long long)g.ei3Residency.Rejected(),
+                    g.ei3Requested.size(), g.bulkFlow.Inflight(), g.mv1Tiles.size(),
+                    g.mv1PendingNow, g.mv1Warmed ? 1 : 0,
+                    (int)g.stage0PlayView, g.regionalBiomeRuntime ? 1 : 0 );
+                g.lastError = detail;
+                ++g.certEi3QBVisualFailures;
+                g.certEi3QBVisualStation = stationCount;
+            }
+            return;
+        }
+
+        // parentZ is the exact Q.A carrier in both modes, so this absolute Z is
+        // byte-for-byte camera matched while leaving a normal eye-height view.
+        g.camZ = matter.parentZ + 2.05f;
+        g.feetZ = g.camZ - kEyeHeightM;
+        g.yaw = station.yaw;
+        g.pitch = station.pitch;
+        if ( ++g.certEi3QBVisualFrames < 90 ) { return; }
+
+        char ppm[MAX_PATH] = {}, metadata[MAX_PATH] = {};
+        char const* mode = g.certEi3QBVisualRichExpected ? "qb" : "qa";
+        std::snprintf( ppm, sizeof( ppm ), "%s\\ei3qb_%s_%s.ppm",
+            g.certOutDir, mode, station.tag );
+        std::snprintf( metadata, sizeof( metadata ), "%s\\ei3qb_%s_%s.txt",
+            g.certOutDir, mode, station.tag );
+        bool const imageWritten = DumpFramePpm( ppm );
+        long long const skyHoles = CountSkyPixelsBelowTerrainSilhouette();
+        int const clearSkyPixels = CountClearSkyPixels();
+        g.certEi3QBVisualSkyHoles += skyHoles;
+        GLint viewport[4] = {};
+        glGetIntegerv( GL_VIEWPORT, viewport );
+        long long const framePixels = (long long)viewport[2] * viewport[3];
+        double const clearSkyFraction = framePixels > 0
+            ? (double)clearSkyPixels / (double)framePixels : 1.0;
+        // These fixed hiking cameras are selected to show both the world and
+        // legitimate open sky.  Enforce that composition so a clear buffer or
+        // a terrain-filled camera cannot masquerade as visual evidence.
+        bool const playerViewComposition = clearSkyFraction >= 0.03
+            && clearSkyFraction <= 0.75;
+        if ( !playerViewComposition )
+        { ++g.certEi3QBVisualCompositionFailures; }
+
+        Ei3::MatterSurfaceSample east, west, north, south;
+        bool const neighbors = g.ei3Residency.SampleMatterSurface(
+                station.x + 4.f, station.y, east )
+            && g.ei3Residency.SampleMatterSurface(
+                station.x - 4.f, station.y, west )
+            && g.ei3Residency.SampleMatterSurface(
+                station.x, station.y + 4.f, north )
+            && g.ei3Residency.SampleMatterSurface(
+                station.x, station.y - 4.f, south );
+        float const slope = neighbors ? std::sqrt(
+            std::pow( ( east.z - west.z ) / 8.f, 2.f )
+          + std::pow( ( north.z - south.z ) / 8.f, 2.f ) ) : -1.f;
+        FILE* file = nullptr;
+        if ( fopen_s( &file, metadata, "w" ) == 0 && file )
+        {
+            char qbAuthoritativeZ[64] = "NA";
+            if ( g.certEi3QBVisualRichExpected )
+                std::snprintf( qbAuthoritativeZ, sizeof( qbAuthoritativeZ ),
+                    "%.9f", matter.z );
+            std::fprintf( file,
+                "certificate=EI3.Q.B_PLAYER_VIEW_MATRIX/1\nmode=%s\nstation=%s\n"
+                "expected_class=%s\nactual_class=%s\nrich_landform=%d\n"
+                "camera_xyz=%.6f,%.6f,%.6f\nyaw=%.9f\npitch=%.9f\n"
+                "fov_y_deg=%.6f\nresolution=%dx%d\n"
+                "world_uuid=%s\nmacro_genesis_digest=%s\nworld_baseline_digest=%s\n"
+                "formation_id=%s\nlandform_element_id=%s\n"
+                "lithology=%s\nsubstrate=%s\nsupport_stratum_id=%s\n"
+                "support_material_id=%s\ndominant_material_id=%s\n"
+                "slope=%.9f\nsoil_depth_m=%.9f\nwetness=%.9f\n"
+                "weathering=%.9f\nstructural_complexity=%.9f\n"
+                "qa_surface_z=%.9f\nqb_authoritative_surface_z=%s\n"
+                "rendered_surface_z=%.9f\nground_support_z=%.9f\n"
+                "sky_hole_pixels=%lld\nclear_sky_pixels=%d\n"
+                "clear_sky_fraction=%.9f\nplayer_view_composition=%s\n"
+                "image_written=%d\n"
+                "mv1_tiles=%zu\nmv1_pending=%d\nmv1_warmed=%d\n",
+                g.certEi3QBVisualRichExpected ? "QB" : "QA", station.tag,
+                station.expectedClass, matter.structureClass.c_str(),
+                matter.richLandform ? 1 : 0, g.camX, g.camY, g.camZ,
+                g.yaw, g.pitch, g.renderedFovYDeg, viewport[2], viewport[3],
+                g.worldUuid.c_str(),
+                g.macroGenesisDigest.c_str(), g.worldBaselineDigest.c_str(),
+                matter.formationId.c_str(), matter.landformElementId.c_str(),
+                matter.lithologyClass.c_str(), matter.substrateClass.c_str(),
+                matter.supportStratumId.c_str(), matter.supportMaterialId.c_str(),
+                matter.dominantMaterialId.c_str(), slope, matter.soilDepthM,
+                matter.wetness, matter.weathering, matter.structuralComplexity,
+                matter.parentZ, qbAuthoritativeZ, matter.z, supportZ, skyHoles,
+                clearSkyPixels, clearSkyFraction,
+                playerViewComposition ? "PASS" : "FAIL",
+                imageWritten ? 1 : 0, g.mv1Tiles.size(), g.mv1PendingNow,
+                g.mv1Warmed ? 1 : 0 );
+            std::fclose( file );
+        }
+        if ( imageWritten && skyHoles == 0 && playerViewComposition )
+        { ++g.certEi3QBVisualCaptures; }
+        else
+        { ++g.certEi3QBVisualFailures; }
+        ++g.certEi3QBVisualStation;
+        g.certEi3QBVisualPhase = 0;
     }
 
     void Ei3PlayerViewTraversalCertTick()
@@ -7844,6 +8246,21 @@ namespace
             std::string message;
             ExtractJsonString( line, "code", code );
             ExtractJsonString( line, "message", message );
+            // A launcher/readiness probe may still be releasing the one local
+            // single-player control slot when the real client arrives.  This
+            // is transport occupancy, not contract incompatibility.  Close
+            // the rejected lane and retry normally; every identity/schema/
+            // authority rejection below remains a hard fail-closed error.
+            if ( code == "control_session_active" )
+            {
+                g.lastError = code;
+                g.detail = message.empty() ? code : code + ": " + message;
+                CloseSock();
+                g.link = LinkState::Disconnected;
+                g.statusLine = "canonical control slot busy - retrying";
+                g.lastAttemptMs = GetTickCount();
+                return;
+            }
             g.link = LinkState::CapsError;
             g.canonicalHandshakeOk = false;
             g.statusLine = "canonical handshake rejected";
@@ -15864,6 +16281,60 @@ namespace
             float const wetDarken=1.f-.18f*std::clamp(matter.wetness,0.f,1.f);
             float const roughTone=.97f+.06f*std::clamp(matter.roughness,0.f,1.f);
             matR*=wetDarken*roughTone;matG*=wetDarken*roughTone;matB*=wetDarken*roughTone;
+
+            if(matter.richLandform)
+            {
+                // Q.B does not introduce a client-side landform palette.  It
+                // exposes the engine's supporting material and structural
+                // complexity more strongly than the kilometre-scale macro
+                // surface promise.  The continuous world-space modulation is
+                // reflectance breakup only: the authoritative refined height,
+                // class, stratum, and material remain the geometry/semantic
+                // source, and the Q.A path never enters this branch.
+                float const complexity=std::clamp(matter.structuralComplexity,0.f,1.f);
+                materialWeight=(std::max)(materialWeight,.38f+.28f*complexity);
+                float structureTone=.94f+.10f*std::sin(
+                    (float)vertex.x*.119f+(float)vertex.y*.083f+phase*1.7f);
+
+                if(matter.structureClass=="resistant_outcrop")
+                {
+                    materialWeight=(std::max)(materialWeight,.68f);
+                    structureTone*=.90f+.14f*complexity;
+                }
+                else if(matter.structureClass=="sedimentary_ledge")
+                {
+                    materialWeight=(std::max)(materialWeight,.62f);
+                    structureTone*=.93f+.10f*std::sin(
+                        (float)vertex.z*.41f+phase);
+                }
+                else if(matter.structureClass=="volcanic_step")
+                {
+                    materialWeight=(std::max)(materialWeight,.72f);
+                    matR*=.86f;matG*=.88f;matB*=.90f;
+                    structureTone*=.91f+.10f*complexity;
+                }
+                else if(matter.structureClass=="weathered_residual")
+                {
+                    materialWeight=(std::max)(materialWeight,.58f);
+                    float const oxidation=.10f+.12f*std::clamp(matter.weathering,0.f,1.f);
+                    matR=std::clamp(matR+oxidation*.18f,0.f,1.f);
+                    matG=std::clamp(matG+oxidation*.07f,0.f,1.f);
+                    matB=std::clamp(matB-oxidation*.06f,0.f,1.f);
+                }
+                else if(matter.structureClass=="talus_apron")
+                {
+                    materialWeight=(std::max)(materialWeight,.64f);
+                    structureTone*=1.02f+.08f*complexity;
+                }
+                else if(matter.structureClass=="depositional_bank")
+                {
+                    materialWeight=(std::max)(materialWeight,.54f);
+                    structureTone*=.98f+.05f*(1.f-complexity);
+                }
+                matR=std::clamp(matR*structureTone,0.f,1.f);
+                matG=std::clamp(matG*structureTone,0.f,1.f);
+                matB=std::clamp(matB*structureTone,0.f,1.f);
+            }
         }
         float const inv=1.f-materialWeight;
         outR=std::clamp((inv*macroR/255.f+materialWeight*matR)*faceShade,0.f,1.f);
@@ -17955,6 +18426,9 @@ namespace
           "MACRO.HYDROCLIMATE", "derived near-surface material profile from geology, deposits, drainage, and hydroclimate", Stage0PlayView::RegionalRegolith },
         { "GEOLOGY / GEOMORPHOLOGY", "MACRO.BIOMES", "MW8 - Biomes",
           "MACRO.SOILS_REGOLITH", "ecological potential / biome regime from climate, soils, drainage, substrate, and exposure", Stage0PlayView::RegionalBiome },
+        { "INTEGRATION", "EI3.Q.B.RICH_CAUSAL_LANDFORMS", "EI3.Q.B - Rich Causal Landforms",
+          "canonical FableScript authority launched in EI3.Q.B rich-landforms mode",
+          "matter-bound outcrops, ledges, volcanic steps, talus aprons, residuals, and depositional banks", Stage0PlayView::RichCausalLandforms },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -18085,6 +18559,8 @@ namespace
     char const* CertificationRuntimeStatus( CertificationBrowserEntry const& entry )
     {
         if ( entry.view == g.stage0PlayView ) { return "CURRENT"; }
+        if ( entry.view == Stage0PlayView::RichCausalLandforms )
+        { return g.ei3AuthorityEnabled && g.ei3RichLandformsSession ? "AVAILABLE" : "REQUIRES LAUNCHER"; }
         if ( entry.view == Stage0PlayView::Clean || entry.view == Stage0PlayView::Combined )
         { return "CERTIFIED"; }
         bool attempted = false;
@@ -18190,6 +18666,8 @@ namespace
         if(boardIndex<0||boardIndex>=kCertificationBrowserCount)return "CLOSED";
         CertificationBrowserEntry const& entry=s_certificationBrowser[boardIndex];
         if(entry.view==g.stage0PlayView)return "PLAYABLE";
+        if(entry.view==Stage0PlayView::RichCausalLandforms&&!g.ei3RichLandformsSession)
+            return "REQUIRES LAUNCHER";
         if(IsRuntimeDepositionChainView(entry.view))return "CERTIFIED";
         char const* runtime=CertificationRuntimeStatus(entry);
         if(std::strcmp(runtime,"CERTIFIED")==0||std::strcmp(runtime,"CURRENT")==0)
@@ -18490,6 +18968,12 @@ namespace
 
     bool SelectStage0PlayView( Stage0PlayView view )
     {
+        if ( view == Stage0PlayView::RichCausalLandforms
+          && ( !g.ei3AuthorityEnabled || !g.ei3RichLandformsSession ) )
+        {
+            g.statusLine = "EI3.Q.B REFUSED - start PLAY_EI3_QB_RICH_LANDFORMS.cmd first";
+            return false;
+        }
         if ( IsCausalPlayableView( view ) && !EnsureCausalPlayableAuthority( view ) )
         {
             std::string const* reason = &g.causalGeologyAuthorityReason;
@@ -18868,12 +19352,21 @@ namespace
         }
         if(g.playWorldgenInitialized&&IsRegionalBiomeView(view)&&oldView!=view)
         {
-            g.feetX=2580.0f;g.feetY=-4860.0f;g.yaw=2.85f;g.pitch=-0.12f;
             g.stage0ToolRuler=false;g.stage0ToolPalette=false;
             g.stage0ToolGeologyCutaway=false;g.walkMode=true;
-            RebuildStage0PlayableRuntime();
-            g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
-            g.statusLine="MW8 - biomes; ecological potential from climate / soils / drainage, not vegetation";
+            if(view==Stage0PlayView::RichCausalLandforms)
+            {
+                // Preserve the player's position in the already-bound authority
+                // world.  This is a presentation selection, not a world reload.
+                g.statusLine="EI3.Q.B - rich causal landforms; FableScript matter authority";
+            }
+            else
+            {
+                g.feetX=2580.0f;g.feetY=-4860.0f;g.yaw=2.85f;g.pitch=-0.12f;
+                RebuildStage0PlayableRuntime();
+                g.camX=g.feetX;g.camY=g.feetY;g.camZ=g.feetZ+kEyeHeightM;
+                g.statusLine="MW8 - biomes; ecological potential from climate / soils / drainage, not vegetation";
+            }
         }
         if(g.playWorldgenInitialized&&IsPresentWaterView(view)&&oldView!=view)
         {
@@ -19067,6 +19560,7 @@ namespace
             case Stage0PlayView::RegionalHydroclimate: return "CERTIFIED MW6 HYDROCLIMATE";
             case Stage0PlayView::RegionalRegolith: return "CERTIFIED MW7 SOILS / REGOLITH";
             case Stage0PlayView::RegionalBiome: return "CERTIFIED MW8 BIOMES";
+            case Stage0PlayView::RichCausalLandforms: return "EI3.Q.B RICH CAUSAL LANDFORMS";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -19488,7 +19982,8 @@ namespace
         for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
         {
             float z=0.f;uint8_t r=94,gg=77,bb=56;
-            if(!Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))return false;
+            if(!Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))
+            {++g.mv1AuthoritySampleFailures;return false;}
             size_t const k=(size_t)j*stride+i;
             zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
             tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
@@ -19538,7 +20033,8 @@ namespace
         g.mv1MaxErrorM=(std::max)(g.mv1MaxErrorM,tileMax);
         {int h=0;int c=chosen;while(c>4){c>>=1;++h;}g.mv1TileCellsHist[(std::min)(h,3)]++;}
 
-        if(!Mv1EnsureBufferProcs())return false;
+        if(!Mv1EnsureBufferProcs())
+        {++g.mv1BufferProcFailures;return false;}
         int tris=0;
         float const skirtZ=(float)(tileMinZ-(2.0*B.errorTargetM+8.0));
         // Interleaved [x,y,z, r,g,b] float vertices; flat shading is baked by
@@ -19613,7 +20109,7 @@ namespace
             skirt((float)(x0+B.tileM),p,Z(F,c*step),(float)(x0+B.tileM),q,Z(F,(c+1)*step)); // +X
         }
         GLuint const vbo=Mv1AllocVbo();
-        if(!vbo)return false;
+        if(!vbo){++g.mv1VboAllocationFailures;return false;}
         unsigned const bytes=(unsigned)(verts.size()*sizeof(float));
         LARGE_INTEGER uq{},u0{},u1{};QueryPerformanceFrequency(&uq);QueryPerformanceCounter(&u0);
         s_mv1BindBuffer(GL_ARRAY_BUFFER,vbo);
@@ -19869,7 +20365,8 @@ namespace
         // next frame (bounded pending, drains continuously).
         std::sort(want.begin(),want.end(),
             [](Want const& a,Want const& b){return a.d2<b.d2;});
-        double const budgetMs=g.certMv1Terrain?60.0:4.0; // cert settles fully
+        bool const fullFieldCert=g.certMv1Terrain||g.certEi3QBVisual;
+        double const budgetMs=fullFieldCert?60.0:4.0; // cert settles fully
         // Hard per-frame cap on display-list CREATION. Each glNewList queues
         // driver-deferred GPU finalization; a burst of creations (a full field
         // rebuild, or a large anchor fringe) lets that backlog grow until the
@@ -19878,7 +20375,7 @@ namespace
         // rasterizes the far field. Capping creation keeps the backlog tiny; the
         // field simply fills over ~1–2 s, like the cold warmup. The cert builds
         // unbounded so stations settle fully.
-        int const maxBuildsPerFrame=g.certMv1Terrain?1000000:6;
+        int const maxBuildsPerFrame=fullFieldCert?1000000:6;
         int built=0;
         for(Want const& w:want)
         {
@@ -20958,9 +21455,6 @@ namespace
 
     bool Mv2LoadPage(int ri,int rj,Mv2Page& out)
     {
-        char path[256];
-        std::snprintf(path,sizeof(path),
-            "Data\\Worldgen\\MacroAuthority\\page_%d_%d.mcp",ri,rj);
         MacroPageAuthority::Context context; // exact pinned projection context until EI0.D supplies a session
         if(g.canonicalHandshakeOk)
         {
@@ -20992,14 +21486,17 @@ namespace
         // Re-reading and re-hashing it for every resident page would make a
         // representation check part of the 128 km presentation hot path.
         static MacroManifestAuthority::Manifest manifest;
-        static std::string manifestGenesis,manifestSchema;
+        static std::string manifestGenesis,manifestSchema,manifestRoot;
         if(!manifest.valid||manifestGenesis!=context.genesisDigest
-           ||manifestSchema!=context.descriptorSchemaDigest)
+           ||manifestSchema!=context.descriptorSchemaDigest
+           ||manifestRoot!=g.macroAuthorityRoot)
         {
+            std::string const manifestPath=g.macroAuthorityRoot+"\\macro_manifest.mcm";
             manifest=MacroManifestAuthority::Load(
-                "Data\\Worldgen\\MacroAuthority\\macro_manifest.mcm",context);
+                manifestPath,context);
             manifestGenesis=context.genesisDigest;
             manifestSchema=context.descriptorSchemaDigest;
+            manifestRoot=g.macroAuthorityRoot;
         }
         auto const bindingIt=manifest.pages.find(std::make_pair(ri,rj));
         if(!manifest.valid||bindingIt==manifest.pages.end())
@@ -21008,10 +21505,33 @@ namespace
             out=Mv2Page();out.ri=ri;out.rj=rj;
             out.trust=MacroPageAuthority::Trust::Quarantined;
             out.failure=MacroPageAuthority::Failure::MalformedHeader;
-            out.authorityDetail=manifest.valid?"engine manifest has no requested page":manifest.failure;
-            if(g.canonicalHandshakeOk){g.canonicalHandshakeOk=false;g.lastError="macro_manifest_authority_invalid:"+out.authorityDetail;}
+            if(manifest.valid)
+            {
+                char missing[96]={};
+                std::snprintf(missing,sizeof(missing),
+                    "engine manifest has no requested page (%d,%d)",ri,rj);
+                out.authorityDetail=missing;
+            }
+            else out.authorityDetail=manifest.failure;
+            if(!manifest.valid)
+            {
+                if(g.canonicalHandshakeOk)
+                {
+                    g.canonicalHandshakeOk=false;
+                    g.lastError="macro_manifest_authority_invalid:"+out.authorityDetail;
+                }
+            }
+            else
+            {
+                // A valid immutable manifest may be a partial projection cache.
+                // Refuse this absent page without local fallback, while keeping
+                // the proven engine/world session available for replacement.
+                g.lastError="macro_projection_page_unavailable:"+out.authorityDetail;
+            }
             return false;
         }
+        std::string path=g.macroAuthorityRoot+"\\"+bindingIt->second.cachePath;
+        std::replace(path.begin(),path.end(),'/', '\\');
         // Validate/build offside.  Only a fully trusted candidate is published to
         // the caller/cache; a corrupt replacement therefore cannot displace a
         // previously published page.
@@ -21243,20 +21763,28 @@ namespace
         if(!g.mv2bEnabled){if(!mv2Tiles.empty())Mv2ReleaseAll();return;}
         int const cri=(int)std::floor((g.camX+kMv2RegionHalfM)/kMv2RegionM);
         int const crj=(int)std::floor((g.camY+kMv2RegionHalfM)/kMv2RegionM);
+        // The matched EI3.Q.B matrix needs only the 3x3 presentation context
+        // surrounding each fixed camera.  Canonical stations consume subsets of
+        // the validated startup 5x5; the remote station consumes exactly its nine
+        // extra engine-authored pages.  Keeping this cert-only scope avoids
+        // accidental requests from the ordinary pre-teleport camera and never
+        // changes normal playable residency, generates fallback authority, or
+        // relaxes EI0.C admission.
+        int const ringCells=g.certEi3QBVisual?1:kMv2RingCells;
         bool const anchorMoved=cri!=g.mv2bAnchorRi||crj!=g.mv2bAnchorRj;
         g.mv2bAnchorRi=cri;g.mv2bAnchorRj=crj;
         LARGE_INTEGER qpf{},t0{};QueryPerformanceFrequency(&qpf);QueryPerformanceCounter(&t0);
         // desired ring
         std::unordered_set<uint64_t> desired;
-        for(int dj=-kMv2RingCells;dj<=kMv2RingCells;++dj)
-        for(int di=-kMv2RingCells;di<=kMv2RingCells;++di)
+        for(int dj=-ringCells;dj<=ringCells;++dj)
+        for(int di=-ringCells;di<=ringCells;++di)
             desired.insert(Mv2Key(cri+di,crj+dj));
         if(anchorMoved)
         {for(auto it=mv2Tiles.begin();it!=mv2Tiles.end();)
             {if(!desired.count(it->first)){Mv2RetireTile(it->second);it=mv2Tiles.erase(it);}else ++it;}}
         // build missing (bounded ring => bounded builds; pages are cheap)
-        for(int dj=-kMv2RingCells;dj<=kMv2RingCells;++dj)
-        for(int di=-kMv2RingCells;di<=kMv2RingCells;++di)
+        for(int dj=-ringCells;dj<=ringCells;++dj)
+        for(int di=-ringCells;di<=ringCells;++di)
         {
             int const ri=cri+di,rj=crj+dj;uint64_t const key=Mv2Key(ri,rj);
             if(mv2Tiles.count(key))continue;
@@ -21403,8 +21931,17 @@ namespace
         int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
         uint64_t const key=Mv2Key(ri,rj);
         auto it=cache.find(key);
-        if(it==cache.end()){Mv2Page pg;bool ok=Mv2LoadPage(ri,rj,pg);
-            it=cache.emplace(key,ok?pg:Mv2Page()).first;}
+        if(it==cache.end())
+        {
+            Mv2Page pg;
+            // A cold canonical launch can ask the presentation carrier for a
+            // sample while the verified macro context is still being admitted.
+            // That miss is transient.  Never negative-cache it for the rest of
+            // the process: the far field may recover while MV1 otherwise keeps
+            // an empty page forever, leaving a moving band of clear sky.
+            if(!Mv2LoadPage(ri,rj,pg))return false;
+            it=cache.emplace(key,std::move(pg)).first;
+        }
         Mv2Page const& pg=it->second;if(pg.n<=0)return false;   // no page => no terrain here
         double fi=(x-pg.minX)/pg.step,fj=(y-pg.minY)/pg.step;
         int i0=(int)std::floor(fi),j0=(int)std::floor(fj);
@@ -21453,8 +21990,11 @@ namespace
         if(it==cache.end())
         {
             Mv2Page page;
-            bool const ok=Mv2LoadPage(ri,rj,page);
-            it=cache.emplace(key,ok?page:Mv2Page()).first;
+            // As with height sampling, only cache a verified page.  A transient
+            // cold-start miss must remain retryable so colour and geometry join
+            // the same canonical page once its context is ready.
+            if(!Mv2LoadPage(ri,rj,page))return false;
+            it=cache.emplace(key,std::move(page)).first;
         }
         Mv2Page const& page=it->second;
         Ms1::SurfaceState const surface=Mv2SurfaceAt(page,x,y);
@@ -30133,6 +30673,20 @@ namespace
         if(SoakDrawAttribOn())ResetDrawSubmitAttrib();
         auto stage0Present = [&]()
         {
+            // A fixed visual station relocates instantly, while its 192 m
+            // authoritative surface and MV1 carrier arrive asynchronously.
+            // Never expose that clear-buffer interval as a playable frame.
+            // Once readiness is proven, ordinary world rendering resumes and
+            // all certificate captures come from that ordinary path.
+            if ( g.certEi3QBVisual
+              && g.certEi3QBVisualPhase == 2
+              && g.certEi3QBVisualFrames == 0 )
+            {
+                glDisable( GL_SCISSOR_TEST );
+                glClearColor( 0.025f, 0.03f, 0.035f, 1.f );
+                glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+                ++g.certEi3QBVisualStagingFramesMasked;
+            }
             LARGE_INTEGER beforePresent{}, afterPresent{};
             QueryPerformanceCounter( &beforePresent );
             double const renderMs = qpf.QuadPart > 0
@@ -30714,6 +31268,83 @@ namespace
                   && std::abs( b - 224 ) <= 2 )
                 { ++sky; }
             }
+        }
+        return sky;
+    }
+
+    int CountSkyPixelsBelowTerrainSilhouette()
+    {
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return INT_MAX; }
+        std::vector<unsigned char> rgb( (size_t)w * (size_t)h * 3u );
+        GLint previousReadBuffer = GL_BACK;
+        glGetIntegerv( GL_READ_BUFFER, &previousReadBuffer );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data() );
+        glReadBuffer( previousReadBuffer );
+
+        auto isClearSky = [&]( int x, int y )
+        {
+            size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 3u;
+            int const r = rgb[i], green = rgb[i + 1], b = rgb[i + 2];
+            return std::abs( r - 114 ) <= 2
+                && std::abs( green - 158 ) <= 2
+                && std::abs( b - 224 ) <= 2;
+        };
+
+        // Open sky belongs above the terrain silhouette.  Once a column has a
+        // stable terrain run, any later clear-sky pixel lower in the displayed
+        // frame is a coverage hole.  This catches broad border-connected gaps
+        // between near, MV1 and horizon carriers that a flood-fill of enclosed
+        // sky cannot detect.  Require three terrain pixels before establishing
+        // the silhouette so a single coarse-edge sample cannot create a failure.
+        long long holes = 0;
+        for ( int x = 0; x < w; ++x )
+        {
+            bool belowSilhouette = false;
+            int terrainRun = 0;
+            for ( int y = h - 1; y >= 0; --y )
+            {
+                bool const sky = isClearSky( x, y );
+                if ( !belowSilhouette )
+                {
+                    terrainRun = sky ? 0 : terrainRun + 1;
+                    if ( terrainRun >= 3 ) { belowSilhouette = true; }
+                }
+                else if ( sky )
+                {
+                    ++holes;
+                }
+            }
+        }
+        return holes > INT_MAX ? INT_MAX : (int)holes;
+    }
+
+    int CountClearSkyPixels()
+    {
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return 0; }
+        std::vector<unsigned char> rgb( (size_t)w * (size_t)h * 3u );
+        GLint previousReadBuffer = GL_BACK;
+        glGetIntegerv( GL_READ_BUFFER, &previousReadBuffer );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data() );
+        glReadBuffer( previousReadBuffer );
+
+        int sky = 0;
+        for ( size_t i = 0; i < rgb.size(); i += 3u )
+        {
+            int const r = rgb[i], green = rgb[i + 1], b = rgb[i + 2];
+            if ( std::abs( r - 114 ) <= 2
+              && std::abs( green - 158 ) <= 2
+              && std::abs( b - 224 ) <= 2 )
+            { ++sky; }
         }
         return sky;
     }
@@ -51135,6 +51766,7 @@ namespace
             Wd1bCertTick();
             LivingWorldLoadTick();
             Ei3PredictiveTraversalCertTick();
+            Ei3QbPlayerViewVisualCertTick();
             Ei3PlayerViewTraversalCertTick();
             PresentationIsolationBeforeFrame(dt);
         }
@@ -56126,6 +56758,45 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certEi3V = true;
                     continue;
                 }
+                if ( _wcsicmp( argv[i], L"--ei3-rich-landforms-stage" ) == 0 )
+                {
+                    g.ei3RichLandformsSession = true;
+                    g.stage0PlayView = Stage0PlayView::RichCausalLandforms;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-ei3qb-visual-qa" ) == 0
+                  || _wcsicmp( argv[i], L"--cert-ei3qb-visual-qb" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certEi3QBVisual = true;
+                    g.certEi3QBVisualRichExpected =
+                        _wcsicmp( argv[i], L"--cert-ei3qb-visual-qb" ) == 0;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-out-dir" ) == 0
+                  && i + 1 < argc )
+                {
+                    ++i;
+                    WideCharToMultiByte( CP_UTF8, 0, argv[i], -1,
+                        g.certOutDir, MAX_PATH, nullptr, nullptr );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--macro-authority-root" ) == 0
+                  && i + 1 < argc )
+                {
+                    ++i;
+                    int const required = WideCharToMultiByte( CP_UTF8, 0,
+                        argv[i], -1, nullptr, 0, nullptr, nullptr );
+                    if ( required > 1 )
+                    {
+                        std::string value( (size_t)required, '\0' );
+                        WideCharToMultiByte( CP_UTF8, 0, argv[i], -1,
+                            value.data(), required, nullptr, nullptr );
+                        value.resize( (size_t)required - 1 );
+                        g.macroAuthorityRoot = value;
+                    }
+                    continue;
+                }
                 if ( _wcsicmp( argv[i], L"--play-phase4" ) == 0
                   || _wcsicmp( argv[i], L"--legacy-phase4" ) == 0 )
                 {
@@ -57932,8 +58603,11 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
 
     if ( g.certEi3LaunchMode )
     {
+        Stage0PlayView const launchView = g.ei3RichLandformsSession
+            ? Stage0PlayView::RichCausalLandforms
+            : Stage0PlayView::RegionalBiome;
         bool const descriptorAuthority = EnsureCausalPlayableAuthority(
-            Stage0PlayView::RegionalBiome );
+            launchView );
         bool const passed = g.ei3AuthorityEnabled
             && g.ei3MatterPlayable
             && g.playWorldgenBaseline && !g.playWorldgenLatestStableLaunch
@@ -57944,6 +58618,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             && !g.stage0ToolGeologyCutaway
             && !g.certWorldgenBaselinePerf
             && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0
+            && ( !g.ei3RichLandformsSession
+                || g.stage0PlayView == Stage0PlayView::RichCausalLandforms )
             && descriptorAuthority;
         FILE* file = nullptr;
         if ( fopen_s( &file, "Docs\\provenance_ei3_launch_mode_cert.txt", "wb" ) == 0 && file )
@@ -57958,6 +58634,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 "authoritative_landing=%d\nplayer_spawn=EMBODIED_ORIGIN_128_128\n"
                 "certification_overlays=OFF\nlive_radius_m=%d\nfar_extent_m=%d\n"
                 "descriptor_authority=%s\ndescriptor_reason=%s\n"
+                "rich_landforms_session=%d\nselected_stage=%s\n"
                 "legacy_phase4_shell=%s\nlocal_physics_fixture=REJECTED\n"
                 "flat_dirt_fallback=REJECTED\n",
                 passed ? "PASS" : "FAIL", g.ei3AuthorityEnabled ? 1 : 0,
@@ -57969,6 +58646,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 g.stage0LiveRadiusM, g.stage0FarExtentM,
                 descriptorAuthority ? "PASS" : "FAIL",
                 g.regionalBiomeAuthorityReason.c_str(),
+                g.ei3RichLandformsSession ? 1 : 0,
+                Stage0PlayViewName( g.stage0PlayView ),
                 g.playWorldgenBaseline ? "REJECTED" : "ACTIVE" );
             std::fclose( file );
         }
