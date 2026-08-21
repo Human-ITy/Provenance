@@ -1,4 +1,5 @@
-# Engine-issued macro authority artifacts are byte-addressed, not text files.
-# In particular, core.autocrlf must not rewrite canonical LF bytes on Windows.
+# World-authority descriptors and engine-issued macro artifacts are byte-addressed.
+# In particular, core.autocrlf must not rewrite their canonical LF bytes on Windows.
+Data/Worldgen/** -text
 *.mcp -text
 *.mcm -text

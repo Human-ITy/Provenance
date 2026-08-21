@@ -39662,6 +39662,7 @@ namespace
         }
 
         g.playWorldgenInitialized = true;
+        bool latestStableSelected = true;
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
           &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
           &&!g.playStage15Launch&&!g.playStage16Launch&&!g.playStage16BLaunch
@@ -39676,7 +39677,29 @@ namespace
         {
             g.stage0StageMenuOpen=false;
             g.stage0ToolDrawerOpen=false;
-            SelectStage0PlayView(Stage0PlayView::PresentWaterTerrainHydraulicCompaction);
+            latestStableSelected = SelectStage0PlayView(
+                Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
+        }
+        if ( g.ei3AuthorityEnabled && g.playWorldgenLatestStableLaunch
+          && !latestStableSelected )
+        {
+            // A byte-damaged or incompatible causal descriptor chain must not
+            // masquerade as the playable world by leaving the clean flat-dirt
+            // performance fixture active.
+            g.statusLine = "EI3 PLAYABLE REFUSED - "
+                + g.presentWaterTerrainHydraulicCompactionAuthorityReason;
+            FILE* file = nullptr;
+            if ( fopen_s( &file, "Docs\\provenance_ei3_playable_refusal.txt", "wb" ) == 0
+              && file )
+            {
+                std::fprintf( file,
+                    "EI3_PLAYABLE=REFUSED\nreason=%s\n"
+                    "flat_dirt_fallback=REJECTED\n",
+                    g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str() );
+                std::fclose( file );
+            }
+            PostQuitMessage( 2 );
+            return;
         }
         if ( g.playStage11Launch )
         {
@@ -56646,10 +56669,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
 
     if ( g.certEi3LaunchMode )
     {
+        bool const descriptorAuthority = EnsureCausalPlayableAuthority(
+            Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
         bool const passed = g.ei3AuthorityEnabled
             && g.playWorldgenBaseline && g.playWorldgenLatestStableLaunch
             && !g.certWorldgenBaselinePerf
-            && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0;
+            && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0
+            && descriptorAuthority;
         FILE* file = nullptr;
         if ( fopen_s( &file, "Docs\\provenance_ei3_launch_mode_cert.txt", "wb" ) == 0 && file )
         {
@@ -56657,11 +56683,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 "EI3_LAUNCH_MODE=%s\n"
                 "authority_enabled=%d\nworldgen_presentation=%d\n"
                 "latest_stable_runtime=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
-                "legacy_phase4_shell=%s\n",
+                "descriptor_authority=%s\ndescriptor_reason=%s\n"
+                "legacy_phase4_shell=%s\nflat_dirt_fallback=REJECTED\n",
                 passed ? "PASS" : "FAIL", g.ei3AuthorityEnabled ? 1 : 0,
                 g.playWorldgenBaseline ? 1 : 0,
                 g.playWorldgenLatestStableLaunch ? 1 : 0,
                 g.stage0LiveRadiusM, g.stage0FarExtentM,
+                descriptorAuthority ? "PASS" : "FAIL",
+                g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str(),
                 g.playWorldgenBaseline ? "REJECTED" : "ACTIVE" );
             std::fclose( file );
         }

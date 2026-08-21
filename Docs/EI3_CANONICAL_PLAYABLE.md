@@ -14,6 +14,13 @@ the historical Phase 4 blue-shell renderer active merely because a command-line
 argument was present. `--cert-ei3-launch-mode` verifies this selection without
 opening a window.
 
+All files below `Data/Worldgen` are byte-addressed authority artifacts. Git must
+preserve their committed bytes on Windows; CRLF conversion invalidates linked
+descriptor digests. If the latest causal presentation cannot load, canonical
+EI3 exits with an explicit refusal and rejects the clean `flat_dirt` performance
+fixture as a fallback. `--cert-ei3-launch-mode` loads the descriptor chain and
+therefore certifies more than command-line booleans.
+
 Persistent playthrough identity:
 
 `C:\Users\D-Day\ProvenanceWorkspace\State\canonical-playable\world-instance.json`

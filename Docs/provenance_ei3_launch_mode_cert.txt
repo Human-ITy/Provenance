@@ -4,4 +4,7 @@ worldgen_presentation=1
 latest_stable_runtime=1
 live_radius_m=192
 far_extent_m=0
+descriptor_authority=PASS
+descriptor_reason=certified
 legacy_phase4_shell=REJECTED
+flat_dirt_fallback=REJECTED
