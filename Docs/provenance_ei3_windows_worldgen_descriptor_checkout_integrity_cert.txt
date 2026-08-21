@@ -1,0 +1,16 @@
+EI3_WINDOWS_WORLDGEN_DESCRIPTOR_CHECKOUT=PASS
+tested_fix_commit=f67098f38ea58aae0cdbbd47d5b77b0ff345ed7c
+checkout_core_autocrlf=true
+checkout_method=clone_no_checkout_then_detached_checkout
+git_attribute=Data/Worldgen/** -text
+authority_files=64
+lf_bytes=79147
+crlf_pairs=0
+geology_blob_sha1=f9a0a90ab8f4d7ecb126ce51cd118e53b7e04388
+geology_worktree_sha1=f9a0a90ab8f4d7ecb126ce51cd118e53b7e04388
+descriptor_authority=PASS
+descriptor_reason=certified
+launch_mode=PASS
+controlled_crlf_corruption_exit=2
+controlled_crlf_corruption_reason=geology_descriptor_digest_mismatch
+flat_dirt_fallback=REJECTED
