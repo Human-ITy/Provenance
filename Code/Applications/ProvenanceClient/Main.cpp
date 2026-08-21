@@ -43291,7 +43291,7 @@ namespace
             StrokeRect( px0, py0, px1, py1, 0.18f, 0.20f, 0.24f );
             glColor3f( 0.82f, 0.88f, 0.94f );
             DrawHudText( px0 + 18.f, py1 - 22.f,
-                "PLAYABLE STAGES / CERTS - one current stage   Enter/click launch   CLOSED is read-only" );
+                "PLAYABLE STAGES / CERTS | EI3.Q.B RICH = row 25 | Enter/click launch | CLOSED is read-only" );
             StandingBoardTableGeom const tbl = MakeStandingBoardTableGeom( px0, py0, px1, py1 );
             FillRect( tbl.colHashX0, tbl.headerY0, tbl.colStatusX1, tbl.headerY1, 0.12f, 0.14f, 0.18f );
             glColor3f( 0.70f, 0.78f, 0.86f );

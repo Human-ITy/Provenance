@@ -2,7 +2,13 @@
 
 ## Launch the playable stage
 
-Double-click `PLAY_EI3_QB_RICH_LANDFORMS.cmd` in the Provenance client repository.
+Double-click the plainly named desktop launcher:
+
+`C:\Users\D-Day\Desktop\Provenance EI3 QB\PLAY EI3 QB - RICH LANDFORMS.cmd`
+
+The source launcher it calls is:
+
+`C:\Users\D-Day\.codex\.chatgpt-projects\g-p-6a3709c376088191918eed8315fa9751\.ei3q-provenance\PLAY_EI3_QB_RICH_LANDFORMS.cmd`
 
 The same launcher works in both the certified integration checkout and the
 consolidated workspace. It discovers the appropriate authority workspace and
@@ -16,8 +22,11 @@ Landforms** stage.
 Inside the client:
 
 1. Press `M` to open the stage board.
-2. Select **EI3.Q.B — Rich Causal Landforms** with the arrow keys or mouse wheel.
-3. Press `Enter` to enter it.
+2. The Q.B launcher starts directly in **EI3.Q.B — Rich Causal Landforms**, so
+   the board opens centered on its current row.
+3. If you opened the generic client instead, Q.B is board row **25**. Scroll
+   upward when the footer says it is showing rows 26–41.
+4. Press `Enter` to re-enter the highlighted stage if needed.
 
 The stage deliberately fails closed in a normal Q.A authority session. Use the
 Q.B launcher so the visible terrain, grounding, and detailed matter projection
@@ -25,15 +34,15 @@ all refer to the same Q.B `WorldBaselineIdentity`.
 
 ## Code ownership and edit locations
 
-FableScript owns the physical world truth. Edit the deterministic Q.B landform
-laws here:
+FableScript owns the physical world truth. The certified integration source is:
 
-- `fablescript/worldgen/world_substrate.py` in the FableScript integration repo
+`C:\Users\D-Day\.codex\.chatgpt-projects\g-p-6a3709c376088191918eed8315fa9751\.ei3q-fablescript\fablescript\worldgen\world_substrate.py`
 
-ProvenanceClient owns stage selection and presentation. Edit those pieces here:
+ProvenanceClient owns stage selection and presentation. Edit these certified
+integration files:
 
-- `Code/Applications/ProvenanceClient/Main.cpp`
-- `Code/Applications/ProvenanceClient/Ei3DetailedProjection.h`
+- `C:\Users\D-Day\.codex\.chatgpt-projects\g-p-6a3709c376088191918eed8315fa9751\.ei3q-provenance\Code\Applications\ProvenanceClient\Main.cpp`
+- `C:\Users\D-Day\.codex\.chatgpt-projects\g-p-6a3709c376088191918eed8315fa9751\.ei3q-provenance\Code\Applications\ProvenanceClient\Ei3DetailedProjection.h`
 
 The one-click local-authority launch path is here:
 
@@ -42,20 +51,22 @@ The one-click local-authority launch path is here:
 
 ## Open and edit the project
 
-The consolidated workspace is `C:\Users\D-Day\ProvenanceWorkspace`.
+The currently certified Q.B code is in the two integration folders above. It
+has not yet been promoted into `C:\Users\D-Day\ProvenanceWorkspace`, so do not
+edit that older copy expecting this Q.B stage to change.
 
-For C++ client work, open this project in Visual Studio:
+For C++ client work, open this exact project in Visual Studio:
 
-- `Client\ProvenanceClient\Code\Applications\ProvenanceClient\Esoterica.Applications.ProvenanceClient.vcxproj`
+- `C:\Users\D-Day\.codex\.chatgpt-projects\g-p-6a3709c376088191918eed8315fa9751\.ei3q-provenance\Code\Applications\ProvenanceClient\Esoterica.Applications.ProvenanceClient.vcxproj`
 
 For engine Python, launcher scripts, documentation, or mixed engine/client
-editing, open the entire `C:\Users\D-Day\ProvenanceWorkspace` folder in Visual
-Studio Code. The main files for this stage are:
+editing, open both `.ei3q-fablescript` and `.ei3q-provenance` in Visual Studio
+Code. The desktop folder contains an `OPEN EI3 QB CODE FOLDERS.cmd` helper.
 
-- `Engine\FableScript\fablescript\worldgen\world_substrate.py`
-- `Client\ProvenanceClient\Code\Applications\ProvenanceClient\Main.cpp`
-- `Client\ProvenanceClient\Code\Applications\ProvenanceClient\Ei3DetailedProjection.h`
-- `Client\ProvenanceClient\Tools\Integration\Start-Ei3CanonicalPlayable.ps1`
+- `.ei3q-fablescript\fablescript\worldgen\world_substrate.py`
+- `.ei3q-provenance\Code\Applications\ProvenanceClient\Main.cpp`
+- `.ei3q-provenance\Code\Applications\ProvenanceClient\Ei3DetailedProjection.h`
+- `.ei3q-provenance\Tools\Integration\Start-Ei3CanonicalPlayable.ps1`
 
 Build the standalone ProvenanceClient project in `Release | x64`. Do not build
 the entire Esoterica solution just to edit or run this stage; optional upstream
