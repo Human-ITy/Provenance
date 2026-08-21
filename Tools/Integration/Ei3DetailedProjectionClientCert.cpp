@@ -30,6 +30,13 @@ int main( int argc, char** argv )
         == Ei3::Residency::Admission::Idempotent;
     float ground = 0.f;
     pass = pass && residency.GroundHeight( 160.f, 160.f, ground ) && std::isfinite( ground );
+    Ei3::MatterSurfaceSample ancestry;
+    pass = pass && residency.SampleMatterSurface( 160.f, 160.f, ancestry );
+    pass = pass && !ancestry.macroFeatureId.empty()
+        && !ancestry.macroLandformId.empty()
+        && !ancestry.parentRangeId.empty()
+        && !ancestry.macroPeakId.empty()
+        && !ancestry.lithologyClass.empty();
     pass = pass && residency.AdmitSnapshot( snapshots[0],
         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", baseline, failure )
         == Ei3::Residency::Admission::Rejected;
@@ -73,7 +80,9 @@ int main( int argc, char** argv )
 
     std::printf(
         "EI3_CLIENT_CONTRACT=%s\nSNAPSHOT_ADMISSION=%s\nDELTA_CONTIGUITY=%s\n"
-        "PREDICTIVE_24_60_120_240=%s\nLANDING_P0=%s\nCOURSE_CHANGE=%s\n",
+        "STATIC_ANCESTRY=%s\nPREDICTIVE_24_60_120_240=%s\n"
+        "LANDING_P0=%s\nCOURSE_CHANGE=%s\n",
+        pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL" );
     return pass ? 0 : 1;

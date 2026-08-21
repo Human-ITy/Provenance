@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
-    [switch] $ProbeOnly
+    [switch] $ProbeOnly,
+    [string[]] $ClientArgument = @('--ei3-authority'),
+    [string] $CanonicalWorkspaceRoot = '',
+    [int] $ControlPort = 8765,
+    [int] $BulkPort = 8766
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +26,7 @@ function Find-Ei3Python {
 }
 
 function Assert-Ei3PortsFree {
-    foreach ($port in 8765, 8766) {
+    foreach ($port in $ControlPort, $BulkPort) {
         $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
         if ($listener) {
             throw "Port $port is already occupied. No process was terminated."
@@ -31,7 +35,11 @@ function Assert-Ei3PortsFree {
 }
 
 $clientRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$workspaceRoot = (Resolve-Path -LiteralPath (Join-Path $clientRoot '..\..')).Path
+$workspaceRoot = if ($CanonicalWorkspaceRoot) {
+    (Resolve-Path -LiteralPath $CanonicalWorkspaceRoot).Path
+} else {
+    (Resolve-Path -LiteralPath (Join-Path $clientRoot '..\..')).Path
+}
 $engineRoot = Join-Path $workspaceRoot 'Engine\FableScript'
 $enginePackage = Join-Path $engineRoot 'fablescript'
 $clientExe = Join-Path $clientRoot 'Build\x64_Release\ProvenanceClient.exe'
@@ -76,8 +84,8 @@ try {
         '--cache-root', $macroCache,
         '--compiled-context-root', $compiledContexts,
         '--world-instance', $worldInstance,
-        '--control-port', '8765',
-        '--bulk-port', '8766',
+        '--control-port', "$ControlPort",
+        '--bulk-port', "$BulkPort",
         '--shutdown-file', $shutdownFile
     )
     $authority = Start-Process -FilePath $python -ArgumentList $authorityArgs `
@@ -101,7 +109,7 @@ try {
         }
         $probeArgs = @(
             $probeModule,
-            '--control-port', '8765', '--bulk-port', '8766',
+            '--control-port', "$ControlPort", '--bulk-port', "$BulkPort",
             '--timeout', '120', '--receipt', $probeReceipt
         )
         & $python @probeArgs 2> $probeStderr | Out-Null
@@ -132,7 +140,7 @@ try {
     Write-Host 'PRESENTATION PATH: EI3 AUTHORITATIVE'
 
     if (-not $ProbeOnly) {
-        $client = Start-Process -FilePath $clientExe -ArgumentList @('--ei3-authority') `
+        $client = Start-Process -FilePath $clientExe -ArgumentList $ClientArgument `
             -WorkingDirectory $clientRoot -PassThru -Wait
         $clientExitCode = $client.ExitCode
         if ($clientExitCode -ne 0) {
@@ -168,6 +176,9 @@ finally {
         authority_pid = if ($authority) { $authority.Id } else { $null }
         owned_authority_shutdown = $cleanShutdown
         client_exit_code = $clientExitCode
+        client_arguments = $ClientArgument
+        control_port = $ControlPort
+        bulk_port = $BulkPort
         world_uuid = if ($identity) { $identity.world_uuid } else { $null }
         macro_genesis_digest = if ($identity) { $identity.macro_genesis_digest } else { $null }
         world_baseline_digest = if ($identity) { $identity.world_baseline_digest } else { $null }

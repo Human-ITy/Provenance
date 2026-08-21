@@ -59,7 +59,31 @@ namespace Ei3
         int surfaceVoxelZ = 0;
         int surfaceFill = 0;
         std::string dominantSurfaceFamily;
+        std::string dominantMaterialId;
+        std::string formationId;
+        std::string macroFeatureId;
+        std::string macroLandformId;
+        std::string parentRangeId;
+        std::string macroPeakId;
+        std::string lithologyClass;
+        std::string substrateClass;
         std::string canonicalJson;
+    };
+
+    struct MatterSurfaceSample
+    {
+        float z = 0.f;
+        std::string dominantMaterialId;
+        std::string dominantSurfaceFamily;
+        std::string formationId;
+        std::string macroFeatureId;
+        std::string macroLandformId;
+        std::string parentRangeId;
+        std::string macroPeakId;
+        std::string lithologyClass;
+        std::string substrateClass;
+        ChunkCoord chunkCoord;
+        int64_t chunkRevision = -1;
     };
 
     struct Snapshot
@@ -290,7 +314,17 @@ namespace Ei3
               || !Detail::ExtractInt( object, "surface_fill", column.surfaceFill )
               || !Detail::ExtractString( object, "dominant_surface_family",
                                          column.dominantSurfaceFamily )
-              || column.surfaceFill < 0 || column.surfaceFill > 255 )
+              || !Detail::ExtractString( object, "dominant_material_id",
+                                         column.dominantMaterialId )
+              || !Detail::ExtractString( object, "formation_id", column.formationId )
+              || !Detail::ExtractString( object, "macro_feature_id", column.macroFeatureId )
+              || !Detail::ExtractString( object, "macro_landform_id", column.macroLandformId )
+              || !Detail::ExtractString( object, "parent_range_id", column.parentRangeId )
+              || !Detail::ExtractString( object, "macro_peak_id", column.macroPeakId )
+              || !Detail::ExtractString( object, "lithology_class", column.lithologyClass )
+              || !Detail::ExtractString( object, "substrate_class", column.substrateClass )
+              || column.surfaceFill < 0 || column.surfaceFill > 255
+              || column.macroFeatureId.empty() )
             { failure = "malformed_detailed_surface_column"; return false; }
             column.ix = voxel.x; column.iy = voxel.y; column.canonicalJson = object;
             candidate.columns.push_back( std::move( column ) );
@@ -593,6 +627,14 @@ namespace Ei3
 
         bool GroundHeight( float x, float y, float& z ) const
         {
+            MatterSurfaceSample sample;
+            if ( !SampleMatterSurface( x, y, sample ) ) { return false; }
+            z = sample.z;
+            return true;
+        }
+
+        bool SampleMatterSurface( float x, float y, MatterSurfaceSample& out ) const
+        {
             ChunkCoord const coord{ FloorChunk( x ), FloorChunk( y ) };
             std::shared_ptr<Snapshot const> snapshot;
             {
@@ -614,9 +656,24 @@ namespace Ei3
                     / kFillDenominator * kVoxelEdgeM; };
             float const a = height( ix, iy ), b = height( ix + 1, iy );
             float const c = height( ix, iy + 1 ), d = height( ix + 1, iy + 1 );
-            z = a * ( 1 - tx ) * ( 1 - ty ) + b * tx * ( 1 - ty )
+            out.z = a * ( 1 - tx ) * ( 1 - ty ) + b * tx * ( 1 - ty )
               + c * ( 1 - tx ) * ty + d * tx * ty;
-            return std::isfinite( z );
+            int const nearestX = tx < .5f ? ix : ix + 1;
+            int const nearestY = ty < .5f ? iy : iy + 1;
+            SurfaceColumn const& source = snapshot->columns[
+                (size_t)nearestY * kLatticeSide + nearestX];
+            out.dominantMaterialId = source.dominantMaterialId;
+            out.dominantSurfaceFamily = source.dominantSurfaceFamily;
+            out.formationId = source.formationId;
+            out.macroFeatureId = source.macroFeatureId;
+            out.macroLandformId = source.macroLandformId;
+            out.parentRangeId = source.parentRangeId;
+            out.macroPeakId = source.macroPeakId;
+            out.lithologyClass = source.lithologyClass;
+            out.substrateClass = source.substrateClass;
+            out.chunkCoord = coord;
+            out.chunkRevision = snapshot->chunkRevision;
+            return std::isfinite( out.z ) && !out.dominantMaterialId.empty();
         }
 
         void Prune( ChunkCoord center, int protectRadius, size_t limit = kMaxResidentChunks )

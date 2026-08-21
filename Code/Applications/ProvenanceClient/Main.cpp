@@ -924,6 +924,10 @@ namespace
         bool certStage0VisualHullMirror = false;
         // --play-worldgen-baseline: human traversal counterpart to the fixed cert.
         bool playWorldgenBaseline = false;
+        // Canonical play uses the existing continuous near reconstruction fed
+        // by admitted WorldSubstrate samples. The Stage/MW calibration meshes
+        // remain available to their explicit certificate launchers only.
+        bool ei3MatterPlayable = false;
         bool playWorldgenInitialized = false;
         bool playWorldgenLatestStableLaunch = false;
         bool certWorldgenLaunchContract = false;
@@ -1814,6 +1818,22 @@ namespace
         size_t ei3DrawSnapshots = 0;
         size_t ei3DrawTriangles = 0;
         float ei3DrawMinZ = 0.f, ei3DrawMaxZ = 0.f;
+        bool ei3ProjectionAlignmentMeasured = false;
+        bool ei3ProjectionAlignmentOk = false;
+        size_t ei3ProjectionAlignmentSamples = 0;
+        double ei3ProjectionAlignmentMeanDeltaM = 0.0;
+        double ei3ProjectionAlignmentMeanAbsM = 0.0;
+        double ei3ProjectionAlignmentMaxAbsM = 0.0;
+        double ei3ProjectionJoinMeanAbsM = 0.0;
+        double ei3ProjectionJoinMaxAbsM = 0.0;
+        float ei3ProjectionAnchorX = 0.f, ei3ProjectionAnchorY = 0.f;
+        float ei3MacroPresentationBiasM = 0.f;
+        float ei3MacroPresentationSlopeX = 0.f;
+        float ei3MacroPresentationSlopeY = 0.f;
+        bool ei3PlayableRuntimeReceiptWritten = false;
+        DWORD ei3PlayableRuntimeReceiptMs = 0;
+        float ei3PlayableMaxTravelM = 0.f;
+        int ei3PlayableSupportHolds = 0;
         bool certEi3Ptc = false;
         int certEi3Phase = 0;
         int certEi3Frames = 0;
@@ -1825,6 +1845,42 @@ namespace
         bool certEi3ReconnectPassed = false;
         bool certEi3LandingPassed = false;
         bool certEi3CoarseRetained = false;
+        bool certEi3V = false;
+        int certEi3VPhase = 0;
+        int certEi3VFrames = 0;
+        int certEi3VLeg = 0;
+        DWORD certEi3VStartMs = 0;
+        DWORD certEi3VPhaseStartMs = 0;
+        float certEi3VStartX = 0.f, certEi3VStartY = 0.f;
+        float certEi3VLegStartX = 0.f, certEi3VLegStartY = 0.f;
+        float certEi3VWalkStartX = 0.f, certEi3VWalkStartY = 0.f;
+        float certEi3VNextCaptureM = 16.f;
+        double certEi3VDistanceM = 0.0;
+        uint64_t certEi3VSourceRev = 0;
+        int certEi3VRevMismatchStart = 0;
+        int certEi3VSupportHoldsStart = 0;
+        int certEi3VMacroEmptyFrames = 0;
+        int certEi3VSourceChanges = 0;
+        int certEi3VCoarseHandoffFrames = 0;
+        int certEi3VWalkDetailMisses = 0;
+        int certEi3VDetailCheckpoints = 0;
+        int certEi3VAheadCheckpoints = 0;
+        int certEi3VLandmarkReturns = 0;
+        float certEi3VLandmarkReturnErrorM = 0.f;
+        std::string certEi3VLandmarkFeatureId;
+        bool certEi3VLegReady = false;
+        bool certEi3VEndpointPending = false;
+        DWORD certEi3VCheckpointStartMs = 0;
+        int certEi3VGroundMismatchFrames = 0;
+        int certEi3VUngroundedWalkFrames = 0;
+        int certEi3VCaptures = 0;
+        long long certEi3VSkyHoles = 0;
+        bool certEi3VCapturePending = false;
+        bool certEi3VLandingPassed = false;
+        bool certEi3VWalkingPassed = false;
+        size_t certEi3VResidentMax = 0;
+        size_t certEi3VRequestedMax = 0;
+        float certEi3VFrameWorstMs = 0.f;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2451,6 +2507,9 @@ namespace
     int Stage0PendingPackageCount( Stage0PlayView view );
     float Stage0MinCompleteRadiusM( Stage0PlayView view );
     bool DumpFramePpm( char const* path );
+    void Mv1CoverageCount( long long& holes, long long& sky, long long& terr );
+    int CountLowerFrameSkyPixels();
+    void FollowStreamCenter();
     int CountLowerPpmSkyPixels( char const* path );
     int CountLowerPpmDarkPixels( char const* path, int* sampled );
     void DrawStage0CalibrationPresentation();
@@ -2728,6 +2787,12 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ );
     bool SampleGroundZ( float x, float y, float& outZ );
+    bool SampleCanonicalWorldGenesisZ( float x, float y, float& outZ );
+    bool SampleCanonicalWorldGenesisColor( float x, float y,
+        uint8_t& r, uint8_t& green, uint8_t& b );
+    float Ei3MacroPresentationOffset( float x, float y );
+    bool FineSurfaceState( double x, double y, Ms1::SurfaceState& out );
+    static uint8_t Ms1LithologyFromMaterial( std::string const& material );
     bool SampleAimSurfaceZ( float x, float y, float& outZ );
     bool SampleTerrainDrawZ( float x, float y, float& outZ ); // HF; collapse where air under skin
     bool SampleOccupancyZ( float x, float y, float& outZ );
@@ -6857,6 +6922,202 @@ namespace
         return RequestBulkMethod( "hello", params.c_str() );
     }
 
+    bool MeasureEi3ProjectionAlignment()
+    {
+        // WorldSubstrate detail and the immutable WorldGenesis macro page share
+        // one identity and coordinate frame, but the page is a kilometre-scale
+        // presentation cache. Measure its local LOD residual against admitted
+        // matter detail; an admitted residual supplies only an overlap morph.
+        static float const offsets[][2] = {
+            { 0.f, 0.f }, { -8.f, 0.f }, { 8.f, 0.f },
+            { 0.f, -8.f }, { 0.f, 8.f },
+            { -16.f, -16.f }, { 16.f, -16.f },
+            { -16.f, 16.f }, { 16.f, 16.f }
+        };
+        double sum = 0.0, sumAbs = 0.0, maxAbs = 0.0;
+        double sumDx2 = 0.0, sumDy2 = 0.0;
+        double sumDxDelta = 0.0, sumDyDelta = 0.0;
+        struct Residual { double dx, dy, delta; };
+        std::vector<Residual> residuals;
+        size_t count = 0;
+        for ( auto const& offset : offsets )
+        {
+            double const x = (double)g.feetX + offset[0];
+            double const y = (double)g.feetY + offset[1];
+            Ei3::MatterSurfaceSample detail;
+            float regionalZ = 0.f;
+            if ( !g.ei3Residency.SampleMatterSurface(
+                    (float)x, (float)y, detail )
+              || !SampleCanonicalWorldGenesisZ(
+                    (float)x, (float)y, regionalZ ) )
+            { continue; }
+            double const delta = (double)detail.z - regionalZ;
+            double const absDelta = std::fabs( delta );
+            sum += delta; sumAbs += absDelta;
+            maxAbs = (std::max)( maxAbs, absDelta );
+            sumDx2 += offset[0] * offset[0];
+            sumDy2 += offset[1] * offset[1];
+            sumDxDelta += offset[0] * delta;
+            sumDyDelta += offset[1] * delta;
+            residuals.push_back( Residual{ offset[0], offset[1], delta } );
+            ++count;
+        }
+        if ( count < 5 ) { return false; }
+
+        g.ei3ProjectionAlignmentMeasured = true;
+        g.ei3ProjectionAlignmentSamples = count;
+        g.ei3ProjectionAlignmentMeanDeltaM = sum / (double)count;
+        g.ei3ProjectionAlignmentMeanAbsM = sumAbs / (double)count;
+        g.ei3ProjectionAlignmentMaxAbsM = maxAbs;
+        g.ei3ProjectionAnchorX = g.feetX;
+        g.ei3ProjectionAnchorY = g.feetY;
+        g.ei3MacroPresentationBiasM = (float)( sum / (double)count );
+        // Retain the measured gradient as evidence, but the carrier uses one
+        // translation. A moving/sheared truth surface would visibly deform as
+        // the player travelled; the near mesh instead geomorphs into this
+        // translated immutable page at its outer edge.
+        g.ei3MacroPresentationSlopeX = sumDx2 > 0.0
+            ? (float)( sumDxDelta / sumDx2 ) : 0.f;
+        g.ei3MacroPresentationSlopeY = sumDy2 > 0.0
+            ? (float)( sumDyDelta / sumDy2 ) : 0.f;
+        double joinSumAbs = 0.0, joinMaxAbs = 0.0;
+        for ( Residual const& r : residuals )
+        {
+            double const fit = g.ei3MacroPresentationBiasM;
+            double const e = std::fabs( r.delta - fit );
+            joinSumAbs += e;
+            joinMaxAbs = (std::max)( joinMaxAbs, e );
+        }
+        g.ei3ProjectionJoinMeanAbsM = joinSumAbs / (double)count;
+        g.ei3ProjectionJoinMaxAbsM = joinMaxAbs;
+        // Reject the former local MW8 source (~50 m wrong here), while admitting
+        // the engine page's coarse representation envelope. The fitted offset is
+        // presentation-only and fades away before the regional representation.
+        g.ei3ProjectionAlignmentOk = maxAbs < 25.0
+            && g.ei3ProjectionAlignmentMeanAbsM < 20.0
+            && joinMaxAbs < 5.0;
+        if ( !g.ei3ProjectionAlignmentOk )
+        {
+            char receipt[256];
+            std::snprintf( receipt, sizeof( receipt ),
+                "EI3 LOD join refused: coarse=%+.3fm max=%.3fm fitted_max=%.3fm n=%zu",
+                g.ei3ProjectionAlignmentMeanDeltaM,
+                g.ei3ProjectionAlignmentMaxAbsM,
+                g.ei3ProjectionJoinMaxAbsM, count );
+            g.lastError = "ei3_projection_vertical_mismatch";
+            g.statusLine = receipt;
+        }
+        else
+        {
+            InvalidateTerrainMesh( "ei3_matter_lod_join" );
+        }
+        return true;
+    }
+
+    float Ei3MacroPresentationOffset( float x, float y )
+    {
+        (void)x; (void)y;
+        // A spawn-local residual is receipt evidence, not a global transform.
+        // Applying it to the unbounded carrier separated macro and substrate
+        // after traversal.
+        return 0.f;
+    }
+
+    bool SamplePublishedMatterGround( float x, float y, float& outZ )
+    {
+        if ( !g.ei3MatterPlayable ) { return false; }
+        double const sx = (double)x
+            + 0.5 * CausalVisibleExposure::kDualStepM;
+        double const sy = (double)y
+            + 0.5 * CausalVisibleExposure::kDualStepM;
+        int const bx = (int)std::floor(
+            sx / CausalVisibleExposure::kBlockSizeM );
+        int const by = (int)std::floor(
+            sy / CausalVisibleExposure::kBlockSizeM );
+        auto const block = g.stage8TerrainBlocks.find( CellKey( bx, by ) );
+        if ( block == g.stage8TerrainBlocks.end()
+          || !block->second.collisionSurface ) { return false; }
+        // SampleGroundZBase resolves this same published collision surface
+        // before any macro carrier fallback. Requiring the publication first
+        // makes visible matter and physical support one atomic handoff.
+        return SampleGroundZBase( x, y, outZ );
+    }
+
+    void WriteEi3PlayableRuntimeReceipt()
+    {
+        if ( !g.ei3ProjectionAlignmentMeasured ) { return; }
+        DWORD const now = GetTickCount();
+        if ( g.ei3PlayableRuntimeReceiptWritten
+          && now - g.ei3PlayableRuntimeReceiptMs < 1000 ) { return; }
+        // Landing is certified by the published matter surface that both the
+        // renderer and collision sampler consume. Macro/detail residual
+        // measurements remain useful telemetry, but they are not a gate on
+        // whether authoritative support exists at the player's feet.
+        bool const landed = !g.ei3LandingIntent && g.walkMode && g.grounded;
+        if ( !landed ) { return; }
+
+        float const travelX = g.feetX - g.ei3ProjectionAnchorX;
+        float const travelY = g.feetY - g.ei3ProjectionAnchorY;
+        float const travelM = std::sqrt( travelX * travelX + travelY * travelY );
+        g.ei3PlayableMaxTravelM = (std::max)( g.ei3PlayableMaxTravelM, travelM );
+
+        Ei3::MatterSurfaceSample matter;
+        bool const sampled = g.ei3Residency.SampleMatterSurface(
+            g.feetX, g.feetY, matter );
+        FILE* file = nullptr;
+        if ( fopen_s( &file, "Docs\\provenance_ei3_playable_runtime.txt", "wb" ) == 0
+          && file )
+        {
+            std::fprintf( file,
+                "EI3_CANONICAL_PLAYABLE_RUNTIME=%s\n"
+                "client=ESOTERICA_PROVENANCE\n"
+                "authority=FABLESCRIPT_WORLDGENESIS_WORLDSUBSTRATE\n"
+                "world_uuid=%s\nmacro_genesis_digest=%s\nworld_baseline_digest=%s\n"
+                "near_renderer=CONTINUOUS_MATTER_BOUND\n"
+                "ei3_diagnostic_lattice=NORMAL_PLAY_OFF\n"
+                "mw8_calibration_surface=NORMAL_PLAY_OFF\n"
+                "alignment_samples=%zu\nalignment_mean_delta_m=%+.6f\n"
+                "alignment_mean_abs_m=%.6f\nalignment_max_abs_m=%.6f\n"
+                "lod_join_fitted_mean_abs_m=%.6f\n"
+                "lod_join_fitted_max_abs_m=%.6f\n"
+                "macro_presentation_bias_m=%+.6f\n"
+                "alignment=%s\nlanded=%s\nwalk_mode=%d\ngrounded=%d\n"
+                "travel_from_alignment_m=%.6f\nmax_travel_m=%.6f\n"
+                "authoritative_support_holds=%d\n"
+                "feet_xyz=%.6f,%.6f,%.6f\ncamera_z=%.6f\n"
+                "matter_sample=%s\nmatter_surface_z=%.6f\nmaterial_id=%s\n"
+                "surface_family=%s\nformation_id=%s\nsubstrate_class=%s\n"
+                "chunk_coord=%d,%d\nchunk_revision=%lld\nresident_chunks=%zu\n",
+                landed ? "PASS" : "FAIL",
+                g.worldUuid.c_str(), g.macroGenesisDigest.c_str(),
+                g.worldBaselineDigest.c_str(),
+                g.ei3ProjectionAlignmentSamples,
+                g.ei3ProjectionAlignmentMeanDeltaM,
+                g.ei3ProjectionAlignmentMeanAbsM,
+                g.ei3ProjectionAlignmentMaxAbsM,
+                g.ei3ProjectionJoinMeanAbsM,
+                g.ei3ProjectionJoinMaxAbsM,
+                g.ei3MacroPresentationBiasM,
+                g.ei3ProjectionAlignmentOk ? "PASS" : "FAIL",
+                landed ? "PASS" : "FAIL", g.walkMode ? 1 : 0,
+                g.grounded ? 1 : 0, travelM, g.ei3PlayableMaxTravelM,
+                g.ei3PlayableSupportHolds,
+                g.feetX, g.feetY, g.feetZ, g.camZ,
+                sampled ? "PASS" : "FAIL", sampled ? matter.z : 0.f,
+                sampled ? matter.dominantMaterialId.c_str() : "",
+                sampled ? matter.dominantSurfaceFamily.c_str() : "",
+                sampled ? matter.formationId.c_str() : "",
+                sampled ? matter.substrateClass.c_str() : "",
+                sampled ? matter.chunkCoord.x : 0,
+                sampled ? matter.chunkCoord.y : 0,
+                (long long)( sampled ? matter.chunkRevision : -1 ),
+                g.ei3Residency.Size() );
+            std::fclose( file );
+            g.ei3PlayableRuntimeReceiptWritten = true;
+            g.ei3PlayableRuntimeReceiptMs = now;
+        }
+    }
+
     void TickEi3Residency()
     {
         if ( !g.ei3ProjectionMode
@@ -6929,17 +7190,32 @@ namespace
         g.ei3Residency.Prune(
             { Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) }, 2 );
 
-        if ( g.ei3LandingIntent )
+        float const joinDx = g.feetX - g.ei3ProjectionAnchorX;
+        float const joinDy = g.feetY - g.ei3ProjectionAnchorY;
+        bool const joinMoved = g.ei3ProjectionAlignmentMeasured
+            && joinDx * joinDx + joinDy * joinDy > 512.f * 512.f;
+        if ( g.ei3MatterPlayable
+          && ( !g.ei3ProjectionAlignmentMeasured || joinMoved ) )
+        { MeasureEi3ProjectionAlignment(); }
+
+        if ( g.ei3LandingIntent
+          && ( g.certEi3Ptc || g.ei3MatterPlayable ) )
         {
             float ground = 0.f;
-            if ( g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground ) )
+            bool const visibleSupportReady = g.ei3MatterPlayable
+                ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
+                : g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
+            if ( visibleSupportReady )
             {
                 g.feetZ = ground; g.camZ = ground + kEyeHeightM;
                 g.velZ = 0.f; g.walkMode = true; g.grounded = true;
                 g.ei3LandingIntent = false;
-                g.statusLine = "authoritative detailed ground admitted - walk active";
+                g.statusLine = g.ei3MatterPlayable
+                    ? "matter-bound terrain published - walk active"
+                    : "authoritative detailed ground admitted - walk active";
             }
         }
+        if ( g.ei3MatterPlayable ) { WriteEi3PlayableRuntimeReceipt(); }
     }
 
     void Ei3PredictiveTraversalCertTick()
@@ -7084,6 +7360,379 @@ namespace
             PostQuitMessage( pass ? 0 : 2 );
             g.certEi3Ptc = false;
         }
+    }
+
+    void Ei3PlayerViewTraversalCertTick()
+    {
+        if ( !g.certEi3V ) { return; }
+        DWORD const now = GetTickCount();
+        if ( g.certEi3VStartMs == 0 )
+        {
+            g.certEi3VStartMs = now;
+            g.certEi3VPhaseStartMs = now;
+        }
+        g.certEi3VResidentMax = (std::max)(
+            g.certEi3VResidentMax, g.ei3Residency.Size() );
+        g.certEi3VRequestedMax = (std::max)(
+            g.certEi3VRequestedMax, g.ei3Requested.size() );
+        g.certEi3VFrameWorstMs = (std::max)(
+            g.certEi3VFrameWorstMs, g.frameDt * 1000.f );
+
+        if ( g.certEi3VCapturePending && !g.mv2bCaptureRequest )
+        {
+            // EI3.V certifies what the player actually sees. The older depth-mask
+            // classifier is intentionally conservative for fixed elevated MV1
+            // diagnostics, but it treats representation overlap as missing depth
+            // even when the fully composed colour frame is continuous. This view
+            // is pitched so legitimate sky stays above the lower 45 percent; any
+            // sky-colour pixel below that line is therefore a visible terrain gap.
+            g.certEi3VSkyHoles += CountLowerFrameSkyPixels();
+            ++g.certEi3VCaptures;
+            g.certEi3VCapturePending = false;
+        }
+
+        float publishedGround = 0.f;
+        bool const publishedHere = SamplePublishedMatterGround(
+            g.feetX, g.feetY, publishedGround );
+        Ei3::MatterSurfaceSample publishedMatter;
+        bool const publishedMatterHere = g.ei3Residency.SampleMatterSurface(
+            g.feetX, g.feetY, publishedMatter );
+        if ( g.certEi3VPhase > 0 && g.certEi3VPhase < 99 )
+        {
+            if ( g.mv1Tiles.empty() ) { ++g.certEi3VMacroEmptyFrames; }
+            if ( g.mv1SourceRev != g.certEi3VSourceRev )
+            { ++g.certEi3VSourceChanges; }
+            if ( g.certEi3VPhase == 1 && !publishedHere )
+            { ++g.certEi3VCoarseHandoffFrames; }
+        }
+
+        if ( g.certEi3VPhase == 0 )
+        {
+            bool const ready = g.canonicalHandshakeOk
+                && g.bulkTransportState == Ei0d::ConnectionState::Active
+                && g.playWorldgenInitialized && !g.mv1Tiles.empty()
+                && g.ei3Residency.Published() > 0 && publishedHere
+                && !g.worldUuid.empty() && !g.macroGenesisDigest.empty();
+            if ( ready )
+            {
+                g.certEi3VStartX = g.camX;
+                g.certEi3VStartY = g.camY;
+                g.certEi3VLegStartX = g.camX;
+                g.certEi3VLegStartY = g.camY;
+                g.certEi3VSourceRev = g.mv1SourceRev;
+                g.certEi3VRevMismatchStart = g.mv1RevMismatchRefusals;
+                g.certEi3VSupportHoldsStart = g.ei3PlayableSupportHolds;
+                g.certEi3VLandmarkFeatureId = publishedMatter.macroFeatureId;
+                g.walkMode = false;
+                g.grounded = false;
+                g.ei3LandingIntent = false;
+                g.camZ = publishedGround + 80.f;
+                g.feetZ = g.camZ - kEyeHeightM;
+                g.pitch = -0.18f;
+                g.certEi3VPhase = 1;
+                g.certEi3VPhaseStartMs = now;
+                g.certEi3VFrames = 0;
+            }
+            else if ( now - g.certEi3VStartMs > 60000 )
+            {
+                g.lastError = "ei3_v_warmup_timeout";
+                g.certEi3VPhase = 99;
+            }
+            return;
+        }
+
+        if ( g.certEi3VPhase == 1 )
+        {
+            // Four moderate-speed legs cross sixteen 64 m authority chunks and
+            // more than one hundred distinct 8 m presentation spaces. The
+            // normal camera and renderer stay active throughout.
+            // Two orthogonal out-and-return traversals make the spawn's
+            // engine-issued MacroFeatureId a real persistent landmark gate:
+            // the client leaves it, views it from the handoff path, and must
+            // arrive back on the same admitted ancestry after each return.
+            float const dx[4] = { 0.f, 0.f, 1.f, -1.f };
+            float const dy[4] = { 1.f, -1.f, 0.f, 0.f };
+            int const leg = (std::min)( 3, g.certEi3VLeg );
+
+            // At every turn, hold the already-visible coarse world while the
+            // actual matter surface one chunk ahead publishes. This proves the
+            // predictive handoff explicitly; it does not require detail under
+            // every flight frame, which would contradict the coarse-retention
+            // contract being certified.
+            if ( !g.certEi3VLegReady )
+            {
+                float aheadGround = 0.f;
+                if ( SamplePublishedMatterGround(
+                        g.camX + dx[leg] * (float)Ei3::kChunkEdgeM,
+                        g.camY + dy[leg] * (float)Ei3::kChunkEdgeM,
+                        aheadGround ) )
+                {
+                    g.certEi3VLegReady = true;
+                    ++g.certEi3VAheadCheckpoints;
+                    g.certEi3VCheckpointStartMs = now;
+                }
+                else if ( g.certEi3VCheckpointStartMs == 0 )
+                { g.certEi3VCheckpointStartMs = now; }
+                else if ( now - g.certEi3VCheckpointStartMs > 30000 )
+                {
+                    g.lastError = "ei3_v_predictive_detail_timeout";
+                    g.certEi3VPhase = 99;
+                }
+                return;
+            }
+
+            // A completed leg is not admitted merely because the camera has
+            // crossed 256 m. Hold on the coarse presentation until the same
+            // matter surface used by landing/grounding is published here.
+            if ( g.certEi3VEndpointPending )
+            {
+                if ( publishedHere )
+                {
+                    bool const returning = g.certEi3VLeg == 1 || g.certEi3VLeg == 3;
+                    if ( returning )
+                    {
+                        float const rx = g.camX - g.certEi3VStartX;
+                        float const ry = g.camY - g.certEi3VStartY;
+                        float const returnError = std::sqrt( rx * rx + ry * ry );
+                        g.certEi3VLandmarkReturnErrorM = (std::max)(
+                            g.certEi3VLandmarkReturnErrorM, returnError );
+                        if ( !publishedMatterHere
+                          || publishedMatter.macroFeatureId
+                                != g.certEi3VLandmarkFeatureId
+                          || returnError > 1.f )
+                        {
+                            g.lastError = "ei3_v_landmark_identity_mismatch";
+                            g.certEi3VPhase = 99;
+                            return;
+                        }
+                        ++g.certEi3VLandmarkReturns;
+                    }
+                    char path[96] = {};
+                    sprintf_s( path, "Docs\\provenance_ei3v_leg_%d.ppm",
+                        g.certEi3VLeg + 1 );
+                    DumpFramePpm( path );
+                    ++g.certEi3VDetailCheckpoints;
+                    ++g.certEi3VLeg;
+                    g.certEi3VLegStartX = g.camX;
+                    g.certEi3VLegStartY = g.camY;
+                    g.certEi3VLegReady = false;
+                    g.certEi3VEndpointPending = false;
+                    g.certEi3VCheckpointStartMs = now;
+                    if ( g.certEi3VLeg >= 4 )
+                    {
+                        g.certEi3VPhase = 2;
+                        g.certEi3VPhaseStartMs = now;
+                        g.certEi3VFrames = 0;
+                    }
+                }
+                else if ( now - g.certEi3VCheckpointStartMs > 30000 )
+                {
+                    g.lastError = "ei3_v_endpoint_detail_timeout";
+                    g.certEi3VPhase = 99;
+                }
+                return;
+            }
+
+            float const dt = (std::max)( 0.001f,
+                (std::min)( 0.05f, g.frameDt ) );
+            float const lxBefore = g.camX - g.certEi3VLegStartX;
+            float const lyBefore = g.camY - g.certEi3VLegStartY;
+            float const legDistanceBefore = std::sqrt(
+                lxBefore * lxBefore + lyBefore * lyBefore );
+            float const step = (std::min)( 30.f * dt,
+                (std::max)( 0.f, 256.f - legDistanceBefore ) );
+            g.camX += dx[leg] * step;
+            g.camY += dy[leg] * step;
+            g.feetX = g.camX;
+            g.feetY = g.camY;
+            // Match the real free-flight controller. Its stream centre advances
+            // every frame; omitting this here left the automated camera moving
+            // while detailed matter residency remained around the start point.
+            FollowStreamCenter();
+            float macroZ = g.feetZ;
+            if ( SampleCanonicalWorldGenesisZ( g.camX, g.camY, macroZ ) )
+            { g.camZ = macroZ + 80.f; }
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.yaw = std::atan2( dx[leg], dy[leg] );
+            g.pitch = -0.18f;
+            g.walkMode = false;
+            g.grounded = false;
+            g.certEi3VDistanceM += step;
+
+            if ( !g.certEi3VCapturePending
+              && g.certEi3VDistanceM >= g.certEi3VNextCaptureM )
+            {
+                g.mv2bCaptureRequest = true;
+                g.certEi3VCapturePending = true;
+                g.certEi3VNextCaptureM += 16.f;
+            }
+
+            float const lx = g.camX - g.certEi3VLegStartX;
+            float const ly = g.camY - g.certEi3VLegStartY;
+            if ( std::sqrt( lx * lx + ly * ly ) >= 256.f )
+            {
+                g.certEi3VEndpointPending = true;
+                g.certEi3VCheckpointStartMs = now;
+            }
+            return;
+        }
+
+        if ( g.certEi3VPhase == 2 )
+        {
+            // Exercise the actual player F transition. If detailed matter is
+            // late, UpdateCamera/TickEi3Residency hold here until the visible
+            // surface is published; no macro or diagnostic ground is accepted.
+            g.keys['F'] = g.certEi3VFrames == 0;
+            ++g.certEi3VFrames;
+            if ( !g.ei3LandingIntent && g.walkMode && g.grounded
+              && publishedHere )
+            {
+                g.keys['F'] = false;
+                g.certEi3VLandingPassed = true;
+                g.certEi3VWalkStartX = g.feetX;
+                g.certEi3VWalkStartY = g.feetY;
+
+                float const dirsX[4] = { 0.f, 1.f, 0.f, -1.f };
+                float const dirsY[4] = { 1.f, 0.f, -1.f, 0.f };
+                float bestDelta = FLT_MAX;
+                int best = 0;
+                for ( int i = 0; i < 4; ++i )
+                {
+                    float candidate = publishedGround;
+                    if ( SamplePublishedMatterGround(
+                            g.feetX + dirsX[i] * 12.f,
+                            g.feetY + dirsY[i] * 12.f, candidate )
+                      && candidate - publishedGround < bestDelta )
+                    {
+                        bestDelta = candidate - publishedGround;
+                        best = i;
+                    }
+                }
+                g.yaw = std::atan2( dirsX[best], dirsY[best] );
+                g.pitch = -0.22f;
+                g.certEi3VPhase = 3;
+                g.certEi3VPhaseStartMs = now;
+                g.certEi3VFrames = 0;
+            }
+            else if ( now - g.certEi3VPhaseStartMs > 30000 )
+            {
+                g.keys['F'] = false;
+                g.lastError = "ei3_v_landing_timeout";
+                g.certEi3VPhase = 99;
+            }
+            return;
+        }
+
+        if ( g.certEi3VPhase == 3 )
+        {
+            g.keys['W'] = true;
+            if ( !publishedHere ) { ++g.certEi3VWalkDetailMisses; }
+            if ( !g.walkMode || !g.grounded )
+            { ++g.certEi3VUngroundedWalkFrames; }
+            if ( publishedHere && g.grounded
+              && std::fabs( g.feetZ - publishedGround ) > 0.15f )
+            { ++g.certEi3VGroundMismatchFrames; }
+            float const wx = g.feetX - g.certEi3VWalkStartX;
+            float const wy = g.feetY - g.certEi3VWalkStartY;
+            float const walked = std::sqrt( wx * wx + wy * wy );
+            if ( walked >= 48.f )
+            {
+                g.keys['W'] = false;
+                g.certEi3VWalkingPassed = true;
+                if ( !g.certEi3VCapturePending )
+                {
+                    g.mv2bCaptureRequest = true;
+                    g.certEi3VCapturePending = true;
+                }
+                g.certEi3VPhase = 4;
+                g.certEi3VPhaseStartMs = now;
+                g.certEi3VFrames = 0;
+            }
+            else if ( now - g.certEi3VPhaseStartMs > 30000 )
+            {
+                g.keys['W'] = false;
+                g.lastError = "ei3_v_walking_timeout";
+                g.certEi3VPhase = 99;
+            }
+            return;
+        }
+
+        bool const finishing = g.certEi3VPhase == 99
+            || ( g.certEi3VPhase == 4 && !g.certEi3VCapturePending
+                && ++g.certEi3VFrames >= 30 );
+        if ( !finishing ) { return; }
+
+        g.keys['F'] = false;
+        g.keys['W'] = false;
+        bool const pass = g.certEi3VPhase == 4
+            && !g.certEi3Ptc && g.canonicalHandshakeOk
+            && g.certEi3VLeg == 4 && g.certEi3VDistanceM >= 1024.0
+            && g.certEi3VCaptures >= 64 && g.certEi3VSkyHoles == 0
+            && g.certEi3VMacroEmptyFrames == 0
+            && g.certEi3VSourceChanges == 0
+            && g.mv1RevMismatchRefusals == g.certEi3VRevMismatchStart
+            && g.certEi3VAheadCheckpoints == 4
+            && g.certEi3VDetailCheckpoints == 4
+            && g.certEi3VLandmarkReturns == 2
+            && !g.certEi3VLandmarkFeatureId.empty()
+            && g.certEi3VWalkDetailMisses == 0
+            && g.certEi3VLandingPassed && g.certEi3VWalkingPassed
+            && g.certEi3VGroundMismatchFrames == 0
+            && g.certEi3VUngroundedWalkFrames == 0
+            && g.ei3PlayableSupportHolds == g.certEi3VSupportHoldsStart
+            && g.ei3Residency.Rejected() == 0
+            && g.macroPageValidationFailures == 0
+            && !g.worldUuid.empty() && !g.macroGenesisDigest.empty();
+
+        DumpFramePpm( "Docs\\provenance_ei3v_final.ppm" );
+        FILE* file = nullptr;
+        if ( fopen_s( &file,
+                "Docs\\provenance_ei3v_traversal_cert.txt", "wb" ) == 0
+          && file )
+        {
+            std::fprintf( file,
+                "EI3_V=%s\nrenderer=NORMAL_PLAYABLE\n"
+                "diagnostic_lattice=OFF\nflight_speed_mps=30\n"
+                "flight_legs=%d\nflight_distance_m=%.3f\n"
+                "walk_distance_target_m=48\nlanding=%s\nwalking=%s\n"
+                "coverage_captures=%d\nvisible_lower_sky_pixels=%lld\n"
+                "macro_empty_frames=%d\nsource_revision_changes=%d\n"
+                "revision_mismatch_delta=%d\ncoarse_handoff_frames=%d\n"
+                "ahead_detail_checkpoints=%d\nendpoint_detail_checkpoints=%d\n"
+                "landmark_macro_feature_id=%s\nlandmark_returns=%d\n"
+                "landmark_max_return_error_m=%.6f\n"
+                "walk_detail_miss_frames=%d\n"
+                "ground_mismatch_frames=%d\nungrounded_walk_frames=%d\n"
+                "support_hold_delta=%d\nresident_max=%zu\nrequested_max=%zu\n"
+                "snapshots_published=%llu\nsnapshots_rejected=%llu\n"
+                "frame_worst_ms=%.3f\nworld_uuid=%s\ngenesis_digest=%s\n"
+                "start_xy=%.3f,%.3f\nfinal_xyz=%.3f,%.3f,%.3f\n"
+                "last_error=%s\n",
+                pass ? "PASS" : "FAIL", g.certEi3VLeg,
+                g.certEi3VDistanceM,
+                g.certEi3VLandingPassed ? "PASS" : "FAIL",
+                g.certEi3VWalkingPassed ? "PASS" : "FAIL",
+                g.certEi3VCaptures, g.certEi3VSkyHoles,
+                g.certEi3VMacroEmptyFrames, g.certEi3VSourceChanges,
+                g.mv1RevMismatchRefusals - g.certEi3VRevMismatchStart,
+                g.certEi3VCoarseHandoffFrames,
+                g.certEi3VAheadCheckpoints, g.certEi3VDetailCheckpoints,
+                g.certEi3VLandmarkFeatureId.c_str(),
+                g.certEi3VLandmarkReturns, g.certEi3VLandmarkReturnErrorM,
+                g.certEi3VWalkDetailMisses, g.certEi3VGroundMismatchFrames,
+                g.certEi3VUngroundedWalkFrames,
+                g.ei3PlayableSupportHolds - g.certEi3VSupportHoldsStart,
+                g.certEi3VResidentMax, g.certEi3VRequestedMax,
+                (unsigned long long)g.ei3Residency.Published(),
+                (unsigned long long)g.ei3Residency.Rejected(),
+                g.certEi3VFrameWorstMs, g.worldUuid.c_str(),
+                g.macroGenesisDigest.c_str(),
+                g.certEi3VStartX, g.certEi3VStartY,
+                g.feetX, g.feetY, g.feetZ, g.lastError.c_str() );
+            std::fclose( file );
+        }
+        PostQuitMessage( pass ? 0 : 2 );
+        g.certEi3V = false;
     }
 
     void UpdateStreamHud()
@@ -7243,6 +7892,20 @@ namespace
             ProvenanceGeo::SetSeedFromIdentity(
                 g.macroGenesisDigest, g.canonicalGeneratorFamily,
                 std::atoi( g.canonicalGeneratorVersion.c_str() ) );
+            if ( g.ei3MatterPlayable )
+            {
+                // The engine-owned macro page is the only valid pre-detail
+                // surface. The local MW8 prototype may describe the same causes,
+                // but it is not the active world's vertical authority.
+                float macroGround = 0.f;
+                if ( SampleCanonicalWorldGenesisZ(
+                        g.feetX, g.feetY, macroGround ) )
+                {
+                    g.feetZ = macroGround;
+                    g.camZ = macroGround + kEyeHeightM;
+                    InvalidateTerrainMesh( "ei1_macro_authority_join" );
+                }
+            }
             return;
         }
 
@@ -13164,8 +13827,12 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
-        if ( g.ei3ProjectionMode && g.ei3Residency.GroundHeight( x, y, outZ ) )
+        if ( g.ei3ProjectionMode && g.certEi3Ptc
+          && g.ei3Residency.GroundHeight( x, y, outZ ) )
         {
+            // The 8 m carrier is certificate geometry only. Normal canonical
+            // play keeps MW8's continuous height authority and applies EI3
+            // matter identity as presentation metadata on that one surface.
             return true;
         }
         if ( g.playWorldgenBaseline && IsCutCOccupancyView( g.stage0PlayView )
@@ -13206,6 +13873,15 @@ namespace
             z = (float)resolved;
             return std::isfinite( z );
         };
+        if ( g.ei3MatterPlayable )
+        {
+            // Publish is the visibility boundary: collision changes to the
+            // detailed FableScript matter surface only when the matching mesh
+            // has crossed onto the render thread. Until then the immutable
+            // WorldGenesis carrier remains both visible ground and collision.
+            if ( sampleResidentCausalPackage( outZ ) ) { return true; }
+            return SampleCanonicalWorldGenesisZ( x, y, outZ );
+        }
         if ( ( g.playWorldgenBaseline || g.certStage8Perf || g.certWorldgenLadderAudit
           || g.certWorldgenLadderLivePerf )
           && IsDifferentialErosionView( g.stage0PlayView )
@@ -14398,6 +15074,56 @@ namespace
 
     void SampleCapColor( float x, float y, float& outR, float& outG, float& outB )
     {
+        if ( g.ei3MatterPlayable )
+        {
+            Ei3::MatterSurfaceSample matter;
+            bool const haveMatter = g.ei3Residency.SampleMatterSurface( x, y, matter );
+            if ( haveMatter )
+            {
+                uint8_t rr = 94, gg = 77, bb = 56;
+                CapColor( matter.dominantMaterialId.c_str(), rr, gg, bb );
+                outR = (float)rr; outG = (float)gg; outB = (float)bb;
+                return;
+            }
+            // Macro SurfaceAppearance is kilometre-scale. Cache its one-metre
+            // presentation samples during near-mesh rebuilds rather than
+            // resolving the same SurfaceState for every half-metre triangle.
+            static std::string macroColorGenesis;
+            static std::unordered_map<uint64_t, uint32_t> macroColorCache;
+            if ( macroColorGenesis != g.macroGenesisDigest )
+            {
+                macroColorCache.clear();
+                macroColorGenesis = g.macroGenesisDigest;
+            }
+            if ( macroColorCache.size() > 65536 ) { macroColorCache.clear(); }
+            int const macroX = (int)std::floor( x );
+            int const macroY = (int)std::floor( y );
+            uint64_t const macroKey = CellKey( macroX, macroY );
+            auto macroIt = macroColorCache.find( macroKey );
+            if ( macroIt == macroColorCache.end() )
+            {
+                uint8_t rr = 94, gg = 77, bb = 56;
+                bool const valid = SampleCanonicalWorldGenesisColor(
+                    macroX + 0.5f, macroY + 0.5f, rr, gg, bb );
+                uint32_t const packed = valid
+                    ? ( 0x80000000u | (uint32_t)rr
+                      | ( (uint32_t)gg << 8 ) | ( (uint32_t)bb << 16 ) )
+                    : 0u;
+                macroIt = macroColorCache.emplace( macroKey, packed ).first;
+            }
+            uint32_t const macroPacked = macroIt->second;
+            bool const haveMacro = ( macroPacked & 0x80000000u ) != 0;
+            uint8_t const macroR = (uint8_t)( macroPacked & 0xffu );
+            uint8_t const macroG = (uint8_t)( ( macroPacked >> 8 ) & 0xffu );
+            uint8_t const macroB = (uint8_t)( ( macroPacked >> 16 ) & 0xffu );
+            if ( haveMacro )
+            {
+                outR = (float)macroR;
+                outG = (float)macroG;
+                outB = (float)macroB;
+                return;
+            }
+        }
         // Use cached cell palette from EnsureGeoCell — NEVER re-run SampleSurface FBM per tri.
         ++g.perfSampleCapColorCalls;
         int const x0 = (int)std::floor( x );
@@ -14557,6 +15283,28 @@ namespace
                         float x2, float y2, float z2,
                         float cavity )
     {
+        if ( g.ei3MatterPlayable )
+        {
+            // Canonical normal play enters the continuous vertex path directly.
+            // Do not compute the legacy centroid material and flat face light.
+            float const cavityK = cavity > 0.f
+                ? ( 1.f - 0.22f * (std::min)( 1.f, cavity ) )
+                : ( cavity < 0.f ? 1.f - 0.35f * cavity : 1.f );
+            auto emitSmoothVertex = [&]( float x, float y, float z )
+            {
+                float r = 0.f, green = 0.f, b = 0.f;
+                SampleCapColor( x, y, r, green, b );
+                constexpr float kOpenSkyLight = 0.90f;
+                float const k = cavityK * kOpenSkyLight / 255.f;
+                glColor3f( r * k, green * k, b * k );
+                glVertex3f( x, y, z );
+            };
+            emitSmoothVertex( x0, y0, z0 );
+            emitSmoothVertex( x1, y1, z1 );
+            emitSmoothVertex( x2, y2, z2 );
+            return;
+        }
+
         // Flat face lighting — world sun + sky on geometric normals (same frame as gallery).
         float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
         float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
@@ -14574,7 +15322,16 @@ namespace
 
         char const* cap = "dirt";
         std::string authoritativeCap;
-        if ( ( g.playWorldgenBaseline || g.certWorldgenBaselinePerf )
+        if ( g.ei3MatterPlayable && g.ei3ProjectionAlignmentOk )
+        {
+            Ei3::MatterSurfaceSample matter;
+            if ( g.ei3Residency.SampleMatterSurface( mx, my, matter ) )
+            { authoritativeCap = matter.dominantMaterialId; cap = authoritativeCap.c_str(); }
+            else if ( CellSample const* mc = GetCell(
+                (int)std::floor( mx ), (int)std::floor( my ) ) )
+            { if ( mc->valid && !mc->cap.empty() ) { cap = mc->cap.c_str(); } }
+        }
+        else if ( ( g.playWorldgenBaseline || g.certWorldgenBaselinePerf )
           && IsCausalPlayableView( g.stage0PlayView ) )
         {
             float authoritativeZ = 0.f;
@@ -15012,6 +15769,33 @@ namespace
 
     void EmitStage8Triangle( CausalVisibleExposure::Tri const& tri, char const* material )
     {
+        if(g.ei3MatterPlayable&&g.ms1bEnabled)
+        {
+            float const ax=(float)(tri.b.x-tri.a.x),ay=(float)(tri.b.y-tri.a.y);
+            float const az=(float)(tri.b.z-tri.a.z),bx=(float)(tri.c.x-tri.a.x);
+            float const by=(float)(tri.c.y-tri.a.y),bz=(float)(tri.c.z-tri.a.z);
+            float nx=ay*bz-az*by,ny=az*bx-ax*bz,nz=ax*by-ay*bx;
+            float const length=std::sqrt(nx*nx+ny*ny+nz*nz);
+            if(length>1e-6f){nx/=length;ny/=length;nz/=length;}
+            constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
+            float const shade=0.38f+0.70f*(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
+            auto emit=[&](CausalVisibleExposure::Vec3 const& v)
+            {
+                // The detailed mesh and macro carrier use the same engine-owned
+                // SurfaceAppearance promise. This keeps colour continuous while
+                // matter geometry refines; the local MW8 certificate palette is
+                // not consulted by canonical play.
+                uint8_t r=94,green=77,b=56;
+                SampleCanonicalWorldGenesisColor(
+                    (float)v.x,(float)v.y,r,green,b);
+                glColor3f(std::clamp(r*shade/255.f,0.f,1.f),
+                    std::clamp(green*shade/255.f,0.f,1.f),
+                    std::clamp(b*shade/255.f,0.f,1.f));
+                glVertex3f((float)v.x,(float)v.y,(float)v.z);
+            };
+            emit(tri.a);emit(tri.b);emit(tri.c);
+            return;
+        }
         uint8_t r=90,green=120,b=70;CapColor(material,r,green,b);
         EmitResolvedTerrainTriangle(tri,material,(float)r,(float)green,(float)b);
     }
@@ -15063,6 +15847,7 @@ namespace
         CausalDifferentialErosion::Control control=
             CausalDifferentialErosion::Control::DifferentialResistance;
         int bx=0,by=0;
+        bool authorityReady=true;
         bool legacyStage56=false;
         bool legacyStage7=false;
         bool integratedCutC=false;
@@ -15866,7 +16651,21 @@ namespace
             IsRegionalGeologyView(job.view)?ThreadRegionalGeologyKernel():nullptr;
         CausalRegionalErosion::Kernel* const workerMw3=
             IsRegionalErosionView(job.view)?ThreadRegionalErosionKernel():nullptr;
-        if(out.integratedCutC)
+        if(g.ei3MatterPlayable)
+        {
+            bool complete=true;
+            CausalVisibleExposure::SampleBlockGridInto(job.bx,job.by,surfaceSamples,
+                [&](double wx,double wy)
+                {
+                    Ei3::MatterSurfaceSample matter;
+                    if(!g.ei3Residency.SampleMatterSurface(
+                            (float)wx,(float)wy,matter))
+                    {complete=false;return 0.0;}
+                    return (double)matter.z;
+                });
+            out.authorityReady=complete;
+        }
+        else if(out.integratedCutC)
         {
             if(integratedExact)
                 out.mesh=IsSinglePickProofView(job.view)&&g.singlePickRuntime
@@ -15934,7 +16733,22 @@ namespace
         for(size_t i=0;i<quadCount;++i)
         {
             CausalVisibleExposure::Vec3 point;
-            if(out.integratedCutC)
+            if(g.ei3MatterPlayable)
+            {
+                point=CausalVisibleExposure::PresentationSamplePoint(
+                    surfaceSamples,descriptors.crossings[i]);
+                Ei3::MatterSurfaceSample matter;
+                if(g.ei3Residency.SampleMatterSurface(
+                        (float)point.x,(float)point.y,matter))
+                {out.materials.emplace_back(matter.dominantMaterialId);}
+                else
+                {
+                    out.authorityReady=false;
+                    out.materials.emplace_back("dirt");
+                    ++out.materialMisses;
+                }
+            }
+            else if(out.integratedCutC)
             {
                 auto const& a=out.mesh.triangles[i*2u];
                 auto const& b=out.mesh.triangles[(std::min)(i*2u+1u,
@@ -15980,7 +16794,6 @@ namespace
                 out.materials.emplace_back(geology.found&&geology.material
                     ?geology.material:"dirt");
             }
-            ++out.materialMisses;
         }
         QueryPerformanceCounter(&materialEnd);
 
@@ -16100,16 +16913,38 @@ namespace
         std::sort( scratch.scheduledKeys.begin(), scratch.scheduledKeys.end() );
     }
 
-    void QueueStage8Package(int bx,int by)
+    void QueueStage8Package(int bx,int by,bool urgent=false)
     {
+        if(g.ei3MatterPlayable)
+        {
+            // A package may straddle as many as four 64 m authority chunks.
+            // Never schedule a replacement mesh until every source needed by
+            // its 17x17 matter lattice is admitted; the macro carrier remains
+            // visible through this wait instead of exposing a hole.
+            double const minX=bx*CausalVisibleExposure::kBlockSizeM
+                -0.5*CausalVisibleExposure::kDualStepM;
+            double const minY=by*CausalVisibleExposure::kBlockSizeM
+                -0.5*CausalVisibleExposure::kDualStepM;
+            double const maxX=minX+CausalVisibleExposure::kBlockSizeM;
+            double const maxY=minY+CausalVisibleExposure::kBlockSizeM;
+            int const cx0=Ei3::FloorChunk((float)minX);
+            int const cy0=Ei3::FloorChunk((float)minY);
+            int const cx1=Ei3::FloorChunk((float)maxX);
+            int const cy1=Ei3::FloorChunk((float)maxY);
+            for(int cy=cy0;cy<=cy1;++cy)
+            for(int cx=cx0;cx<=cx1;++cx)
+            {if(!g.ei3Residency.Has({cx,cy}))return;}
+        }
         EnsureStage8PackageWorkers();
         uint64_t const key=CellKey(bx,by);
         {
             std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
             if(WorkerTerrainBlocks(g.stage0PlayView).count(key)
                 ||!s_stage8PackageWorkers.scheduled.insert(key).second)return;
-            s_stage8PackageWorkers.pending.push_back(Stage8PackageJob{
-                s_stage8PackageWorkers.epoch,g.stage0PlayView,g.stage8Control,bx,by});
+            Stage8PackageJob const job{
+                s_stage8PackageWorkers.epoch,g.stage0PlayView,g.stage8Control,bx,by};
+            if(urgent)s_stage8PackageWorkers.pending.push_front(job);
+            else s_stage8PackageWorkers.pending.push_back(job);
         }
         s_stage8PackageWorkers.wake.notify_one();
     }
@@ -16118,7 +16953,8 @@ namespace
     {
         uint64_t const key=CellKey(package.bx,package.by);
         auto& terrainBlocks=WorkerTerrainBlocks(package.view);
-        if(package.view!=g.stage0PlayView||package.control!=g.stage8Control
+        if(!package.authorityReady||package.view!=g.stage0PlayView
+            ||package.control!=g.stage8Control
             ||terrainBlocks.count(key))
         {
             RecycleStage8CpuPackage(package);
@@ -16129,7 +16965,8 @@ namespace
         GLuint const list=AllocDisplayListOutsideFonts();
         if(!list)return false;
         QueryPerformanceCounter(&allocEnd);
-        LitSetIdentity();glNewList(list,GL_COMPILE);glShadeModel(GL_FLAT);
+        LitSetIdentity();glNewList(list,GL_COMPILE);
+        glShadeModel(g.ei3MatterPlayable?GL_SMOOTH:GL_FLAT);
         glBegin(GL_TRIANGLES);
         if(package.legacyStage56)
         {
@@ -16336,6 +17173,15 @@ namespace
                 }
             }
             if(!have)break;
+            if(!result.authorityReady)
+            {
+                std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+                s_stage8PackageWorkers.scheduled.erase(
+                    CellKey(result.bx,result.by));
+                RecycleStage8CpuPackage(result);
+                ++s_soakFrame.workerCompletions;
+                continue;
+            }
             bool const spatial=Stage8InPublishApron(bounds,result.bx,result.by);
             bool const lookahead=Stage8InLookaheadWindow(bounds,result.bx,result.by);
             bool const live=inLive(result.bx,result.by);
@@ -16560,7 +17406,7 @@ namespace
         if(profileWaterfall)QueryPerformanceCounter(&allocEnd);
         LitSetIdentity();
         glNewList( list, GL_COMPILE );
-        glShadeModel( GL_FLAT );
+        glShadeModel( g.ei3MatterPlayable ? GL_SMOOTH : GL_FLAT );
         glBegin( GL_TRIANGLES );
         // Each pair is one canonical 0.5 m D2 quad. Its material is sampled
         // once at the quad center and shared by the two presentation triangles.
@@ -16678,7 +17524,8 @@ namespace
         if ( stage56 && g.stage0PlayView!=Stage0PlayView::Clean
           && !g.causalGeologyRuntime && !g.causalExposureRuntime ) { return; }
         if ( stage7 && !g.causalVisibleRuntime ) { return; }
-        if ( !stage56 && !stage7 && !g.causalErosionRuntime && !g.causalIntrusionRuntime
+        if ( !g.ei3MatterPlayable && !stage56 && !stage7
+          && !g.causalErosionRuntime && !g.causalIntrusionRuntime
           && !g.causalMineralizationRuntime && !g.causalFaultRuntime
           && !g.causalBreachRuntime && !g.cutCOccupancyRuntime
           && !g.exactLocalRuntime && !g.bareEarthRuntime
@@ -16698,6 +17545,22 @@ namespace
         auto& terrainBlocks=WorkerTerrainBlocks(g.stage0PlayView);
         ServiceRetiredTerrainDisplayLists();
         Stage0PresentationBounds const bounds = Stage0CurrentPresentationBounds();
+        if(g.ei3MatterPlayable)
+        {
+            // A shifted live window must not wait behind derived jobs for an
+            // area the player has already left. These jobs carry no authority
+            // and own no GL state, so canceling them is a presentation-cache
+            // operation. Active work may finish and is filtered at publish.
+            std::lock_guard<std::mutex> lock(s_stage8PackageWorkers.mutex);
+            auto it=s_stage8PackageWorkers.pending.begin();
+            while(it!=s_stage8PackageWorkers.pending.end())
+            {
+                if(Stage8InLookaheadWindow(bounds,it->bx,it->by))
+                {++it;continue;}
+                s_stage8PackageWorkers.scheduled.erase(CellKey(it->bx,it->by));
+                it=s_stage8PackageWorkers.pending.erase(it);
+            }
+        }
         PublishWorkerDualCacheResidency();
         // CPU products completed by the workers are the only packages allowed
         // to cross into GL ownership.  Publication is bounded independently of
@@ -16809,8 +17672,11 @@ namespace
         // Queueing is cheap and complete: required packages are nearest-first,
         // then the forward-biased apron. Workers consume the immutable CPU
         // stages while the render thread continues with eviction and drawing.
-        for(auto const& package:scratch.requiredKeys)
-        {QueueStage8Package(package.first,package.second);}
+        // Push the nearest required package to the front last so it becomes
+        // the next available worker job. This keeps the visible/collision
+        // handoff centred on the moving player instead of on old ring work.
+        for(auto it=scratch.requiredKeys.rbegin();it!=scratch.requiredKeys.rend();++it)
+        {QueueStage8Package(it->first,it->second,true);}
         for(auto const& package:scratch.collarKeys)
         {QueueStage8Package(package.first,package.second);}
         for(auto const& package:scratch.lookaheadKeys)
@@ -18308,6 +19174,22 @@ namespace
 
     uint64_t Mv1SourceRevision()
     {
+        if ( g.ei3MatterPlayable && g.canonicalHandshakeOk
+          && !g.macroGenesisDigest.empty() )
+        {
+            uint64_t hash = 1469598103934665603ULL;
+            for ( unsigned char c : g.macroGenesisDigest )
+            { hash ^= c; hash *= 1099511628211ULL; }
+            // Projection alignment is measured again as the player travels, but
+            // its moving sample anchor is not world identity. MV1 vertices sample
+            // the same absolute engine WorldGenesis authority and do not consume
+            // the anchor, residual, or pass/fail telemetry. Including any of that
+            // mutable measurement state here therefore made ordinary
+            // traversal look like a source revision and released every distant
+            // tile at once, exposing sky until the field rebuilt. Only immutable
+            // genesis identity belongs in this presentation-cache lineage.
+            return hash;
+        }
         if(!g.regionalBiomeRuntime)return 0;
         auto const* f=g.regionalBiomeRuntime->Field();
         return f?f->fieldDigest:0;
@@ -18402,11 +19284,20 @@ namespace
         return true;
     }
 
-    // Samples the SAME certified MW1–MW8 composite authority the near path uses,
-    // at absolute world coordinates. No second terrain world, no wrap.
+    // Samples the engine-owned WorldGenesis carrier at absolute coordinates.
+    // WorldSubstrate detail refines this same world near the player; there is no
+    // second client-generated terrain world and no coordinate wrap.
     bool Mv1SampleAuthority(double x,double y,float& outZ,
         uint8_t& r,uint8_t& gg,uint8_t& bb)
     {
+        if(g.ei3MatterPlayable)
+        {
+            if(!SampleCanonicalWorldGenesisZ((float)x,(float)y,outZ))return false;
+            if(SampleCanonicalWorldGenesisColor((float)x,(float)y,r,gg,bb))
+            {return true;}
+            r=94;gg=77;bb=56;
+            return true;
+        }
         if(!g.regionalBiomeRuntime)return false;
         double const z=g.regionalBiomeRuntime->ReconstructedZ(x,y);
         if(!std::isfinite(z))return false;
@@ -18493,6 +19384,7 @@ namespace
         int const stride=F+1;
         double const x0=(double)tx*B.tileM, y0=(double)ty*B.tileM;
         double const fs=(double)B.tileM/F;         // fine step (m)
+        float const presentationBias=B.zBias;
         std::vector<float> zf((size_t)stride*stride);
         std::vector<uint8_t> cr((size_t)stride*stride),cg((size_t)stride*stride),cb((size_t)stride*stride);
         double tileMinZ=1e30;
@@ -18501,14 +19393,19 @@ namespace
             float z=0.f;uint8_t r=94,gg=77,bb=56;
             if(!Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))return false;
             size_t const k=(size_t)j*stride+i;
-            zf[k]=z+B.zBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
+            zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
             tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
         }
         auto Z=[&](int i,int j)->float{return zf[(size_t)j*stride+i];};
         // Choose coarsest cells C in {4,8,16,32} whose bilinear approximation
         // error against the fine samples is within the band target.
         int chosen=F;
-        for(int C=4;C<=F;C*=2)
+        // Certification may collapse smooth regional tiles aggressively. In
+        // normal play that created the huge forest-green quads which could
+        // pierce through and hide the finer mid terrain underneath. Preserve
+        // every sampled vertex for the playable ladder; this changes only
+        // presentation tessellation, never MW8 height or material authority.
+        for(int C=4;!g.ei3MatterPlayable&&C<=F;C*=2)
         {
             int const s=F/C;double maxErr=0.0;
             for(int cj=0;cj<C;++cj)for(int ci=0;ci<C;++ci)
@@ -18565,7 +19462,7 @@ namespace
             constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
             float const ndotl=(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
             float const hillshade=0.22f+0.95f*ndotl;
-            float const zc=.5f*(Z(i0,j0)+Z(i1,j1))-B.zBias;
+            float const zc=.5f*(Z(i0,j0)+Z(i1,j1))-presentationBias;
             // MS1.B: elevation must NOT drive appearance (material already encodes it); keep
             // only the directional hillshade. Frozen path keeps the elevation brightening.
             float const elevBright=g.ms1bEnabled?1.f:0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
@@ -18590,9 +19487,23 @@ namespace
         // Perimeter skirts (drop each boundary edge down to skirtZ).
         auto skirt=[&](float ax,float ay,float az,float bx,float by,float bz)
         {
-            curR=0.30f;curG=0.28f;curB=0.26f;
-            push(ax,ay,az);push(bx,by,bz);push(ax,ay,skirtZ);
-            push(bx,by,bz);push(bx,by,skirtZ);push(ax,ay,skirtZ);
+            float bottomA=skirtZ,bottomB=skirtZ;
+            if(g.ei3MatterPlayable)
+            {
+                // Canonical play never exposes the old tile-wide diagnostic
+                // curtain. Adjacent MW8 tiles share their edge samples, so a
+                // shallow, locally coloured seal is sufficient for raster
+                // precision without drawing a giant gray/tan wall.
+                bottomA=az-0.25f;bottomB=bz-0.25f;
+                float sampleZ=0.f;uint8_t rr=94,green=77,bb=56;
+                if(Mv1SampleAuthority(.5*(ax+bx),.5*(ay+by),sampleZ,rr,green,bb))
+                {
+                    curR=(float)rr/255.f;curG=(float)green/255.f;curB=(float)bb/255.f;
+                }
+            }
+            else{curR=0.30f;curG=0.28f;curB=0.26f;}
+            push(ax,ay,az);push(bx,by,bz);push(ax,ay,bottomA);
+            push(bx,by,bz);push(bx,by,bottomB);push(ax,ay,bottomA);
             tris+=2;
         };
         for(int c=0;c<chosen;++c)
@@ -18813,13 +19724,45 @@ namespace
                 if(!g.mv1Tiles.count(key))want.push_back(Want{band,tx,ty,d2});
             }
         }
-        // Retire anything no longer desired (or stale rev) only when the anchor
-        // moved, to avoid per-frame thrash while pending tiles drain.
+        // Coverage ownership transfer. Canonical play builds the full sampled
+        // terrain, so an entering fringe can take several frames to drain under
+        // the bounded build budget. Retiring the outgoing fringe first exposed a
+        // transient strip of sky between the near and distant ladders. Keep only
+        // a one-tile, per-band hysteresis ring while replacements are pending;
+        // anything beyond that ring retires immediately, so travel history can
+        // never accumulate. Non-play/cert paths preserve their frozen behavior.
+        auto inPlayableHandoffRing=[&](AppState::Mv1Tile const& tile)->bool
+        {
+            if(tile.band<0||tile.band>=3)return false;
+            Mv1Band const& B=kMv1Bands[tile.band];
+            double const ax0=(double)tile.cx-tile.halfM-anchorX;
+            double const ax1=(double)tile.cx+tile.halfM-anchorX;
+            double const ay0=(double)tile.cy-tile.halfM-anchorY;
+            double const ay1=(double)tile.cy+tile.halfM-anchorY;
+            double const nx=(ax0>0.0)?ax0:(ax1<0.0)?ax1:0.0;
+            double const ny=(ay0>0.0)?ay0:(ay1<0.0)?ay1:0.0;
+            double const nearD2=nx*nx+ny*ny;
+            double const outer=(double)B.outer+B.tileM;
+            if(nearD2>=outer*outer)return false;
+            double const fx=((std::abs)(ax0)>(std::abs)(ax1))?ax0:ax1;
+            double const fy=((std::abs)(ay0)>(std::abs)(ay1))?ay0:ay1;
+            double const farD2=fx*fx+fy*fy;
+            double const inner=(std::max)(0.0,(double)B.inner-B.tileM);
+            return farD2>=inner*inner;
+        };
+
+        // Before building, free stale or definitely irrelevant tiles. During a
+        // playable handoff, outgoing tiles inside the bounded ring remain valid
+        // fallback coverage until the desired set is complete.
         if(anchorChanged)
         {
             for(auto it=g.mv1Tiles.begin();it!=g.mv1Tiles.end();)
             {
-                if(!desired.count(it->first)||it->second.sourceRev!=g.mv1SourceRev)
+                bool const stale=it->second.sourceRev!=g.mv1SourceRev;
+                bool const outsideDesired=!desired.count(it->first);
+                bool const retainForHandoff=g.ei3MatterPlayable&&outsideDesired
+                    &&inPlayableHandoffRing(it->second);
+                if(stale||(outsideDesired&&!retainForHandoff))
                 {Mv1RetireTile(it->second);it=g.mv1Tiles.erase(it);++g.mv1TilesRetired;}
                 else ++it;
             }
@@ -18848,7 +19791,21 @@ namespace
             if(Mv1BuildTile(w.band,w.tx,w.ty,tile))
             {g.mv1Tiles.emplace(Mv1TileKey(w.band,w.tx,w.ty),tile);++g.mv1TilesBuilt;++built;}
         }
-        g.mv1PendingNow=(int)want.size()-built;
+        // Recompute readiness from the actual resident map (rather than assuming
+        // every attempted build succeeded). Once the entering desired field is
+        // complete, retire the temporary handoff ring in the same frame.
+        int missingDesired=0;
+        for(uint64_t const key:desired)if(!g.mv1Tiles.count(key))++missingDesired;
+        g.mv1PendingNow=missingDesired;
+        if(g.ei3MatterPlayable&&missingDesired==0)
+        {
+            for(auto it=g.mv1Tiles.begin();it!=g.mv1Tiles.end();)
+            {
+                if(!desired.count(it->first))
+                {Mv1RetireTile(it->second);it=g.mv1Tiles.erase(it);++g.mv1TilesRetired;}
+                else ++it;
+            }
+        }
         g.mv1PendingMax=(std::max)(g.mv1PendingMax,g.mv1PendingNow);
         g.mv1BuildMsThisFrame=elapsedMs();
         // Recount resident telemetry.
@@ -20359,6 +21316,58 @@ namespace
         double tx=fi-i0,ty=fj-j0;
         auto H=[&](int i,int j){return (double)pg.h[(size_t)j*pg.n+i];};
         z=H(i0,j0)*(1-tx)*(1-ty)+H(i0+1,j0)*tx*(1-ty)+H(i0,j0+1)*(1-tx)*ty+H(i0+1,j0+1)*tx*ty;
+        return true;
+    }
+
+    bool SampleCanonicalWorldGenesisZ( float x, float y, float& outZ )
+    {
+        if ( !g.canonicalHandshakeOk || g.macroGenesisDigest.empty() )
+        { return false; }
+        static std::string cachedGenesis;
+        static std::unordered_map<uint64_t,Mv2Page> cache;
+        if ( cachedGenesis != g.macroGenesisDigest )
+        {
+            cache.clear();
+            cachedGenesis = g.macroGenesisDigest;
+        }
+        double z = 0.0;
+        if ( !Mv2PageHeight( cache, (double)x, (double)y, z )
+          || !std::isfinite( z ) ) { return false; }
+        outZ = (float)z;
+        return true;
+    }
+
+    bool SampleCanonicalWorldGenesisColor( float x, float y,
+        uint8_t& r, uint8_t& green, uint8_t& b )
+    {
+        if ( !g.canonicalHandshakeOk || g.macroGenesisDigest.empty() )
+        { return false; }
+        static std::string cachedGenesis;
+        static std::unordered_map<uint64_t,Mv2Page> cache;
+        if ( cachedGenesis != g.macroGenesisDigest )
+        {
+            cache.clear();
+            cachedGenesis = g.macroGenesisDigest;
+        }
+        int const ri=(int)std::floor(((double)x+kMv2RegionHalfM)/kMv2RegionM);
+        int const rj=(int)std::floor(((double)y+kMv2RegionHalfM)/kMv2RegionM);
+        uint64_t const key=Mv2Key(ri,rj);
+        auto it=cache.find(key);
+        if(it==cache.end())
+        {
+            Mv2Page page;
+            bool const ok=Mv2LoadPage(ri,rj,page);
+            it=cache.emplace(key,ok?page:Mv2Page()).first;
+        }
+        Mv2Page const& page=it->second;
+        Ms1::SurfaceState const surface=Mv2SurfaceAt(page,x,y);
+        if(!surface.valid)return false;
+        Ms1::RGB const color=g.ms1bDebugAxis
+            ?Ms1::DebugColor(surface,g.ms1bDebugAxis)
+            :Ms1::ResolveAppearance(surface,x,y,300.f);
+        r=(uint8_t)std::clamp(color.r*255.f,0.f,255.f);
+        green=(uint8_t)std::clamp(color.g*255.f,0.f,255.f);
+        b=(uint8_t)std::clamp(color.b*255.f,0.f,255.f);
         return true;
     }
 
@@ -26647,6 +27656,8 @@ namespace
         // Adaptive mouth refine (x64_Release_adapt): coarse 2×2 vista; tip/6 only on opening disks.
         // Never whole-cell div=12 — that fine-meshed a square metre per opening at load/dig.
         DWORD const t0 = GetTickCount();
+        // Restore the certified MW8 near mesh. EI3 supplies material identity;
+        // it does not replace this surface with a second chunk-shaped carrier.
         constexpr int kDrawRadius = 64;
         int const ax = g.terrainAnchorX;
         int const ay = g.terrainAnchorY;
@@ -26686,14 +27697,15 @@ namespace
         if ( !g.terrainList ) { return; }
         LitSetIdentity();
         glNewList( g.terrainList, GL_COMPILE );
-        glShadeModel( GL_FLAT );
+        glShadeModel( g.ei3MatterPlayable ? GL_SMOOTH : GL_FLAT );
         glBegin( GL_TRIANGLES );
 
         for ( int y = y0; y < y1; ++y )
         {
             for ( int x = x0; x < x1; ++x )
             {
-                if ( !GetCell( x, y ) || !GetCell( x + 1, y ) || !GetCell( x, y + 1 ) || !GetCell( x + 1, y + 1 ) )
+                if ( !GetCell( x, y ) || !GetCell( x + 1, y )
+                  || !GetCell( x, y + 1 ) || !GetCell( x + 1, y + 1 ) )
                 {
                     continue;
                 }
@@ -26731,7 +27743,9 @@ namespace
         {
             for ( int x = x0; x < x1; ++x )
             {
-                if ( GetCell( x, y ) && GetCell( x + 1, y ) && GetCell( x, y + 1 ) && GetCell( x + 1, y + 1 ) )
+                if ( g.ei3MatterPlayable
+                  || ( GetCell( x, y ) && GetCell( x + 1, y )
+                    && GetCell( x, y + 1 ) && GetCell( x + 1, y + 1 ) ) )
                 {
                     ++cells;
                 }
@@ -27878,7 +28892,8 @@ namespace
          || ( g.certResidency && g.certResidencyPhase >= 2 && g.certResidencyPhase <= 5 )
          || ( g.certStress && g.certStressPhase >= 2 && g.certStressPhase <= 8 );
         if ( !freezeVistaRecenter
-          && ( std::abs( ax - g.terrainAnchorX ) >= 8 || std::abs( ay - g.terrainAnchorY ) >= 8 ) )
+          && ( std::abs( ax - g.terrainAnchorX ) >= 8
+            || std::abs( ay - g.terrainAnchorY ) >= 8 ) )
         {
             InvalidateTerrainMesh( "vista_recenter" );
         }
@@ -27972,7 +28987,10 @@ namespace
     void DrawEi3DetailedProjection()
     {
         g.ei3DrawSnapshots = 0; g.ei3DrawTriangles = 0;
-        if ( !g.ei3ProjectionMode ) { return; }
+        // This 8 m lattice is an EI3 transport/grounding diagnostic, not the
+        // playable terrain mesh. Normal play keeps the existing client-owned
+        // regional presentation; only the PTC certificate draws these quads.
+        if ( !g.ei3ProjectionMode || !g.certEi3Ptc ) { return; }
         Ei3::ChunkCoord const center{ Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) };
         auto const snapshots = g.ei3Residency.SnapshotsNear( center, 4 );
         if ( snapshots.empty() ) { return; }
@@ -28426,7 +29444,13 @@ namespace
 
     bool WalkStepAllowed( float fromX, float fromY, float fromZ, float toX, float toY, float& outGroundZ )
     {
-        if ( g.ei3ProjectionMode
+        if ( g.ei3MatterPlayable
+          && !SamplePublishedMatterGround( toX, toY, outGroundZ ) )
+        {
+            g.ei3LandingIntent = true;
+            return false;
+        }
+        if ( g.certEi3Ptc
           && !g.ei3Residency.GroundHeight( toX, toY, outGroundZ ) )
         {
             g.ei3LandingIntent = true;
@@ -28630,15 +29654,20 @@ namespace
         if ( g.keys['F'] && !g.keyToggleLatch['F'] )
         {
             bool const requestedWalk = !g.walkMode;
-            if ( requestedWalk && g.ei3ProjectionMode )
+            if ( requestedWalk && ( g.certEi3Ptc || g.ei3MatterPlayable ) )
             {
                 float ground = 0.f;
-                if ( !g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground ) )
+                bool const supportReady = g.ei3MatterPlayable
+                    ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
+                    : g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
+                if ( !supportReady )
                 {
                     g.walkMode = false;
                     g.grounded = false;
                     g.ei3LandingIntent = true;
-                    g.statusLine = "landing held - requesting authoritative P0 ground";
+                    g.statusLine = g.ei3MatterPlayable
+                        ? "landing held - requesting published matter ground"
+                        : "landing held - requesting authoritative P0 ground";
                     g.keyToggleLatch['F'] = true;
                     UpdateStreamHud();
                     return;
@@ -28708,6 +29737,24 @@ namespace
                 if ( !WalkStepAllowed( fromX, fromY, fromZ, tx, ty, gz ) ) { return false; }
                 g.feetX = tx;
                 g.feetY = ty;
+                // A supported capsule follows the same published matter surface
+                // that authorized the XY step. Previously only X/Y changed and
+                // gravity chased the old Z, making a walker briefly airborne on
+                // every downhill frame and eventually producing the moving bowl
+                // seen from below. Preserve real cliff falls: only terrain within
+                // the certified step/slope envelope is followed.
+                float const horiz = std::sqrt( dx * dx + dy * dy );
+                float const vertical = std::fabs( gz - fromZ );
+                bool const followsSurface = g.grounded
+                    && ( vertical <= kMaxStepM
+                      || ( horiz > 1e-5f
+                        && vertical / horiz <= kMaxWalkSlope ) );
+                if ( followsSurface )
+                {
+                    g.feetZ = gz;
+                    g.velZ = 0.f;
+                    g.grounded = true;
+                }
                 return true;
             };
             if ( wlen > 1e-5f )
@@ -28740,8 +29787,11 @@ namespace
             g.feetZ += g.velZ * dt;
 
             float ground = g.feetZ;
-            bool const authoritativeGround = !g.ei3ProjectionMode
-                || g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
+            bool const authoritativeGround = g.ei3MatterPlayable
+                ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
+                : ( !g.certEi3Ptc
+                    || g.ei3Residency.GroundHeight(
+                        g.feetX, g.feetY, ground ) );
             if ( authoritativeGround && SampleGroundZ( g.feetX, g.feetY, ground ) )
             {
                 if ( g.feetZ <= ground )
@@ -28757,11 +29807,32 @@ namespace
             }
             else if ( g.ei3ProjectionMode )
             {
-                g.grounded = false;
-                g.walkMode = false;
-                g.ei3LandingIntent = true;
-                g.camX = g.feetX; g.camY = g.feetY;
-                g.camZ = g.feetZ + kEyeHeightM;
+                if ( g.ei3MatterPlayable )
+                {
+                    // A transient projection miss is back-pressure, never a
+                    // portal into the free-flight diagnostic controller. Undo
+                    // this frame's attempted step and retain the last known
+                    // authoritative support while residency catches up.
+                    g.feetX = fromX;
+                    g.feetY = fromY;
+                    g.feetZ = fromZ;
+                    g.velZ = 0.f;
+                    g.grounded = true;
+                    g.walkMode = true;
+                    g.ei3LandingIntent = true;
+                    ++g.ei3PlayableSupportHolds;
+                    g.camX = g.feetX; g.camY = g.feetY;
+                    g.camZ = g.feetZ + kEyeHeightM;
+                    g.statusLine = "authoritative ground pending - movement held";
+                }
+                else
+                {
+                    g.grounded = false;
+                    g.walkMode = false;
+                    g.ei3LandingIntent = true;
+                    g.camX = g.feetX; g.camY = g.feetY;
+                    g.camZ = g.feetZ + kEyeHeightM;
+                }
             }
             if(!g.grounded){g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;}
 
@@ -29159,7 +30230,8 @@ namespace
         {
             // Showcase renders macro-only from up close: drop the near plane to 350 m and
             // keep the macro depth (no clear), so the macro landform IS the terrain.
-            float const nf2 = g.certMv2Showcase ? 350.f : 24000.f, ff2 = (float)kMv2VisibleRadiusM + 2000.f;
+            float const nf2 = g.certMv2Showcase ? 350.f : 24000.f;
+            float const ff2 = (float)kMv2VisibleRadiusM + 2000.f;
             float const fm2[16] = {
                 f / aspect, 0, 0, 0,
                 0, f, 0, 0,
@@ -29171,7 +30243,8 @@ namespace
             g.mv2bFarPass = true;
             DrawMv2Horizon();
             g.mv2bFarPass = false;
-            if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
+            if ( ( g.certMv2b || g.certMv1Coverage || g.certEi3V )
+              && g.mv2bCaptureRequest )
             { Mv2CaptureFarDepth( nf2, ff2 ); }   // request cleared after the MV1 pass unions its mask
             Mv2SetAerial( false );
             if ( !g.certMv2Showcase ) glClear( GL_DEPTH_BUFFER_BIT );
@@ -29189,7 +30262,11 @@ namespace
         if ( g.playWorldgenBaseline && g.mv1Enabled && !g.certMv2Showcase
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
-            float const nf = 128.f, ff = (float)kMv1VisibleRangeM + 1000.f;
+            // Canonical play keeps the engine macro carrier continuous beneath
+            // resident matter detail. The near pass clears and overpaints depth,
+            // so this supplies coverage rather than a competing truth surface.
+            float const nf = g.ei3MatterPlayable ? 0.03f : 128.f;
+            float const ff = (float)kMv1VisibleRangeM + 1000.f;
             float const fm[16] = {
                 f / aspect, 0, 0, 0,
                 0, f, 0, 0,
@@ -29212,7 +30289,8 @@ namespace
             { Mv1cCaptureFarDepth( nf, ff ); g.mv1cCaptureRequest = false; }
             if ( g.certMv1d && g.mv1dBandCaptureRequest )
             { Mv1dCaptureBands( nf, ff ); g.mv1dBandCaptureRequest = false; }
-            if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
+            if ( ( g.certMv2b || g.certMv1Coverage || g.certEi3V )
+              && g.mv2bCaptureRequest )
             { Mv2AccumMv1Mask(); }   // union MV1 far; near pass unions + clears after DrawHeightfield
             if ( g.mv2bEnabled ) Mv2SetAerial( false );
             else if ( mv1dOn ) Mv1dSetFog( false );
@@ -29230,7 +30308,8 @@ namespace
         // Union the near authoritative world (0.03-600 m) into the gap-classifier
         // terrain mask, then close the capture: a sky pixel is only a hole if NONE
         // of the three passes drew terrain there.
-        if ( ( g.certMv2b || g.certMv1Coverage ) && g.mv2bCaptureRequest )
+        if ( ( g.certMv2b || g.certMv1Coverage || g.certEi3V )
+          && g.mv2bCaptureRequest )
         { Mv2AccumMv1Mask(); g.mv2bCaptureRequest = false; }
         DrawLivingWorldLoadPresentation();
         if(g.certPresentationIsolation&&g.presentationIsolationMode==4)
@@ -29507,6 +30586,39 @@ namespace
         }
         std::fclose( f );
         return true;
+    }
+
+    int CountLowerFrameSkyPixels()
+    {
+        GLint vp[4] = {};
+        glGetIntegerv( GL_VIEWPORT, vp );
+        int const w = vp[2], h = vp[3];
+        if ( w <= 0 || h <= 0 ) { return INT_MAX; }
+        std::vector<unsigned char> rgb( (size_t)w * (size_t)h * 3u );
+        GLint previousReadBuffer = GL_BACK;
+        glGetIntegerv( GL_READ_BUFFER, &previousReadBuffer );
+        glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+        glReadBuffer( GL_FRONT );
+        glReadPixels( 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data() );
+        glReadBuffer( previousReadBuffer );
+
+        int sky = 0;
+        // glReadPixels is bottom-up: the first 45 percent is the lower part of
+        // the displayed player view. Use the same exact clear-sky tolerance as
+        // the established PPM continuity check.
+        for ( int y = 0; y < h * 45 / 100; ++y )
+        {
+            for ( int x = 0; x < w; ++x )
+            {
+                size_t const i = ( (size_t)y * (size_t)w + (size_t)x ) * 3u;
+                int const r = rgb[i], green = rgb[i + 1], b = rgb[i + 2];
+                if ( std::abs( r - 114 ) <= 2
+                  && std::abs( green - 158 ) <= 2
+                  && std::abs( b - 224 ) <= 2 )
+                { ++sky; }
+            }
+        }
+        return sky;
     }
 
     bool DumpDepthPpm( char const* path, float nearZ, float farZ )
@@ -39644,7 +40756,7 @@ namespace
         g.playWorldgenRateMs = g.playWorldgenStartMs;
         g.playWorldgenWorkingSet = CurrentWorkingSetBytes();
 
-        if ( fopen_s( &g.playWorldgenTrace,
+        if ( !g.ei3MatterPlayable && fopen_s( &g.playWorldgenTrace,
             "Docs\\provenance_worldgen_playtest_trace.csv", "w" ) == 0
           && g.playWorldgenTrace )
         {
@@ -39663,6 +40775,7 @@ namespace
 
         g.playWorldgenInitialized = true;
         bool latestStableSelected = true;
+        bool canonicalEi3WorldSelected = true;
         if(g.playWorldgenLatestStableLaunch&&!g.playStage11Launch
           &&!g.playStage12Launch&&!g.playStage13Launch&&!g.playStage14Launch
           &&!g.playStage15Launch&&!g.playStage16Launch&&!g.playStage16BLaunch
@@ -39679,27 +40792,6 @@ namespace
             g.stage0ToolDrawerOpen=false;
             latestStableSelected = SelectStage0PlayView(
                 Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
-        }
-        if ( g.ei3AuthorityEnabled && g.playWorldgenLatestStableLaunch
-          && !latestStableSelected )
-        {
-            // A byte-damaged or incompatible causal descriptor chain must not
-            // masquerade as the playable world by leaving the clean flat-dirt
-            // performance fixture active.
-            g.statusLine = "EI3 PLAYABLE REFUSED - "
-                + g.presentWaterTerrainHydraulicCompactionAuthorityReason;
-            FILE* file = nullptr;
-            if ( fopen_s( &file, "Docs\\provenance_ei3_playable_refusal.txt", "wb" ) == 0
-              && file )
-            {
-                std::fprintf( file,
-                    "EI3_PLAYABLE=REFUSED\nreason=%s\n"
-                    "flat_dirt_fallback=REJECTED\n",
-                    g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str() );
-                std::fclose( file );
-            }
-            PostQuitMessage( 2 );
-            return;
         }
         if ( g.playStage11Launch )
         {
@@ -40134,7 +41226,33 @@ namespace
         if(g.playMw8Launch)
         {
             g.stage0StageMenuOpen=false;
-            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            bool const selected = SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            if ( g.ei3AuthorityEnabled )
+            {
+                canonicalEi3WorldSelected = selected;
+                if ( selected )
+                {
+                    // Canonical play enters the original embodied-world locale,
+                    // not a certification camera. This is the same absolute
+                    // 128/128 neighbourhood used by the historical material,
+                    // digging, and water runtime. It also avoids synchronously
+                    // searching a 60 km cert grid before authority can attach.
+                    constexpr float spawnX = 128.5f;
+                    constexpr float spawnY = 128.5f;
+                    g.feetX = spawnX; g.feetY = spawnY;
+                    g.playerX = (int)std::floor( spawnX );
+                    g.playerY = (int)std::floor( spawnY );
+                    RebuildStage0PlayableRuntime();
+                    float regionalGround = g.feetZ;
+                    SampleGroundZBase( spawnX, spawnY, regionalGround );
+                    g.feetZ = regionalGround;
+                    g.camX = spawnX; g.camY = spawnY;
+                    g.camZ = regionalGround + kEyeHeightM;
+                    g.yaw = 0.35f; g.pitch = -0.18f;
+                    g.walkMode = false; g.grounded = false;
+                    g.ei3LandingIntent = true;
+                }
+            }
             if(g.certMw8Visual)
             {
                 g.stage0ToolRuler=false;g.stage0ToolPalette=false;
@@ -40226,6 +41344,31 @@ namespace
                 g.camX=g.feetX;g.camY=g.feetY;g.camZ=15.0f;
                 g.yaw=0.75f;g.pitch=-0.55f;
             }
+        }
+        bool const canonicalEi3Refused = g.ei3AuthorityEnabled
+            && ( ( g.playWorldgenLatestStableLaunch && !latestStableSelected )
+              || ( g.playMw8Launch && !canonicalEi3WorldSelected ) );
+        if ( canonicalEi3Refused )
+        {
+            // A byte-damaged or incompatible causal descriptor chain must not
+            // masquerade as the playable world by leaving a certification or
+            // clean flat-dirt fixture active.
+            std::string const& reason = g.playMw8Launch
+                ? g.regionalBiomeAuthorityReason
+                : g.presentWaterTerrainHydraulicCompactionAuthorityReason;
+            g.statusLine = "EI3 PLAYABLE REFUSED - " + reason;
+            FILE* file = nullptr;
+            if ( fopen_s( &file, "Docs\\provenance_ei3_playable_refusal.txt", "wb" ) == 0
+              && file )
+            {
+                std::fprintf( file,
+                    "EI3_PLAYABLE=REFUSED\nreason=%s\n"
+                    "certification_fixture_fallback=REJECTED\n"
+                    "flat_dirt_fallback=REJECTED\n", reason.c_str() );
+                std::fclose( file );
+            }
+            PostQuitMessage( 2 );
+            return;
         }
         g.statusLine = g.playWorldgenLatestStableLaunch
             ? "P5b.2A - LATEST CERTIFIED STABLE RUNTIME  [M] stages"
@@ -49895,6 +51038,7 @@ namespace
             Wd1bCertTick();
             LivingWorldLoadTick();
             Ei3PredictiveTraversalCertTick();
+            Ei3PlayerViewTraversalCertTick();
             PresentationIsolationBeforeFrame(dt);
         }
         else if ( !g.ei3AuthorityEnabled
@@ -54833,12 +55977,28 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 if ( _wcsicmp( argv[i], L"--ei3-authority" ) == 0 )
                 {
                     g.ei3AuthorityEnabled = true;
-                    // Canonical EI3 is a playable world entrypoint, not a
-                    // networking toggle for the historical Phase 4 shell.
-                    // Keep the ordinary certified worldgen presentation and
-                    // let engine snapshots refine it after both lanes bind.
+                    g.ei3MatterPlayable = true;
+                    // FableScript WorldGenesis is the continuous macro carrier;
+                    // FableScript WorldSubstrate is the published matter-bound
+                    // near surface. Provenance owns their presentation only.
+                    // Historical diagnostic carriers stay off in normal play.
                     g.playWorldgenBaseline = true;
-                    g.playWorldgenLatestStableLaunch = true;
+                    g.playWorldgenLatestStableLaunch = false;
+                    g.playMw8Launch = true;
+                    // MV1 owns only the 128 m-to-32 km presentation coverage
+                    // band and samples the engine WorldGenesis carrier. Published
+                    // matter detail refines the overlap without replacing truth.
+                    g.mv1Enabled = true;
+                    g.mv2bEnabled = true;
+                    g.mv2cEnabled = true;
+                    g.ms1bEnabled = true;
+                    g.wd1bEnabled = true;
+                    g.ei3LandingIntent = true;
+                    g.stage0ToolPerformanceHud = false;
+                    g.stage0ToolMutationHud = false;
+                    g.stage0ToolRuler = false;
+                    g.stage0ToolPalette = false;
+                    g.stage0ToolGeologyCutaway = false;
                     g.certWorldgenBaselinePerf = false;
                     g.stage0LiveRadiusM = 192;
                     g.stage0FarExtentM = 0;
@@ -54861,6 +56021,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     // PTC keeps a real coarse ring but does not rebuild that
                     // entire evidence extent merely to stress near residency.
                     g.stage0FarExtentM = 8000;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-ei3-v" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certEi3V = true;
                     continue;
                 }
                 if ( _wcsicmp( argv[i], L"--play-phase4" ) == 0
@@ -56670,9 +57836,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
     if ( g.certEi3LaunchMode )
     {
         bool const descriptorAuthority = EnsureCausalPlayableAuthority(
-            Stage0PlayView::PresentWaterTerrainHydraulicCompaction );
+            Stage0PlayView::RegionalBiome );
         bool const passed = g.ei3AuthorityEnabled
-            && g.playWorldgenBaseline && g.playWorldgenLatestStableLaunch
+            && g.ei3MatterPlayable
+            && g.playWorldgenBaseline && !g.playWorldgenLatestStableLaunch
+            && g.playMw8Launch && g.mv2bEnabled && g.mv2cEnabled
+            && g.ms1bEnabled && g.wd1bEnabled && g.ei3LandingIntent
+            && !g.stage0ToolPerformanceHud && !g.stage0ToolMutationHud
+            && !g.stage0ToolRuler && !g.stage0ToolPalette
+            && !g.stage0ToolGeologyCutaway
             && !g.certWorldgenBaselinePerf
             && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0
             && descriptorAuthority;
@@ -56682,15 +57854,24 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             std::fprintf( file,
                 "EI3_LAUNCH_MODE=%s\n"
                 "authority_enabled=%d\nworldgen_presentation=%d\n"
-                "latest_stable_runtime=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
+                "playable_near_source=PLAYABLE_NEAR_MATTER\n"
+                "ei3_diagnostic_lattice=NORMAL_PLAY_OFF\n"
+                "mw8_calibration_near=NORMAL_PLAY_OFF\n"
+                "macro_world_presentation=%s\nmv2b=%d\nmv2c=%d\nms1b=%d\nwd1b=%d\n"
+                "authoritative_landing=%d\nplayer_spawn=EMBODIED_ORIGIN_128_128\n"
+                "certification_overlays=OFF\nlive_radius_m=%d\nfar_extent_m=%d\n"
                 "descriptor_authority=%s\ndescriptor_reason=%s\n"
-                "legacy_phase4_shell=%s\nflat_dirt_fallback=REJECTED\n",
+                "legacy_phase4_shell=%s\nlocal_physics_fixture=REJECTED\n"
+                "flat_dirt_fallback=REJECTED\n",
                 passed ? "PASS" : "FAIL", g.ei3AuthorityEnabled ? 1 : 0,
                 g.playWorldgenBaseline ? 1 : 0,
-                g.playWorldgenLatestStableLaunch ? 1 : 0,
+                g.playMw8Launch ? "FABLESCRIPT_WORLDGENESIS" : "MISSING",
+                g.mv2bEnabled ? 1 : 0, g.mv2cEnabled ? 1 : 0,
+                g.ms1bEnabled ? 1 : 0, g.wd1bEnabled ? 1 : 0,
+                g.ei3LandingIntent ? 1 : 0,
                 g.stage0LiveRadiusM, g.stage0FarExtentM,
                 descriptorAuthority ? "PASS" : "FAIL",
-                g.presentWaterTerrainHydraulicCompactionAuthorityReason.c_str(),
+                g.regionalBiomeAuthorityReason.c_str(),
                 g.playWorldgenBaseline ? "REJECTED" : "ACTIVE" );
             std::fclose( file );
         }
