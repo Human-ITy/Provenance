@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -27,9 +28,32 @@ namespace Ei3
     constexpr int kChunkEdgeM = 64;
     constexpr int kLatticeSide = 9;
     constexpr int kLatticeCount = kLatticeSide * kLatticeSide;
+    constexpr int kDetailLatticeSide = 17;
+    constexpr int kDetailLatticeCount = kDetailLatticeSide * kDetailLatticeSide;
+    constexpr int kDetailSpacingVoxels = 32;
     constexpr float kVoxelEdgeM = 0.125f;
     constexpr float kFillDenominator = 255.f;
     constexpr size_t kMaxResidentChunks = 256;
+
+    struct MaterialPart
+    {
+        std::string materialId;
+        int parts = 0;
+    };
+
+    struct SurfaceSemantic
+    {
+        std::string dominantSurfaceFamily;
+        std::string dominantMaterialId;
+        std::string lithologyClass;
+        std::string substrateClass;
+        std::string landformClass;
+        float weathering = 0.f;
+        float soilDepthM = 0.f;
+        float wetness = 0.f;
+        float roughness = 0.f;
+        std::vector<MaterialPart> surfaceMaterialMix;
+    };
 
     struct ChunkCoord
     {
@@ -67,6 +91,12 @@ namespace Ei3
         std::string macroPeakId;
         std::string lithologyClass;
         std::string substrateClass;
+        std::string landformClass;
+        float weathering = 0.f;
+        float soilDepthM = 0.f;
+        float wetness = 0.f;
+        float roughness = 0.f;
+        std::vector<MaterialPart> surfaceMaterialMix;
         std::string canonicalJson;
     };
 
@@ -82,6 +112,12 @@ namespace Ei3
         std::string macroPeakId;
         std::string lithologyClass;
         std::string substrateClass;
+        std::string landformClass;
+        float weathering = 0.f;
+        float soilDepthM = 0.f;
+        float wetness = 0.f;
+        float roughness = 0.f;
+        std::vector<MaterialPart> surfaceMaterialMix;
         ChunkCoord chunkCoord;
         int64_t chunkRevision = -1;
     };
@@ -98,6 +134,15 @@ namespace Ei3
         std::string baselineChunkDigest;
         std::string checksum;
         std::vector<SurfaceColumn> columns;
+        // Optional EI3.Q additive extension.  Heights are the engine's existing
+        // one-metre WorldSubstrate anchors in canonical fixed-height units.
+        // Older snapshots remain admissible and use the certified 8 m carrier.
+        std::vector<int> detailSurfaceHeightQ;
+        // Expanded from the engine's compact palette on admission. One entry
+        // per 4 m detail sample keeps semantic and geometric interpolation on
+        // the same authoritative lattice without retaining JSON indices in
+        // the render path.
+        std::vector<SurfaceSemantic> detailSurfaceSemantics;
         std::string canonicalJson;
     };
 
@@ -147,6 +192,17 @@ namespace Ei3
               || value > (std::numeric_limits<int>::max)() ) { return false; }
             out = (int)value;
             return true;
+        }
+
+        inline bool ExtractFloat( std::string const& json, char const* key, float& out )
+        {
+            std::string const needle = std::string( "\"" ) + key + "\":";
+            size_t p = json.find( needle );
+            if ( p == std::string::npos ) { return false; }
+            p += needle.size();
+            char* end = nullptr;
+            out = std::strtof( json.c_str() + p, &end );
+            return end != json.c_str() + p && std::isfinite( out );
         }
 
         inline bool ExtractArray( std::string const& json, char const* key, std::string& out )
@@ -229,6 +285,103 @@ namespace Ei3
                 if ( depth != 0 ) { return false; }
             }
             return true;
+        }
+
+        inline bool SplitInts( std::string const& array, std::vector<int>& out )
+        {
+            out.clear();
+            if ( array.size() < 2 || array.front() != '[' || array.back() != ']' )
+            { return false; }
+            size_t p = 1;
+            while ( p + 1 < array.size() )
+            {
+                if ( array[p] == ',' ) { ++p; continue; }
+                bool negative = array[p] == '-';
+                if ( negative ) { ++p; }
+                if ( p + 1 >= array.size() || array[p] < '0' || array[p] > '9' )
+                { return false; }
+                int64_t value = 0;
+                while ( p < array.size() && array[p] >= '0' && array[p] <= '9' )
+                { value = value * 10 + ( array[p++] - '0' ); }
+                if ( negative ) { value = -value; }
+                if ( value < (std::numeric_limits<int>::min)()
+                  || value > (std::numeric_limits<int>::max)() ) { return false; }
+                out.push_back( (int)value );
+            }
+            return true;
+        }
+
+        inline bool SplitFloats( std::string const& array, std::vector<float>& out )
+        {
+            out.clear();
+            if ( array.size() < 2 || array.front() != '[' || array.back() != ']' )
+            { return false; }
+            size_t p = 1;
+            while ( p + 1 < array.size() )
+            {
+                if ( array[p] == ',' ) { ++p; continue; }
+                char* end = nullptr;
+                float const value = std::strtof( array.c_str() + p, &end );
+                if ( end == array.c_str() + p || !std::isfinite( value ) )
+                { return false; }
+                p = (size_t)( end - array.c_str() );
+                out.push_back( value );
+            }
+            return true;
+        }
+
+        inline bool SplitMaterialParts( std::string const& array,
+                                        std::vector<MaterialPart>& out )
+        {
+            out.clear();
+            if ( array.size() < 2 || array.front() != '[' || array.back() != ']' )
+            { return false; }
+            size_t p = 1;
+            while ( p + 1 < array.size() )
+            {
+                if ( array[p] == ',' ) { ++p; continue; }
+                if ( array[p++] != '[' || p >= array.size() || array[p++] != '"' )
+                { return false; }
+                size_t const begin = p;
+                size_t const quote = array.find( '"', p );
+                if ( quote == std::string::npos ) { return false; }
+                MaterialPart part;
+                part.materialId.assign( array, begin, quote - begin );
+                p = quote + 1;
+                if ( p >= array.size() || array[p++] != ',' ) { return false; }
+                if ( p >= array.size() || array[p] < '0' || array[p] > '9' )
+                { return false; }
+                int64_t value = 0;
+                while ( p < array.size() && array[p] >= '0' && array[p] <= '9' )
+                { value = value * 10 + ( array[p++] - '0' ); }
+                if ( value <= 0 || value > 65535 || p >= array.size() || array[p++] != ']' )
+                { return false; }
+                part.parts = (int)value;
+                out.push_back( std::move( part ) );
+            }
+            int64_t sum = 0;
+            for ( MaterialPart const& part : out ) { sum += part.parts; }
+            return !out.empty() && sum == 65535;
+        }
+
+        inline bool ParseSurfaceSemantic( std::string const& object,
+                                          SurfaceSemantic& out )
+        {
+            std::string mix;
+            return ExtractString( object, "dominant_surface_family",
+                                  out.dominantSurfaceFamily )
+                && ExtractString( object, "dominant_material_id",
+                                  out.dominantMaterialId )
+                && ExtractString( object, "lithology_class", out.lithologyClass )
+                && ExtractString( object, "substrate_class", out.substrateClass )
+                && ExtractString( object, "landform_class", out.landformClass )
+                && ExtractArray( object, "surface_material_mix", mix )
+                && SplitMaterialParts( mix, out.surfaceMaterialMix )
+                && !out.dominantSurfaceFamily.empty()
+                && !out.dominantMaterialId.empty()
+                && !out.lithologyClass.empty()
+                && !out.substrateClass.empty()
+                && !out.landformClass.empty();
         }
 
         inline bool ExtractPair( std::string const& json, char const* key, ChunkCoord& out )
@@ -327,7 +480,105 @@ namespace Ei3
               || column.macroFeatureId.empty() )
             { failure = "malformed_detailed_surface_column"; return false; }
             column.ix = voxel.x; column.iy = voxel.y; column.canonicalJson = object;
+            // EI3.Q context is additive so historical EI3 snapshots remain
+            // readable. Canonical EI3.Q fixtures require and exercise it.
+            Detail::ExtractString( object, "landform_class", column.landformClass );
+            Detail::ExtractFloat( object, "weathering", column.weathering );
+            Detail::ExtractFloat( object, "soil_depth_m", column.soilDepthM );
+            Detail::ExtractFloat( object, "wetness", column.wetness );
+            Detail::ExtractFloat( object, "roughness", column.roughness );
+            std::string surfaceMix;
+            if ( Detail::ExtractArray( object, "surface_material_mix", surfaceMix )
+              && !Detail::SplitMaterialParts( surfaceMix, column.surfaceMaterialMix ) )
+            { failure = "malformed_detailed_surface_material_mix"; return false; }
             candidate.columns.push_back( std::move( column ) );
+        }
+        std::string detailObject;
+        if ( Detail::ExtractObject( canonicalJson, "surface_detail", detailObject ) )
+        {
+            std::string encoding, offsets, heights;
+            int detailVersion = 0, latticeSide = 0, spacingVoxels = 0;
+            if ( !Detail::ExtractString( detailObject, "encoding", encoding )
+              || !Detail::ExtractInt( detailObject, "detail_version", detailVersion )
+              || !Detail::ExtractInt( detailObject, "lattice_side", latticeSide )
+              || !Detail::ExtractInt( detailObject, "spacing_voxels", spacingVoxels )
+              || !Detail::ExtractArray( detailObject, "sample_offsets_voxels", offsets )
+              || !Detail::ExtractArray( detailObject, "surface_height_q", heights )
+              || encoding != "absolute-fixed-height-q" || detailVersion != 1
+              || latticeSide != kDetailLatticeSide
+              || spacingVoxels != kDetailSpacingVoxels
+              || !Detail::SplitInts( heights, candidate.detailSurfaceHeightQ )
+              || candidate.detailSurfaceHeightQ.size() != kDetailLatticeCount )
+            { failure = "malformed_detailed_surface_detail"; return false; }
+            std::vector<int> parsedOffsets;
+            if ( !Detail::SplitInts( offsets, parsedOffsets )
+              || parsedOffsets.size() != kDetailLatticeSide )
+            { failure = "malformed_detailed_surface_detail_offsets"; return false; }
+            for ( int i = 0; i < kDetailLatticeSide; ++i )
+            {
+                int const expected = i < kDetailLatticeSide - 1
+                    ? i * kDetailSpacingVoxels : 511;
+                if ( parsedOffsets[(size_t)i] != expected )
+                { failure = "malformed_detailed_surface_detail_offsets"; return false; }
+            }
+            std::string semanticEncoding, semanticPaletteArray, semanticIndicesArray;
+            bool const hasSemanticPalette = Detail::ExtractString(
+                detailObject, "semantic_encoding", semanticEncoding );
+            bool const hasSemanticObjects = Detail::ExtractArray(
+                detailObject, "semantic_palette", semanticPaletteArray );
+            bool const hasSemanticIndices = Detail::ExtractArray(
+                detailObject, "semantic_indices", semanticIndicesArray );
+            if ( hasSemanticPalette || hasSemanticObjects || hasSemanticIndices )
+            {
+                if ( !hasSemanticPalette || !hasSemanticObjects || !hasSemanticIndices
+                  || semanticEncoding != "palette-indexed-surface-context-v1" )
+                { failure = "malformed_detailed_surface_semantics"; return false; }
+                std::vector<std::string> semanticObjects;
+                std::vector<int> semanticIndices;
+                std::vector<float> weathering, soilDepth, wetness, roughness;
+                std::string weatheringArray, soilDepthArray, wetnessArray, roughnessArray;
+                if ( !Detail::SplitObjects( semanticPaletteArray, semanticObjects )
+                  || semanticObjects.empty()
+                  || !Detail::SplitInts( semanticIndicesArray, semanticIndices )
+                  || semanticIndices.size() != kDetailLatticeCount
+                  || !Detail::ExtractArray( detailObject, "weathering", weatheringArray )
+                  || !Detail::ExtractArray( detailObject, "soil_depth_m", soilDepthArray )
+                  || !Detail::ExtractArray( detailObject, "wetness", wetnessArray )
+                  || !Detail::ExtractArray( detailObject, "roughness", roughnessArray )
+                  || !Detail::SplitFloats( weatheringArray, weathering )
+                  || !Detail::SplitFloats( soilDepthArray, soilDepth )
+                  || !Detail::SplitFloats( wetnessArray, wetness )
+                  || !Detail::SplitFloats( roughnessArray, roughness )
+                  || weathering.size() != kDetailLatticeCount
+                  || soilDepth.size() != kDetailLatticeCount
+                  || wetness.size() != kDetailLatticeCount
+                  || roughness.size() != kDetailLatticeCount )
+                { failure = "malformed_detailed_surface_semantics"; return false; }
+                std::vector<SurfaceSemantic> semanticPalette;
+                semanticPalette.reserve( semanticObjects.size() );
+                for ( std::string const& semanticObject : semanticObjects )
+                {
+                    SurfaceSemantic semantic;
+                    if ( !Detail::ParseSurfaceSemantic( semanticObject, semantic ) )
+                    { failure = "malformed_detailed_surface_semantic"; return false; }
+                    semanticPalette.push_back( std::move( semantic ) );
+                }
+                candidate.detailSurfaceSemantics.reserve( kDetailLatticeCount );
+                for ( size_t sampleIndex = 0; sampleIndex < semanticIndices.size();
+                      ++sampleIndex )
+                {
+                    int const paletteIndex = semanticIndices[sampleIndex];
+                    if ( paletteIndex < 0
+                      || paletteIndex >= (int)semanticPalette.size() )
+                    { failure = "malformed_detailed_surface_semantic_index"; return false; }
+                    SurfaceSemantic semantic = semanticPalette[(size_t)paletteIndex];
+                    semantic.weathering = weathering[sampleIndex];
+                    semantic.soilDepthM = soilDepth[sampleIndex];
+                    semantic.wetness = wetness[sampleIndex];
+                    semantic.roughness = roughness[sampleIndex];
+                    candidate.detailSurfaceSemantics.push_back( std::move( semantic ) );
+                }
+            }
         }
         candidate.canonicalJson = canonicalJson;
         out = std::move( candidate );
@@ -656,8 +907,36 @@ namespace Ei3
                     / kFillDenominator * kVoxelEdgeM; };
             float const a = height( ix, iy ), b = height( ix + 1, iy );
             float const c = height( ix, iy + 1 ), d = height( ix + 1, iy + 1 );
-            out.z = a * ( 1 - tx ) * ( 1 - ty ) + b * tx * ( 1 - ty )
-              + c * ( 1 - tx ) * ty + d * tx * ty;
+            bool const hasDetail = snapshot->detailSurfaceHeightQ.size() == kDetailLatticeCount;
+            int dx = 0, dy = 0; float dtx = 0.f, dty = 0.f;
+            if ( hasDetail )
+            {
+                auto detailAxis = []( float local, int& index, float& blend )
+                {
+                    local = (std::max)( 0.f, (std::min)( 63.875f, local ) );
+                    index = (std::min)( kDetailLatticeSide - 2,
+                        (int)std::floor( local / 4.f ) );
+                    float const origin = index * 4.f;
+                    float const interval = index == kDetailLatticeSide - 2
+                        ? 3.875f : 4.f;
+                    blend = (std::max)( 0.f, (std::min)( 1.f,
+                        ( local - origin ) / interval ) );
+                };
+                detailAxis( localX, dx, dtx ); detailAxis( localY, dy, dty );
+                auto detailHeight = [&]( int sx, int sy )
+                { return snapshot->detailSurfaceHeightQ[
+                        (size_t)sy * kDetailLatticeSide + sx]
+                        / kFillDenominator * kVoxelEdgeM; };
+                float const da = detailHeight( dx, dy ), db = detailHeight( dx + 1, dy );
+                float const dc = detailHeight( dx, dy + 1 ), dd = detailHeight( dx + 1, dy + 1 );
+                out.z = da * ( 1 - dtx ) * ( 1 - dty ) + db * dtx * ( 1 - dty )
+                  + dc * ( 1 - dtx ) * dty + dd * dtx * dty;
+            }
+            else
+            {
+                out.z = a * ( 1 - tx ) * ( 1 - ty ) + b * tx * ( 1 - ty )
+                  + c * ( 1 - tx ) * ty + d * tx * ty;
+            }
             int const nearestX = tx < .5f ? ix : ix + 1;
             int const nearestY = ty < .5f ? iy : iy + 1;
             SurfaceColumn const& source = snapshot->columns[
@@ -671,6 +950,80 @@ namespace Ei3
             out.macroPeakId = source.macroPeakId;
             out.lithologyClass = source.lithologyClass;
             out.substrateClass = source.substrateClass;
+            out.landformClass = source.landformClass;
+            auto blendContext = [&]( float SurfaceColumn::*member )
+            {
+                float const ca = snapshot->columns[(size_t)iy * kLatticeSide + ix].*member;
+                float const cb = snapshot->columns[(size_t)iy * kLatticeSide + ix + 1].*member;
+                float const cc = snapshot->columns[(size_t)(iy + 1) * kLatticeSide + ix].*member;
+                float const cd = snapshot->columns[(size_t)(iy + 1) * kLatticeSide + ix + 1].*member;
+                return ca * ( 1 - tx ) * ( 1 - ty ) + cb * tx * ( 1 - ty )
+                  + cc * ( 1 - tx ) * ty + cd * tx * ty;
+            };
+            out.weathering = blendContext( &SurfaceColumn::weathering );
+            out.soilDepthM = blendContext( &SurfaceColumn::soilDepthM );
+            out.wetness = blendContext( &SurfaceColumn::wetness );
+            out.roughness = blendContext( &SurfaceColumn::roughness );
+            out.surfaceMaterialMix = source.surfaceMaterialMix;
+            if ( hasDetail
+              && snapshot->detailSurfaceSemantics.size() == kDetailLatticeCount )
+            {
+                auto detailSemantic = [&]( int sx, int sy ) -> SurfaceSemantic const&
+                { return snapshot->detailSurfaceSemantics[
+                    (size_t)sy * kDetailLatticeSide + sx]; };
+                float const weights[4] = {
+                    ( 1 - dtx ) * ( 1 - dty ), dtx * ( 1 - dty ),
+                    ( 1 - dtx ) * dty, dtx * dty };
+                SurfaceSemantic const* corners[4] = {
+                    &detailSemantic( dx, dy ), &detailSemantic( dx + 1, dy ),
+                    &detailSemantic( dx, dy + 1 ), &detailSemantic( dx + 1, dy + 1 ) };
+                int const nearestDetailX = dtx < .5f ? dx : dx + 1;
+                int const nearestDetailY = dty < .5f ? dy : dy + 1;
+                SurfaceSemantic const& semantic = detailSemantic(
+                    nearestDetailX, nearestDetailY );
+                out.dominantMaterialId = semantic.dominantMaterialId;
+                out.dominantSurfaceFamily = semantic.dominantSurfaceFamily;
+                out.lithologyClass = semantic.lithologyClass;
+                out.substrateClass = semantic.substrateClass;
+                out.landformClass = semantic.landformClass;
+                out.weathering = out.soilDepthM = out.wetness = out.roughness = 0.f;
+                for ( int i = 0; i < 4; ++i )
+                {
+                    out.weathering += corners[i]->weathering * weights[i];
+                    out.soilDepthM += corners[i]->soilDepthM * weights[i];
+                    out.wetness += corners[i]->wetness * weights[i];
+                    out.roughness += corners[i]->roughness * weights[i];
+                }
+                std::vector<std::pair<std::string, double>> blended;
+                for ( int i = 0; i < 4; ++i )
+                {
+                    for ( MaterialPart const& part : corners[i]->surfaceMaterialMix )
+                    {
+                        auto found = std::find_if( blended.begin(), blended.end(),
+                            [&]( auto const& value ) { return value.first == part.materialId; } );
+                        if ( found == blended.end() )
+                            blended.emplace_back( part.materialId,
+                                (double)part.parts * weights[i] );
+                        else
+                            found->second += (double)part.parts * weights[i];
+                    }
+                }
+                out.surfaceMaterialMix.clear();
+                int assigned = 0;
+                for ( size_t i = 0; i < blended.size(); ++i )
+                {
+                    int parts = i + 1 == blended.size()
+                        ? 65535 - assigned : (int)std::lround( blended[i].second );
+                    parts = (std::max)( 0, (std::min)( 65535 - assigned, parts ) );
+                    if ( parts > 0 )
+                    {
+                        out.surfaceMaterialMix.push_back( { blended[i].first, parts } );
+                        assigned += parts;
+                    }
+                }
+                if ( assigned != 65535 || out.surfaceMaterialMix.empty() )
+                    out.surfaceMaterialMix = semantic.surfaceMaterialMix;
+            }
             out.chunkCoord = coord;
             out.chunkRevision = snapshot->chunkRevision;
             return std::isfinite( out.z ) && !out.dominantMaterialId.empty();

@@ -22,6 +22,14 @@ int main( int argc, char** argv )
     std::string failure;
     pass = pass && Ei3::ParseSnapshot( snapshots[0], world, baseline, parsed, failure );
     pass = pass && parsed.columns.size() == Ei3::kLatticeCount;
+    pass = pass && parsed.detailSurfaceHeightQ.size() == Ei3::kDetailLatticeCount;
+    pass = pass && parsed.detailSurfaceSemantics.size() == Ei3::kDetailLatticeCount;
+    pass = pass && !parsed.columns.empty()
+        && !parsed.columns[0].landformClass.empty()
+        && parsed.columns[0].weathering >= 0.f
+        && parsed.columns[0].weathering <= 1.f
+        && parsed.columns[0].soilDepthM >= 0.f
+        && !parsed.columns[0].surfaceMaterialMix.empty();
 
     Ei3::Residency residency;
     auto admitted = residency.AdmitSnapshot( snapshots[0], world, baseline, failure );
@@ -36,7 +44,11 @@ int main( int argc, char** argv )
         && !ancestry.macroLandformId.empty()
         && !ancestry.parentRangeId.empty()
         && !ancestry.macroPeakId.empty()
-        && !ancestry.lithologyClass.empty();
+        && !ancestry.lithologyClass.empty()
+        && !ancestry.surfaceMaterialMix.empty();
+    int ancestryParts = 0;
+    for ( auto const& part : ancestry.surfaceMaterialMix ) { ancestryParts += part.parts; }
+    pass = pass && ancestryParts == 65535;
     pass = pass && residency.AdmitSnapshot( snapshots[0],
         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", baseline, failure )
         == Ei3::Residency::Admission::Rejected;
@@ -81,9 +93,12 @@ int main( int argc, char** argv )
     std::printf(
         "EI3_CLIENT_CONTRACT=%s\nSNAPSHOT_ADMISSION=%s\nDELTA_CONTIGUITY=%s\n"
         "STATIC_ANCESTRY=%s\nPREDICTIVE_24_60_120_240=%s\n"
+        "MATTER_DETAIL_4M=%s\nSURFACE_CONTEXT_4M=%s\nSURFACE_MIX_4M=%s\n"
         "LANDING_P0=%s\nCOURSE_CHANGE=%s\n",
         pass ? "PASS" : "FAIL",
         pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL",
-        pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL" );
+        pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL",
+        pass ? "PASS" : "FAIL",
+        pass ? "PASS" : "FAIL", pass ? "PASS" : "FAIL" );
     return pass ? 0 : 1;
 }

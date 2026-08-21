@@ -15767,6 +15767,71 @@ namespace
         glVertex3f( x2, y2, z2 );
     }
 
+    void ResolveEi3MatterVertexColor( CausalVisibleExposure::Vec3 const& vertex,
+        float faceShade, char const* fallbackMaterial, float& outR, float& outG, float& outB )
+    {
+        uint8_t macroR=94,macroG=77,macroB=56;
+        SampleCanonicalWorldGenesisColor(
+            (float)vertex.x,(float)vertex.y,macroR,macroG,macroB);
+
+        Ei3::MatterSurfaceSample matter;
+        bool const haveMatter=g.ei3Residency.SampleMatterSurface(
+            (float)vertex.x,(float)vertex.y,matter);
+        char const* material=haveMatter&&!matter.dominantMaterialId.empty()
+            ?matter.dominantMaterialId.c_str():fallbackMaterial;
+        // Continuous world-space presentation breakup within the material's
+        // authored reflectance range. It changes no body, stratum, height, or
+        // collision fact and deliberately has no cell/tile boundary.
+        float const phase=(float)((unsigned char)(material&&material[0]?material[0]:'d'))*.037f;
+        float const wave=.5f+.25f*std::sin((float)vertex.x*.173f+(float)vertex.y*.109f+phase)
+            +.15f*std::sin((float)vertex.x*.047f-(float)vertex.y*.071f+phase*2.3f)
+            +.10f*std::sin((float)vertex.x*.613f+(float)vertex.y*.431f-phase);
+        float const t=std::clamp(wave,0.f,1.f);
+        auto paletteColor=[&](char const* id,float& r,float& green,float& b)
+        {
+            VisualMat::VisualMaterialDef const& visual=VisualMat::OrDirt(id);
+            r=((1.f-t)*visual.color_range.r0+t*visual.color_range.r1)/255.f;
+            green=((1.f-t)*visual.color_range.g0+t*visual.color_range.g1)/255.f;
+            b=((1.f-t)*visual.color_range.b0+t*visual.color_range.b1)/255.f;
+        };
+        float matR=0.f,matG=0.f,matB=0.f;
+        if(haveMatter&&!matter.surfaceMaterialMix.empty())
+        {
+            for(Ei3::MaterialPart const& part:matter.surfaceMaterialMix)
+            {
+                float r=0.f,green=0.f,b=0.f;
+                paletteColor(part.materialId.c_str(),r,green,b);
+                float const weight=(float)part.parts/65535.f;
+                matR+=r*weight;matG+=green*weight;matB+=b*weight;
+            }
+        }
+        else paletteColor(material,matR,matG,matB);
+
+        // SurfaceState remains the engine-owned appearance context at this
+        // stage.  Detailed projection currently describes the physical
+        // substrate (and in the certified corridor that is nearly uniform
+        // granite/metamorphic bare bedrock); it does not yet carry an ecology
+        // or living-cover descriptor.  Keep the substrate readable as a
+        // mineral cue without allowing it to wash the macro surface promise
+        // into one grey replacement patch.
+        float materialWeight=.08f;
+        if(haveMatter)
+        {
+            if(matter.dominantSurfaceFamily=="rock")materialWeight=.18f;
+            else if(matter.dominantSurfaceFamily=="sediment")materialWeight=.14f;
+            else if(matter.dominantSurfaceFamily=="regolith")materialWeight=.10f;
+            // Existing engine wetness darkens the same material; it does not
+            // synthesize water. Roughness gives only a mild reflectance cue.
+            float const wetDarken=1.f-.18f*std::clamp(matter.wetness,0.f,1.f);
+            float const roughTone=.97f+.06f*std::clamp(matter.roughness,0.f,1.f);
+            matR*=wetDarken*roughTone;matG*=wetDarken*roughTone;matB*=wetDarken*roughTone;
+        }
+        float const inv=1.f-materialWeight;
+        outR=std::clamp((inv*macroR/255.f+materialWeight*matR)*faceShade,0.f,1.f);
+        outG=std::clamp((inv*macroG/255.f+materialWeight*matG)*faceShade,0.f,1.f);
+        outB=std::clamp((inv*macroB/255.f+materialWeight*matB)*faceShade,0.f,1.f);
+    }
+
     void EmitStage8Triangle( CausalVisibleExposure::Tri const& tri, char const* material )
     {
         if(g.ei3MatterPlayable&&g.ms1bEnabled)
@@ -15781,16 +15846,9 @@ namespace
             float const shade=0.38f+0.70f*(std::max)(0.f,nx*kLx+ny*kLy+nz*kLz);
             auto emit=[&](CausalVisibleExposure::Vec3 const& v)
             {
-                // The detailed mesh and macro carrier use the same engine-owned
-                // SurfaceAppearance promise. This keeps colour continuous while
-                // matter geometry refines; the local MW8 certificate palette is
-                // not consulted by canonical play.
-                uint8_t r=94,green=77,b=56;
-                SampleCanonicalWorldGenesisColor(
-                    (float)v.x,(float)v.y,r,green,b);
-                glColor3f(std::clamp(r*shade/255.f,0.f,1.f),
-                    std::clamp(green*shade/255.f,0.f,1.f),
-                    std::clamp(b*shade/255.f,0.f,1.f));
+                float r=0.f,green=0.f,b=0.f;
+                ResolveEi3MatterVertexColor(v,shade,material,r,green,b);
+                glColor3f(r,green,b);
                 glVertex3f((float)v.x,(float)v.y,(float)v.z);
             };
             emit(tri.a);emit(tri.b);emit(tri.c);
