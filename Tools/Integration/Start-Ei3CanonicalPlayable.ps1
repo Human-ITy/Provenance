@@ -100,7 +100,7 @@ try {
             throw "FableScript authority exited during startup: $detail"
         }
         $probeArgs = @(
-            '-m', 'tools.probe_playable_authority',
+            $probeModule,
             '--control-port', '8765', '--bulk-port', '8766',
             '--timeout', '120', '--receipt', $probeReceipt
         )
