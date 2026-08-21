@@ -8,6 +8,12 @@ artifacts, validates one detailed projection, and only then opens
 `ProvenanceClient.exe --ei3-authority`. Closing the client requests a clean
 shutdown and targets only the authority PID created by that launcher.
 
+`--ei3-authority` is itself a fail-closed playable entrypoint: it selects the
+latest certified worldgen presentation before connecting. It must never leave
+the historical Phase 4 blue-shell renderer active merely because a command-line
+argument was present. `--cert-ei3-launch-mode` verifies this selection without
+opening a window.
+
 Persistent playthrough identity:
 
 `C:\Users\D-Day\ProvenanceWorkspace\State\canonical-playable\world-instance.json`

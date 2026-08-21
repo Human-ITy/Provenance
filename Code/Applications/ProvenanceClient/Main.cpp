@@ -1801,6 +1801,7 @@ namespace
         Ei0a::RequestTracker bulkRequestTracker;
         Ei0d::SessionBinding controlSessionBinding;
         bool ei3AuthorityEnabled = false;
+        bool certEi3LaunchMode = false;
         bool ei3ProjectionMode = false;
         bool ei3LandingIntent = false;
         Ei3::Residency ei3Residency;
@@ -54809,6 +54810,21 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 if ( _wcsicmp( argv[i], L"--ei3-authority" ) == 0 )
                 {
                     g.ei3AuthorityEnabled = true;
+                    // Canonical EI3 is a playable world entrypoint, not a
+                    // networking toggle for the historical Phase 4 shell.
+                    // Keep the ordinary certified worldgen presentation and
+                    // let engine snapshots refine it after both lanes bind.
+                    g.playWorldgenBaseline = true;
+                    g.playWorldgenLatestStableLaunch = true;
+                    g.certWorldgenBaselinePerf = false;
+                    g.stage0LiveRadiusM = 192;
+                    g.stage0FarExtentM = 0;
+                    ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-ei3-launch-mode" ) == 0 )
+                {
+                    g.certEi3LaunchMode = true;
                     continue;
                 }
                 if ( _wcsicmp( argv[i], L"--cert-ei3-ptc" ) == 0 )
@@ -56626,6 +56642,31 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             }
             LocalFree( argv );
         }
+    }
+
+    if ( g.certEi3LaunchMode )
+    {
+        bool const passed = g.ei3AuthorityEnabled
+            && g.playWorldgenBaseline && g.playWorldgenLatestStableLaunch
+            && !g.certWorldgenBaselinePerf
+            && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0;
+        FILE* file = nullptr;
+        if ( fopen_s( &file, "Docs\\provenance_ei3_launch_mode_cert.txt", "wb" ) == 0 && file )
+        {
+            std::fprintf( file,
+                "EI3_LAUNCH_MODE=%s\n"
+                "authority_enabled=%d\nworldgen_presentation=%d\n"
+                "latest_stable_runtime=%d\nlive_radius_m=%d\nfar_extent_m=%d\n"
+                "legacy_phase4_shell=%s\n",
+                passed ? "PASS" : "FAIL", g.ei3AuthorityEnabled ? 1 : 0,
+                g.playWorldgenBaseline ? 1 : 0,
+                g.playWorldgenLatestStableLaunch ? 1 : 0,
+                g.stage0LiveRadiusM, g.stage0FarExtentM,
+                g.playWorldgenBaseline ? "REJECTED" : "ACTIVE" );
+            std::fclose( file );
+        }
+        WSACleanup();
+        return passed ? 0 : 2;
     }
 
     // The uncapped player loop is the frame owner. Terrain derivation workers

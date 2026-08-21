@@ -1,0 +1,7 @@
+EI3_LAUNCH_MODE=PASS
+authority_enabled=1
+worldgen_presentation=1
+latest_stable_runtime=1
+live_radius_m=192
+far_extent_m=0
+legacy_phase4_shell=REJECTED

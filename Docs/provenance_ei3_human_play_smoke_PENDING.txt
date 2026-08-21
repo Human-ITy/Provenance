@@ -1,4 +1,9 @@
 EI3_HUMAN_PLAY_SMOKE=PENDING
+attempt_1=FAIL
+attempt_1_failure=legacy_phase4_blue_shell_no_terrain
+attempt_1_evidence=C:\Users\D-Day\ProvenanceWorkspace\Evidence\Playable\human-smoke\20260820-phase4-blue-shell-failure.png
+attempt_1_evidence_sha256=CBA0D97061738E51AB9FB62A8F709E44048FE29C0F4C993DFD8521E33DE56BD7
+root_cause=--ei3-authority_enabled_networking_but_bypassed_argument_free_worldgen_launch_initialization
 required_actions=stand/look; move; turn/look-behind; short-flight; descend; walk; exit; relaunch
 required_persistence=same world_uuid after relaunch
 automation_is_not_human_confirmation=1
