@@ -4,6 +4,10 @@
 
 Double-click `PLAY_EI3_QB_RICH_LANDFORMS.cmd` in the Provenance client repository.
 
+The same launcher works in both the certified integration checkout and the
+consolidated workspace. It discovers the appropriate authority workspace and
+does not silently fall back to a non-authoritative client-only mode.
+
 The launcher starts the local authoritative FableScript process in the Q.B
 physical-baseline mode, waits for the canonical authority and projection lanes,
 then starts ProvenanceClient directly in the selectable **EI3.Q.B — Rich Causal
