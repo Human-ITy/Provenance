@@ -801,6 +801,10 @@ namespace Ei3
         Priority priority = Priority::P5;
         float etaSeconds = std::numeric_limits<float>::infinity();
         float score = 0.f;
+        // Non-negative for the player-centred continuity obligation.  These
+        // rings always sort ahead of directional prediction: lookahead may
+        // use spare capacity, but may never leave a nearer direction empty.
+        int radialRing = -1;
     };
 
     struct PredictiveInput
@@ -823,23 +827,48 @@ namespace Ei3
     {
         std::unordered_map<ChunkCoord, DesiredChunk, ChunkCoordHash> best;
         ChunkCoord const center{ FloorChunk( input.x ), FloorChunk( input.y ) };
-        auto admit = [&]( int x, int y, Priority priority, float eta, float score )
+        auto admit = [&]( int x, int y, Priority priority, float eta, float score,
+                          int radialRing = -1 )
         {
             ChunkCoord const key{ x, y };
-            DesiredChunk value{ key, priority, eta, score };
+            DesiredChunk value{ key, priority, eta, score, radialRing };
             auto found = best.find( key );
-            if ( found == best.end() || (int)priority < (int)found->second.priority
-              || ( priority == found->second.priority && score > found->second.score ) )
+            bool const valueIsRadial = radialRing >= 0;
+            bool const foundIsRadial = found != best.end() && found->second.radialRing >= 0;
+            if ( found == best.end()
+              || ( valueIsRadial && !foundIsRadial )
+              || ( valueIsRadial == foundIsRadial && (int)priority < (int)found->second.priority )
+              || ( valueIsRadial == foundIsRadial && priority == found->second.priority
+                && score > found->second.score ) )
             { best[key] = value; }
         };
 
         // P0: current support and landing collar. It can never be displaced by
         // visual-interest work.
-        int const supportRadius = ( input.walkMode || input.landingIntent ) ? 1 : 0;
+        // The published 8 m surface lattice is dual-sampled across 64 m
+        // authority boundaries.  A package under an airborne camera can
+        // therefore need the same four source chunks as a walking/landing
+        // package.  Keep the 3x3 P0 collar in every movement mode; otherwise
+        // flight reaches a chunk edge with only half of the visible/collision
+        // package admitted and the coarse carrier can never hand off cleanly.
+        int const supportRadius = 1;
         for ( int oy = -supportRadius; oy <= supportRadius; ++oy )
             for ( int ox = -supportRadius; ox <= supportRadius; ++ox )
                 admit( center.x + ox, center.y + oy, Priority::P0, 0.f,
-                       10000.f - (float)( std::abs( ox ) + std::abs( oy ) ) );
+                       10000.f - (float)( std::abs( ox ) + std::abs( oy ) ),
+                       (std::max)( std::abs( ox ), std::abs( oy ) ) );
+
+        // The full local support envelope is admitted concentrically before
+        // any travel-direction or camera-interest work. Equal radius means
+        // equal priority and protection in every direction.
+        for ( int r = 2; r <= 3; ++r )
+            for ( int oy = -r; oy <= r; ++oy )
+                for ( int ox = -r; ox <= r; ++ox )
+                    if ( (std::max)( std::abs( ox ), std::abs( oy ) ) == r )
+                        admit( center.x + ox, center.y + oy,
+                               r == 2 ? Priority::P1 : Priority::P2,
+                               std::numeric_limits<float>::infinity(),
+                               9000.f - r * 100.f, r );
 
         float const speed = std::sqrt( input.velocityX * input.velocityX
                                     + input.velocityY * input.velocityY );
@@ -848,7 +877,11 @@ namespace Ei3
         float dlen = std::sqrt( dx * dx + dy * dy );
         if ( dlen < 1e-5f ) { dx = 0.f; dy = 1.f; dlen = 1.f; }
         dx /= dlen; dy /= dlen;
-        float const leadM = (std::max)( 192.f, speed * 3.f );
+        // Keep at least one directional package beyond the protected ring-3
+        // envelope even at the ordinary 24 m/s traversal rate. Otherwise the
+        // concentric obligation legitimately absorbs the whole lookahead and
+        // forward prefetch does not begin until after a boundary is crossed.
+        float const leadM = (std::max)( 256.f, speed * 3.f );
         int const leadChunks = (std::min)( 16, (int)std::ceil( leadM / kChunkEdgeM ) );
         float const lateralX = -dy, lateralY = dx;
         for ( int step = 1; step <= leadChunks; ++step )
@@ -861,11 +894,11 @@ namespace Ei3
                                     FloorChunk( py + lateralY * side * kChunkEdgeM ) };
                 float const eta = speed > .5f ? step * kChunkEdgeM / speed
                                                : std::numeric_limits<float>::infinity();
-                admit( c.x, c.y, Priority::P1, eta, 8000.f - step * 10.f - std::abs( side ) );
+                admit( c.x, c.y, Priority::P3, eta, 6000.f - step * 10.f - std::abs( side ) );
             }
         }
 
-        // P2 camera/landmark pursuit, including course changes before velocity
+        // P4 camera/landmark pursuit, including course changes before velocity
         // has caught up. Altitude expands this cheap directional preview.
         float const altitudeLead = (std::min)( 1024.f, 256.f + (std::max)( 0.f, input.z ) * .5f );
         int const sightSteps = (std::max)( 4, (int)std::ceil( altitudeLead / kChunkEdgeM ) );
@@ -873,24 +906,17 @@ namespace Ei3
         {
             ChunkCoord const c{ FloorChunk( input.x + input.cameraForwardX * step * kChunkEdgeM ),
                                 FloorChunk( input.y + input.cameraForwardY * step * kChunkEdgeM ) };
-            admit( c.x, c.y, Priority::P2, std::numeric_limits<float>::infinity(),
-                   6000.f - step * 10.f );
+            admit( c.x, c.y, Priority::P4, std::numeric_limits<float>::infinity(),
+                   4000.f - step * 10.f );
         }
 
-        // P3 local continuity ring; P4/P5 are trailing/speculative and are the
-        // first work dropped under pressure.
-        for ( int r = 1; r <= 3; ++r )
-            for ( int oy = -r; oy <= r; ++oy )
-                for ( int ox = -r; ox <= r; ++ox )
-                    if ( (std::max)( std::abs( ox ), std::abs( oy ) ) == r )
-                        admit( center.x + ox, center.y + oy,
-                               r <= 2 ? Priority::P3 : Priority::P5,
-                               std::numeric_limits<float>::infinity(), 4000.f - r * 100.f );
+        // P5 is trailing/speculative and is the first work dropped under
+        // pressure. It cannot displace the concentric local envelope.
         if ( speed > .5f )
         {
             for ( int step = 1; step <= 3; ++step )
                 admit( FloorChunk( input.x - dx * step * kChunkEdgeM ),
-                       FloorChunk( input.y - dy * step * kChunkEdgeM ), Priority::P4,
+                       FloorChunk( input.y - dy * step * kChunkEdgeM ), Priority::P5,
                        std::numeric_limits<float>::infinity(), 2000.f - step );
         }
         std::vector<DesiredChunk> result;
@@ -898,6 +924,11 @@ namespace Ei3
         for ( auto const& value : best ) { result.push_back( value.second ); }
         std::sort( result.begin(), result.end(), []( DesiredChunk const& a, DesiredChunk const& b )
         {
+            bool const aRadial = a.radialRing >= 0;
+            bool const bRadial = b.radialRing >= 0;
+            if ( aRadial != bRadial ) { return aRadial; }
+            if ( aRadial && a.radialRing != b.radialRing )
+            { return a.radialRing < b.radialRing; }
             if ( a.priority != b.priority ) { return (int)a.priority < (int)b.priority; }
             if ( a.etaSeconds != b.etaSeconds ) { return a.etaSeconds < b.etaSeconds; }
             if ( a.score != b.score ) { return a.score > b.score; }
@@ -1193,7 +1224,18 @@ namespace Ei3
                     int const distance = (std::max)( std::abs( it->first.x - center.x ),
                                                     std::abs( it->first.y - center.y ) );
                     if ( distance <= protectRadius ) { continue; }
-                    if ( victim == live_.end() || it->second.lastUse < victim->second.lastUse )
+                    if ( victim == live_.end() ) { victim = it; continue; }
+                    int const victimDistance = (std::max)(
+                        std::abs( victim->first.x - center.x ),
+                        std::abs( victim->first.y - center.y ) );
+                    if ( distance > victimDistance
+                      || ( distance == victimDistance
+                        && it->second.lastUse < victim->second.lastUse )
+                      || ( distance == victimDistance
+                        && it->second.lastUse == victim->second.lastUse
+                        && ( it->first.y < victim->first.y
+                          || ( it->first.y == victim->first.y
+                            && it->first.x < victim->first.x ) ) ) )
                     { victim = it; }
                 }
                 if ( victim == live_.end() ) { break; }

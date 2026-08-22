@@ -7189,7 +7189,13 @@ namespace
             std::vector<Ei3::ChunkCoord> prewarm;
             for ( Ei3::DesiredChunk const& value : desired )
             {
-                if ( prewarm.size() == 64 ) { break; }
+                // Background work must not occupy the authority workers with
+                // an entire speculative horizon while the player is moving.
+                // P0/P1 are the two nearest concentric support rings.  They
+                // are admitted before directional travel work; outer rings
+                // remain explicit presentation dependencies below.
+                if ( prewarm.size() == 16
+                  || (int)value.priority > (int)Ei3::Priority::P1 ) { break; }
                 if ( !g.ei3Residency.Has( value.coord ) ) { prewarm.push_back( value.coord ); }
             }
             if ( !prewarm.empty() )
@@ -7212,7 +7218,11 @@ namespace
                   || g.ei3Requested.count( value.coord ) ) { continue; }
                 batch.push_back( value.coord );
             }
-            if ( !batch.empty() && g.bulkFlow.Inflight() < 6 )
+            // The local bulk session is a serial response lane.  Queuing six
+            // stale batches cannot improve throughput and prevents a newly-P0
+            // support collar from overtaking old travel work.  Permit at most
+            // one explicit batch behind the short prewarm acknowledgement.
+            if ( !batch.empty() && g.bulkFlow.Inflight() < 2 )
             {
                 std::string const params = Ei3::BuildChunksParams( batch );
                 if ( RequestBulkMethod( "detailed_chunks", params.c_str(),
@@ -7222,7 +7232,7 @@ namespace
             }
         }
         g.ei3Residency.Prune(
-            { Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) }, 2 );
+            { Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) }, 3 );
 
         float const joinDx = g.feetX - g.ei3ProjectionAnchorX;
         float const joinDy = g.feetY - g.ei3ProjectionAnchorY;
@@ -7237,7 +7247,7 @@ namespace
         {
             float ground = 0.f;
             bool const visibleSupportReady = g.ei3MatterPlayable
-                ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
+                ? SampleGroundZ( g.feetX, g.feetY, ground )
                 : g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
             if ( visibleSupportReady )
             {
@@ -7245,7 +7255,7 @@ namespace
                 g.velZ = 0.f; g.walkMode = true; g.grounded = true;
                 g.ei3LandingIntent = false;
                 g.statusLine = g.ei3MatterPlayable
-                    ? "matter-bound terrain published - walk active"
+                    ? "continuous world surface ready - walk active"
                     : "authoritative detailed ground admitted - walk active";
             }
         }
@@ -16292,44 +16302,44 @@ namespace
                 // class, stratum, and material remain the geometry/semantic
                 // source, and the Q.A path never enters this branch.
                 float const complexity=std::clamp(matter.structuralComplexity,0.f,1.f);
-                materialWeight=(std::max)(materialWeight,.38f+.28f*complexity);
-                float structureTone=.94f+.10f*std::sin(
+                materialWeight=(std::max)(materialWeight,.14f+.06f*complexity);
+                float structureTone=.98f+.04f*std::sin(
                     (float)vertex.x*.119f+(float)vertex.y*.083f+phase*1.7f);
 
                 if(matter.structureClass=="resistant_outcrop")
                 {
-                    materialWeight=(std::max)(materialWeight,.68f);
-                    structureTone*=.90f+.14f*complexity;
+                    materialWeight=(std::max)(materialWeight,.22f);
+                    structureTone*=.97f+.06f*complexity;
                 }
                 else if(matter.structureClass=="sedimentary_ledge")
                 {
-                    materialWeight=(std::max)(materialWeight,.62f);
-                    structureTone*=.93f+.10f*std::sin(
+                    materialWeight=(std::max)(materialWeight,.20f);
+                    structureTone*=.98f+.04f*std::sin(
                         (float)vertex.z*.41f+phase);
                 }
                 else if(matter.structureClass=="volcanic_step")
                 {
-                    materialWeight=(std::max)(materialWeight,.72f);
-                    matR*=.86f;matG*=.88f;matB*=.90f;
-                    structureTone*=.91f+.10f*complexity;
+                    materialWeight=(std::max)(materialWeight,.22f);
+                    matR*=.96f;matG*=.97f;matB*=.98f;
+                    structureTone*=.97f+.05f*complexity;
                 }
                 else if(matter.structureClass=="weathered_residual")
                 {
-                    materialWeight=(std::max)(materialWeight,.58f);
-                    float const oxidation=.10f+.12f*std::clamp(matter.weathering,0.f,1.f);
-                    matR=std::clamp(matR+oxidation*.18f,0.f,1.f);
-                    matG=std::clamp(matG+oxidation*.07f,0.f,1.f);
-                    matB=std::clamp(matB-oxidation*.06f,0.f,1.f);
+                    materialWeight=(std::max)(materialWeight,.20f);
+                    float const oxidation=.06f*std::clamp(matter.weathering,0.f,1.f);
+                    matR=std::clamp(matR+oxidation*.10f,0.f,1.f);
+                    matG=std::clamp(matG+oxidation*.04f,0.f,1.f);
+                    matB=std::clamp(matB-oxidation*.03f,0.f,1.f);
                 }
                 else if(matter.structureClass=="talus_apron")
                 {
-                    materialWeight=(std::max)(materialWeight,.64f);
-                    structureTone*=1.02f+.08f*complexity;
+                    materialWeight=(std::max)(materialWeight,.20f);
+                    structureTone*=1.00f+.04f*complexity;
                 }
                 else if(matter.structureClass=="depositional_bank")
                 {
-                    materialWeight=(std::max)(materialWeight,.54f);
-                    structureTone*=.98f+.05f*(1.f-complexity);
+                    materialWeight=(std::max)(materialWeight,.18f);
+                    structureTone*=.99f+.03f*(1.f-complexity);
                 }
                 matR=std::clamp(matR*structureTone,0.f,1.f);
                 matG=std::clamp(matG*structureTone,0.f,1.f);
@@ -17226,10 +17236,23 @@ namespace
                 [&](double wx,double wy)
                 {
                     Ei3::MatterSurfaceSample matter;
+                    float carrierZ=0.f;
                     if(!g.ei3Residency.SampleMatterSurface(
-                            (float)wx,(float)wy,matter))
+                            (float)wx,(float)wy,matter)
+                      || !SampleCanonicalWorldGenesisZ(
+                            (float)wx,(float)wy,carrierZ))
                     {complete=false;return 0.0;}
-                    return (double)matter.z;
+                    // Detailed matter is an authored local refinement of its
+                    // engine parent surface.  Compose that delta onto the same
+                    // canonical carrier used by every coarser LOD.  Drawing
+                    // matter.z directly put the 8 m blocks in a second vertical
+                    // frame (about 16 m above the visible world), creating the
+                    // floating tan safety slab and replacement-world effect.
+                    double const refined=(double)carrierZ
+                        + ((double)matter.z-(double)matter.parentZ);
+                    if(!std::isfinite(refined))
+                    {complete=false;return 0.0;}
+                    return refined;
                 });
             out.authorityReady=complete;
         }
@@ -18426,9 +18449,9 @@ namespace
           "MACRO.HYDROCLIMATE", "derived near-surface material profile from geology, deposits, drainage, and hydroclimate", Stage0PlayView::RegionalRegolith },
         { "GEOLOGY / GEOMORPHOLOGY", "MACRO.BIOMES", "MW8 - Biomes",
           "MACRO.SOILS_REGOLITH", "ecological potential / biome regime from climate, soils, drainage, substrate, and exposure", Stage0PlayView::RegionalBiome },
-        { "INTEGRATION", "EI3.Q.B.RICH_CAUSAL_LANDFORMS", "EI3.Q.B - Rich Causal Landforms",
-          "canonical FableScript authority launched in EI3.Q.B rich-landforms mode",
-          "matter-bound outcrops, ledges, volcanic steps, talus aprons, residuals, and depositional banks", Stage0PlayView::RichCausalLandforms },
+        { "INTEGRATION", "STAGE0.CUT0.CONTINUOUS_WORLD_PREVIEW", "Stage 0 Cut 0 - Continuous World Foundation",
+          "canonical FableScript authority with the current EI3.Q.B landform projection enabled",
+          "PREVIEW - continuous matter/LOD handoff; Stage 0 world causes are not implemented yet", Stage0PlayView::RichCausalLandforms },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER", "Stage 16D - Present Water Occupancy",
           "GEOMORPH.COMPILED_SEDIMENT", "static lakes, rivers, wetlands, and connected water surfaces without flow", Stage0PlayView::PresentWater },
         { "GEOLOGY / GEOMORPHOLOGY", "HYDROLOGY.PRESENT_WATER_BODY", "Stage 16E - Present Water Body Semantics",
@@ -18560,7 +18583,7 @@ namespace
     {
         if ( entry.view == g.stage0PlayView ) { return "CURRENT"; }
         if ( entry.view == Stage0PlayView::RichCausalLandforms )
-        { return g.ei3AuthorityEnabled && g.ei3RichLandformsSession ? "AVAILABLE" : "REQUIRES LAUNCHER"; }
+        { return g.ei3AuthorityEnabled && g.ei3RichLandformsSession ? "PREVIEW" : "REQUIRES LAUNCHER"; }
         if ( entry.view == Stage0PlayView::Clean || entry.view == Stage0PlayView::Combined )
         { return "CERTIFIED"; }
         bool attempted = false;
@@ -18666,8 +18689,8 @@ namespace
         if(boardIndex<0||boardIndex>=kCertificationBrowserCount)return "CLOSED";
         CertificationBrowserEntry const& entry=s_certificationBrowser[boardIndex];
         if(entry.view==g.stage0PlayView)return "PLAYABLE";
-        if(entry.view==Stage0PlayView::RichCausalLandforms&&!g.ei3RichLandformsSession)
-            return "REQUIRES LAUNCHER";
+        if(entry.view==Stage0PlayView::RichCausalLandforms)
+            return g.ei3RichLandformsSession ? "PREVIEW" : "REQUIRES LAUNCHER";
         if(IsRuntimeDepositionChainView(entry.view))return "CERTIFIED";
         char const* runtime=CertificationRuntimeStatus(entry);
         if(std::strcmp(runtime,"CERTIFIED")==0||std::strcmp(runtime,"CURRENT")==0)
@@ -18971,7 +18994,7 @@ namespace
         if ( view == Stage0PlayView::RichCausalLandforms
           && ( !g.ei3AuthorityEnabled || !g.ei3RichLandformsSession ) )
         {
-            g.statusLine = "EI3.Q.B REFUSED - start PLAY_EI3_QB_RICH_LANDFORMS.cmd first";
+            g.statusLine = "CUT 0 REFUSED - start PLAY_STAGE0_CUT0_CONTINUOUS_WORLD.cmd first";
             return false;
         }
         if ( IsCausalPlayableView( view ) && !EnsureCausalPlayableAuthority( view ) )
@@ -19358,7 +19381,7 @@ namespace
             {
                 // Preserve the player's position in the already-bound authority
                 // world.  This is a presentation selection, not a world reload.
-                g.statusLine="EI3.Q.B - rich causal landforms; FableScript matter authority";
+                g.statusLine="STAGE 0 CUT 0 PREVIEW - continuous matter carrier; world causes remain future cuts";
             }
             else
             {
@@ -19560,7 +19583,7 @@ namespace
             case Stage0PlayView::RegionalHydroclimate: return "CERTIFIED MW6 HYDROCLIMATE";
             case Stage0PlayView::RegionalRegolith: return "CERTIFIED MW7 SOILS / REGOLITH";
             case Stage0PlayView::RegionalBiome: return "CERTIFIED MW8 BIOMES";
-            case Stage0PlayView::RichCausalLandforms: return "EI3.Q.B RICH CAUSAL LANDFORMS";
+            case Stage0PlayView::RichCausalLandforms: return "STAGE 0 CUT 0 - CONTINUOUS WORLD FOUNDATION";
             case Stage0PlayView::PresentWater: return "CERTIFIED PRESENT WATER OCCUPANCY";
             case Stage0PlayView::PresentWaterBody: return "CERTIFIED PRESENT WATER BODY SEMANTICS";
             case Stage0PlayView::PresentWaterEquilibrate: return "CERTIFIED BODY-LOCAL EQUILIBRATION";
@@ -21779,10 +21802,10 @@ namespace
         for(int dj=-ringCells;dj<=ringCells;++dj)
         for(int di=-ringCells;di<=ringCells;++di)
             desired.insert(Mv2Key(cri+di,crj+dj));
-        if(anchorMoved)
-        {for(auto it=mv2Tiles.begin();it!=mv2Tiles.end();)
-            {if(!desired.count(it->first)){Mv2RetireTile(it->second);it=mv2Tiles.erase(it);}else ++it;}}
-        // build missing (bounded ring => bounded builds; pages are cheap)
+        // Build the new ring before retiring the previous one. Retiring first
+        // exposed the clear colour between macro-page sets during travel even
+        // though both the old and new authoritative pages were valid.
+        // Coverage handoff is publish-new-then-retire-old, never the reverse.
         for(int dj=-ringCells;dj<=ringCells;++dj)
         for(int di=-ringCells;di<=ringCells;++di)
         {
@@ -21794,6 +21817,12 @@ namespace
             ++g.mv2bPageCreates;if(g.mv2bWarmed)++g.mv2bRuntimeAllocsAfterWarmup;
             g.mv2bResidentBytes+=(long long)t.bytes;
         }
+        bool desiredComplete=true;
+        for(uint64_t const key:desired)
+            if(!mv2Tiles.count(key)){desiredComplete=false;break;}
+        if(anchorMoved&&desiredComplete)
+        {for(auto it=mv2Tiles.begin();it!=mv2Tiles.end();)
+            {if(!desired.count(it->first)){Mv2RetireTile(it->second);it=mv2Tiles.erase(it);}else ++it;}}
         g.mv2bResidentBytes=0;for(auto const& kv:mv2Tiles)g.mv2bResidentBytes+=(long long)kv.second.bytes;
         g.mv2bBytesHighWater=(std::max)(g.mv2bBytesHighWater,g.mv2bResidentBytes);
         g.mv2bPagesResident=(int)mv2Tiles.size();
@@ -21957,6 +21986,8 @@ namespace
     {
         if ( !g.canonicalHandshakeOk || g.macroGenesisDigest.empty() )
         { return false; }
+        static std::mutex cacheMutex;
+        std::lock_guard<std::mutex> const lock( cacheMutex );
         static std::string cachedGenesis;
         static std::unordered_map<uint64_t,Mv2Page> cache;
         if ( cachedGenesis != g.macroGenesisDigest )
@@ -23347,8 +23378,6 @@ namespace
                     }else{++it;}
                 }
             };
-            retireAbsent(g.stage0FarStitchTiles,desiredStitch);
-            retireAbsent(g.stage0FarCoarseTiles,desiredCoarse);
             int discovered=0;
             for(TileSpec const& spec:desired)
             {
@@ -23358,8 +23387,6 @@ namespace
                 {if(profileWaterfall)++s_stage11Waterfall.farTilesRetained;continue;}
                 ++discovered;
                 if(profileWaterfall)++s_stage11Waterfall.farTilesDiscovered;
-                if(existing!=tiles.end())
-                {retireFarList(existing->second.list);tiles.erase(existing);}
                 LARGE_INTEGER resource0{},resource1{},compile0{},compile1{},publish0{},publish1{};
                 if(profileWaterfall)QueryPerformanceCounter(&resource0);
                 GLuint const list=allocFarList();
@@ -23396,7 +23423,15 @@ namespace
                         *(double)(compile1.QuadPart-compile0.QuadPart)/(double)waterfallQpf.QuadPart;
                     QueryPerformanceCounter(&publish0);
                 }
-                tiles.emplace(spec.key,Stage0FarFieldTile{list,tris,spec.signature});
+                Stage0FarFieldTile const replacement{list,tris,spec.signature};
+                if(existing!=tiles.end())
+                {
+                    GLuint const oldList=existing->second.list;
+                    existing->second=replacement;
+                    retireFarList(oldList);
+                }
+                else
+                {tiles.emplace(spec.key,replacement);}
                 if(profileWaterfall)
                 {
                     QueryPerformanceCounter(&publish1);
@@ -23410,6 +23445,24 @@ namespace
                     else ++s_stage11Waterfall.farCoarseTilesBuilt;
                     ++s_stage11Waterfall.farTilesPublished;
                 }
+            }
+            // Retire the outgoing coverage only after every required tile has
+            // a publishable successor.  Keeping the old generation for one
+            // more frame is harmless overlap; retiring it first exposes sky
+            // through the macro/detailed handoff when allocation or compile
+            // work is delayed.
+            bool allDesiredPublished=true;
+            for(TileSpec const& spec:desired)
+            {
+                auto const& tiles=spec.stitch?g.stage0FarStitchTiles:g.stage0FarCoarseTiles;
+                auto const found=tiles.find(spec.key);
+                if(found==tiles.end()||found->second.contentSignature!=spec.signature)
+                {allDesiredPublished=false;break;}
+            }
+            if(allDesiredPublished)
+            {
+                retireAbsent(g.stage0FarStitchTiles,desiredStitch);
+                retireAbsent(g.stage0FarCoarseTiles,desiredCoarse);
             }
             if(profileWaterfall)
             {s_stage11Waterfall.farTilesPendingMax=(std::max)(s_stage11Waterfall.farTilesPendingMax,discovered);}
@@ -30081,12 +30134,6 @@ namespace
 
     bool WalkStepAllowed( float fromX, float fromY, float fromZ, float toX, float toY, float& outGroundZ )
     {
-        if ( g.ei3MatterPlayable
-          && !SamplePublishedMatterGround( toX, toY, outGroundZ ) )
-        {
-            g.ei3LandingIntent = true;
-            return false;
-        }
         if ( g.certEi3Ptc
           && !g.ei3Residency.GroundHeight( toX, toY, outGroundZ ) )
         {
@@ -30295,7 +30342,7 @@ namespace
             {
                 float ground = 0.f;
                 bool const supportReady = g.ei3MatterPlayable
-                    ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
+                    ? SampleGroundZ( g.feetX, g.feetY, ground )
                     : g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
                 if ( !supportReady )
                 {
@@ -30303,7 +30350,7 @@ namespace
                     g.grounded = false;
                     g.ei3LandingIntent = true;
                     g.statusLine = g.ei3MatterPlayable
-                        ? "landing held - requesting published matter ground"
+                        ? "landing held - canonical world surface unavailable"
                         : "landing held - requesting authoritative P0 ground";
                     g.keyToggleLatch['F'] = true;
                     UpdateStreamHud();
@@ -30424,12 +30471,13 @@ namespace
             g.feetZ += g.velZ * dt;
 
             float ground = g.feetZ;
-            bool const authoritativeGround = g.ei3MatterPlayable
-                ? SamplePublishedMatterGround( g.feetX, g.feetY, ground )
-                : ( !g.certEi3Ptc
+            bool const groundReady = g.ei3MatterPlayable
+                ? SampleGroundZ( g.feetX, g.feetY, ground )
+                : ( ( !g.certEi3Ptc
                     || g.ei3Residency.GroundHeight(
-                        g.feetX, g.feetY, ground ) );
-            if ( authoritativeGround && SampleGroundZ( g.feetX, g.feetY, ground ) )
+                        g.feetX, g.feetY, ground ) )
+                    && SampleGroundZ( g.feetX, g.feetY, ground ) );
+            if ( groundReady )
             {
                 if ( g.feetZ <= ground )
                 {
@@ -43291,7 +43339,7 @@ namespace
             StrokeRect( px0, py0, px1, py1, 0.18f, 0.20f, 0.24f );
             glColor3f( 0.82f, 0.88f, 0.94f );
             DrawHudText( px0 + 18.f, py1 - 22.f,
-                "PLAYABLE STAGES / CERTS | EI3.Q.B RICH = row 25 | Enter/click launch | CLOSED is read-only" );
+                "PLAYABLE STAGES / CERTS | STAGE 0 CUT 0 = row 25 | Enter/click launch | CLOSED is read-only" );
             StandingBoardTableGeom const tbl = MakeStandingBoardTableGeom( px0, py0, px1, py1 );
             FillRect( tbl.colHashX0, tbl.headerY0, tbl.colStatusX1, tbl.headerY1, 0.12f, 0.14f, 0.18f );
             glColor3f( 0.70f, 0.78f, 0.86f );

@@ -54,11 +54,75 @@ $worldInstanceName = if ($RichLandforms) {
 } else {
     'world-instance.json'
 }
+
+function Stop-Ei3PreviouslyOwnedAuthority {
+    param([Parameter(Mandatory = $true)][string] $ReceiptPath)
+
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) { return }
+    try {
+        $receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json
+        $authorityPid = [int]$receipt.authority_pid
+        $ownerPid = [int]$receipt.owner_pid
+        $shutdownPath = [string]$receipt.shutdown_file
+    } catch {
+        throw "The previous authority ownership receipt is malformed: $ReceiptPath"
+    }
+
+    # A live launcher still owns its authority. Never interfere with it.
+    if ($ownerPid -ne $PID -and (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)) {
+        return
+    }
+    $process = Get-Process -Id $authorityPid -ErrorAction SilentlyContinue
+    if (-not $process) {
+        Remove-Item -LiteralPath $ReceiptPath -Force
+        return
+    }
+
+    # Fail closed: only stop the exact Python authority recorded by our previous
+    # launcher when it owns both configured listeners and its command line proves
+    # the canonical projection module and ports. An unrelated listener is never
+    # terminated merely because it occupies 8765/8766.
+    $listeners = @()
+    foreach ($port in $ControlPort, $BulkPort) {
+        $listener = @(Get-NetTCPConnection -State Listen -LocalPort $port `
+            -ErrorAction SilentlyContinue)
+        if ($listener.Count -ne 1 -or [int]$listener[0].OwningProcess -ne $authorityPid) {
+            return
+        }
+        $listeners += $listener
+    }
+    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $authorityPid" `
+        -ErrorAction SilentlyContinue
+    $commandLine = if ($processInfo) { [string]$processInfo.CommandLine } else { '' }
+    if ($commandLine -notmatch 'tools\.serve_worldgen_projection' -or
+            $commandLine -notmatch "--control-port\s+$ControlPort" -or
+            $commandLine -notmatch "--bulk-port\s+$BulkPort" -or
+            [string]::IsNullOrWhiteSpace($shutdownPath)) {
+        return
+    }
+
+    @{
+        owner_pid = $PID
+        authority_pid = $authorityPid
+        requested_utc = [DateTime]::UtcNow.ToString('o')
+        reason = 'STALE_OWNED_AUTHORITY_RELAUNCH'
+    } | ConvertTo-Json | Set-Content -LiteralPath $shutdownPath -Encoding utf8
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ((Get-Process -Id $authorityPid -ErrorAction SilentlyContinue) -and
+            [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (Get-Process -Id $authorityPid -ErrorAction SilentlyContinue) {
+        Stop-Process -Id $authorityPid -ErrorAction Stop
+    }
+    Remove-Item -LiteralPath $ReceiptPath -Force
+}
 $worldInstance = Join-Path $worldStateRoot $worldInstanceName
 $compiledContexts = Join-Path $workspaceRoot 'Cache\Worldgen\compiled_context\drainage'
 $evidenceRoot = Join-Path $workspaceRoot 'Evidence\Playable\launcher-runs'
 $workspaceManifest = Join-Path $workspaceRoot 'CANONICAL_WORKSPACE.json'
 $probeModule = Join-Path $enginePackage 'tools\probe_playable_authority.py'
+$ownershipReceipt = Join-Path $worldStateRoot 'last-owned-authority.json'
 
 foreach ($required in $engineRoot, $enginePackage, $clientRoot, $macroCache,
         $workspaceManifest, $probeModule) {
@@ -70,6 +134,8 @@ if (-not (Test-Path -LiteralPath $clientExe -PathType Leaf)) {
     throw "Canonical client executable is missing: $clientExe"
 }
 
+New-Item -ItemType Directory -Force -Path $worldStateRoot | Out-Null
+Stop-Ei3PreviouslyOwnedAuthority -ReceiptPath $ownershipReceipt
 Assert-Ei3PortsFree
 $python = Find-Ei3Python
 $runId = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N'))
@@ -172,7 +238,10 @@ try {
         authority_pid = $authority.Id
         shutdown_file = $shutdownFile
         started_utc = [DateTime]::UtcNow.ToString('o')
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $worldStateRoot 'last-owned-authority.json') -Encoding utf8
+        control_port = $ControlPort
+        bulk_port = $BulkPort
+        engine_package = $enginePackage
+    } | ConvertTo-Json | Set-Content -LiteralPath $ownershipReceipt -Encoding utf8
 
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     do {
@@ -218,7 +287,7 @@ try {
     Write-Host ("PROJECTED CACHE PAGES: {0}" -f $projectedCachePages)
     Write-Host 'DETAIL PROJECTION: ACTIVE'
     Write-Host 'PRESENTATION PATH: EI3 AUTHORITATIVE'
-    Write-Host ("LANDFORM STAGE: {0}" -f $(if ($RichLandforms) { 'EI3.Q.B RICH' } else { 'EI3.Q.A CERTIFIED' }))
+    Write-Host ("PLAYABLE STAGE: {0}" -f $(if ($RichLandforms) { 'STAGE 0 CUT 0 CONTINUOUS WORLD PREVIEW' } else { 'EI3.Q.A CERTIFIED' }))
 
     if (-not $ProbeOnly) {
         $timeUntilPlayableMs = $launchClock.ElapsedMilliseconds
@@ -251,6 +320,12 @@ finally {
         }
         $authority.Refresh()
         $cleanShutdown = $authority.HasExited
+        if ($cleanShutdown -and (Test-Path -LiteralPath $ownershipReceipt -PathType Leaf)) {
+            $owned = Get-Content -LiteralPath $ownershipReceipt -Raw | ConvertFrom-Json
+            if ([int]$owned.authority_pid -eq $authority.Id) {
+                Remove-Item -LiteralPath $ownershipReceipt -Force
+            }
+        }
     }
     if ($macroCacheAccessAlias -and [IO.Directory]::Exists($macroCacheAccessAlias)) {
         # Delete only the temporary junction.  The persistent cache target and all
