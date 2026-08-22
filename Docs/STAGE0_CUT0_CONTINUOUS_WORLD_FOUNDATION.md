@@ -38,9 +38,15 @@ Run:
 
 The launcher starts the canonical local FableScript authority and opens the
 client directly on the authoritative rich-landform projection. In the client,
-press `M` to open the stages table. Row 25 is:
+press `M` to open the stages table. The current row 26 is:
 
 `Stage 0 Cut 0 - Continuous World Foundation`
+
+You may also open `Build\x64_Release\ProvenanceClient.exe` directly, press `M`,
+select that row, and press `Enter`. The row starts the canonical launcher,
+closes the unauthoritative browser window, and reopens the client in Cut 0.
+Its idle status is `ENTER TO START`, not a refusal requiring the player to find
+and run another file manually.
 
 This row is deliberately labelled as a preview. It proves the continuous
 carrier/residency foundation, not the later caused-world content.
@@ -97,7 +103,7 @@ no stale-port failure.
 Final focused receipt:
 
 - Release binary SHA-256:
-  `2875FA9F6169EC4DCF8FA6FE07494085C413CB8D4E995EF6703D0411C76C202A`
+  `09601B9E75A5329114980F056BF9A4D12AA183702D1463A456AF26DF1B041183`
 - Cut 0 client projection/residency checks: 12/12 PASS.
 - Focused FableScript detailed-projection/rich-landform regressions: 14/14 PASS.
 - Authority probe: 25/25 startup pages, detailed projection ACTIVE,

@@ -18583,7 +18583,7 @@ namespace
     {
         if ( entry.view == g.stage0PlayView ) { return "CURRENT"; }
         if ( entry.view == Stage0PlayView::RichCausalLandforms )
-        { return g.ei3AuthorityEnabled && g.ei3RichLandformsSession ? "PREVIEW" : "REQUIRES LAUNCHER"; }
+        { return g.ei3AuthorityEnabled && g.ei3RichLandformsSession ? "PREVIEW" : "ENTER TO START"; }
         if ( entry.view == Stage0PlayView::Clean || entry.view == Stage0PlayView::Combined )
         { return "CERTIFIED"; }
         bool attempted = false;
@@ -18690,7 +18690,7 @@ namespace
         CertificationBrowserEntry const& entry=s_certificationBrowser[boardIndex];
         if(entry.view==g.stage0PlayView)return "PLAYABLE";
         if(entry.view==Stage0PlayView::RichCausalLandforms)
-            return g.ei3RichLandformsSession ? "PREVIEW" : "REQUIRES LAUNCHER";
+            return g.ei3RichLandformsSession ? "PREVIEW" : "ENTER TO START";
         if(IsRuntimeDepositionChainView(entry.view))return "CERTIFIED";
         char const* runtime=CertificationRuntimeStatus(entry);
         if(std::strcmp(runtime,"CERTIFIED")==0||std::strcmp(runtime,"CURRENT")==0)
@@ -18989,12 +18989,55 @@ namespace
         }
     }
 
+    bool StartStage0Cut0CanonicalLauncher()
+    {
+        // Directly opening ProvenanceClient.exe is a supported way to browse the
+        // stage table.  Cut 0 additionally needs the local authoritative process,
+        // so Enter/click must perform that transition instead of merely telling
+        // the player to find a separate launcher.
+        wchar_t workingDirectory[32768] = {};
+        DWORD const directoryLength = GetCurrentDirectoryW(
+            (DWORD)( sizeof( workingDirectory ) / sizeof( workingDirectory[0] ) ),
+            workingDirectory );
+        if ( directoryLength == 0
+          || directoryLength >= (DWORD)( sizeof( workingDirectory ) / sizeof( workingDirectory[0] ) ) )
+        {
+            g.statusLine = "CUT 0 START FAILED - cannot resolve the canonical client folder";
+            return false;
+        }
+
+        std::wstring const launcherPath = std::wstring( workingDirectory )
+            + L"\\PLAY_STAGE0_CUT0_CONTINUOUS_WORLD.cmd";
+        DWORD const attributes = GetFileAttributesW( launcherPath.c_str() );
+        if ( attributes == INVALID_FILE_ATTRIBUTES
+          || ( attributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 )
+        {
+            g.statusLine = "CUT 0 START FAILED - PLAY_STAGE0_CUT0_CONTINUOUS_WORLD.cmd is missing";
+            return false;
+        }
+
+        HINSTANCE const launched = ShellExecuteW( g.hwnd, L"open",
+            launcherPath.c_str(), nullptr, workingDirectory, SW_SHOWNORMAL );
+        if ( (INT_PTR)launched <= 32 )
+        {
+            g.statusLine = "CUT 0 START FAILED - Windows could not start the canonical launcher";
+            return false;
+        }
+
+        g.statusLine = "CUT 0 STARTED - reopening with canonical FableScript authority";
+        // The launcher owns the replacement process. Leaving this unauthoritative
+        // browser open would produce two visually identical clients and make it
+        // unclear which one owns the world session.
+        PostMessageW( g.hwnd, WM_CLOSE, 0, 0 );
+        return true;
+    }
+
     bool SelectStage0PlayView( Stage0PlayView view )
     {
         if ( view == Stage0PlayView::RichCausalLandforms
           && ( !g.ei3AuthorityEnabled || !g.ei3RichLandformsSession ) )
         {
-            g.statusLine = "CUT 0 REFUSED - start PLAY_STAGE0_CUT0_CONTINUOUS_WORLD.cmd first";
+            StartStage0Cut0CanonicalLauncher();
             return false;
         }
         if ( IsCausalPlayableView( view ) && !EnsureCausalPlayableAuthority( view ) )
