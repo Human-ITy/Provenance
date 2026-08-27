@@ -44,7 +44,7 @@
 #include "CausalRegionalHydroclimate.h" // MW6 hydroclimate
 #include "CausalRegionalRegolith.h" // MW7 soils / regolith
 #include "CausalRegionalBiome.h" // MW8 biome regime
-#include "CausalRegionalBiome.h" // MW8 biome regime
+#include "AdoptPage.h" // Phase 17 orographic production consume
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -946,6 +946,7 @@ namespace
         bool playMw6Launch = false;
         bool playMw7Launch = false;
         bool playMw8Launch = false;
+        bool playOrographicLaunch = false;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
         int regionalGeologyOverride = -1;
@@ -4248,6 +4249,8 @@ namespace
 
         if(IsRegionalBiomeView(view))
         {
+            if(g.playOrographicLaunch && AdoptPage::IsLive())
+            { return true; }
             if(!g.regionalBiomeAuthorityAttempted)
             {
                 g.regionalBiomeAuthorityAttempted=true;
@@ -5164,6 +5167,12 @@ namespace
         {
             if(IsRegionalBiomeView(view))
             {
+                if(g.playOrographicLaunch && AdoptPage::IsLive())
+                {
+                    if(!AdoptPage::SampleZ((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
+                        g.voxelEdgeM,outZ))return false;
+                    outCap=AdoptPage::DiagnosticMaterial(x,y);return true;
+                }
                 if(!g.regionalBiomeRuntime)return false;
                 if(SampleResidentCausalPackageSurface(x,y,outZ))
                 {
@@ -12394,6 +12403,12 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
+        if ( AdoptPage::IsLive() )
+        {
+            if ( !AdoptPage::SampleZ( x, y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM, outZ ) )
+            { return false; }
+            return std::isfinite( outZ );
+        }
         if ( g.playWorldgenBaseline && IsCutCOccupancyView( g.stage0PlayView )
           && g.cutCOccupancyRuntime && g.causalMineralizationRuntime )
         {
@@ -39198,6 +39213,19 @@ namespace
                 g.yaw=(float)anchor.yaw;g.pitch=-0.74f;
             }
         }
+        if(g.playOrographicLaunch)
+        {
+            g.stage0StageMenuOpen=false;
+            AdoptPage::AdoptCanonicalFixture();
+            SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            g.stage0ToolRuler=false;g.stage0ToolPalette=false;
+            g.stage0ToolGeologyCutaway=false;g.walkMode=true;g.grounded=false;
+            float const ax=1536.f,ay=1536.f;
+            g.feetX=ax;g.feetY=ay;
+            float ground=0.f;SampleGroundZBase(ax,ay,ground);
+            g.camX=g.feetX;g.camY=g.feetY;g.camZ=ground+48.0f;
+            g.yaw=0.35f;g.pitch=-0.55f;
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -53123,6 +53151,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runRegionalHydroclimateCert = false;
         bool runRegionalRegolithCert = false;
         bool runRegionalBiomeCert = false;
+        bool runEsotericaAdoptPageCert = false;
+        bool runMw8OrographicCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -53348,6 +53378,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-mw8")==0
                   ||_wcsicmp(certArgv[i],L"--cert-biomes")==0)
                 {runRegionalBiomeCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-esoterica-adopt-page")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-adopt-page")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-orographic-phase17")==0)
+                {runEsotericaAdoptPageCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw8-orographic")==0)
+                {runEsotericaAdoptPageCert=true;runMw8OrographicCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -53683,6 +53719,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             CausalRegionalBiome::WriteCertArtifact(result,
                 "Docs\\provenance_mw8_biomes_cert.txt");
             return result.passed?0:1;
+        }
+        if(runEsotericaAdoptPageCert)
+        {
+            auto const result=AdoptPage::RunCert();
+            AdoptPage::WriteCertArtifact(result,
+                "Docs\\provenance_esoterica_adopt_page_cert.txt");
+            if(runMw8OrographicCert)
+                return result.mw8Passed?0:1;
+            return result.consumePassed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
         {
@@ -55146,6 +55191,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-orographic-phase17")==0
+                  ||_wcsicmp(argv[i],L"--play-mw8-orographic")==0
+                  ||_wcsicmp(argv[i],L"--play-esoterica-adopt-page")==0)
+                {
+                    g.playWorldgenBaseline=true;g.playOrographicLaunch=true;
+                    g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
+                    continue;
                 }
                 if(_wcsicmp(argv[i],L"--mv1-off")==0)
                 {g.mv1Enabled=false;continue;}

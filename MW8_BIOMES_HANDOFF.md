@@ -1,5 +1,63 @@
 # MW8 — Biomes / Ecological Regime
 
+## HOLD — consume is live; MW8 is not resumed on orographic.phase17
+
+Esoterica `adopt_page` now consumes canonical Phase 17 pages (see
+`ESOTERICA_ADOPT_PAGE_HANDOFF.md`). MW8 is **not** recertified on the frozen
+64 km MW1–MW7 microscope at e8155fa3.
+
+**Exact MW8 mismatch:** alpine / windward-vs-rain-shadow / wet-basin gates
+fail on adopted page `(1,1)` `[1024,2048]²`. Census on that page: alpine 0,
+windward/leeward split 0, basin wetland 0, riparian 2, moist forest 287.
+Grade→Z relief under terrain_caps is ~2 m; the frozen MW8 fixtures need
+hundreds of metres and 4–32 km orographic fetch. Do not fake a second
+macro heightfield to recover those numbers.
+
+MW8 remains **FROZEN @ e8155fa3**. MW9 CLOSED.
+
+---
+
+The 64 km microscope work below is **kept** (e8155fa3). It is not the
+orographic.phase17 resume surface. Do not open MW9.
+
+MW8 remains **ecological regime potential** inferred from MW1–MW7 (climate,
+elevation, moisture, soil/regolith, drainage, substrate, exposure). It is not
+vegetation placement, not a color mask, and not living-world population.
+
+**Proven boundary (keep):**
+- MW8 CERTIFIED / FROZEN @ e8155fa3 (e8155fa38871122cb4e5bb6683f2a97c1caf836d)
+- Field digest 3aec4e96adda96f5; input revision bundle e1c2f2c82d66de37
+- Kernel CausalRegionalBiome.h last committed at that freeze; working tree
+  matches HEAD (no uncommitted MW8 biome-logic WIP)
+- Branch provenance/client-spike HEAD 5073baa7 (later WD1.B; MW8 not reopened)
+- Dirty Docs/ MW8 visual/cardinal/soak receipts exist on disk — leave them;
+  they are not a recert and must not be pushed as a new MW8 CERTIFIED
+
+**Consume path (2026-08-27):** Esoterica `adopt_page` now admits canonical
+`orographic.phase17` production pages (world hash `b74f957a7fdb429a`, page
+`(1,1)` digest `03f579fed39e4685…`) and refuses tectonic-v3 / stale revision.
+Render/collision derive from the adopted page. See
+`ESOTERICA_ADOPT_PAGE_HANDOFF.md`. MW8 is resumed **only** if gates pass on
+that adopted geography — never by recertifying the frozen 64 km microscope
+at e8155fa3. MW9 CLOSED.
+
+**Gates to resume later** (after Phase 17 orographic production, on explicit
+green-light — not automatically):
+1. Alpine elevation control
+2. Windward vs rain-shadow
+3. Riparian / valley distinct from slope
+4. Wet basin
+5. H2H BiomeId 64 km → 192 m → 12.5 cm (deposit/regolith ancestry retained)
+6. MW8-off == exact MW7 (geometry, HydroclimateId, RegolithId, FormationId, MW5 bodies)
+7. Hydroclimate-off wet/dry contrast collapse; regolith-off substrate/drainage collapse
+8. Visual cert (diagnostic regime colors only — no trees/grass/shrubs/animals/snowpack)
+9. Test A + 90 s Test B; parent off-path invariants
+
+CLOSED remains: MW9 flora/fauna, vegetation placement, live weather, glaciers,
+live snowpack, groundwater, ecology simulation, 3C collapse, 16C remobilization.
+
+---
+
 MW8 answers one question: given climate, elevation, moisture, soil/regolith,
 drainage, substrate, and exposure, what persistent ecological regime does each
 place resolve to?
