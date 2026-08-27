@@ -164,6 +164,35 @@ namespace AdoptPage
         bool usedPresentationZ = false;
     };
 
+    // End-to-end consume receipt for one (x,y): carrier vs reconstructed feature terms.
+    struct SampleTrace
+    {
+        bool ok = false;
+        int px = 0, py = 0;
+        double sampledCarrier = 0;
+        double peakContribution = 0;
+        double ridgeContribution = 0;
+        double spurContribution = 0;
+        double saddleContribution = 0;
+        double valleyContribution = 0; // drainage incision lives in the smooth carrier
+        double sharpTotal = 0;
+        double grade = 0;
+        float sampleZ = 0;
+        float collisionZ = 0;
+        std::string peakId, ridgeId, spurId, saddleId, valleyId;
+    };
+
+    struct SharpTerms
+    {
+        double peakC = 0, ridgeC = 0, spurC = 0, saddleC = 0;
+        double crest = 0, shoulder = 0, taper = 0, neck = 0;
+        std::string peakId, ridgeId, spurId, saddleId;
+        double total() const
+        {
+            return peakC + ridgeC + spurC + saddleC + crest + shoulder + taper + neck;
+        }
+    };
+
     struct AdoptedGeography
     {
         WorldIdentity identity;
@@ -448,7 +477,11 @@ namespace AdoptPage
         px = (int)std::floor(x / pageM);
         py = (int)std::floor(y / pageM);
     }
-    inline AdoptedGeography const* PageAt(double x, double y, double skirtM = 8.0)
+    // Page-seam overlap. 8 m was thinner than a meso sample step, so a tile that
+    // straddled a 1024 m edge failed SampleZ and opened a sky tear.
+    constexpr double kPageSkirtM = 128.0;
+
+    inline AdoptedGeography const* PageAt(double x, double y, double skirtM = kPageSkirtM)
     {
         int px = 0, py = 0;
         PageOf(x, y, px, py);
@@ -471,6 +504,26 @@ namespace AdoptPage
          && y >= G().bounds[1] - skirtM && y <= G().bounds[3] + skirtM)
             return &G();
         return nullptr;
+    }
+    // Presentation fill only: keep a tile that overhangs the atlas from punching
+    // sky. Collision / grounding stay on the strict PageAt path.
+    inline AdoptedGeography const* NearestLivePage(double x, double y, double maxDistM = 4096.0)
+    {
+        if (AdoptedGeography const* hit = PageAt(x, y)) return hit;
+        AdoptedGeography const* best = nullptr;
+        double bestD = 1e300;
+        auto consider = [&](AdoptedGeography const& p)
+        {
+            if (!p.live) return;
+            double cx = std::clamp(x, p.bounds[0], p.bounds[2]);
+            double cy = std::clamp(y, p.bounds[1], p.bounds[3]);
+            double d = std::hypot(x - cx, y - cy);
+            if (d < bestD) { bestD = d; best = &p; }
+        };
+        for (auto const& kv : Atlas()) consider(kv.second);
+        if (G().live) consider(G());
+        if (!best || bestD > maxDistM) return nullptr;
+        return best;
     }
     inline int AtlasCount() { return (int)Atlas().size(); }
     inline bool AtlasHas(int px, int py)
@@ -568,13 +621,63 @@ namespace AdoptPage
         Json const* defs = page.get("feature_definitions");
         if (defs && defs->kind == Json::Obj)
         {
+            auto hasId = [](std::vector<std::string> const& ids, std::string const& id)
+            {
+                return std::find(ids.begin(), ids.end(), id) != ids.end();
+            };
+            if (Json const* peaks = defs->get("peaks"))
+                for (Json const& f : peaks->a)
+                {
+                    Peak p;
+                    p.id = f.str("id"); p.parent = f.str("parent"); p.type = f.str("type", "peak");
+                    if (Json const* pos = f.get("pos")) p.pos = AsVec2(*pos);
+                    p.radius = f.num("radius"); p.prominence = f.num("prominence");
+                    if (hasId(geo.peakIds, p.id)) continue;
+                    geo.peaks.push_back(p);
+                    geo.peakIds.push_back(p.id);
+                }
+            if (Json const* ridges = defs->get("ridges"))
+                for (Json const& f : ridges->a)
+                {
+                    Ridge r;
+                    r.id = f.str("id"); r.parent = f.str("parent"); r.type = f.str("type", "ridge");
+                    if (Json const* ax = f.get("axis")) r.axis = AsAxis(*ax);
+                    r.halfWidth = f.num("half_width"); r.crest = f.num("crest"); r.length = f.num("length");
+                    if (hasId(geo.ridgeIds, r.id)) continue;
+                    geo.ridges.push_back(r);
+                    geo.ridgeIds.push_back(r.id);
+                }
+            if (Json const* saddles = defs->get("saddles"))
+                for (Json const& f : saddles->a)
+                {
+                    Saddle s;
+                    s.id = f.str("id"); s.parent = f.str("parent"); s.type = f.str("type", "saddle");
+                    if (Json const* pos = f.get("pos")) s.pos = AsVec2(*pos);
+                    s.radius = f.num("radius"); s.drop = f.num("drop");
+                    if (hasId(geo.saddleIds, s.id)) continue;
+                    geo.saddles.push_back(s);
+                    geo.saddleIds.push_back(s.id);
+                }
+            if (Json const* spurs = defs->get("spurs"))
+                for (Json const& f : spurs->a)
+                {
+                    Spur s;
+                    s.id = f.str("id"); s.parent = f.str("parent"); s.type = f.str("type", "spur");
+                    if (Json const* ax = f.get("axis")) s.axis = AsAxis(*ax);
+                    s.halfWidth = f.num("half_width"); s.crest = f.num("crest");
+                    if (hasId(geo.spurIds, s.id)) continue;
+                    geo.spurs.push_back(s);
+                    geo.spurIds.push_back(s.id);
+                }
             if (Json const* valleys = defs->get("valleys"))
                 for (Json const& f : valleys->a)
                 {
                     Valley v;
                     v.id = f.str("id"); v.type = f.str("type", "valley");
+                    v.parent = f.str("parent");
                     if (Json const* pos = f.get("pos")) v.pos = AsVec2(*pos);
                     v.accumulation = f.num("accumulation"); v.width = f.num("width");
+                    if (hasId(geo.valleyIds, v.id)) continue;
                     geo.valleys.push_back(v);
                     geo.valleyIds.push_back(v.id);
                 }
@@ -611,29 +714,39 @@ namespace AdoptPage
         return top * (1.0 - v) + bot * v;
     }
 
-    inline double SharpFromFeatures(AdoptedGeography const& geo, double x, double y)
+    inline SharpTerms SharpTermsFromFeatures(AdoptedGeography const& geo, double x, double y)
     {
-        double peakC = 0, ridgeC = 0, spurC = 0, saddleC = 0;
-        double crest = 0, shoulder = 0, taper = 0, neck = 0;
+        SharpTerms t;
+        double bestPeak = 0, bestRidge = 0, bestSpur = 0, bestSaddle = 0;
         for (Peak const& p : geo.peaks)
         {
             double d = std::hypot(x - p.pos.x, y - p.pos.y);
             double f = Falloff(d, p.radius);
-            if (f > 0.0) peakC += p.prominence * f * f;
+            if (f > 0.0)
+            {
+                double c = p.prominence * f * f;
+                t.peakC += c;
+                if (c > bestPeak) { bestPeak = c; t.peakId = p.id; }
+            }
         }
         for (Ridge const& r : geo.ridges)
         {
             auto dt = DistToPolyline(r.axis, x, y);
             double d = dt.first, hw = r.halfWidth;
             double f = Falloff(d, hw);
-            if (f > 0.0) ridgeC += r.crest * f;
+            if (f > 0.0)
+            {
+                double c = r.crest * f;
+                t.ridgeC += c;
+                if (c > bestRidge) { bestRidge = c; t.ridgeId = r.id; }
+            }
             if (d < hw * kRidgeReach)
             {
-                crest += r.crest * kCrestSharpen * Falloff(d, hw * 0.45);
+                t.crest += r.crest * kCrestSharpen * Falloff(d, hw * 0.45);
                 if (hw * 0.5 < d && d < hw * kRidgeReach)
                 {
                     double band = (d - hw * 0.5) / (hw * (kRidgeReach - 0.5));
-                    shoulder -= r.crest * kShoulderDrop * Smoothstep(1.0 - std::fabs(2.0 * band - 1.0));
+                    t.shoulder -= r.crest * kShoulderDrop * Smoothstep(1.0 - std::fabs(2.0 * band - 1.0));
                 }
             }
         }
@@ -643,28 +756,44 @@ namespace AdoptPage
             double f = Falloff(dt.first, sp.halfWidth);
             if (f > 0.0)
             {
-                spurC += sp.crest * f;
-                taper -= sp.crest * kSpurTaper * dt.second * f;
+                double c = sp.crest * f;
+                t.spurC += c;
+                t.taper -= sp.crest * kSpurTaper * dt.second * f;
+                if (c > bestSpur) { bestSpur = c; t.spurId = sp.id; }
             }
         }
         for (Saddle const& sd : geo.saddles)
         {
             double d = std::hypot(x - sd.pos.x, y - sd.pos.y);
             double f = Falloff(d, sd.radius);
-            if (f > 0.0) saddleC -= (ridgeC + peakC) * sd.drop * f;
+            double sTerm = 0;
+            if (f > 0.0) sTerm -= (t.ridgeC + t.peakC) * sd.drop * f;
             double fn = Falloff(d, sd.radius * kSaddleNeckReach);
-            if (fn > 0.0) neck -= sd.drop * kSaddleNeck * fn * fn;
+            if (fn > 0.0) t.neck -= sd.drop * kSaddleNeck * fn * fn;
+            t.saddleC += sTerm;
+            if (std::fabs(sTerm) + std::fabs(t.neck) > bestSaddle)
+            {
+                bestSaddle = std::fabs(sTerm) + std::fabs(t.neck);
+                t.saddleId = sd.id;
+            }
         }
-        return peakC + ridgeC + spurC + saddleC + crest + shoulder + taper + neck;
+        return t;
+    }
+
+    inline double SharpFromFeatures(AdoptedGeography const& geo, double x, double y)
+    {
+        return SharpTermsFromFeatures(geo, x, y).total();
     }
 
     inline bool SampleGrade(double x, double y, double& out)
     {
         AdoptedGeography const* page = PageAt(x, y);
         if (!page || !page->live || page->smooth.empty()) return false;
-        double sx = std::clamp(x, page->bounds[0], page->bounds[2]);
-        double sy = std::clamp(y, page->bounds[1], page->bounds[3]);
-        double g = SampledOnly(*page, sx, sy) + SharpFromFeatures(*page, sx, sy);
+        // Smooth samples are page-local; sharp features are world-space definitions
+        // and must be evaluated at the true (x,y), never clamped to the page AABB.
+        // Clamping was carrier-only consume: peaks/ridges outside the rectangle
+        // vanished from SampleZ even though the page carried their definitions.
+        double g = SampledOnly(*page, x, y) + SharpFromFeatures(*page, x, y);
         out = std::clamp(g, kGradeMin, kGradeMax);
         return true;
     }
@@ -675,6 +804,76 @@ namespace AdoptPage
         if (!SampleGrade(x, y, g)) return false;
         outZ = (float)((g - (double)datum) * (double)relief * (double)voxel);
         return std::isfinite(outZ);
+    }
+
+    inline bool SampleGradeNearest(double x, double y, double& out)
+    {
+        if (SampleGrade(x, y, out)) return true;
+        AdoptedGeography const* page = NearestLivePage(x, y);
+        if (!page || !page->live || page->smooth.empty()) return false;
+        double g = SampledOnly(*page, x, y) + SharpFromFeatures(*page, x, y);
+        out = std::clamp(g, kGradeMin, kGradeMax);
+        return true;
+    }
+
+    inline bool SampleZNearest(float x, float y, float datum, float relief, float voxel, float& outZ)
+    {
+        double g = 0;
+        if (!SampleGradeNearest(x, y, g)) return false;
+        outZ = (float)((g - (double)datum) * (double)relief * (double)voxel);
+        return std::isfinite(outZ);
+    }
+
+    inline SampleTrace TraceSample(double x, double y, float datum, float relief, float voxel)
+    {
+        SampleTrace t;
+        AdoptedGeography const* page = PageAt(x, y);
+        if (!page) page = NearestLivePage(x, y);
+        if (!page || !page->live || page->smooth.empty()) return t;
+        t.ok = true;
+        t.px = page->px; t.py = page->py;
+        t.sampledCarrier = SampledOnly(*page, x, y);
+        SharpTerms const sh = SharpTermsFromFeatures(*page, x, y);
+        t.peakContribution = sh.peakC;
+        t.ridgeContribution = sh.ridgeC;
+        t.spurContribution = sh.spurC;
+        t.saddleContribution = sh.saddleC + sh.neck;
+        t.sharpTotal = sh.total();
+        t.peakId = sh.peakId; t.ridgeId = sh.ridgeId;
+        t.spurId = sh.spurId; t.saddleId = sh.saddleId;
+        double bestV = 1e300;
+        auto considerValley = [&](AdoptedGeography const& g)
+        {
+            for (Valley const& v : g.valleys)
+            {
+                double d = std::hypot(x - v.pos.x, y - v.pos.y);
+                if (d < bestV) { bestV = d; t.valleyId = v.id; }
+            }
+        };
+        for (auto const& kv : Atlas()) considerValley(kv.second);
+        if (G().live) considerValley(G());
+        // Valley/drainage incision is band-limited and already in the smooth
+        // carrier. Do not add a second client incision term.
+        t.valleyContribution = 0.0;
+        t.grade = std::clamp(t.sampledCarrier + t.sharpTotal, kGradeMin, kGradeMax);
+        t.sampleZ = (float)((t.grade - (double)datum) * (double)relief * (double)voxel);
+        t.collisionZ = t.sampleZ;
+        return t;
+    }
+
+    // Terrain/material presentation for adopted pages. Not MW9 flora.
+    // The previous orographic MV1 path used a solid olive grade-lerp
+    // (70+40t, 90+50t, 58+20(1-t)) — untextured debug, not a gallery albedo.
+    inline char const* AppearanceMaterial(double x, double y)
+    {
+        SampleTrace const t = TraceSample(x, y, 0.5f, 64.f, 0.125f);
+        if (!t.ok) return "dirt";
+        if (t.peakContribution >= 0.08) return "biome_alpine_barren";
+        if (t.ridgeContribution >= 0.05 || t.saddleContribution <= -0.02)
+            return "biome_dry_rocky";
+        if (!t.valleyId.empty() && t.sampledCarrier < 0.55) return "loam";
+        if (t.grade >= 1.05) return "biome_alpine_tundra";
+        return "dirt";
     }
 
     // Presentation sea is GradeToZ(datum) = 0. Do not retune GradeToZ for ecology.
@@ -1484,6 +1683,11 @@ namespace AdoptPage
         bool windwardUsedPresentationZ = false;
         std::string liveWire = "banked_production_page_bytes";
         std::string contextWire = "banked_ecological_context_bytes";
+        bool featureSurfaceReconstructed = false;
+        double peakCarrier = 0, peakSharp = 0, peakGrade = 0, peakZ = 0, peakCollisionZ = 0;
+        double ridgeSharp = 0, saddleSharp = 0, spurSharp = 0, valleyCarrier = 0;
+        std::string proofPeakId, proofRidgeId, proofSaddleId, proofSpurId, proofValleyId;
+        double maxReloadAbsDelta = 0;
     };
 
     inline WorldIdentity LoadInstalledIdentity(std::string const& dir)
@@ -1607,6 +1811,123 @@ namespace AdoptPage
         c.adoptDigest = d0;
         c.adoptDigestReload = d1;
         add("same_page_same_adopted_result_after_reload", d0 != 0 && d0 == d1);
+
+        add("page_2_1_admitted", Adopt(ident, page21).ok && AtlasHas(2, 1));
+        {
+            Peak const* peak = nullptr;
+            Ridge const* ridge = nullptr;
+            Saddle const* saddle = nullptr;
+            Spur const* spur = nullptr;
+            Valley const* valley = nullptr;
+            auto onAtlas = [&](double x, double y) { return PageAt(x, y) != nullptr; };
+            auto findPeak = [&](AdoptedGeography const& g)
+            {
+                for (Peak const& p : g.peaks)
+                    if (onAtlas(p.pos.x, p.pos.y) && (!peak || p.prominence > peak->prominence))
+                        peak = &p;
+            };
+            auto findRidge = [&](AdoptedGeography const& g)
+            {
+                for (Ridge const& r : g.ridges)
+                {
+                    if (r.axis.size() < 2) continue;
+                    Vec2 m = r.axis[r.axis.size() / 2];
+                    if (onAtlas(m.x, m.y) && (!ridge || r.crest > ridge->crest)) ridge = &r;
+                }
+            };
+            auto findSaddle = [&](AdoptedGeography const& g)
+            {
+                for (Saddle const& s : g.saddles)
+                    if (onAtlas(s.pos.x, s.pos.y) && (!saddle || s.drop > saddle->drop))
+                        saddle = &s;
+            };
+            auto findSpur = [&](AdoptedGeography const& g)
+            {
+                for (Spur const& s : g.spurs)
+                {
+                    if (s.axis.size() < 2) continue;
+                    double x = 0.5 * (s.axis.front().x + s.axis.back().x);
+                    double y = 0.5 * (s.axis.front().y + s.axis.back().y);
+                    if (onAtlas(x, y) && (!spur || s.crest > spur->crest)) spur = &s;
+                }
+            };
+            auto findValley = [&](AdoptedGeography const& g)
+            {
+                for (Valley const& v : g.valleys)
+                    if (onAtlas(v.pos.x, v.pos.y)
+                      && (!valley || v.accumulation > valley->accumulation))
+                        valley = &v;
+            };
+            for (auto const& kv : Atlas())
+            {
+                findPeak(kv.second); findRidge(kv.second); findSaddle(kv.second);
+                findSpur(kv.second); findValley(kv.second);
+            }
+            float const datum = 0.5f, relief = 64.f, voxel = 0.125f;
+            bool idsCross = shared >= 1;
+            if (peak && ridge && saddle && spur && valley)
+            {
+                SampleTrace tp = TraceSample(peak->pos.x, peak->pos.y, datum, relief, voxel);
+                SampleTrace tr;
+                if (ridge->axis.size() >= 2)
+                    tr = TraceSample(ridge->axis[ridge->axis.size()/2].x,
+                        ridge->axis[ridge->axis.size()/2].y, datum, relief, voxel);
+                SampleTrace ts = TraceSample(saddle->pos.x, saddle->pos.y, datum, relief, voxel);
+                SampleTrace tsp;
+                if (spur->axis.size() >= 2)
+                    tsp = TraceSample(0.5 * (spur->axis.front().x + spur->axis.back().x),
+                        0.5 * (spur->axis.front().y + spur->axis.back().y), datum, relief, voxel);
+                SampleTrace tv = TraceSample(valley->pos.x, valley->pos.y, datum, relief, voxel);
+                c.proofPeakId = peak->id; c.proofRidgeId = ridge->id;
+                c.proofSaddleId = saddle->id; c.proofSpurId = spur->id;
+                c.proofValleyId = valley->id;
+                c.peakCarrier = tp.sampledCarrier; c.peakSharp = tp.peakContribution;
+                c.peakGrade = tp.grade; c.peakZ = tp.sampleZ; c.peakCollisionZ = tp.collisionZ;
+                c.ridgeSharp = tr.ridgeContribution; c.saddleSharp = ts.saddleContribution;
+                c.spurSharp = tsp.spurContribution; c.valleyCarrier = tv.sampledCarrier;
+                bool peakTopo = tp.ok && tp.peakContribution >= 0.20
+                    && tp.peakContribution + 1e-6 >= peak->prominence * 0.85
+                    && tp.peakId == peak->id;
+                bool ridgeTopo = tr.ok && tr.ridgeContribution > 0.02 && !tr.ridgeId.empty();
+                bool saddleTopo = ts.ok && ts.saddleContribution < -0.01 && !ts.saddleId.empty();
+                bool spurTopo = tsp.ok && tsp.spurContribution > 0.01 && !tsp.spurId.empty();
+                bool valleyPresent = tv.ok && !tv.valleyId.empty();
+                bool sameZ = tp.ok && std::fabs(tp.sampleZ - tp.collisionZ) < 1e-6f;
+                bool reconstructed = tp.ok && tp.peakContribution > 0.20
+                    && std::fabs(tp.grade - tp.sampledCarrier) > 0.15;
+                c.featureSurfaceReconstructed = peakTopo && ridgeTopo && saddleTopo
+                    && spurTopo && valleyPresent && sameZ && idsCross && reconstructed;
+                add("feature_peak_in_sample_z", peakTopo);
+                add("feature_ridge_in_sample_z", ridgeTopo);
+                add("feature_saddle_in_sample_z", saddleTopo);
+                add("feature_spur_in_sample_z", spurTopo);
+                add("feature_valley_id_survives", valleyPresent);
+                add("render_collision_same_sample_z", sameZ);
+            }
+            else
+            {
+                add("feature_peak_in_sample_z", false);
+                add("feature_ridge_in_sample_z", false);
+                add("feature_saddle_in_sample_z", false);
+                add("feature_spur_in_sample_z", false);
+                add("feature_valley_id_survives", false);
+                add("render_collision_same_sample_z", false);
+            }
+            double reloadMax = 0;
+            if (peak)
+            {
+                SampleTrace a = TraceSample(peak->pos.x, peak->pos.y, datum, relief, voxel);
+                Adopt(ident, page11);
+                Adopt(ident, page21);
+                SampleTrace b = TraceSample(peak->pos.x, peak->pos.y, datum, relief, voxel);
+                reloadMax = (std::max)(reloadMax, std::fabs(a.grade - b.grade));
+            }
+            c.maxReloadAbsDelta = reloadMax;
+            add("unload_reload_preserves_feature_z", reloadMax < 1e-9);
+            add("feature_ids_survive_page_boundary", idsCross && AtlasHas(1, 1) && AtlasHas(2, 1));
+            add("sample_z_reconstructs_carried_features", c.featureSurfaceReconstructed);
+            Adopt(ident, page11);
+        }
 
         int q0 = 0;
         int rb0 = G().rebuilds;
@@ -1852,6 +2173,13 @@ namespace AdoptPage
             "page_boundary_biome_agree=%d\n"
             "alpine_used_presentation_z=%d\nwindward_used_presentation_z=%d\n"
             "influence_radius_m=%.1f\npage_size_m=%.1f\n"
+            "feature_surface=%s\n"
+            "proof.peak_id=%s\nproof.ridge_id=%s\nproof.saddle_id=%s\n"
+            "proof.spur_id=%s\nproof.valley_id=%s\n"
+            "proof.peak_carrier=%.9f\nproof.peak_sharp=%.9f\nproof.peak_grade=%.9f\n"
+            "proof.peak_sample_z=%.6f\nproof.peak_collision_z=%.6f\n"
+            "proof.ridge_sharp=%.9f\nproof.saddle_sharp=%.9f\nproof.spur_sharp=%.9f\n"
+            "proof.valley_carrier=%.9f\nproof.reload_abs_delta=%.9e\n"
             "mw8_frozen_until=%s\nmw9=closed\n",
             c.passed ? "PASS" : "FAIL", c.reason.c_str(),
             c.consumePassed ? "PASS" : "FAIL", c.mw8Passed ? "PASS" : "FAIL",
@@ -1867,6 +2195,11 @@ namespace AdoptPage
             c.offMaxAbsDeltaM, c.h2h125, c.pageBoundaryBiomeAgree,
             c.alpineUsedPresentationZ ? 1 : 0, c.windwardUsedPresentationZ ? 1 : 0,
             Ctx().influenceRadiusM, Ctx().pageSizeM,
+            c.featureSurfaceReconstructed ? "reconstructed" : "carrier_only",
+            c.proofPeakId.c_str(), c.proofRidgeId.c_str(), c.proofSaddleId.c_str(),
+            c.proofSpurId.c_str(), c.proofValleyId.c_str(),
+            c.peakCarrier, c.peakSharp, c.peakGrade, c.peakZ, c.peakCollisionZ,
+            c.ridgeSharp, c.saddleSharp, c.spurSharp, c.valleyCarrier, c.maxReloadAbsDelta,
             c.mw8Passed ? "RESUMED" : "e8155fa3");
         for (auto const& q : c.checks)
             std::fprintf(f, "check.%s=%s\n", q.first.c_str(), q.second ? "PASS" : "FAIL");

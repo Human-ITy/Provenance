@@ -997,6 +997,7 @@ namespace
         std::unordered_set<uint64_t> orographicPagesResident;
         std::vector<std::pair<int,int>> orographicPagesWanted;
         DWORD orographicPageLastSendAttemptMs = 0;
+        int orographicStreamGeneration = 0;
         int orographicContextPx = -1000000, orographicContextPy = -1000000;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
@@ -2631,6 +2632,7 @@ namespace
     int CountClearSkyPixels();
     void FollowStreamCenter();
     bool OrographicPlayActive();
+    void Mv1InvalidateAdoptedPage( int px, int py );
     void ServiceOrographicPages();
     void SeatOrographicPlayer();
     int CountLowerPpmSkyPixels( char const* path );
@@ -7223,39 +7225,63 @@ namespace
         if ( g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
         int px = 0, py = 0;
         AdoptPage::PageOf( g.feetX, g.feetY, px, py );
-        constexpr int kRing = 2; // 5x5 1024 m pages — presence, not biome radius
-        for ( int dj = -kRing; dj <= kRing; ++dj )
-        for ( int di = -kRing; di <= kRing; ++di )
+        // Coverage hierarchy uses the same 1024 m adopted pages. Near is a
+        // 9×9 keep (ring 4). Mid/far request out to 32 km so MV1 never falls
+        // through to a leftover v11 64 km strip. Coarser tessellation is an
+        // MV1 band choice; authority stays AdoptPage::SampleZ.
+        constexpr int kNearRing = 4;  // 9×9 = 9.2 km
+        constexpr int kFarRing = 16;  // 33×33 = 33.8 km, matches MV1 far
+        for ( int dj = -kFarRing; dj <= kFarRing; ++dj )
+        for ( int di = -kFarRing; di <= kFarRing; ++di )
             RequestOrographicPage( px + di, py + dj );
 
-        if ( !g.orographicPagesRequested.empty() || g.bulkFlow.Inflight() >= 2 )
-            return;
-        DWORD const now = GetTickCount();
-        if ( now - g.orographicPageLastSendAttemptMs < 200 ) { return; }
+        g.orographicPagesWanted.erase(
+            std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
+                [&]( std::pair<int,int> const& page )
+                {
+                    int const dx = page.first - px, dy = page.second - py;
+                    return dx > kFarRing || dx < -kFarRing
+                        || dy > kFarRing || dy < -kFarRing;
+                } ),
+            g.orographicPagesWanted.end() );
 
-        std::pair<int,int> selected{};
-        bool have = false;
-        double best = 0.0;
-        for ( auto const& page : g.orographicPagesWanted )
+        DWORD const now = GetTickCount();
+        if ( now - g.orographicPageLastSendAttemptMs < 50 ) { return; }
+        constexpr int kMaxInflight = 4;
+        int sent = 0;
+        while ( (int)g.orographicPagesRequested.size() < kMaxInflight
+             && g.bulkFlow.Inflight() < kMaxInflight )
         {
-            uint64_t const key = AdoptPage::PageKey( page.first, page.second );
-            if ( g.orographicPagesResident.count( key )
-              || g.orographicPagesRequested.count( key ) ) continue;
-            double const dx = (double)page.first - px, dy = (double)page.second - py;
-            double const d = dx * dx + dy * dy;
-            if ( !have || d < best ) { selected = page; best = d; have = true; }
+            std::pair<int,int> selected{};
+            bool have = false;
+            double best = 0.0;
+            bool preferNear = false;
+            for ( auto const& page : g.orographicPagesWanted )
+            {
+                uint64_t const key = AdoptPage::PageKey( page.first, page.second );
+                if ( g.orographicPagesResident.count( key )
+                  || g.orographicPagesRequested.count( key ) ) continue;
+                int const adx = page.first - px, ady = page.second - py;
+                bool const near = (std::abs)(adx) <= kNearRing && (std::abs)(ady) <= kNearRing;
+                double const d = (double)adx * adx + (double)ady * ady;
+                if ( !have || ( near && !preferNear ) || ( near == preferNear && d < best ) )
+                {
+                    selected = page; best = d; have = true; preferNear = near;
+                }
+            }
+            if ( !have ) { break; }
+            char params[96];
+            std::snprintf( params, sizeof( params ),
+                "{\"page_coord\":[%d,%d]}", selected.first, selected.second );
+            g.orographicPageLastSendAttemptMs = now;
+            if ( !RequestBulkMethod( "orographic_production_page", params,
+                    { (int)PendingKind::OrographicPage, selected.first, selected.second } ) )
+                break;
+            g.orographicPagesRequested.insert(
+                AdoptPage::PageKey( selected.first, selected.second ) );
+            g.statusLine = "orographic.phase17 page streaming";
+            if ( ++sent >= kMaxInflight ) break;
         }
-        if ( !have ) { return; }
-        char params[96];
-        std::snprintf( params, sizeof( params ),
-            "{\"page_coord\":[%d,%d]}", selected.first, selected.second );
-        g.orographicPageLastSendAttemptMs = now;
-        if ( !RequestBulkMethod( "orographic_production_page", params,
-                { (int)PendingKind::OrographicPage, selected.first, selected.second } ) )
-            return;
-        g.orographicPagesRequested.insert(
-            AdoptPage::PageKey( selected.first, selected.second ) );
-        g.statusLine = "orographic.phase17 page streaming";
     }
 
     void SeatOrographicPlayer()
@@ -13603,6 +13629,8 @@ namespace
             }
             g.orographicPagesResident.insert( key );
             g.orographicPlayable = true;
+            ++g.orographicStreamGeneration;
+            Mv1InvalidateAdoptedPage( correlated.bx, correlated.by );
             g.orographicPagesWanted.erase(
                 std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
                     [&]( std::pair<int,int> const& p )
@@ -14925,9 +14953,9 @@ namespace
             return AdoptPage::SampleZ( x, y, g.gradeDatum, g.reliefVoxels,
                 g.voxelEdgeM, outZ );
         }
-        // AdoptPage::SampleZ reconstructs the banked orographic.phase17 carrier
-        // for consume certification only. Native Stage0 collision and grounding
-        // stay on WorldGenesis / published matter. Do not replace this path.
+        // AdoptPage::SampleZ reconstructs carried phase17 features (peaks/ridges/
+        // saddles/spurs) on top of the sampled smooth carrier. Collision and
+        // render share that result. Do not fall through to WorldGenesis here.
         if ( g.ei3MatterPlayable
           && UsesCut0RegionalCarrier( g.stage0PlayView ) )
         {
@@ -20506,6 +20534,19 @@ namespace
         { 2048,  20000, 2048,  64, 18.0, -3.0f },  // 1 regional ~2–20 km
         {20000,  32000, 4096, 128, 45.0, -10.0f }, // 2 horizon  ~20–32 km
     };
+    // Same AdoptPage::SampleZ authority. Near covers the streamed keep;
+    // mid/far coarsen tessellation only. Horizon sits ~80 uu under near/mid
+    // so LOD seams do not open sky (do not repeat v366).
+    static constexpr Mv1Band kOroMv1Bands[3] = {
+        {     0,   8192,  256,   8,  5.0,  -1.0f },
+        {  6144,  20480, 2048,  64, 18.0,  -8.0f },
+        { 16384,  32768, 4096, 128, 45.0, -80.0f },
+    };
+    static Mv1Band const& Mv1BandOf(int band)
+    {
+        if ( band < 0 || band > 2 ) band = 0;
+        return OrographicPlayActive() ? kOroMv1Bands[band] : kMv1Bands[band];
+    }
     static constexpr int kMv1VisibleRangeM = 32000;
     static constexpr int kMv1FineCells = 32; // tileM/fineStep for every band
 
@@ -20630,12 +20671,10 @@ namespace
         if(OrographicPlayActive())
         {
             if(!AdoptPage::SampleZ((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
-                g.voxelEdgeM,outZ))return false;
-            double grade=0.0;
-            AdoptPage::SampleGrade(x,y,grade);
-            float const t=(float)std::clamp((grade-0.45)/0.55,0.0,1.0);
-            r=(uint8_t)(70.0+40.0*t); gg=(uint8_t)(90.0+50.0*t);
-            bb=(uint8_t)(58.0+20.0*(1.0-t));
+                g.voxelEdgeM,outZ))
+                return false;
+            char const* mat=AdoptPage::AppearanceMaterial(x,y);
+            r=110;gg=88;bb=58;CapColor(mat,r,gg,bb);
             return true;
         }
         if(g.ei3MatterPlayable)
@@ -20713,6 +20752,29 @@ namespace
         for(int i=0;i<4;++i)g.mv1TileCellsHist[i]=0;
     }
 
+    void Mv1InvalidateAdoptedPage( int px, int py )
+    {
+        double const x0 = (double)px * 1024.0 - AdoptPage::kPageSkirtM;
+        double const y0 = (double)py * 1024.0 - AdoptPage::kPageSkirtM;
+        double const x1 = (double)(px + 1) * 1024.0 + AdoptPage::kPageSkirtM;
+        double const y1 = (double)(py + 1) * 1024.0 + AdoptPage::kPageSkirtM;
+        for ( auto it = g.mv1Tiles.begin(); it != g.mv1Tiles.end(); )
+        {
+            AppState::Mv1Tile const& tile = it->second;
+            double const tx0 = (double)tile.cx - tile.halfM;
+            double const tx1 = (double)tile.cx + tile.halfM;
+            double const ty0 = (double)tile.cy - tile.halfM;
+            double const ty1 = (double)tile.cy + tile.halfM;
+            if ( tx1 > x0 && tx0 < x1 && ty1 > y0 && ty0 < y1 )
+            {
+                Mv1RetireTile( tile );
+                it = g.mv1Tiles.erase( it );
+                ++g.mv1TilesRetired;
+            }
+            else ++it;
+        }
+    }
+
     uint64_t Mv1TileKey(int band,int tx,int ty)
     {
         return ((uint64_t)(uint32_t)band<<58)
@@ -20732,7 +20794,7 @@ namespace
             &&!tracedFirstPlayerTileAttempt;
         if(traceFirstPlayerTile)tracedFirstPlayerTileAttempt=true;
         if(traceFirstPlayerTile)PlayerStartupTrace("nearest terrain tile build begin");
-        Mv1Band const& B=kMv1Bands[band];
+        Mv1Band const& B=Mv1BandOf(band);
         int const F=kMv1FineCells;                 // fine cells per axis
         int const stride=F+1;
         double const x0=(double)tx*B.tileM, y0=(double)ty*B.tileM;
@@ -20740,16 +20802,42 @@ namespace
         float const presentationBias=B.zBias;
         std::vector<float> zf((size_t)stride*stride);
         std::vector<uint8_t> cr((size_t)stride*stride),cg((size_t)stride*stride),cb((size_t)stride*stride);
+        std::vector<char> hit((size_t)stride*stride,0);
         double tileMinZ=1e30;
+        int hitN=0;
         for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
         {
             float z=0.f;uint8_t r=94,gg=77,bb=56;
-            if(!Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))
-            {++g.mv1AuthoritySampleFailures;return false;}
             size_t const k=(size_t)j*stride+i;
-            zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
-            tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+            if(Mv1SampleAuthority(x0+i*fs,y0+j*fs,z,r,gg,bb))
+            {
+                zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;hit[k]=1;++hitN;
+                tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+            }
         }
+        if(hitN==0)
+        {++g.mv1AuthoritySampleFailures;return false;}
+        if(hitN<(stride*stride)&&OrographicPlayActive())
+        {
+            // Continuity before cull: a tile that overlaps adopted pages must
+            // not open sky at the keep edge. Fill only the missing samples from
+            // the nearest live page; do not invent a second generator.
+            for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
+            {
+                size_t const k=(size_t)j*stride+i;
+                if(hit[k])continue;
+                float z=0.f;
+                if(!AdoptPage::SampleZNearest((float)(x0+i*fs),(float)(y0+j*fs),
+                    g.gradeDatum,g.reliefVoxels,g.voxelEdgeM,z))
+                {++g.mv1AuthoritySampleFailures;return false;}
+                char const* mat=AdoptPage::AppearanceMaterial(x0+i*fs,y0+j*fs);
+                uint8_t r=110,gg=88,bb=58;CapColor(mat,r,gg,bb);
+                zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
+                tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+            }
+        }
+        else if(hitN<(stride*stride))
+        {++g.mv1AuthoritySampleFailures;return false;}
         if(traceFirstPlayerTile)PlayerStartupTrace("nearest terrain samples complete");
         auto Z=[&](int i,int j)->float{return zf[(size_t)j*stride+i];};
         // Choose coarsest cells C in {4,8,16,32} whose bilinear approximation
@@ -20760,7 +20848,7 @@ namespace
         // pierce through and hide the finer mid terrain underneath. Preserve
         // every sampled vertex for the playable ladder; this changes only
         // presentation tessellation, never MW8 height or material authority.
-        for(int C=4;!g.ei3MatterPlayable&&C<=F;C*=2)
+        for(int C=4;!g.ei3MatterPlayable&&!OrographicPlayActive()&&C<=F;C*=2)
         {
             int const s=F/C;double maxErr=0.0;
             for(int cj=0;cj<C;++cj)for(int ci=0;ci<C;++ci)
@@ -20874,7 +20962,7 @@ namespace
             }
             tris+=2;
         }
-        if(!UsesSkirtlessMv1Tiles(g.stage0PlayView))
+        if(!UsesSkirtlessMv1Tiles(g.stage0PlayView)||OrographicPlayActive())
         {
             // Diagnostic/certification views retain the historical perimeter
             // closure. Canonical play is a shared-edge continuous surface; a
@@ -20952,8 +21040,8 @@ namespace
             if(d>=0.99999f)continue; // far-cleared background (sky), no terrain
             ++terrain;
             float const dist=2.f*nf*ff/(ff+nf-(2.f*d-1.f)*(ff-nf));
-            if(dist<kMv1Bands[0].outer)++meso;          // ..2 km
-            else if(dist<kMv1Bands[1].outer)++regional; // 2..20 km
+            if(dist<Mv1BandOf(0).outer)++meso;
+            else if(dist<Mv1BandOf(1).outer)++regional;
             else ++horizon;                             // 20..32 km
         }
         g.mv1cBandPixels[0]=meso;g.mv1cBandPixels[1]=regional;g.mv1cBandPixels[2]=horizon;
@@ -21074,8 +21162,9 @@ namespace
         }
         bool const canonicalCarrier=g.ei3MatterPlayable
             &&UsesCut0RegionalCarrier(g.stage0PlayView);
-        if(!IsRegionalBiomeView(g.stage0PlayView)
-          ||(!canonicalCarrier&&!g.regionalBiomeRuntime))
+        bool const orographicCarrier=OrographicPlayActive()&&AdoptPage::IsLive();
+        if(!orographicCarrier&&(!IsRegionalBiomeView(g.stage0PlayView)
+          ||(!canonicalCarrier&&!g.regionalBiomeRuntime)))
         {
             if(g.ei3PlayerFacing&&!tracedPlayerMv1ViewGate)
             {
@@ -21090,7 +21179,7 @@ namespace
             }
             if(!g.mv1Tiles.empty())Mv1ReleaseAll();return;
         }
-        if(canonicalCarrier
+        if(canonicalCarrier&&!orographicCarrier
           &&(!g.canonicalHandshakeOk||g.macroGenesisDigest.empty()))
         {
             if(g.ei3PlayerFacing&&!tracedPlayerMv1AuthorityWait)
@@ -21134,7 +21223,7 @@ namespace
 
         // Anchor snapped to the meso tile grid so bands rebuild only on a coarse
         // cadence, not every metre.
-        int const snap=kMv1Bands[0].tileM;
+        int const snap=Mv1BandOf(0).tileM;
         int const anchorX=(int)std::floor(g.feetX/snap)*snap;
         int const anchorY=(int)std::floor(g.feetY/snap)*snap;
         bool const anchorChanged=anchorX!=g.mv1AnchorX||anchorY!=g.mv1AnchorY
@@ -21164,7 +21253,7 @@ namespace
         std::vector<Want> want;
         for(int band=0;band<3;++band)
         {
-            Mv1Band const& B=kMv1Bands[band];
+            Mv1Band const& B=Mv1BandOf(band);
             int const t0x=(int)std::floor((double)(anchorX-B.outer)/B.tileM)-1;
             int const t1x=(int)std::floor((double)(anchorX+B.outer)/B.tileM)+1;
             int const t0y=(int)std::floor((double)(anchorY-B.outer)/B.tileM)-1;
@@ -21210,7 +21299,7 @@ namespace
         auto inPlayableHandoffRing=[&](AppState::Mv1Tile const& tile)->bool
         {
             if(tile.band<0||tile.band>=3)return false;
-            Mv1Band const& B=kMv1Bands[tile.band];
+            Mv1Band const& B=Mv1BandOf(tile.band);
             double const ax0=(double)tile.cx-tile.halfM-anchorX;
             double const ax1=(double)tile.cx+tile.halfM-anchorX;
             double const ay0=(double)tile.cy-tile.halfM-anchorY;
@@ -33095,6 +33184,7 @@ namespace
         // seam. Pages are MV2.A compiled authority (cheap; no ReconstructedZ). Only
         // active when mv2bEnabled — all frozen MV1 certs (mv2b off) are untouched.
         if ( g.playWorldgenBaseline && g.mv2bEnabled
+          && !OrographicPlayActive()
           && g.playWorldgenInitialized
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
@@ -33145,7 +33235,9 @@ namespace
             // below remains 0.03..600 m and overpaints this carrier after the
             // depth clear, so there is no near-coverage loss here.
             float const nf = 128.f;
-            float const ff = (float)kMv1VisibleRangeM + 1000.f;
+            float const ff = OrographicPlayActive()
+                ? (float)Mv1BandOf(2).outer + 1000.f
+                : (float)kMv1VisibleRangeM + 1000.f;
             float const fm[16] = {
                 f / aspect, 0, 0, 0,
                 0, f, 0, 0,
@@ -60602,6 +60694,10 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     g.playOrographicLaunch=true;
                     g.orographicPlayable=true;
+                    g.playWorldgenBaseline=true;
+                    g.playMw8Launch=true;
+                    g.mv1Enabled=true;
+                    g.mv2bEnabled=false;
                     g.wd1bEnabled=false;
                     continue;
                 }
@@ -61092,6 +61188,14 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {
                     g.bulkPort = _wtoi( argv[i] + 12 );
                 }
+            }
+
+            if ( g.playOrographicLaunch || g.orographicPlayable )
+            {
+                g.mv2bEnabled = false;
+                g.wd1bEnabled = false;
+                g.playWorldgenBaseline = true;
+                g.mv1Enabled = true;
             }
 
             // The ordinary player launch follows the latest certified runtime.
