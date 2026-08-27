@@ -5,7 +5,7 @@ NATIVE STAGE0 CONSUMES OROGRAPHIC.PHASE17 —
 MW8 CERTIFICATION PORTED TO PRODUCT CLIENT
 ```
 
-MW9 CLOSED. Native Stage0 is the product consume client. ProvenanceEsoterica
+MW9 flora realized (fauna CLOSED). Native Stage0 is the product consume client. ProvenanceEsoterica
 `provenance/client-spike` `2c5d9823` remains the certified **reference** — do
 not rewrite that tree; copy the contract, not its heightfield.
 
@@ -91,5 +91,4 @@ None for live emit. `live_v11_orographic_phase17_emit=LIVE` on the existing
 
 ## MW9
 
-CLOSED. No flora/fauna, vegetation placement, live weather, glaciers, or
-ecology simulation.
+Flora realized on live QueryContext / MW8 (`MW9_ECOLOGY_HANDOFF.md`). Fauna CLOSED.

@@ -47,6 +47,7 @@
 #include "CausalRegionalRegolith.h" // MW7 soils / regolith
 #include "CausalRegionalBiome.h" // MW8 biome regime
 #include "AdoptPage.h" // Stage0 orographic.phase17 authority-admission seam
+#include "CausalRegionalEcology.h" // MW9 realized flora (fauna CLOSED)
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -18453,6 +18454,8 @@ namespace
           "MACRO.HYDROCLIMATE", "derived near-surface material profile from geology, deposits, drainage, and hydroclimate", Stage0PlayView::RegionalRegolith },
         { "GEOLOGY / GEOMORPHOLOGY", "MACRO.BIOMES", "MW8 - Biomes",
           "MACRO.SOILS_REGOLITH", "ecological potential / biome regime from climate, soils, drainage, substrate, and exposure", Stage0PlayView::RegionalBiome },
+        { "GEOLOGY / GEOMORPHOLOGY", "MACRO.FLORA", "MW9 - Realized Flora",
+          "MACRO.BIOMES", "persistent flora occupancy from source, establishment, growth, competition, and mortality — not biome paint", Stage0PlayView::RegionalBiome },
         { "INTEGRATION", "STAGE0.CUT0.CONTINUOUS_WORLD_PREVIEW", "Stage 0 Cut 0 - Continuous World Foundation",
           "canonical FableScript authority with the current EI3.Q.B landform projection enabled",
           "PREVIEW - continuous matter/LOD handoff; Stage 0 world causes are not implemented yet", Stage0PlayView::RichCausalLandforms },
@@ -18504,12 +18507,12 @@ namespace
     static StandingBoardClosedEntry const s_standingBoardClosed[kStandingBoardClosedCount] = {
         { "3C structural collapse", "HYDROLOGY.BANK_SUPPORT_COLLAPSE" },
         { "16C runtime remobilization", "GEOMORPH.16C_RUNTIME_REMOBILIZATION" },
-        { "MW9 flora / fauna", "MACRO.FLORA_FAUNA" }
+        { "MW9 fauna", "MACRO.FAUNA" }
     };
 
     char const* MacroWorldgenCaption()
     {
-        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3 CERTIFIED  MW4 CERTIFIED  MW5 CERTIFIED  MW6 CERTIFIED  MW7 CERTIFIED  MW8 CERTIFIED  MW9 CLOSED";
+        return "MACRO WORLDGEN  MW1 CERTIFIED  MW2 CERTIFIED  MW3 CERTIFIED  MW4 CERTIFIED  MW5 CERTIFIED  MW6 CERTIFIED  MW7 CERTIFIED  MW8 CERTIFIED  MW9 FLORA CERTIFIED  FAUNA CLOSED";
     }
 
     bool IsRuntimeDepositionChainView( Stage0PlayView view )
@@ -42098,7 +42101,10 @@ namespace
             if(!AdoptPage::IsLive())
                 AdoptPage::AdoptCanonicalFixture();
             if(AdoptPage::IsLive())
-                g.statusLine="orographic.phase17 admitted (banked page 1,1); native Stage0 render unchanged";
+            {
+                CausalRegionalEcology::Compile(CausalRegionalEcology::Control::ForceOn);
+                g.statusLine="orographic.phase17 admitted (banked page 1,1); MW9 flora realized; native Stage0 render unchanged";
+            }
         }
         if(g.playP5b3b3bLaunch)
         {
@@ -56083,6 +56089,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runRegionalBiomeCert = false;
         bool runStage0AdoptPageCert = false;
         bool runMw8OrographicCert = false;
+        bool runMw9EcologyCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -56313,6 +56320,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 {runStage0AdoptPageCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-mw8-orographic")==0)
                 {runStage0AdoptPageCert=true;runMw8OrographicCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw9-ecology")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-mw9")==0)
+                {runMw9EcologyCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -56657,6 +56667,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             if(runMw8OrographicCert)
                 return result.mw8Passed?0:1;
             return result.consumePassed?0:1;
+        }
+        if(runMw9EcologyCert)
+        {
+            auto const result=CausalRegionalEcology::RunCert();
+            CausalRegionalEcology::WriteCertArtifact(result,
+                "Docs\\provenance_mw9_ecology_cert.txt");
+            return result.passed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
         {

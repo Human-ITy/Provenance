@@ -4,7 +4,7 @@
 DEFAULT STAGE0 LIVE STREAM = OROGRAPHIC.PHASE17
 ```
 
-MW9 CLOSED. MW8 doctrine/gates untouched. WorldGenesis v11 library worlds
+MW9 flora realized on this same live consume path (fauna CLOSED). MW8 doctrine/gates untouched. WorldGenesis v11 library worlds
 remain v11. Native Stage0 consume (`AdoptPage` / `QueryContext`) is unchanged
 except it now prefers **live-emitted** pages when the live receipt is present.
 
@@ -55,7 +55,7 @@ Live emit matches the banked golden (oracle). TCP control/bulk lanes carry
 - H2H 289, MW8-off Δ 0, hydro-off 0, page-boundary 51
 - no GradeToZ, no second heightfield, travel rebuilds 0
 - `live_wire=orographic_production_page`
-- MW9 CLOSED
+- MW9 flora realized on the same live pages (fauna CLOSED)
 
 ## Preserved
 
@@ -65,4 +65,4 @@ Live emit matches the banked golden (oracle). TCP control/bulk lanes carry
 - AdoptPage / QueryContext
 - `_grade_at = tectonic.grade_at`
 - MW8 gates
-- MW9 CLOSED
+- MW9 flora (CERT_MW9_ECOLOGY.cmd); fauna CLOSED

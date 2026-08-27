@@ -419,7 +419,7 @@ WD1.A   WaterState authority              CERTIFIED (Python authority; two-stage
 WD1.B   shared water appearance           CERTIFIED (one C++ Ms1::ResolveWaterAppearance resolver: observed = MS1 bottom·T(depth) + body_optical·(1-T) + reflection, T=exp(-k·depth), k from turbidity/organic/sediment; continuous optical depth, NEVER bands; clear/sediment/organic/mineral bodies diverge; macro STANDING water rendered as an overlay at surface_z over the MS1 substrate (terrain untouched); macro_authority respected (centre defers, no macro water); opt-in --wd1b (default off==frozen); optical cert PASS + real-client showcase (turquoise crater lakes over basalt, organic lowland) + MW8 24m/s Test B PX2 green; geometry/water-truth bit-exact; NEXT = WD1.C)
 WD1.C   waterfalls / cascades             HOLD (presentation design/fixtures only; existence authority waits for engine ownership)
 MV3.C-testB  24m/s Test B on gen-5 pages   PASS (engine_cpu 0-over worst 11.7ms, 0 presented/stage-owned/os-gap, cadence no-regression, 0 movement frames over)
-MW9     flora / fauna                     CLOSED
+MW9     flora                             CERTIFIED (realized occupancy on live Stage0 MW8; fauna CLOSED)
 ```
 
 **MS1.A CERTIFIED** — SurfaceState authority + composition (Python world-authority only;
