@@ -279,6 +279,11 @@ try {
         $spawnY = '1536'
         $spawnZ = '0'
         $spawnYaw = '0'
+        # 1024 m orographic pages: spawn 1536,1536 is certified (1,1).
+        # Must be set here — the v11 prewarm below is skipped, but the
+        # readiness probe still reads $centerRi/$centerRj under StrictMode.
+        $centerRi = 1
+        $centerRj = 1
         $effectiveClientArgument += @(
             '--ei3-spawn-x', $spawnX,
             '--ei3-spawn-y', $spawnY,
