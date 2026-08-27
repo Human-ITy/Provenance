@@ -1,0 +1,53 @@
+TERRAIN VERTICAL HIERARCHY CERTIFIED — MACRO GEOGRAPHY HAS PHYSICAL SCALE WITHOUT SACRIFICING WORLD IDENTITY
+reason=TERRAIN VERTICAL HIERARCHY CERTIFIED — MACRO GEOGRAPHY HAS PHYSICAL SCALE WITHOUT SACRIFICING WORLD IDENTITY
+peak_to_valley_m=637.447
+ridge_to_drain_m=302.466
+saddle_to_peak_m=409.251
+local_hill_m=130.407
+ordinary_relief_m=0.190
+max_reload=0.000000000e+00
+max_seam=0.453041
+max_render_collision=0.000000000e+00
+downhill_frac=0.956
+below_sea_n=4
+wetland_n=77
+novelty_changes=20
+novelty_min_m=50
+novelty_med_m=250
+novelty_max_m=1550
+novelty_mean_m=355
+lowland_stays_low=1
+sea_level=0
+wd1=closed
+mw9=closed
+compose=regional+massif+peak+ridge+saddle+spur+valley+local
+grade_to_z_not_global_knob=1
+proof.dominant_mountain id=peak:528686ea260b xy=2419.87,2397.74 regional=1.823 massif=254.497 peak=429.469 ridge=58.061 saddle=0.000 spur=0.000 valley=-0.000 local=0.806 finalZ=744.657 local_relief=498.335 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:f490d4cd84ce peak=peak:528686ea260b ridge=ridge:7571154e6395 saddle= spur= valley=basin:f8f9103d4bf8
+proof.secondary_peak id=peak:77b5cac94cbf xy=2572.82,2587.31 regional=1.823 massif=198.452 peak=429.186 ridge=87.917 saddle=0.000 spur=0.000 valley=-0.000 local=0.706 finalZ=718.085 local_relief=470.616 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:fdb8bf9cc2a7 peak=peak:77b5cac94cbf ridge=ridge:de93a69a40a6 saddle= spur= valley=basin:f8f9103d4bf8
+proof.branching_ridge id=ridge:a1a9bec18891 xy=2536.64,1930.59 regional=1.823 massif=332.873 peak=6.640 ridge=132.034 saddle=-42.332 spur=35.677 valley=-0.000 local=1.796 finalZ=468.512 local_relief=152.668 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:364c559b9d0a peak=peak:63b2f066047a ridge=ridge:a1a9bec18891 saddle=saddle:806962f22730 spur=spur:a63cb3887278 valley=basin:f8f9103d4bf8
+proof.saddle_pass id=saddle:21d1b520c4c8 xy=2503.94,2279.76 regional=1.823 massif=301.307 peak=14.380 ridge=71.896 saddle=-55.354 spur=0.000 valley=-0.000 local=1.354 finalZ=335.405 local_relief=162.425 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:f490d4cd84ce peak=peak:c01fd4feaa50 ridge=ridge:7571154e6395 saddle=saddle:21d1b520c4c8 spur= valley=basin:f8f9103d4bf8
+proof.spur id=spur:48af7f5caf02 xy=2415.10,1801.16 regional=1.823 massif=196.213 peak=0.000 ridge=0.000 saddle=0.000 spur=29.009 valley=-0.000 local=0.785 finalZ=227.831 local_relief=130.407 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:364c559b9d0a peak= ridge= saddle= spur=spur:48af7f5caf02 valley=basin:f8f9103d4bf8
+proof.dry_valley id=basin:f63f287ceae9 xy=2176.00,2560.00 regional=1.823 massif=128.182 peak=0.000 ridge=0.000 saddle=0.000 spur=0.000 valley=-22.862 local=0.067 finalZ=107.210 local_relief=100.223 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif=massif:fdb8bf9cc2a7 peak= ridge= saddle= spur= valley=basin:f63f287ceae9
+proof.wet_valley_basin id=b5357ef0af061eb8 xy=2688.00,1024.00 regional=1.823 massif=0.000 peak=0.000 ridge=0.000 saddle=0.000 spur=0.000 valley=-0.000 local=-1.595 finalZ=0.228 local_relief=2.574 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif= peak= ridge= saddle= spur= valley=basin:45c81e05fc88
+proof.lowland id=spawn_1536_1536 xy=1536.00,1536.00 regional=1.311 massif=0.000 peak=0.000 ridge=0.000 saddle=0.000 spur=0.000 valley=-0.000 local=-0.420 finalZ=0.891 local_relief=0.138 render_collision=0.000000000e+00 reload=0.000000000e+00 seam=0.000000 ids massif= peak= ridge= saddle= spur= valley=basin:f8f9103d4bf8
+check.page_1_1=PASS
+check.page_2_1=PASS
+check.context=PASS
+check.dominant_peak_id=PASS
+check.secondary_peak_id=PASS
+check.ridge_metres=PASS
+check.saddle_below_peaks=PASS
+check.spur_present=PASS
+check.peak_to_valley_hundreds=PASS
+check.ridge_to_drain_tens=PASS
+check.ordinary_not_mountain=PASS
+check.lowland_not_mountainous=PASS
+check.render_collision_zero=PASS
+check.reload_zero=PASS
+check.page_boundary_continuous=PASS
+check.compose_matches_final=PASS
+check.valleys_drain_by_topology=PASS
+check.depressions_not_automatic_lakes=PASS
+check.wet_from_hydrology_not_z=PASS
+check.wd1_closed=PASS
+check.ten_km_novelty_measured=PASS

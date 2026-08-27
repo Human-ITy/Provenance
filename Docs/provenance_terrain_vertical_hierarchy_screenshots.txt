@@ -1,0 +1,13 @@
+player_view_screenshots
+00 lowland_ground: spawn 1536,1536 standing, lowland dirt/hillshade, not a mountain.
+01 lowland_air: same place, 220 m up, confirms the basin stays low vs distant massifs.
+02 dominant_peak_ground: standing on peak:528686ea260b.
+03 dominant_peak_air: free-flight above the same summit, envelope + shoulders.
+04 secondary_peak_ground: peak:77b5cac94cbf.
+05 branching_ridge_air: ridge:a1a9bec18891 crest from the air.
+06 saddle_pass_ground: saddle:21d1b520c4c8 between neighboring peaks.
+07 spur_ground: spur:48af7f5caf02 descending flank.
+08 dry_valley_ground: basin:f63f287ceae9 floor on the massif flank, drained, not a lake.
+09 wet_valley_ground: hydrology wetland/riparian cell, not Z<sea.
+10 overview_flight: 720 m above the massif, one lineage near-to-far.
+numbers=PASS

@@ -1,0 +1,215 @@
+TERRAIN VERTICAL HIERARCHY / PHASE 1 AUDIT
+K_GZ = relief*voxel = 8.0 m per grade unit
+grade domain [0.15,2.6] -> Z [-2.80, 16.80] m
+theoretical max relief = 19.60 m
+
+page peaks=8 ridges=5 saddles=4 spurs=6 valleys=5
+ctx massifs=52 peaks=165
+peak prominence range: 0.2686 .. 0.5965 -> Z contrib 2.15 .. 4.77 m
+ridge crest range: 0.1910 .. 0.3475 -> Z contrib 1.53 .. 2.78 m
+massif lift range: 0.1010 .. 0.2558 -> Z if used 0.81 .. 2.05 m
+
+=== SPAWN 1536,1536 (ordinary / page 1,1 interior) ===
+xy=(1536.0,1536.0) page=[1, 1]
+  carrier=0.611317  massif_UNUSED=0.000000 ()
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=basin:f8f9103d4bf8 dist=461.5m)
+  sharp_total=0.000000  raw=0.611317  clamp_delta=0.000000
+  grade=0.611317  GradeToZ=0.891m  collision=0.891m
+  GradeToZ_if_massif_added=0.891m  (still *8 m/grade)
+
+=== DOMINANT PEAK peak:528686ea260b prom=0.5965 r=99.7 ===
+xy=(2419.9,2397.7) page=[2, 1]
+  carrier=0.828643  massif_UNUSED=0.120941 (massif:f490d4cd84ce)
+  peak=0.596485 (peak:528686ea260b)  ridge=0.190992 (ridge:7571154e6395)
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=648.5m)
+  sharp_total=0.813673  raw=1.642317  clamp_delta=0.000000
+  grade=1.642317  GradeToZ=9.139m  collision=9.139m
+  GradeToZ_if_massif_added=10.106m  (still *8 m/grade)
+
+=== SECONDARY PEAK peak:c38f65afd5ad prom=0.4589 ===
+xy=(2454.0,2160.7) page=[2, 1]
+  carrier=0.917364  massif_UNUSED=0.188265 (massif:364c559b9d0a)
+  peak=0.458867 (peak:c38f65afd5ad)  ridge=0.347458 (ridge:a1a9bec18891)
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=773.1m)
+  sharp_total=0.837995  raw=1.755358  clamp_delta=0.000000
+  grade=1.755358  GradeToZ=10.043m  collision=10.043m
+  GradeToZ_if_massif_added=11.549m  (still *8 m/grade)
+
+=== RIDGE CREST ridge:a1a9bec18891 crest=0.3475 hw=162.8 ===
+xy=(2536.6,1930.6) page=[2, 1]
+  carrier=0.952385  massif_UNUSED=0.204409 (massif:364c559b9d0a)
+  peak=0.000000 ()  ridge=0.347458 (ridge:a1a9bec18891)
+  saddle=-0.141957 (saddle:806962f22730)  spur=0.260209 (spur:a63cb3887278)
+  valley_term=0 (id=basin:f8f9103d4bf8 dist=896.4m)
+  sharp_total=0.515472  raw=1.467857  clamp_delta=0.000000
+  grade=1.467857  GradeToZ=7.743m  collision=7.743m
+  GradeToZ_if_massif_added=9.378m  (still *8 m/grade)
+
+=== ADJACENT DRAINAGE to ridge (offset 1.35*hw) ===
+xy=(2344.9,1823.0) page=[2, 1]
+  carrier=0.808050  massif_UNUSED=0.130189 (massif:364c559b9d0a)
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.061631 (spur:48af7f5caf02)
+  valley_term=0 (id=basin:f8f9103d4bf8 dist=689.5m)
+  sharp_total=0.028045  raw=0.836096  clamp_delta=0.000000
+  grade=0.836096  GradeToZ=2.689m  collision=2.689m
+  GradeToZ_if_massif_added=3.730m  (still *8 m/grade)
+
+=== SADDLE saddle:21d1b520c4c8 drop=0.4834 ===
+xy=(2503.9,2279.8) page=[2, 1]
+  carrier=0.897143  massif_UNUSED=0.167273 (massif:f490d4cd84ce)
+  peak=0.040901 (peak:c38f65afd5ad)  ridge=0.262953 (ridge:7571154e6395)
+  saddle=-0.195222 (saddle:21d1b520c4c8)  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=765.1m)
+  sharp_total=0.114284  raw=1.011427  clamp_delta=0.000000
+  grade=1.011427  GradeToZ=4.091m  collision=4.091m
+  GradeToZ_if_massif_added=5.430m  (still *8 m/grade)
+
+=== SADDLE-NEIGHBOR PEAK peak:c01fd4feaa50 ===
+xy=(2573.3,2216.7) page=[2, 1]
+  carrier=0.935581  massif_UNUSED=0.196499 (massif:f490d4cd84ce)
+  peak=0.314614 (peak:c01fd4feaa50)  ridge=0.429997 (ridge:0c41982aa9c2)
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=853.4m)
+  sharp_total=0.789562  raw=1.725143  clamp_delta=0.000000
+  grade=1.725143  GradeToZ=9.801m  collision=9.801m
+  GradeToZ_if_massif_added=11.373m  (still *8 m/grade)
+
+=== SADDLE-NEIGHBOR PEAK peak:c38f65afd5ad ===
+xy=(2454.0,2160.7) page=[2, 1]
+  carrier=0.917364  massif_UNUSED=0.188265 (massif:364c559b9d0a)
+  peak=0.458867 (peak:c38f65afd5ad)  ridge=0.347458 (ridge:a1a9bec18891)
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=773.1m)
+  sharp_total=0.837995  raw=1.755358  clamp_delta=0.000000
+  grade=1.755358  GradeToZ=10.043m  collision=10.043m
+  GradeToZ_if_massif_added=11.549m  (still *8 m/grade)
+
+=== SPUR spur:48af7f5caf02 crest=0.1911 ===
+xy=(2415.1,1801.2) page=[2, 1]
+  carrier=0.826030  massif_UNUSED=0.148395 (massif:364c559b9d0a)
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.191102 (spur:48af7f5caf02)
+  valley_term=0 (id=basin:f8f9103d4bf8 dist=718.8m)
+  sharp_total=0.100855  raw=0.926884  clamp_delta=0.000000
+  grade=0.926884  GradeToZ=3.415m  collision=3.415m
+  GradeToZ_if_massif_added=4.602m  (still *8 m/grade)
+
+=== VALLEY basin:0e70ca9169e9 acc=34 pos=[768, 2048] ===
+xy=(768.0,2048.0) page=[1, 1]
+  carrier=0.614284  massif_UNUSED=0.000000 ()
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=basin:0e70ca9169e9 dist=0.0m)
+  sharp_total=0.000000  raw=0.614284  clamp_delta=0.000000
+  grade=0.614284  GradeToZ=0.914m  collision=0.914m
+  GradeToZ_if_massif_added=0.914m  (still *8 m/grade)
+
+=== NEAREST VALLEY TO DOMINANT PEAK valley:76c07f6e3a6d d=648.5m ===
+xy=(1792.0,2560.0) page=[1, 1]
+  carrier=0.700792  massif_UNUSED=0.003019 (massif:fdb8bf9cc2a7)
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=valley:76c07f6e3a6d dist=0.0m)
+  sharp_total=0.000000  raw=0.700792  clamp_delta=0.000000
+  grade=0.700792  GradeToZ=1.606m  collision=1.606m
+  GradeToZ_if_massif_added=1.630m  (still *8 m/grade)
+
+=== ORDINARY NON-FEATURE (min sharp, low massif) (1104, 1104) ===
+xy=(1104.0,1104.0) page=[1, 1]
+  carrier=0.623741  massif_UNUSED=0.000000 ()
+  peak=0.000000 ()  ridge=0.000000 ()
+  saddle=0.000000 ()  spur=0.000000 ()
+  valley_term=0 (id=basin:771929fe1431 dist=314.4m)
+  sharp_total=0.000000  raw=0.623741  clamp_delta=0.000000
+  grade=0.623741  GradeToZ=0.990m  collision=0.990m
+  GradeToZ_if_massif_added=0.990m  (still *8 m/grade)
+
+========== WORLD-SPACE RELIEF (current GradeToZ) ==========
+dominant peak to nearby valley: 7.532 m   (peakZ=9.139 valleyZ=1.606)
+dominant peak to page-max-acc valley: 8.224 m
+ridge crest to adjacent drainage: 5.054 m
+saddle to neighbor peak A: 5.710 m
+saddle to neighbor peak B: 5.951 m
+local spur vs drainage: 0.726 m
+ordinary non-feature local relief (80m neighborhood): 0.190 m  z=[0.895,1.085]
+spawn local Z=0.891 m
+
+smooth carrier grade [0.4363,1.0146] -> Z [-0.510,4.117] m
+smooth step=500 n=4  (no sub-500m local carrier)
+
+========== WHERE THE ~10 m COMPRESSION OCCURS ==========
+1. Feature amplitudes are GRADE units: peak prom~0.28-0.60, ridge crest~0.19-0.35,
+   massif lift~0.22-0.26, smooth~0.45-1.01. Designed as tectonic.grade_at, not metres.
+2. GradeToZ is the SINGLE scale: Z=(grade-0.5)*64*0.125 = *8 m/grade.
+   Peak 0.60 * 8 = 4.8 m. Carrier contrast 0.56 * 8 = 4.5 m. Together ~10 m.
+3. Massif lift is computed in SharpFromContext (ecology) but NOT added to SampleZ.
+   Even if added, 0.26*8 = 2.1 m — still compressed by the same knob.
+4. kGradeMax=2.60 clamp is NOT the live cause (raw at dominant peak stays < 2.3).
+5. Valley incision term in SampleZ is hard-coded 0; drainage lives in 500 m smooth.
+DO NOT globally multiply the reconstructed grade field: that would scale local
+carrier and features together and turn lowlands into mountains.
+
+========== PROFILE SHAPE (current peak function = isotropic f^2) ==========
+peak radius=99.7m  samples along +X:
+  d=    0.0 peakC=0.5965 Z=9.139
+  d=   19.9 peakC=0.4789 Z=7.997
+  d=   39.9 peakC=0.2505 Z=5.727
+  d=   59.8 peakC=0.0739 Z=3.912
+  d=   79.7 peakC=0.0065 Z=3.132
+  d=   99.7 peakC=0.0003 Z=3.308
+ridge cross-section (perp to first segment):
+  d= -162.8 ridgeC=0.0160 Z=3.259
+  d= -130.3 ridgeC=0.0420 Z=3.486
+  d=  -97.7 ridgeC=0.1223 Z=4.223
+  d=  -65.1 ridgeC=0.2252 Z=5.163
+  d=  -32.6 ridgeC=0.3113 Z=6.146
+  d=    0.0 ridgeC=0.3475 Z=6.586
+  d=   32.6 ridgeC=0.3113 Z=6.047
+  d=   65.1 ridgeC=0.2252 Z=4.999
+  d=   97.7 ridgeC=0.1223 Z=3.902
+  d=  130.3 ridgeC=0.0361 Z=2.852
+  d=  162.8 ridgeC=0.0000 Z=2.287
+
+========== 10 km TRAVERSAL NOVELTY (current IDs / massif / valley) ==========
+line (1536.0,1536.0) +X 10000.0m, step 50.0m, context-id changes=13
+gap min/median/max = 150 / 550 / 1200 m
+mean gap = 631 m
+  @400m Z=0.85 ('', '', '', 'basin:f8f9103d4bf8') -> ('massif:364c559b9d0a', '', '', 'basin:f8f9103d4bf8')
+  @900m Z=1.55 ('massif:364c559b9d0a', '', '', 'basin:f8f9103d4bf8') -> ('massif:364c559b9d0a', '', '', 'basin:45c81e05fc88')
+  @1650m Z=1.60 ('massif:364c559b9d0a', '', '', 'basin:45c81e05fc88') -> ('massif:c137c722a310', '', '', 'basin:45c81e05fc88')
+  @2150m Z=2.05 ('massif:c137c722a310', '', '', 'basin:45c81e05fc88') -> ('', '', '', 'basin:45c81e05fc88')
+  @2450m Z=2.05 ('', '', '', 'basin:45c81e05fc88') -> ('', '', '', 'valley:b9f1e547708f')
+  @3500m Z=2.05 ('', '', '', 'valley:b9f1e547708f') -> ('', '', '', 'valley:a6f5d0f567b5')
+  @4050m Z=2.05 ('', '', '', 'valley:a6f5d0f567b5') -> ('massif:3d9f7631f951', '', '', 'valley:a6f5d0f567b5')
+  @4450m Z=2.05 ('massif:3d9f7631f951', '', '', 'valley:a6f5d0f567b5') -> ('massif:3d9f7631f951', '', '', 'valley:64ebf2d5b584')
+  @5350m Z=2.05 ('massif:3d9f7631f951', '', '', 'valley:64ebf2d5b584') -> ('', '', '', 'valley:64ebf2d5b584')
+  @5500m Z=2.05 ('', '', '', 'valley:64ebf2d5b584') -> ('massif:645ed4e2c94b', '', '', 'valley:64ebf2d5b584')
+  @6150m Z=2.05 ('massif:645ed4e2c94b', '', '', 'valley:64ebf2d5b584') -> ('massif:645ed4e2c94b', '', '', 'valley:d82a0deb2c4b')
+  @7000m Z=2.05 ('massif:645ed4e2c94b', '', '', 'valley:d82a0deb2c4b') -> ('', '', '', 'valley:d82a0deb2c4b')
+  @8200m Z=2.05 ('', '', '', 'valley:d82a0deb2c4b') -> ('', '', '', 'valley:3624a21b124c')
+
+========== PROPOSED SEAM (not yet implemented) ==========
+Keep SampleGrade / SharpFromFeatures / kGradeMinMax / _grade_at UNCHANGED
+(MW8 ecology + carrier cert stay in grade domain).
+New explicit metre composition:
+  TerrainElevationComponents { regional_z, massif_z, peak_z, ridge_z,
+    saddle_z, spur_z, valley_z, local_z }
+  FinalSurfaceZ = sum(components)   // independently scaled
+  SampleZ := compose  (NOT GradeToZ(SampleGrade))
+Scales (m per existing grade-unit amplitude):
+  regional/local smooth residual: 8 m/grade (current, metres-tens)
+  massif: ~1800 m/unit  (lift 0.25 -> ~450 m envelope)
+  peak:   ~720 m/unit   (prom 0.60 -> ~430 m summit add)
+  ridge:  ~380 m/unit   (crest 0.35 -> ~130 m)
+  spur:   ~220 m/unit
+  saddle: relative fraction of local peak+ridge metres + neck
+  valley: explicit incision from valley/drainage IDs (topology), not Z<sea
+Profile functions: anisotropic peak (massif trend + id skew), ridge
+cross-section sharp-crest/concave-shoulder with end-tapered width.
+No new noise. No global grade multiply. Sea stays PresentationSeaZ=0.
+Lowland = no massif/peak/ridge coverage -> only regional+local metres.

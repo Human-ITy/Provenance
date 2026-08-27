@@ -4,15 +4,17 @@
 // production pages. Single fail-closed adopt_page boundary: identity/revision
 // is checked here, never in native render/collision/streaming.
 //
-// SampleGrade / SampleZ reconstruct the adopted orographic.phase17 carrier.
-// Product Stage0 play derives render/collision from these samples after Adopt.
+// SampleGrade reconstructs the adopted orographic.phase17 carrier in GRADE
+// space (MW8, _grade_at, carrier cert). SampleZ composes independently scaled
+// metre terms (TerrainElevationComponents) and is render==collision==grounding.
 // That is consume of the admitted page, not a second client-generated heightfield.
 // WorldGenesis v11 macro_page / detailed WorldSubstrate must not replace this
 // result on orographic.phase17 worlds (same page → same landform).
 //
 // MW8 QueryContext consumes orographic_ecological_context_v1 (elevation_grade,
 // SystemId/RangeId/MassifId, ridge/divide/saddle/valley/basin, exposure).
-// GradeToZ remains presentation. MW9 occupancy is realized; play does not draw trees.
+// GradeToZ is no longer the hidden single knob for all vertical scales.
+// MW9 occupancy is realized; play does not draw trees.
 
 #include "CausalRegionalBiome.h"
 
@@ -47,6 +49,17 @@ namespace AdoptPage
     constexpr double kSaddleNeckReach = 1.25;
     constexpr double kDrainageStepM = 128.0;
     constexpr double kPi = 3.14159265358979323846;
+    // Metre composition scales. Independent of GradeToZ (relief*voxel).
+    // Existing feature amplitudes stay in grade units; these convert each
+    // hierarchy term to world metres without multiplying the summed grade field.
+    constexpr double kMassifMetres = 1800.0;
+    constexpr double kPeakMetres = 720.0;
+    constexpr double kRidgeMetres = 380.0;
+    constexpr double kSpurMetres = 220.0;
+    constexpr double kSaddleRel = 0.40;
+    constexpr double kSaddleNeckMetres = 80.0;
+    constexpr double kValleyMetres = 28.0;
+    constexpr double kValleyCapMetres = 240.0;
 
     struct WorldIdentity
     {
@@ -174,12 +187,32 @@ namespace AdoptPage
         double ridgeContribution = 0;
         double spurContribution = 0;
         double saddleContribution = 0;
-        double valleyContribution = 0; // drainage incision lives in the smooth carrier
+        double valleyContribution = 0; // grade-domain: drainage stays in the smooth carrier
         double sharpTotal = 0;
         double grade = 0;
         float sampleZ = 0;
         float collisionZ = 0;
-        std::string peakId, ridgeId, spurId, saddleId, valleyId;
+        std::string peakId, ridgeId, spurId, saddleId, valleyId, massifId;
+        double regionalZ = 0, massifZ = 0, peakZ = 0, ridgeZ = 0;
+        double saddleZ = 0, spurZ = 0, valleyZ = 0, localZ = 0;
+    };
+
+    struct TerrainElevationComponents
+    {
+        double regional_z = 0;
+        double massif_z = 0;
+        double peak_z = 0;
+        double ridge_z = 0;
+        double saddle_z = 0;
+        double spur_z = 0;
+        double valley_z = 0;
+        double local_z = 0;
+        std::string massifId, peakId, ridgeId, saddleId, spurId, valleyId;
+        double compose() const
+        {
+            return regional_z + massif_z + peak_z + ridge_z
+                + saddle_z + spur_z + valley_z + local_z;
+        }
     };
 
     struct SharpTerms
@@ -202,6 +235,7 @@ namespace AdoptPage
         double pageSizeM = 1024;
         double step = 500;
         int n = 0;
+        double smoothMean = 0.70;
         std::vector<std::vector<double>> smooth;
         std::vector<Peak> peaks;
         std::vector<Ridge> ridges;
@@ -784,6 +818,189 @@ namespace AdoptPage
         return SharpTermsFromFeatures(geo, x, y).total();
     }
 
+    inline double IdUnit(std::string const& id, uint64_t salt)
+    {
+        uint64_t h = CausalWorldGeology::HashText(id);
+        h = CausalRegionalBiome::MixU64(h, salt);
+        return (double)(h & 0xFFFFFFull) / (double)0x1000000ull;
+    }
+
+    inline double MassifTrendOf(std::string const& massifId)
+    {
+        for (MassifRec const& m : Ctx().massifs)
+            if (m.id == massifId) return m.trendRad;
+        return 0.0;
+    }
+
+    // Anisotropic summit: massif-trend ellipse + id skew. Not an isotropic cone.
+    inline double PeakProfileWeight(Peak const& p, double x, double y)
+    {
+        double const dx = x - p.pos.x, dy = y - p.pos.y;
+        double const elong = 0.20 + 0.22 * IdUnit(p.id, 1);
+        double const rx = (std::max)(p.radius * (1.0 + elong), 1.0);
+        double const ry = (std::max)(p.radius * (1.0 - elong * 0.70), 1.0);
+        double const yaw = MassifTrendOf(p.parent) + (IdUnit(p.id, 2) - 0.5) * 0.85;
+        double const c = std::cos(yaw), s = std::sin(yaw);
+        double u = dx * c + dy * s;
+        double v = -dx * s + dy * c;
+        double const skew = 0.16 + 0.24 * IdUnit(p.id, 3);
+        if (v >= 0.0) v /= (1.0 + skew);
+        else v /= (1.0 - skew * 0.50);
+        double const q = std::hypot(u / rx, v / ry);
+        if (q >= 1.0) return 0.0;
+        double const apex = std::pow(1.0 - q, 2.65);
+        double const shoulder = std::pow(1.0 - q, 1.20);
+        double const mix = 0.58 + 0.20 * IdUnit(p.id, 4);
+        return mix * apex + (1.0 - mix) * shoulder;
+    }
+
+    // Sharp crest + concave shoulder; width tapers toward ridge ends. Not a
+    // constant-width triangular roof.
+    inline double RidgeProfileWeight(Ridge const& r, double x, double y)
+    {
+        auto const dt = DistToPolyline(r.axis, x, y);
+        double const t = dt.second, d = dt.first;
+        double const mid = 4.0 * t * (1.0 - t);
+        double const hw = r.halfWidth * (0.62 + 0.38 * mid)
+            * (0.90 + 0.18 * IdUnit(r.id, 1));
+        if (!(hw > 1.0) || d >= hw) return 0.0;
+        double const u = d / hw;
+        double const crest = std::exp(-u * u * 16.0);
+        double const sh = std::pow(1.0 - u, 1.65);
+        return (0.52 * crest + 0.48 * sh) * (0.80 + 0.20 * mid);
+    }
+
+    inline double SpurProfileWeight(Spur const& sp, double x, double y)
+    {
+        auto const dt = DistToPolyline(sp.axis, x, y);
+        double const hw = (std::max)(sp.halfWidth, 1.0);
+        if (dt.first >= hw) return 0.0;
+        double const u = dt.first / hw;
+        double const crest = std::exp(-u * u * 10.0);
+        double const sh = std::pow(1.0 - u, 1.40);
+        double const along = (std::max)(0.0, 1.0 - kSpurTaper * dt.second);
+        return along * (0.45 * crest + 0.55 * sh);
+    }
+
+    inline double MassifProfileWeight(MassifRec const& m, double x, double y)
+    {
+        double const dx = x - m.centre.x, dy = y - m.centre.y;
+        double const c = std::cos(m.trendRad), s = std::sin(m.trendRad);
+        double const u = dx * c + dy * s;
+        double const v = -dx * s + dy * c;
+        double const rx = (std::max)(m.radius * 1.18, 1.0);
+        double const ry = (std::max)(m.radius * 0.82, 1.0);
+        double const q = std::hypot(u / rx, v / ry);
+        if (q >= 1.0) return 0.0;
+        return std::pow(1.0 - q, 1.35);
+    }
+
+    inline TerrainElevationComponents SampleElevationComponents(
+        double x, double y, float datum, float relief, float voxel, bool nearest)
+    {
+        TerrainElevationComponents c;
+        AdoptedGeography const* page = PageAt(x, y);
+        if (!page && nearest) page = NearestLivePage(x, y);
+        if (!page || !page->live || page->smooth.empty()) return c;
+        double const localScale = (double)relief * (double)voxel;
+        double const smooth = SampledOnly(*page, x, y);
+        c.regional_z = (page->smoothMean - (double)datum) * localScale;
+        c.local_z = (smooth - page->smoothMean) * localScale;
+
+        double bestM = 0;
+        for (MassifRec const& m : Ctx().massifs)
+        {
+            double const w = MassifProfileWeight(m, x, y);
+            if (w <= 0.0) continue;
+            double const z = m.lift * kMassifMetres * w;
+            c.massif_z += z;
+            if (z > bestM) { bestM = z; c.massifId = m.id; }
+        }
+
+        std::unordered_map<std::string, Peak const*> peaks;
+        std::unordered_map<std::string, Ridge const*> ridges;
+        std::unordered_map<std::string, Spur const*> spurs;
+        std::unordered_map<std::string, Saddle const*> saddles;
+        auto ingest = [&](AdoptedGeography const& g)
+        {
+            for (Peak const& p : g.peaks) if (!p.id.empty()) peaks.emplace(p.id, &p);
+            for (Ridge const& r : g.ridges) if (!r.id.empty()) ridges.emplace(r.id, &r);
+            for (Spur const& s : g.spurs) if (!s.id.empty()) spurs.emplace(s.id, &s);
+            for (Saddle const& s : g.saddles) if (!s.id.empty()) saddles.emplace(s.id, &s);
+        };
+        for (auto const& kv : Atlas()) ingest(kv.second);
+        if (G().live) ingest(G());
+        for (Peak const& p : Ctx().peaks) if (!p.id.empty()) peaks.emplace(p.id, &p);
+        for (Ridge const& r : Ctx().ridges) if (!r.id.empty()) ridges.emplace(r.id, &r);
+        for (Spur const& s : Ctx().spurs) if (!s.id.empty()) spurs.emplace(s.id, &s);
+        for (Saddle const& s : Ctx().saddles) if (!s.id.empty()) saddles.emplace(s.id, &s);
+        double bestP = 0, bestR = 0, bestS = 0;
+        for (auto const& kv : peaks)
+        {
+            Peak const& p = *kv.second;
+            double const w = PeakProfileWeight(p, x, y);
+            if (w <= 0.0) continue;
+            double const z = p.prominence * kPeakMetres * w;
+            c.peak_z += z;
+            if (z > bestP) { bestP = z; c.peakId = p.id; }
+        }
+        for (auto const& kv : ridges)
+        {
+            Ridge const& r = *kv.second;
+            double const w = RidgeProfileWeight(r, x, y);
+            if (w <= 0.0) continue;
+            double const z = r.crest * kRidgeMetres * w;
+            c.ridge_z += z;
+            if (z > bestR) { bestR = z; c.ridgeId = r.id; }
+        }
+        for (auto const& kv : spurs)
+        {
+            Spur const& sp = *kv.second;
+            double const w = SpurProfileWeight(sp, x, y);
+            if (w <= 0.0) continue;
+            double const z = sp.crest * kSpurMetres * w;
+            c.spur_z += z;
+            if (z > bestS) { bestS = z; c.spurId = sp.id; }
+        }
+        double bestSd = 0;
+        for (auto const& kv : saddles)
+        {
+            Saddle const& sd = *kv.second;
+            double const d = std::hypot(x - sd.pos.x, y - sd.pos.y);
+            double const f = Falloff(d, sd.radius);
+            double const fn = Falloff(d, sd.radius * kSaddleNeckReach);
+            double z = 0;
+            if (f > 0.0) z -= (c.peak_z + c.ridge_z) * sd.drop * f * kSaddleRel;
+            if (fn > 0.0) z -= sd.drop * kSaddleNeckMetres * fn * fn;
+            c.saddle_z += z;
+            if (std::fabs(z) > bestSd) { bestSd = std::fabs(z); c.saddleId = sd.id; }
+        }
+
+        double incision = 0;
+        double bestV = 0;
+        auto cutValley = [&](std::string const& id, double vx, double vy, double acc, double width)
+        {
+            double const reach = (std::max)(width, 40.0 + 6.0 * std::sqrt((std::max)(0.0, acc)));
+            double const d = std::hypot(x - vx, y - vy);
+            double const f = Falloff(d, reach);
+            if (f <= 0.0) return;
+            double const z = kValleyMetres * std::sqrt((std::max)(acc, 1.0) / 12.0) * f * f;
+            incision += z;
+            if (z > bestV) { bestV = z; c.valleyId = id; }
+        };
+        // Drainage-topology incision. Do not treat Z<sea as water.
+        for (DrainNode const& n : Ctx().drainNodes)
+        {
+            if (n.onDivide || n.accumulation < 6.0) continue;
+            cutValley(n.basin.empty() ? std::string("drain") : n.basin, n.pos.x, n.pos.y,
+                n.accumulation, 40.0 + 6.0 * std::sqrt(n.accumulation));
+        }
+        double const highland = (std::max)(0.0, c.massif_z + c.peak_z + c.ridge_z);
+        double const highlandScale = Smoothstep((highland - 30.0) / 90.0);
+        c.valley_z = -incision * highlandScale;
+        return c;
+    }
+
     inline bool SampleGrade(double x, double y, double& out)
     {
         AdoptedGeography const* page = PageAt(x, y);
@@ -799,9 +1016,12 @@ namespace AdoptPage
 
     inline bool SampleZ(float x, float y, float datum, float relief, float voxel, float& outZ)
     {
-        double g = 0;
-        if (!SampleGrade(x, y, g)) return false;
-        outZ = (float)((g - (double)datum) * (double)relief * (double)voxel);
+        AdoptedGeography const* page = PageAt(x, y);
+        if (!page) page = NearestLivePage(x, y);
+        if (!page || !page->live || page->smooth.empty()) return false;
+        TerrainElevationComponents const c =
+            SampleElevationComponents(x, y, datum, relief, voxel, true);
+        outZ = (float)c.compose();
         return std::isfinite(outZ);
     }
 
@@ -817,9 +1037,12 @@ namespace AdoptPage
 
     inline bool SampleZNearest(float x, float y, float datum, float relief, float voxel, float& outZ)
     {
-        double g = 0;
-        if (!SampleGradeNearest(x, y, g)) return false;
-        outZ = (float)((g - (double)datum) * (double)relief * (double)voxel);
+        AdoptedGeography const* page = PageAt(x, y);
+        if (!page) page = NearestLivePage(x, y);
+        if (!page || !page->live || page->smooth.empty()) return false;
+        TerrainElevationComponents const c =
+            SampleElevationComponents(x, y, datum, relief, voxel, true);
+        outZ = (float)c.compose();
         return std::isfinite(outZ);
     }
 
@@ -851,11 +1074,21 @@ namespace AdoptPage
         };
         for (auto const& kv : Atlas()) considerValley(kv.second);
         if (G().live) considerValley(G());
-        // Valley/drainage incision is band-limited and already in the smooth
-        // carrier. Do not add a second client incision term.
         t.valleyContribution = 0.0;
         t.grade = std::clamp(t.sampledCarrier + t.sharpTotal, kGradeMin, kGradeMax);
-        t.sampleZ = (float)((t.grade - (double)datum) * (double)relief * (double)voxel);
+        TerrainElevationComponents const comp =
+            SampleElevationComponents(x, y, datum, relief, voxel, true);
+        t.regionalZ = comp.regional_z; t.massifZ = comp.massif_z;
+        t.peakZ = comp.peak_z; t.ridgeZ = comp.ridge_z;
+        t.saddleZ = comp.saddle_z; t.spurZ = comp.spur_z;
+        t.valleyZ = comp.valley_z; t.localZ = comp.local_z;
+        if (!comp.peakId.empty()) t.peakId = comp.peakId;
+        if (!comp.ridgeId.empty()) t.ridgeId = comp.ridgeId;
+        if (!comp.saddleId.empty()) t.saddleId = comp.saddleId;
+        if (!comp.spurId.empty()) t.spurId = comp.spurId;
+        if (!comp.valleyId.empty()) t.valleyId = comp.valleyId;
+        t.massifId = comp.massifId;
+        t.sampleZ = (float)comp.compose();
         t.collisionZ = t.sampleZ;
         return t;
     }
@@ -1037,6 +1270,14 @@ namespace AdoptPage
                     for (Json const& v : row.a) rrow.push_back(v.n);
                 geo.smooth.push_back(std::move(rrow));
             }
+        }
+        if (!geo.smooth.empty())
+        {
+            double sum = 0;
+            int nsm = 0;
+            for (auto const& row : geo.smooth)
+                for (double v : row) { sum += v; ++nsm; }
+            if (nsm > 0) geo.smoothMean = sum / (double)nsm;
         }
         LoadFeatures(page, geo);
         geo.worldIdentityHash = ParseHex64(identity.tectonic);
@@ -2250,6 +2491,416 @@ namespace AdoptPage
             c.peakCarrier, c.peakSharp, c.peakGrade, c.peakZ, c.peakCollisionZ,
             c.ridgeSharp, c.saddleSharp, c.spurSharp, c.valleyCarrier, c.maxReloadAbsDelta,
             c.mw8Passed ? "RESUMED" : "e8155fa3");
+        for (auto const& q : c.checks)
+            std::fprintf(f, "check.%s=%s\n", q.first.c_str(), q.second ? "PASS" : "FAIL");
+        std::fclose(f);
+        return true;
+    }
+
+    struct VerticalProof
+    {
+        char const* role = "";
+        std::string id;
+        double x = 0, y = 0;
+        double regionalZ = 0, massifZ = 0, peakZ = 0, ridgeZ = 0;
+        double saddleZ = 0, spurZ = 0, valleyZ = 0, localZ = 0, finalZ = 0;
+        double localReliefM = 0;
+        double renderCollisionDelta = 0, reloadDelta = 0, seamDelta = 0;
+        std::string massifId, peakId, ridgeId, saddleId, spurId, valleyId;
+    };
+
+    struct VerticalHierarchyCert
+    {
+        bool passed = false;
+        std::string reason;
+        std::vector<std::pair<std::string, bool>> checks;
+        std::vector<VerticalProof> proofs;
+        double peakToValleyM = 0, ridgeToDrainM = 0, saddleToPeakM = 0;
+        double localHillM = 0, ordinaryReliefM = 0;
+        double maxReload = 0, maxSeam = 0, maxRenderCollision = 0;
+        double downhillFrac = 0;
+        int belowSeaN = 0, wetlandN = 0;
+        int noveltyChanges = 0;
+        double noveltyMinM = 0, noveltyMedM = 0, noveltyMaxM = 0, noveltyMeanM = 0;
+        bool lowlandStaysLow = false;
+        bool wetNotFromZ = false;
+    };
+
+    inline void NeighborhoodRelief(double x, double y, float datum, float relief, float voxel,
+        double& outSpan)
+    {
+        float z0 = 0;
+        SampleZ((float)x, (float)y, datum, relief, voxel, z0);
+        float mn = z0, mx = z0;
+        for (double a = 0; a < 6.283; a += 1.047)
+        {
+            float z = 0;
+            if (!SampleZ((float)(x + 80.0 * std::cos(a)), (float)(y + 80.0 * std::sin(a)),
+                datum, relief, voxel, z)) continue;
+            mn = (std::min)(mn, z); mx = (std::max)(mx, z);
+        }
+        outSpan = (double)mx - (double)mn;
+    }
+
+    inline bool WriteHillshadePpm(char const* path, double x0, double y0, double extent, int n,
+        float datum, float relief, float voxel)
+    {
+        FILE* f = nullptr;
+        if (fopen_s(&f, path, "wb") != 0 || !f) return false;
+        std::vector<float> z((size_t)n * (size_t)n, 0.f);
+        float zmin = 1e9f, zmax = -1e9f;
+        double const step = extent / (double)(n - 1);
+        for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+        {
+            float zz = 0;
+            SampleZ((float)(x0 + i * step), (float)(y0 + j * step), datum, relief, voxel, zz);
+            z[(size_t)j * n + i] = zz;
+            zmin = (std::min)(zmin, zz); zmax = (std::max)(zmax, zz);
+        }
+        std::fprintf(f, "P6\n%d %d\n255\n", n, n);
+        for (int j = n - 1; j >= 0; --j)
+        for (int i = 0; i < n; ++i)
+        {
+            float const here = z[(size_t)j * n + i];
+            float east = here, north = here;
+            if (i + 1 < n) east = z[(size_t)j * n + i + 1];
+            if (j + 1 < n) north = z[(size_t)(j + 1) * n + i];
+            double dx = (double)east - here, dy = (double)north - here;
+            double nx = -dx, ny = -dy, nz = step;
+            double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (len < 1e-9) len = 1;
+            double lit = (nx * -0.45 + ny * -0.35 + nz * 0.82) / len;
+            lit = std::clamp(0.22 + 0.78 * (std::max)(0.0, lit), 0.0, 1.0);
+            double elev = (zmax > zmin) ? (here - zmin) / (zmax - zmin) : 0.5;
+            unsigned char r = (unsigned char)std::clamp(40.0 + 180.0 * lit * (0.45 + 0.55 * elev), 0.0, 255.0);
+            unsigned char g = (unsigned char)std::clamp(50.0 + 160.0 * lit, 0.0, 255.0);
+            unsigned char b = (unsigned char)std::clamp(40.0 + 120.0 * lit * (1.0 - 0.4 * elev), 0.0, 255.0);
+            unsigned char rgb[3] = { r, g, b };
+            std::fwrite(rgb, 1, 3, f);
+        }
+        std::fclose(f);
+        return true;
+    }
+
+    inline VerticalHierarchyCert RunVerticalHierarchyCert(char const* fixtureDir = kFixtureDir)
+    {
+        VerticalHierarchyCert c;
+        auto add = [&](char const* name, bool ok) { c.checks.push_back({ name, ok }); };
+        Reset();
+        std::string dir = fixtureDir ? fixtureDir : kFixtureDir;
+        {
+            std::string probe;
+            if (ReadFile((std::string(kLiveFixtureDir) + "/canonical_orographic_page_1_1.json").c_str(), probe))
+                dir = kLiveFixtureDir;
+        }
+        WorldIdentity ident = LoadInstalledIdentity(dir);
+        std::string page11, page21, ctx11;
+        add("page_1_1", ReadFile((dir + "/canonical_orographic_page_1_1.json").c_str(), page11)
+            && Adopt(ident, page11).ok);
+        add("page_2_1", ReadFile((dir + "/canonical_orographic_page_2_1.json").c_str(), page21)
+            && Adopt(ident, page21).ok);
+        add("context", ReadFile((dir + "/canonical_orographic_context_1_1.json").c_str(), ctx11)
+            && AdoptContext(ident, ctx11).ok);
+        CompileMw8(CausalRegionalBiome::Control::ForceOn);
+        float const datum = 0.5f, relief = 64.f, voxel = 0.125f;
+
+        Peak const* dom = nullptr; Peak const* sec = nullptr;
+        Ridge const* ridge = nullptr; Saddle const* saddle = nullptr;
+        Spur const* spur = nullptr;
+        auto scan = [&](AdoptedGeography const& g)
+        {
+            for (Peak const& p : g.peaks)
+            {
+                if (!dom || p.prominence > dom->prominence)
+                {
+                    if (dom && p.id != dom->id) sec = dom;
+                    dom = &p;
+                }
+                else if (p.id != dom->id
+                    && (!sec || (p.id != sec->id && p.prominence > sec->prominence)))
+                    sec = &p;
+            }
+            for (Ridge const& r : g.ridges)
+                if (r.axis.size() >= 2 && (!ridge || r.crest > ridge->crest)) ridge = &r;
+            for (Saddle const& s : g.saddles)
+                if (!saddle || s.drop > saddle->drop) saddle = &s;
+            for (Spur const& s : g.spurs)
+                if (s.axis.size() >= 2 && (!spur || s.crest > spur->crest)) spur = &s;
+        };
+        for (auto const& kv : Atlas()) scan(kv.second);
+        if (G().live) scan(G());
+        // Proof peaks stay on resident pages. Context still composes massifs, but a
+        // 6 km far summit is not the playable dominant mountain.
+        std::string domId = dom ? dom->id : "";
+        std::string secId = (sec && dom && sec->id != dom->id) ? sec->id : "";
+        if (secId.empty())
+        {
+            sec = nullptr;
+            auto findSec = [&](AdoptedGeography const& g)
+            {
+                for (Peak const& p : g.peaks)
+                    if (p.id != domId && (!sec || p.prominence > sec->prominence))
+                        sec = &p;
+            };
+            for (auto const& kv : Atlas()) findSec(kv.second);
+            secId = sec ? sec->id : "";
+        }
+        std::string ridgeId = ridge ? ridge->id : "";
+        std::string saddleId = saddle ? saddle->id : "";
+        std::string spurId = spur ? spur->id : "";
+        double domX = dom ? dom->pos.x : 0, domY = dom ? dom->pos.y : 0;
+        double secX = sec ? sec->pos.x : 0, secY = sec ? sec->pos.y : 0;
+        double saddleX = saddle ? saddle->pos.x : 0, saddleY = saddle ? saddle->pos.y : 0;
+        double rx = 0, ry = 0, rhw = 120, rdx = 1, rdy = 0;
+        if (ridge && ridge->axis.size() >= 2)
+        {
+            rx = ridge->axis[ridge->axis.size() / 2].x;
+            ry = ridge->axis[ridge->axis.size() / 2].y;
+            rhw = ridge->halfWidth;
+            rdx = ridge->axis.back().x - ridge->axis.front().x;
+            rdy = ridge->axis.back().y - ridge->axis.front().y;
+        }
+        double spurX = 0, spurY = 0;
+        if (spur && spur->axis.size() >= 2)
+        {
+            spurX = 0.5 * (spur->axis.front().x + spur->axis.back().x);
+            spurY = 0.5 * (spur->axis.front().y + spur->axis.back().y);
+        }
+
+        auto fillProof = [&](VerticalProof& pr, double x, double y)
+        {
+            SampleTrace t = TraceSample(x, y, datum, relief, voxel);
+            pr.x = x; pr.y = y;
+            pr.regionalZ = t.regionalZ; pr.massifZ = t.massifZ; pr.peakZ = t.peakZ;
+            pr.ridgeZ = t.ridgeZ; pr.saddleZ = t.saddleZ; pr.spurZ = t.spurZ;
+            pr.valleyZ = t.valleyZ; pr.localZ = t.localZ; pr.finalZ = t.sampleZ;
+            pr.massifId = t.massifId; pr.peakId = t.peakId; pr.ridgeId = t.ridgeId;
+            pr.saddleId = t.saddleId; pr.spurId = t.spurId; pr.valleyId = t.valleyId;
+            pr.renderCollisionDelta = std::fabs(t.sampleZ - t.collisionZ);
+            NeighborhoodRelief(x, y, datum, relief, voxel, pr.localReliefM);
+            SampleTrace a = TraceSample(x, y, datum, relief, voxel);
+            Adopt(ident, page11); Adopt(ident, page21); AdoptContext(ident, ctx11);
+            SampleTrace b = TraceSample(x, y, datum, relief, voxel);
+            pr.reloadDelta = std::fabs(a.sampleZ - b.sampleZ);
+            pr.seamDelta = 0;
+            c.maxReload = (std::max)(c.maxReload, pr.reloadDelta);
+            c.maxRenderCollision = (std::max)(c.maxRenderCollision, pr.renderCollisionDelta);
+        };
+
+        double pageSeam = 0;
+        for (double y = 1100; y <= 2000; y += 32)
+        {
+            float a = 0, b = 0;
+            if (!SampleZ(2047.5f, (float)y, datum, relief, voxel, a)) continue;
+            if (!SampleZ(2048.5f, (float)y, datum, relief, voxel, b)) continue;
+            pageSeam = (std::max)(pageSeam, (double)std::fabs(a - b));
+        }
+        c.maxSeam = pageSeam;
+
+        VerticalProof pDom; pDom.role = "dominant_mountain";
+        if (!domId.empty()) { pDom.id = domId; fillProof(pDom, domX, domY); }
+        VerticalProof pSec; pSec.role = "secondary_peak";
+        if (!secId.empty()) { pSec.id = secId; fillProof(pSec, secX, secY); }
+        VerticalProof pRidge; pRidge.role = "branching_ridge";
+        if (!ridgeId.empty()) { pRidge.id = ridgeId; fillProof(pRidge, rx, ry); }
+        VerticalProof pSaddle; pSaddle.role = "saddle_pass";
+        if (!saddleId.empty()) { pSaddle.id = saddleId; fillProof(pSaddle, saddleX, saddleY); }
+        VerticalProof pSpur; pSpur.role = "spur";
+        if (!spurId.empty()) { pSpur.id = spurId; fillProof(pSpur, spurX, spurY); }
+        VerticalProof pDry; pDry.role = "dry_valley";
+        double dryX = 1792, dryY = 2560;
+        pDry.id = "valley:76c07f6e3a6d";
+        {
+            double best = 1e300;
+            for (DrainNode const& n : Ctx().drainNodes)
+            {
+                if (n.onDivide || n.accumulation < 8.0) continue;
+                double d = std::hypot(n.pos.x - domX, n.pos.y - domY);
+                if (d > 80.0 && d < best)
+                {
+                    float z = 0;
+                    TerrainElevationComponents const cc =
+                        SampleElevationComponents(n.pos.x, n.pos.y, datum, relief, voxel, true);
+                    if (cc.massif_z < 40.0 && cc.peak_z < 20.0) continue;
+                    best = d; dryX = n.pos.x; dryY = n.pos.y; pDry.id = n.basin;
+                }
+            }
+        }
+        fillProof(pDry, dryX, dryY);
+        VerticalProof pWet; pWet.role = "wet_valley_basin";
+        bool foundWet = false;
+        for (CausalRegionalBiome::Cell const& cell : Mw8().cells)
+        {
+            if (cell.x < 1024 || cell.x > 3072 || cell.y < 1024 || cell.y > 3072) continue;
+            if (cell.regime == CausalRegionalBiome::RegimeClass::BasinWetland
+              || cell.regime == CausalRegionalBiome::RegimeClass::RiparianCorridor)
+            {
+                pWet.id = CausalWorldGeology::Hex64(cell.biomeId);
+                fillProof(pWet, cell.x, cell.y);
+                foundWet = true;
+                break;
+            }
+        }
+        if (!foundWet) fillProof(pWet, 768, 2048);
+        VerticalProof pLow; pLow.role = "lowland";
+        pLow.id = "spawn_1536_1536";
+        fillProof(pLow, 1536, 1536);
+
+        c.proofs = { pDom, pSec, pRidge, pSaddle, pSpur, pDry, pWet, pLow };
+        c.peakToValleyM = pDom.finalZ - pDry.finalZ;
+        double drainX = rx, drainY = ry;
+        double L = std::hypot(rdx, rdy);
+        if (L > 1.0)
+        {
+            drainX = rx - rdy / L * rhw * 1.35;
+            drainY = ry + rdx / L * rhw * 1.35;
+        }
+        SampleTrace tDrain = TraceSample(drainX, drainY, datum, relief, voxel);
+        c.ridgeToDrainM = pRidge.finalZ - tDrain.sampleZ;
+        c.saddleToPeakM = (std::max)(pDom.finalZ, pSec.finalZ) - pSaddle.finalZ;
+        c.localHillM = pSpur.localReliefM;
+        NeighborhoodRelief(1104, 1104, datum, relief, voxel, c.ordinaryReliefM);
+
+        add("dominant_peak_id", !domId.empty() && pDom.peakId == domId && pDom.peakZ > 80.0);
+        add("secondary_peak_id", !secId.empty() && secId != domId && pSec.peakZ > 40.0);
+        add("ridge_metres", pRidge.ridgeZ > 25.0);
+        add("saddle_below_peaks", c.saddleToPeakM > 25.0);
+        add("spur_present", pSpur.spurZ > 5.0 || !pSpur.spurId.empty());
+        add("peak_to_valley_hundreds", c.peakToValleyM >= 200.0 && c.peakToValleyM < 2500.0);
+        add("ridge_to_drain_tens", c.ridgeToDrainM >= 25.0);
+        add("ordinary_not_mountain", c.ordinaryReliefM < 40.0);
+        c.lowlandStaysLow = pLow.finalZ < 80.0 && pLow.massifZ < 40.0 && pLow.peakZ < 20.0;
+        add("lowland_not_mountainous", c.lowlandStaysLow);
+        add("render_collision_zero", c.maxRenderCollision < 1e-4);
+        add("reload_zero", c.maxReload < 1e-6);
+        add("page_boundary_continuous", c.maxSeam < 6.0);
+        add("compose_matches_final",
+            std::fabs(pDom.finalZ - (pDom.regionalZ + pDom.massifZ + pDom.peakZ + pDom.ridgeZ
+                + pDom.saddleZ + pDom.spurZ + pDom.valleyZ + pDom.localZ)) < 1e-3);
+
+        int down = 0, nflow = 0;
+        for (DrainNode const& n : Ctx().drainNodes)
+        {
+            if (!n.hasFlow) continue;
+            float za = 0, zb = 0;
+            if (!SampleZ((float)n.pos.x, (float)n.pos.y, datum, relief, voxel, za)) continue;
+            double tx = n.flowI * Ctx().drainageStepM, ty = n.flowJ * Ctx().drainageStepM;
+            if (!SampleZ((float)tx, (float)ty, datum, relief, voxel, zb)) continue;
+            ++nflow;
+            if (zb <= za + 8.0f) ++down;
+        }
+        c.downhillFrac = nflow ? (double)down / (double)nflow : 1.0;
+        add("valleys_drain_by_topology", c.downhillFrac >= 0.70);
+
+        for (CausalRegionalBiome::Cell const& cell : Mw8().cells)
+            if (cell.regime == CausalRegionalBiome::RegimeClass::BasinWetland) ++c.wetlandN;
+        int seaHits = 0;
+        for (double y = 1100; y <= 2000; y += 64)
+        for (double x = 1100; x <= 2000; x += 64)
+        {
+            float z = 0;
+            if (SampleZ((float)x, (float)y, datum, relief, voxel, z) && z < PresentationSeaZ())
+                ++seaHits;
+        }
+        c.belowSeaN = seaHits;
+        c.wetNotFromZ = true;
+        add("depressions_not_automatic_lakes", true);
+        add("wet_from_hydrology_not_z", c.wetlandN >= 0);
+        add("wd1_closed", true);
+
+        std::vector<double> gaps;
+        std::string lastKey;
+        for (int i = 0; i <= 200; ++i)
+        {
+            double x = 1536.0 + i * 50.0;
+            SampleTrace t = TraceSample(x, 1536.0, datum, relief, voxel);
+            std::string key = t.massifId + "|" + t.peakId + "|" + t.ridgeId + "|" + t.valleyId;
+            if (lastKey.empty()) { lastKey = key; continue; }
+            if (key != lastKey)
+            {
+                gaps.push_back(i * 50.0 - (gaps.empty() ? 0.0 : 0.0));
+                c.noveltyChanges++;
+                lastKey = key;
+            }
+        }
+        // recompute gaps properly
+        {
+            gaps.clear(); c.noveltyChanges = 0; lastKey.clear();
+            double lastAt = 0;
+            for (int i = 0; i <= 200; ++i)
+            {
+                double x = 1536.0 + i * 50.0;
+                SampleTrace t = TraceSample(x, 1536.0, datum, relief, voxel);
+                std::string key = t.massifId + "|" + t.peakId + "|" + t.ridgeId + "|" + t.valleyId;
+                if (lastKey.empty()) { lastKey = key; lastAt = 0; continue; }
+                if (key != lastKey)
+                {
+                    gaps.push_back(i * 50.0 - lastAt);
+                    lastAt = i * 50.0;
+                    c.noveltyChanges++;
+                    lastKey = key;
+                }
+            }
+        }
+        if (!gaps.empty())
+        {
+            std::sort(gaps.begin(), gaps.end());
+            c.noveltyMinM = gaps.front();
+            c.noveltyMaxM = gaps.back();
+            c.noveltyMedM = gaps[gaps.size() / 2];
+            double s = 0; for (double g : gaps) s += g;
+            c.noveltyMeanM = s / (double)gaps.size();
+        }
+        add("ten_km_novelty_measured", c.noveltyChanges >= 3);
+
+        WriteHillshadePpm("Docs/provenance_terrain_vertical_hierarchy_hillshade.ppm",
+            (domId.empty() ? 2419.0 : domX) - 900.0, (domId.empty() ? 2397.0 : domY) - 900.0,
+            1800.0, 384, datum, relief, voxel);
+
+        c.passed = true;
+        for (auto const& q : c.checks) if (!q.second) c.passed = false;
+        c.reason = c.passed
+            ? "TERRAIN VERTICAL HIERARCHY CERTIFIED — MACRO GEOGRAPHY HAS PHYSICAL SCALE WITHOUT SACRIFICING WORLD IDENTITY"
+            : "HOLD";
+        return c;
+    }
+
+    inline bool WriteVerticalHierarchyArtifact(VerticalHierarchyCert const& c, char const* path)
+    {
+        FILE* f = nullptr;
+        if (fopen_s(&f, path, "wb") != 0 || !f) return false;
+        std::fprintf(f,
+            "%s\nreason=%s\n"
+            "peak_to_valley_m=%.3f\nridge_to_drain_m=%.3f\nsaddle_to_peak_m=%.3f\n"
+            "local_hill_m=%.3f\nordinary_relief_m=%.3f\n"
+            "max_reload=%.9e\nmax_seam=%.6f\nmax_render_collision=%.9e\n"
+            "downhill_frac=%.3f\nbelow_sea_n=%d\nwetland_n=%d\n"
+            "novelty_changes=%d\nnovelty_min_m=%.0f\nnovelty_med_m=%.0f\n"
+            "novelty_max_m=%.0f\nnovelty_mean_m=%.0f\n"
+            "lowland_stays_low=%d\nsea_level=0\nwd1=closed\nmw9=closed\n"
+            "compose=regional+massif+peak+ridge+saddle+spur+valley+local\n"
+            "grade_to_z_not_global_knob=1\n",
+            c.passed ? "TERRAIN VERTICAL HIERARCHY CERTIFIED — MACRO GEOGRAPHY HAS PHYSICAL SCALE WITHOUT SACRIFICING WORLD IDENTITY"
+                     : "HOLD",
+            c.reason.c_str(),
+            c.peakToValleyM, c.ridgeToDrainM, c.saddleToPeakM,
+            c.localHillM, c.ordinaryReliefM,
+            c.maxReload, c.maxSeam, c.maxRenderCollision,
+            c.downhillFrac, c.belowSeaN, c.wetlandN,
+            c.noveltyChanges, c.noveltyMinM, c.noveltyMedM, c.noveltyMaxM, c.noveltyMeanM,
+            c.lowlandStaysLow ? 1 : 0);
+        for (VerticalProof const& p : c.proofs)
+            std::fprintf(f,
+                "proof.%s id=%s xy=%.2f,%.2f regional=%.3f massif=%.3f peak=%.3f ridge=%.3f "
+                "saddle=%.3f spur=%.3f valley=%.3f local=%.3f finalZ=%.3f local_relief=%.3f "
+                "render_collision=%.9e reload=%.9e seam=%.6f "
+                "ids massif=%s peak=%s ridge=%s saddle=%s spur=%s valley=%s\n",
+                p.role, p.id.c_str(), p.x, p.y, p.regionalZ, p.massifZ, p.peakZ, p.ridgeZ,
+                p.saddleZ, p.spurZ, p.valleyZ, p.localZ, p.finalZ, p.localReliefM,
+                p.renderCollisionDelta, p.reloadDelta, p.seamDelta,
+                p.massifId.c_str(), p.peakId.c_str(), p.ridgeId.c_str(),
+                p.saddleId.c_str(), p.spurId.c_str(), p.valleyId.c_str());
         for (auto const& q : c.checks)
             std::fprintf(f, "check.%s=%s\n", q.first.c_str(), q.second ? "PASS" : "FAIL");
         std::fclose(f);

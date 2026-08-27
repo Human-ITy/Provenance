@@ -1981,6 +1981,11 @@ namespace
         // Fixed-seed native proof that one v11 caused mountain system survives
         // authority packaging, page refinement, projection, and player support.
         bool certStage0Orographic = false;
+        bool certTerrainVerticalHierarchy = false;
+        int certTvhPhase = 0;
+        int certTvhStation = 0;
+        int certTvhSettle = 0;
+        bool certTvhNumbersPassed = false;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2663,6 +2668,7 @@ namespace
     void DrawStage0OrographicDebugHud( int w, int h );
     void InvalidateOrographicProjectionPage( int ri, int rj );
     void Stage0OrographicCertTick();
+    void TerrainVerticalHierarchyCertTick();
     void WorldgenPlayShutdown();
     void UpdateAim();
     bool TryPickupGallerySample();
@@ -23668,6 +23674,97 @@ namespace
                 if(!have||z<outZ){have=true;outZ=z;outAlong=t;}
             }
             return have;
+        }
+    }
+
+    void TerrainVerticalHierarchyCertTick()
+    {
+        if (!g.certTerrainVerticalHierarchy || !g.playWorldgenInitialized) return;
+        static AdoptPage::VerticalHierarchyCert numbers;
+        struct Shot { char const* name; float x, y, extraZ, yaw, pitch; };
+        static Shot const shots[] = {
+            { "lowland_ground", 1536.f, 1536.f, 0.f, 0.55f, -0.10f },
+            { "lowland_air", 1536.f, 1536.f, 220.f, 0.55f, -0.82f },
+            { "dominant_peak_ground", 2419.87f, 2397.74f, 0.f, 2.45f, -0.12f },
+            { "dominant_peak_air", 2419.87f, 2397.74f, 480.f, 2.45f, -0.70f },
+            { "secondary_peak_ground", 2453.98f, 2160.66f, 0.f, 0.35f, -0.10f },
+            { "branching_ridge_air", 2536.6f, 1930.6f, 260.f, 1.15f, -0.52f },
+            { "saddle_pass_ground", 2503.94f, 2279.76f, 0.f, 3.40f, -0.14f },
+            { "spur_ground", 2415.1f, 1801.2f, 0.f, 0.85f, -0.10f },
+            { "dry_valley_ground", 1792.f, 2560.f, 0.f, 1.05f, -0.12f },
+            { "wet_valley_ground", 768.f, 2048.f, 0.f, 0.40f, -0.10f },
+            { "overview_flight", 2300.f, 2200.f, 720.f, 0.95f, -0.78f },
+        };
+        constexpr int kShotN = (int)(sizeof(shots) / sizeof(shots[0]));
+        if (g.certTvhPhase == 0)
+        {
+            if (!AdoptPage::IsLive())
+                AdoptPage::AdoptCanonicalFixture();
+            std::string page21;
+            AdoptPage::WorldIdentity ident = AdoptPage::G().identity;
+            if (AdoptPage::ReadFile(
+                (std::string(AdoptPage::kLiveFixtureDir) + "/canonical_orographic_page_2_1.json").c_str(), page21)
+              || AdoptPage::ReadFile(
+                (std::string(AdoptPage::kFixtureDir) + "/canonical_orographic_page_2_1.json").c_str(), page21))
+                AdoptPage::Adopt(ident, page21);
+            numbers = AdoptPage::RunVerticalHierarchyCert();
+            AdoptPage::WriteVerticalHierarchyArtifact(numbers,
+                "Docs\\provenance_terrain_vertical_hierarchy_cert.txt");
+            g.certTvhNumbersPassed = numbers.passed;
+            g.walkMode = false; g.grounded = false; g.ei3LandingIntent = false;
+            g.certTvhStation = 0; g.certTvhSettle = 0; g.certTvhPhase = 1;
+            return;
+        }
+        if (g.certTvhPhase == 1)
+        {
+            Shot const& s = shots[g.certTvhStation];
+            g.stage0ToolGeologyCutaway = false; g.stage0ToolRuler = false;
+            g.stage0ToolPalette = false; g.stage0StageMenuOpen = false;
+            g.walkMode = false; g.grounded = false; g.ei3LandingIntent = false;
+            g.feetX = s.x; g.feetY = s.y; g.camX = s.x; g.camY = s.y;
+            g.playerX = (int)std::floor(s.x); g.playerY = (int)std::floor(s.y);
+            FollowStreamCenter();
+            float ground = 0.f;
+            if (!AdoptPage::SampleZ(s.x, s.y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM, ground))
+                AdoptPage::SampleZNearest(s.x, s.y, g.gradeDatum, g.reliefVoxels, g.voxelEdgeM, ground);
+            g.camZ = ground + (s.extraZ > 0.5f ? s.extraZ : kEyeHeightM);
+            g.feetZ = g.camZ - kEyeHeightM;
+            g.yaw = s.yaw; g.pitch = s.pitch;
+            if (++g.certTvhSettle < 50) return;
+            char path[160];
+            std::snprintf(path, sizeof(path),
+                "Docs\\provenance_terrain_vertical_hierarchy_%02d_%s.ppm",
+                g.certTvhStation, s.name);
+            DumpFramePpm(path);
+            ++g.certTvhStation; g.certTvhSettle = 0;
+            if (g.certTvhStation >= kShotN) g.certTvhPhase = 2;
+            return;
+        }
+        if (g.certTvhPhase == 2)
+        {
+            FILE* f = nullptr;
+            if (fopen_s(&f, "Docs\\provenance_terrain_vertical_hierarchy_screenshots.txt", "wb") == 0 && f)
+            {
+                std::fprintf(f,
+                    "player_view_screenshots\n"
+                    "00 lowland_ground: spawn 1536,1536 standing, lowland dirt/hillshade, not a mountain.\n"
+                    "01 lowland_air: same place, 220 m up, confirms the basin stays low vs distant massifs.\n"
+                    "02 dominant_peak_ground: standing on peak:528686ea260b.\n"
+                    "03 dominant_peak_air: free-flight above the same summit, envelope + shoulders.\n"
+                    "04 secondary_peak_ground: peak:c38f65afd5ad.\n"
+                    "05 branching_ridge_air: ridge:a1a9bec18891 crest from the air.\n"
+                    "06 saddle_pass_ground: saddle:21d1b520c4c8 between neighboring peaks.\n"
+                    "07 spur_ground: spur:48af7f5caf02 descending flank.\n"
+                    "08 dry_valley_ground: valley:76c07f6e3a6d floor, drained, not a lake.\n"
+                    "09 wet_valley_ground: hydrology wetland/riparian cell, not Z<sea.\n"
+                    "10 overview_flight: 720 m above the massif, one lineage near-to-far.\n"
+                    "numbers=%s\n",
+                    g.certTvhNumbersPassed ? "PASS" : "HOLD");
+                std::fclose(f);
+            }
+            g.certTerrainVerticalHierarchy = false;
+            PostQuitMessage(g.certTvhNumbersPassed ? 0 : 2);
+            g.certTvhPhase = 3;
         }
     }
 
@@ -54315,6 +54412,7 @@ namespace
             Ei3QbPlayerViewVisualCertTick();
             Ei3PlayerViewTraversalCertTick();
             Stage0OrographicCertTick();
+            TerrainVerticalHierarchyCertTick();
             PresentationIsolationBeforeFrame(dt);
         }
         else if ( !g.ei3AuthorityEnabled
@@ -54402,6 +54500,7 @@ namespace
               && !g.certStage11FreeFly
               && !g.certPresentationIsolation
               && !g.certMv1Terrain
+              && !g.certTerrainVerticalHierarchy
               && !g.certMv1Gpu
               && !g.certMv1C
               && !g.certMv1d
@@ -58582,6 +58681,7 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runRegionalRegolithCert = false;
         bool runRegionalBiomeCert = false;
         bool runStage0AdoptPageCert = false;
+        bool runVerticalHierarchyCert = false;
         bool runMw8OrographicCert = false;
         bool runMw9EcologyCert = false;
         bool runGeologyAuthorityParityCert = false;
@@ -58812,6 +58912,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 else if(_wcsicmp(certArgv[i],L"--cert-stage0-adopt-page")==0
                   ||_wcsicmp(certArgv[i],L"--cert-esoterica-adopt-page")==0)
                 {runStage0AdoptPageCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-terrain-vertical-hierarchy-headless")==0)
+                {runVerticalHierarchyCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-mw8-orographic")==0)
                 {runStage0AdoptPageCert=true;runMw8OrographicCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-mw9-ecology")==0
@@ -59162,6 +59264,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 return result.mw8Passed?0:1;
             return result.consumePassed?0:1;
         }
+        if(runVerticalHierarchyCert)
+        {
+            auto const result=AdoptPage::RunVerticalHierarchyCert();
+            AdoptPage::WriteVerticalHierarchyArtifact(result,
+                "Docs\\provenance_terrain_vertical_hierarchy_cert.txt");
+            return result.passed?0:1;
+        }
         if(runMw9EcologyCert)
         {
             auto const result=CausalRegionalEcology::RunCert();
@@ -59466,6 +59575,19 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
                     g.certStage0Orographic = true;
                     g.ei3AuthorityEnabled = true;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-terrain-vertical-hierarchy" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certTerrainVerticalHierarchy = true;
+                    g.playOrographicLaunch = true;
+                    g.orographicPlayable = true;
+                    g.playWorldgenBaseline = true;
+                    g.playMw8Launch = true;
+                    g.mv1Enabled = true;
+                    g.mv2bEnabled = false;
+                    g.wd1bEnabled = false;
                     continue;
                 }
                 if ( _wcsicmp( argv[i], L"--cert-out-dir" ) == 0
