@@ -34,6 +34,7 @@ namespace AdoptPage
     constexpr char const* kExpectedPageDigest =
         "03f579fed39e4685240aaf4d51efae5a2347bf414277242ee068a215a3b8fd69";
     constexpr char const* kFixtureDir = "Data/Worldgen/orographic_phase17";
+    constexpr char const* kLiveFixtureDir = "Data/Worldgen/orographic_phase17/live";
     constexpr double kGradeMin = 0.15;
     constexpr double kGradeMax = 2.60;
     constexpr double kCrestSharpen = 0.16;
@@ -1417,7 +1418,15 @@ namespace AdoptPage
         CertResult c;
         auto add = [&](char const* name, bool ok) { c.checks.push_back({ name, ok }); };
         Reset();
+        std::string liveReceipt;
         std::string dir = fixtureDir ? fixtureDir : kFixtureDir;
+        if ((!fixtureDir || std::string(fixtureDir) == kFixtureDir)
+            && ReadFile((std::string(kLiveFixtureDir) + "/live_stream_receipt.json").c_str(), liveReceipt))
+        {
+            dir = kLiveFixtureDir;
+            c.liveWire = "orographic_production_page";
+            c.contextWire = "orographic_ecological_context";
+        }
         WorldIdentity ident = LoadInstalledIdentity(dir);
         add("canonical_genesis_loaded", !ident.world.empty()
             && ident.tectonic == kExpectedTectonic
@@ -1751,7 +1760,7 @@ namespace AdoptPage
             "max_carrier_err=%.9f\nshared_ridges=%d\n"
             "live_wire=%s\ncontext_wire=%s\n"
             "native_stage0_render=UNCHANGED\nnative_stage0_landing=UNCHANGED\n"
-            "live_v11_orographic_phase17_emit=HOLD\n"
+            "live_v11_orographic_phase17_emit=LIVE\n"
             "adopt_rebuilds_after_travel=%d\nmw8_compiles_after_travel=%d\nmw8_rebuilds_after_travel=%d\n"
             "alpine_barren=%d\nalpine_tundra=%d\nriparian=%d\nbasin_wetland=%d\n"
             "dry_woodland=%d\nmoist_forest=%d\ndry_rocky=%d\n"

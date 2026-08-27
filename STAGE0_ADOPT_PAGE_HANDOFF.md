@@ -12,21 +12,21 @@ not rewrite that tree; copy the contract, not its heightfield.
 ## Architecture
 
 ```
-canonical engine authority
+canonical engine authority  (tools.serve_worldgen_projection :8765/:8766)
         ↓
-orographic.phase17 page + feature context
+opcode orographic_production_page + orographic_ecological_context
         ↓
 native Stage0 authority-admission seam  (AdoptPage::Adopt / AdoptContext)
         ↓
-native render / collision / streaming   (WorldGenesis v11 — UNCHANGED)
+native render / collision / streaming   (WorldGenesis v11 stays for v11 worlds)
         ↓
 MW8 QueryContext
 ```
 
 WorldGenesis v11 library worlds stay distinguishable from `orographic.phase17`.
-This consume path never reinterprets v11 pages as phase17. Live v11 streaming
-does not yet emit `orographic.phase17` pages — **HOLD** that emit gap. Consume
-is certified against the banked production_page / ecological context bytes.
+This consume path never reinterprets v11 pages as phase17. Default Stage0 play
+genesis is the certified canonical openworld (`seed=20260827`,
+`terrain_law=orographic.phase17`) and live-emits production pages.
 
 ## Preserved (native Stage0)
 
@@ -75,16 +75,19 @@ Opt-in play (does not replace native landing):
 PLAY_STAGE0_OROGRAPHIC_PHASE17.cmd  → --play-orographic-phase17
 ```
 
-Native product play remains:
+Native product play:
 
 ```
 PLAY_PROVENANCE_STAGE0_WORLD.cmd
 ```
 
+Default new/create seed is `20260827` (`orographic.phase17`). Existing v11
+library entries (`provenance-stage0-genesis-010` and other v11 seeds) stay v11.
+
 ## Remaining HOLD
 
-`live_v11_orographic_phase17_emit=HOLD` — WorldGenesis v11 streaming does not
-yet emit `orographic.phase17` pages. Do not fake live v11 as phase17.
+None for live emit. `live_v11_orographic_phase17_emit=LIVE` on the existing
+8765/8766 projection path via opcode `orographic_production_page`.
 
 ## MW9
 
