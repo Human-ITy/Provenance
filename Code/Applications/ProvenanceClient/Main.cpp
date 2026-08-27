@@ -46,7 +46,7 @@
 #include "CausalRegionalHydroclimate.h" // MW6 hydroclimate
 #include "CausalRegionalRegolith.h" // MW7 soils / regolith
 #include "CausalRegionalBiome.h" // MW8 biome regime
-#include "CausalRegionalBiome.h" // MW8 biome regime
+#include "AdoptPage.h" // Stage0 orographic.phase17 authority-admission seam
 #include "CausalPresentWater.h"
 #include "CausalPresentWaterBody.h"
 #include "CausalPresentWaterEquilibrate.h"
@@ -971,6 +971,7 @@ namespace
         bool playMw6Launch = false;
         bool playMw7Launch = false;
         bool playMw8Launch = false;
+        bool playOrographicLaunch = false;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
         int regionalGeologyOverride = -1;
@@ -14293,6 +14294,9 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
+        // AdoptPage::SampleZ reconstructs the banked orographic.phase17 carrier
+        // for consume certification only. Native Stage0 collision and grounding
+        // stay on WorldGenesis / published matter. Do not replace this path.
         if ( g.ei3ProjectionMode && g.certEi3Ptc
           && g.ei3Residency.GroundHeight( x, y, outZ ) )
         {
@@ -42087,6 +42091,15 @@ namespace
                 g.yaw=(float)anchor.yaw;g.pitch=-0.74f;
             }
         }
+        if(g.playOrographicLaunch)
+        {
+            // Product consume of certified orographic.phase17. Native Stage0
+            // landing, WorldGenesis v11 render, collision, and streaming stay.
+            if(!AdoptPage::IsLive())
+                AdoptPage::AdoptCanonicalFixture();
+            if(AdoptPage::IsLive())
+                g.statusLine="orographic.phase17 admitted (banked page 1,1); native Stage0 render unchanged";
+        }
         if(g.playP5b3b3bLaunch)
         {
             g.stage0StageMenuOpen=false;
@@ -56068,6 +56081,8 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool runRegionalHydroclimateCert = false;
         bool runRegionalRegolithCert = false;
         bool runRegionalBiomeCert = false;
+        bool runStage0AdoptPageCert = false;
+        bool runMw8OrographicCert = false;
         bool runGeologyAuthorityParityCert = false;
         bool runCutCOccupancyParityCert = false;
         char descriptorPath[MAX_PATH] = "Data\\Worldgen\\causal_world_geology_kernel_floor.cwg";
@@ -56293,6 +56308,11 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(certArgv[i],L"--cert-mw8")==0
                   ||_wcsicmp(certArgv[i],L"--cert-biomes")==0)
                 {runRegionalBiomeCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-stage0-adopt-page")==0
+                  ||_wcsicmp(certArgv[i],L"--cert-esoterica-adopt-page")==0)
+                {runStage0AdoptPageCert=true;}
+                else if(_wcsicmp(certArgv[i],L"--cert-mw8-orographic")==0)
+                {runStage0AdoptPageCert=true;runMw8OrographicCert=true;}
                 else if(_wcsicmp(certArgv[i],L"--cert-stage16c-sediment")==0
                   ||_wcsicmp(certArgv[i],L"--cert-compiled-sediment")==0)
                 {runCompiledSedimentCert=true;}
@@ -56628,6 +56648,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             CausalRegionalBiome::WriteCertArtifact(result,
                 "Docs\\provenance_mw8_biomes_cert.txt");
             return result.passed?0:1;
+        }
+        if(runStage0AdoptPageCert)
+        {
+            auto const result=AdoptPage::RunCert();
+            AdoptPage::WriteCertArtifact(result,
+                "Docs\\provenance_stage0_adopt_page_cert.txt");
+            if(runMw8OrographicCert)
+                return result.mw8Passed?0:1;
+            return result.consumePassed?0:1;
         }
         if(runPresentWaterTerrainResponseCert)
         {
@@ -58185,6 +58214,15 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.playWorldgenBaseline=true;g.playMw8Launch=true;
                     g.certWorldgenBaselinePerf=false;g.stage0LiveRadiusM=192;g.stage0FarExtentM=0;
                     ProvenanceGeo::SetFixture(ProvenanceGeo::GeoFixture::Baseline);continue;
+                }
+                if(_wcsicmp(argv[i],L"--play-orographic-phase17")==0
+                  ||_wcsicmp(argv[i],L"--play-mw8-orographic")==0
+                  ||_wcsicmp(argv[i],L"--play-stage0-adopt-page")==0)
+                {
+                    // Opt-in consume of banked orographic.phase17. Does not replace
+                    // native Stage0 landing, WorldGenesis v11 render, or collision.
+                    g.playOrographicLaunch=true;
+                    continue;
                 }
                 if(_wcsicmp(argv[i],L"--mv1-off")==0)
                 {g.mv1Enabled=false;continue;}
