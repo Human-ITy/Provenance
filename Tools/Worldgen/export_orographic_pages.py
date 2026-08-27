@@ -58,6 +58,8 @@ def main() -> int:
     stamp = ocar.genesis_stamp(ident)
     page11 = ocar.production_page(ident, 1, 1, step=500)
     page21 = ocar.production_page(ident, 2, 1, step=500)
+    ctx11 = ocar.ecological_context_page(ident, 1, 1)
+    ctx21 = ocar.ecological_context_page(ident, 2, 1)
 
     in_page = ((1100.0, 1100.0), (1500.0, 1720.0), (1024.0, 1024.0),
                (1536.0, 1536.0), (1800.0, 1400.0), (1600.0, 1900.0),
@@ -79,6 +81,8 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     d11 = _dump(OUT / "canonical_orographic_page_1_1.json", page11)
     d21 = _dump(OUT / "canonical_orographic_page_2_1.json", page21)
+    dc11 = _dump(OUT / "canonical_orographic_context_1_1.json", ctx11)
+    dc21 = _dump(OUT / "canonical_orographic_context_2_1.json", ctx21)
     dh = _dump(OUT / "tectonic_v3_page_1_1.json", hist_page)
     _dump(OUT / "canonical_genesis.json", stamp)
     meta = {
@@ -88,6 +92,13 @@ def main() -> int:
         "terrain_law": tectonic.terrain_law_of(ident),
         "page_1_1_digest": d11,
         "page_2_1_digest": d21,
+        "context_1_1_digest": dc11,
+        "context_2_1_digest": dc21,
+        "influence_radius_m": ctx11["influence_radius_m"],
+        "page_size_m": ctx11["page_size_m"],
+        "context_system_ids": [s["id"] for s in ctx11["systems"]],
+        "context_range_ids": [r["id"] for r in ctx11["ranges"]],
+        "context_massif_ids": [m["id"] for m in ctx11["massifs"]],
         "tectonic_v3_digest": dh,
         "expected_page_digest": "03f579fed39e4685240aaf4d51efae5a2347bf414277242ee068a215a3b8fd69",
         "cache_key": page11["cache_key"],

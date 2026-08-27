@@ -2,23 +2,26 @@
 
 ## Status
 
-Esoterica now has a **single fail-closed `adopt_page` boundary**. Canonical
+Esoterica has a **single fail-closed `adopt_page` boundary** plus an **adjacent
+canonical orographic context consume seam** (`AdoptContext`). Canonical
 `orographic.phase17` production pages are admitted; tectonic-v3 and stale
 revisions are refused. After adopt, render/collision sample
 `bilinear(smooth) + sharp_from_features(carried definitions)`. There is no
 second client-generated macro heightfield on this path.
 
-Default `voxel_bridge` sessions remain tectonic-v3 `generated_chunk`. The live
-opcode `orographic_production_page` is fail-closed unless the installed genesis
-is `orographic.phase17` (`canonical_orographic` scenario). Cert/play consume
-**banked production_page bytes** (digest `03f579fed39e4685…`) — the same JSON
-the opcode would emit. Esoterica does not yet request that opcode at runtime.
+Default `voxel_bridge` sessions remain tectonic-v3 `generated_chunk`. Live
+opcodes `orographic_production_page` and `orographic_ecological_context` are
+fail-closed unless the installed genesis is `orographic.phase17`. Cert/play
+consume **banked** bytes (page digest `03f579fed39e4685…`) — the same JSON
+the opcodes would emit.
 
-MW8 resume is **HOLD**. Adopted page `(1,1)` fails alpine / windward /
-wet-basin gates (0 alpine, 0 windward/leeward split, 0 basin wetland).
-Do not recertify the 64 km microscope at e8155fa3. MW9 CLOSED.
+```
+MW8 RESUMED ON CANONICAL OROGRAPHIC CONTEXT —
+ECOLOGY INDEPENDENT OF PAGE/RENDER SCALE
+```
 
-MW9 remains CLOSED.
+Page `(1,1)` stays `[1024,2048]²`. Context influence radius **4710.4 m**
+(system spacing × reach). MW9 CLOSED.
 
 ## Adopt admits
 
@@ -35,13 +38,24 @@ MW9 remains CLOSED.
 - Missing or empty required feature_definitions
 - Does **not** rewrite the receiving identity to match the page
 
+## Context consume (adjacent seam)
+
+`AdoptContext` loads `orographic_ecological_context_v1`. It names SystemId /
+RangeId / MassifId and carries ridge/divide, saddle/pass, basin/valley,
+slope/aspect, exposure, windward/leeward, upstream/downstream. PeakId/RidgeId/
+SaddleId/SpurId/ValleyId agree with the production page. MW8 queries this
+graph; it does not read GradeToZ.
+
 ## Proofs
 
 Headless: `CERT_ESOTERICA_ADOPT_PAGE.cmd`
 → `Build\x64_Release\ProvenanceClient.exe --cert-esoterica-adopt-page`
 → `Docs/provenance_esoterica_adopt_page_cert.txt`
 
-Play: `PLAY_ESOTERICA_ADOPT_PAGE.cmd`
+MW8: `CERT_MW8_OROGRAPHIC.cmd`
+→ `--cert-mw8-orographic` (consume PASS, mw8 PASS)
+
+Play: `PLAY_ESOTERICA_ADOPT_PAGE.cmd` / `PLAY_MW8_OROGRAPHIC.cmd`
 → `--play-orographic-phase17` (stand on page `(1,1)` at 1536,1536)
 
 Fixtures: `Data/Worldgen/orographic_phase17/`
@@ -49,8 +63,8 @@ Fixtures: `Data/Worldgen/orographic_phase17/`
 
 ## Wire
 
-`voxel_bridge.py` method `orographic_production_page` returns the same JSON
-the client adopts. `_grade_at = tectonic.grade_at` is unchanged.
+`voxel_bridge.py` methods `orographic_production_page` and
+`orographic_ecological_context`. `_grade_at = tectonic.grade_at` is unchanged.
 
 ```
 PYTHONPATH=. python voxel_bridge.py canonical_orographic

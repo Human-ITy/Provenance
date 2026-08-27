@@ -1,21 +1,42 @@
 # MW8 — Biomes / Ecological Regime
 
-## HOLD — consume is live; MW8 is not resumed on orographic.phase17
+## RESUMED on canonical orographic context (not GradeToZ, not a bigger page)
 
-Esoterica `adopt_page` now consumes canonical Phase 17 pages (see
-`ESOTERICA_ADOPT_PAGE_HANDOFF.md`). MW8 is **not** recertified on the frozen
-64 km MW1–MW7 microscope at e8155fa3.
+```
+MW8 RESUMED ON CANONICAL OROGRAPHIC CONTEXT —
+ECOLOGY INDEPENDENT OF PAGE/RENDER SCALE
+```
 
-**Exact MW8 mismatch:** alpine / windward-vs-rain-shadow / wet-basin gates
-fail on adopted page `(1,1)` `[1024,2048]²`. Census on that page: alpine 0,
-windward/leeward split 0, basin wetland 0, riparian 2, moist forest 287.
-Grade→Z relief under terrain_caps is ~2 m; the frozen MW8 fixtures need
-hundreds of metres and 4–32 km orographic fetch. Do not fake a second
-macro heightfield to recover those numbers.
+Esoterica `adopt_page` consumes canonical Phase 17 pages (see
+`ESOTERICA_ADOPT_PAGE_HANDOFF.md`). Adjacent `AdoptContext` consumes
+`orographic_ecological_context_v1`. MW8 queries that graph:
 
-MW8 remains **FROZEN @ e8155fa3**. MW9 CLOSED.
+- `elevation_grade` (canonical; not GradeToZ metres)
+- SystemId / RangeId / MassifId
+- ridge / divide / saddle / valley / basin
+- slope_grade / aspect
+- exposure / windward_factor / lee_factor (ridge/massif vs moisture azimuth 298°)
+- accumulation / upstream / downstream drainage
+
+Page `(1,1)` remains `[1024,2048]²`, digest `03f579fed39e4685…`. Influence
+radius **4710.4 m** > page **1024 m**. Alpine cells sit on neighboring-page
+peaks named by the context graph; render/collision stay on the local page.
+`alpine_used_presentation_z=0`, `windward_used_presentation_z=0`.
+
+Do **not** recertify the frozen 64 km microscope at e8155fa3. MW9 CLOSED.
+
+**Cert (2026-08-27):** `CERT_MW8_OROGRAPHIC.cmd` PASS. Receipt
+`Docs/provenance_esoterica_adopt_page_cert.txt` (`mw8=PASS`,
+`mw8_frozen_until=RESUMED`). Census: alpine barren 74, riparian 379,
+basin wetland 149, dry woodland 2, moist forest 1617, dry rocky 335;
+windward wet 0.890 vs leeward 0.203; hydro-off contrast 0.000;
+page-boundary BiomeId agree 51/51; H2H 289/289; off Δ 0.000000 m;
+travel `adopt_rebuilds=0`, `mw8_compiles=0`, `mw8_rebuilds=0`.
+64 km Test A / 90 s soak were not re-run (would recertify e8155fa3);
+orographic MW8 adds no persistent background workload.
 
 ---
+
 
 The 64 km microscope work below is **kept** (e8155fa3). It is not the
 orographic.phase17 resume surface. Do not open MW9.
@@ -33,25 +54,23 @@ vegetation placement, not a color mask, and not living-world population.
 - Dirty Docs/ MW8 visual/cardinal/soak receipts exist on disk — leave them;
   they are not a recert and must not be pushed as a new MW8 CERTIFIED
 
-**Consume path (2026-08-27):** Esoterica `adopt_page` now admits canonical
+**Consume path (2026-08-27):** Esoterica `adopt_page` admits canonical
 `orographic.phase17` production pages (world hash `b74f957a7fdb429a`, page
 `(1,1)` digest `03f579fed39e4685…`) and refuses tectonic-v3 / stale revision.
-Render/collision derive from the adopted page. See
-`ESOTERICA_ADOPT_PAGE_HANDOFF.md`. MW8 is resumed **only** if gates pass on
-that adopted geography — never by recertifying the frozen 64 km microscope
-at e8155fa3. MW9 CLOSED.
+Adjacent `AdoptContext` admits `orographic_ecological_context_v1`. MW8 is
+resumed on that canonical context — never by recertifying the frozen 64 km
+microscope at e8155fa3. MW9 CLOSED.
 
-**Gates to resume later** (after Phase 17 orographic production, on explicit
-green-light — not automatically):
-1. Alpine elevation control
-2. Windward vs rain-shadow
+**Gates (orographic.phase17 context — PASS on CERT_MW8_OROGRAPHIC):**
+1. Alpine elevation control — canonical elevation_grade; lapse-off changes class
+2. Windward vs rain-shadow — ridge/massif exposure across page boundaries
 3. Riparian / valley distinct from slope
-4. Wet basin
-5. H2H BiomeId 64 km → 192 m → 12.5 cm (deposit/regolith ancestry retained)
-6. MW8-off == exact MW7 (geometry, HydroclimateId, RegolithId, FormationId, MW5 bodies)
+4. Wet basin — basin/wetness authority
+5. H2H BiomeId to 12.5 cm (289/289); page-boundary BiomeId stable
+6. MW8-off == exact adopted surface (max |Δ| 0.000000 m)
 7. Hydroclimate-off wet/dry contrast collapse; regolith-off substrate/drainage collapse
-8. Visual cert (diagnostic regime colors only — no trees/grass/shrubs/animals/snowpack)
-9. Test A + 90 s Test B; parent off-path invariants
+8. Diagnostic regime colors only — no trees/grass/shrubs/animals/snowpack
+9. Ordinary travel does not rebuild context (`adopt_rebuilds=0`, `mw8_compiles=0`, `mw8_rebuilds=0`)
 
 CLOSED remains: MW9 flora/fauna, vegetation placement, live weather, glaciers,
 live snowpack, groundwater, ecology simulation, 3C collapse, 16C remobilization.

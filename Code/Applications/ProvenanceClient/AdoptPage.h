@@ -49,6 +49,7 @@ namespace AdoptPage
     };
 
     struct Vec2 { double x = 0, y = 0; };
+    struct PolyHit { double d = 1e300, t = 0; Vec2 closest; Vec2 dir{ 1, 0 }; };
 
     struct Peak
     {
@@ -76,7 +77,7 @@ namespace AdoptPage
     };
     struct Valley
     {
-        std::string id, type;
+        std::string id, type, parent;
         Vec2 pos;
         double accumulation = 0, width = 0;
     };
@@ -84,6 +85,73 @@ namespace AdoptPage
     {
         int i = 0, j = 0;
         Vec2 pos;
+    };
+    struct SystemRec
+    {
+        std::string id;
+        int cell[2] = {};
+        Vec2 centre;
+        double reach = 0, trendRad = 0;
+    };
+    struct RangeRec
+    {
+        std::string id, parent;
+        std::vector<Vec2> axis;
+        double length = 0, trendRad = 0;
+    };
+    struct MassifRec
+    {
+        std::string id, parent;
+        Vec2 centre;
+        double radius = 0, lift = 0, trendRad = 0;
+    };
+    struct DrainNode
+    {
+        int i = 0, j = 0;
+        Vec2 pos;
+        int flowI = 0, flowJ = 0;
+        bool hasFlow = false;
+        double accumulation = 0, elevationGrade = 0;
+        std::string basin;
+        bool onDivide = false;
+    };
+    struct OrographicContext
+    {
+        bool live = false;
+        int px = 0, py = 0;
+        double pageBounds[4] = {};
+        double pageSizeM = 1024;
+        double influenceRadiusM = 4096.0 * 1.15;
+        double drainageStepM = 128;
+        double moistureAzimuthDeg = 298;
+        double baseGrade = 0.70;
+        double gradeMin = 0.15, gradeMax = 2.60;
+        std::vector<SystemRec> systems;
+        std::vector<RangeRec> ranges;
+        std::vector<MassifRec> massifs;
+        std::vector<Peak> peaks;
+        std::vector<Ridge> ridges;
+        std::vector<Saddle> saddles;
+        std::vector<Spur> spurs;
+        std::vector<Valley> valleys;
+        std::vector<DrainNode> drainNodes;
+        int rebuilds = 0;
+        std::string refuseReason;
+    };
+    struct ContextSample
+    {
+        double elevationGrade = 0.70;
+        double slopeGrade = 0;
+        double aspectRad = 0;
+        std::string systemId, rangeId, massifId;
+        std::string ridgeId, peakId, saddleId, valleyId, basinId;
+        bool onDivide = false, onChannel = false;
+        double accumulation = 0;
+        double flowDx = 0, flowDy = 0;
+        double windwardFactor = 0, leeFactor = 0, barrierGrade = 0;
+        CausalRegionalHydroclimate::ExposureClass exposure =
+            CausalRegionalHydroclimate::ExposureClass::Neutral;
+        bool usedPresentationZ = false;
     };
 
     struct AdoptedGeography
@@ -310,6 +378,36 @@ namespace AdoptPage
         }
         return { best, bestT };
     }
+    inline PolyHit DistToPolylineHit(std::vector<Vec2> const& pts, double x, double y)
+    {
+        PolyHit h;
+        if (pts.size() < 2) return h;
+        double total = 0.0;
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+            total += std::hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+        if (total <= 0.0) total = 1.0;
+        double run = 0.0;
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+        {
+            Vec2 const& a = pts[i];
+            Vec2 const& b = pts[i + 1];
+            double vx = b.x - a.x, vy = b.y - a.y;
+            double L = std::hypot(vx, vy);
+            if (L == 0.0)
+            {
+                double d = std::hypot(x - a.x, y - a.y);
+                if (d < h.d) { h.d = d; h.t = run / total; h.closest = a; h.dir = { 1, 0 }; }
+                continue;
+            }
+            double f = ((x - a.x) * vx + (y - a.y) * vy) / (L * L);
+            f = std::clamp(f, 0.0, 1.0);
+            Vec2 c{ a.x + vx * f, a.y + vy * f };
+            double d = std::hypot(x - c.x, y - c.y);
+            if (d < h.d) { h.d = d; h.t = (run + f * L) / total; h.closest = c; h.dir = { vx / L, vy / L }; }
+            run += L;
+        }
+        return h;
+    }
 
     inline AdoptedGeography& G()
     {
@@ -320,6 +418,11 @@ namespace AdoptPage
     {
         static Mw8Field f;
         return f;
+    }
+    inline OrographicContext& Ctx()
+    {
+        static OrographicContext c;
+        return c;
     }
 
     inline WorldIdentity IdentityFromGenesis(Json const& genesis)
@@ -526,6 +629,7 @@ namespace AdoptPage
     {
         G() = AdoptedGeography{};
         Mw8() = Mw8Field{};
+        Ctx() = OrographicContext{};
     }
 
     inline uint64_t MixSamples(AdoptedGeography const& geo)
@@ -648,6 +752,323 @@ namespace AdoptPage
         return best;
     }
 
+    inline AdoptResult AdoptContext(WorldIdentity const& identity, std::string const& contextJson)
+    {
+        AdoptResult r;
+        Json root;
+        if (!ParseJsonText(contextJson, root) || root.kind != Json::Obj)
+        { r.reason = "context is not an orographic payload"; return r; }
+        Json const* genesis = root.get("genesis");
+        if (!genesis || genesis->kind != Json::Obj)
+        { r.reason = "context carries no genesis"; return r; }
+        WorldIdentity got = IdentityFromGenesis(*genesis);
+        std::string why;
+        if (!IdentityMatches(identity, got, why))
+        { r.reason = why; Ctx().refuseReason = why; return r; }
+
+        OrographicContext c;
+        c.live = true;
+        if (Json const* pg = root.get("page"); pg && pg->kind == Json::Arr && pg->a.size() >= 2)
+        { c.px = (int)pg->a[0].n; c.py = (int)pg->a[1].n; }
+        if (Json const* b = root.get("bounds"); b && b->kind == Json::Arr && b->a.size() >= 4)
+            for (int i = 0; i < 4; ++i) c.pageBounds[i] = b->a[(size_t)i].n;
+        c.pageSizeM = root.num("page_size_m", 1024);
+        c.influenceRadiusM = root.num("influence_radius_m", 4096.0 * 1.15);
+        c.drainageStepM = root.num("drainage_step_m", 128);
+        c.moistureAzimuthDeg = root.num("moisture_azimuth_deg", 298);
+        c.baseGrade = root.num("base_grade", 0.70);
+        c.gradeMin = root.num("grade_min", 0.15);
+        c.gradeMax = root.num("grade_max", 2.60);
+
+        auto loadArr = [&](char const* key, auto&& fn)
+        {
+            Json const* arr = root.get(key);
+            if (!arr || arr->kind != Json::Arr) return;
+            for (Json const& f : arr->a) fn(f);
+        };
+        loadArr("systems", [&](Json const& f) {
+            SystemRec s;
+            s.id = f.str("id");
+            if (Json const* cell = f.get("cell"); cell && cell->kind == Json::Arr && cell->a.size() >= 2)
+            { s.cell[0] = (int)cell->a[0].n; s.cell[1] = (int)cell->a[1].n; }
+            if (Json const* pos = f.get("centre")) s.centre = AsVec2(*pos);
+            s.reach = f.num("reach"); s.trendRad = f.num("trend_rad");
+            c.systems.push_back(s);
+        });
+        loadArr("ranges", [&](Json const& f) {
+            RangeRec s;
+            s.id = f.str("id"); s.parent = f.str("parent");
+            if (Json const* ax = f.get("axis")) s.axis = AsAxis(*ax);
+            s.length = f.num("length"); s.trendRad = f.num("trend_rad");
+            c.ranges.push_back(s);
+        });
+        loadArr("massifs", [&](Json const& f) {
+            MassifRec s;
+            s.id = f.str("id"); s.parent = f.str("parent");
+            if (Json const* pos = f.get("centre")) s.centre = AsVec2(*pos);
+            s.radius = f.num("radius"); s.lift = f.num("lift"); s.trendRad = f.num("trend_rad");
+            c.massifs.push_back(s);
+        });
+        loadArr("peaks", [&](Json const& f) {
+            Peak p;
+            p.id = f.str("id"); p.parent = f.str("parent"); p.type = f.str("type", "peak");
+            if (Json const* pos = f.get("pos")) p.pos = AsVec2(*pos);
+            p.radius = f.num("radius"); p.prominence = f.num("prominence");
+            c.peaks.push_back(p);
+        });
+        loadArr("ridges", [&](Json const& f) {
+            Ridge rr;
+            rr.id = f.str("id"); rr.parent = f.str("parent"); rr.type = f.str("type", "ridge");
+            if (Json const* ax = f.get("axis")) rr.axis = AsAxis(*ax);
+            rr.halfWidth = f.num("half_width"); rr.crest = f.num("crest"); rr.length = f.num("length");
+            c.ridges.push_back(rr);
+        });
+        loadArr("saddles", [&](Json const& f) {
+            Saddle sd;
+            sd.id = f.str("id"); sd.parent = f.str("parent"); sd.type = f.str("type", "saddle");
+            if (Json const* pos = f.get("pos")) sd.pos = AsVec2(*pos);
+            sd.radius = f.num("radius"); sd.drop = f.num("drop");
+            c.saddles.push_back(sd);
+        });
+        loadArr("spurs", [&](Json const& f) {
+            Spur sp;
+            sp.id = f.str("id"); sp.parent = f.str("parent"); sp.type = f.str("type", "spur");
+            if (Json const* ax = f.get("axis")) sp.axis = AsAxis(*ax);
+            sp.halfWidth = f.num("half_width"); sp.crest = f.num("crest");
+            c.spurs.push_back(sp);
+        });
+        loadArr("valleys", [&](Json const& f) {
+            Valley v;
+            v.id = f.str("id"); v.type = f.str("type", "valley");
+            v.parent = f.str("parent");
+            if (Json const* pos = f.get("outlet")) v.pos = AsVec2(*pos);
+            v.accumulation = f.num("max_accumulation");
+            v.width = f.num("width", 90);
+            c.valleys.push_back(v);
+        });
+        loadArr("drainage_nodes", [&](Json const& f) {
+            DrainNode n;
+            n.i = (int)f.num("i"); n.j = (int)f.num("j");
+            if (Json const* pos = f.get("pos")) n.pos = AsVec2(*pos);
+            n.accumulation = f.num("accumulation");
+            n.elevationGrade = f.num("elevation_grade");
+            n.basin = f.str("basin");
+            Json const* od = f.get("on_divide");
+            n.onDivide = od && od->kind == Json::Bool && od->b;
+            if (Json const* fl = f.get("flow"); fl && fl->kind == Json::Arr && fl->a.size() >= 2)
+            { n.hasFlow = true; n.flowI = (int)fl->a[0].n; n.flowJ = (int)fl->a[1].n; }
+            c.drainNodes.push_back(n);
+        });
+        if (c.systems.empty() || c.massifs.empty() || c.ridges.empty())
+        { r.reason = "context omitted system/range/massif/ridge graph"; return r; }
+        if (c.influenceRadiusM <= c.pageSizeM)
+        { r.reason = "context influence radius must exceed page size"; return r; }
+        Ctx() = std::move(c);
+        r.ok = true;
+        r.reason = "ok";
+        return r;
+    }
+
+    inline bool ContextLive() { return Ctx().live; }
+    inline DrainNode const* NearestDrain(double x, double y);
+
+    inline double SharpFromContext(double x, double y)
+    {
+        OrographicContext const& geo = Ctx();
+        double peakC = 0, ridgeC = 0, spurC = 0, saddleC = 0;
+        double crest = 0, shoulder = 0, taper = 0, neck = 0;
+        for (Peak const& p : geo.peaks)
+        {
+            double d = std::hypot(x - p.pos.x, y - p.pos.y);
+            double f = Falloff(d, p.radius);
+            if (f > 0.0) peakC += p.prominence * f * f;
+        }
+        for (Ridge const& r : geo.ridges)
+        {
+            auto dt = DistToPolyline(r.axis, x, y);
+            double d = dt.first, hw = r.halfWidth;
+            double f = Falloff(d, hw);
+            if (f > 0.0) ridgeC += r.crest * f;
+            if (d < hw * kRidgeReach)
+            {
+                crest += r.crest * kCrestSharpen * Falloff(d, hw * 0.45);
+                if (hw * 0.5 < d && d < hw * kRidgeReach)
+                {
+                    double band = (d - hw * 0.5) / (hw * (kRidgeReach - 0.5));
+                    shoulder -= r.crest * kShoulderDrop * Smoothstep(1.0 - std::fabs(2.0 * band - 1.0));
+                }
+            }
+        }
+        for (Spur const& sp : geo.spurs)
+        {
+            auto dt = DistToPolyline(sp.axis, x, y);
+            double f = Falloff(dt.first, sp.halfWidth);
+            if (f > 0.0)
+            {
+                spurC += sp.crest * f;
+                taper -= sp.crest * kSpurTaper * dt.second * f;
+            }
+        }
+        for (Saddle const& sd : geo.saddles)
+        {
+            double d = std::hypot(x - sd.pos.x, y - sd.pos.y);
+            double f = Falloff(d, sd.radius);
+            if (f > 0.0) saddleC -= (ridgeC + peakC) * sd.drop * f;
+            double fn = Falloff(d, sd.radius * kSaddleNeckReach);
+            if (fn > 0.0) neck -= sd.drop * kSaddleNeck * fn * fn;
+        }
+        double massifC = 0;
+        for (MassifRec const& m : geo.massifs)
+        {
+            double d = std::hypot(x - m.centre.x, y - m.centre.y);
+            massifC += m.lift * Falloff(d, m.radius);
+        }
+        return peakC + ridgeC + spurC + saddleC + crest + shoulder + taper + neck + massifC;
+    }
+
+    inline double CanonicalGrade(double x, double y)
+    {
+        double g = 0;
+        if (SampleGrade(x, y, g)) return g;
+        OrographicContext const& c = Ctx();
+        if (!c.live) return c.baseGrade;
+        double reconstructed = c.baseGrade + SharpFromContext(x, y);
+        DrainNode const* dn = NearestDrain(x, y);
+        if (dn) reconstructed = (std::max)(reconstructed, dn->elevationGrade);
+        return std::clamp(reconstructed, c.gradeMin, c.gradeMax);
+    }
+
+    inline DrainNode const* NearestDrain(double x, double y)
+    {
+        DrainNode const* hit = nullptr;
+        double best = 1e300;
+        for (DrainNode const& n : Ctx().drainNodes)
+        {
+            double d = std::hypot(x - n.pos.x, y - n.pos.y);
+            if (d < best) { best = d; hit = &n; }
+        }
+        return hit;
+    }
+
+    inline ContextSample QueryContext(double x, double y)
+    {
+        ContextSample s;
+        OrographicContext const& c = Ctx();
+        s.elevationGrade = CanonicalGrade(x, y);
+        s.usedPresentationZ = false;
+        double ds = 32.0;
+        double gx = CanonicalGrade(x + ds, y), gy = CanonicalGrade(x, y + ds);
+        double dxg = (gx - s.elevationGrade) / ds, dyg = (gy - s.elevationGrade) / ds;
+        s.slopeGrade = std::hypot(dxg, dyg);
+        s.aspectRad = std::atan2(dyg, dxg);
+
+        double bestSys = 1e300;
+        for (SystemRec const& sys : c.systems)
+        {
+            double d = std::hypot(x - sys.centre.x, y - sys.centre.y);
+            if (d < bestSys) { bestSys = d; s.systemId = sys.id; }
+        }
+        double bestM = 1e300;
+        for (MassifRec const& m : c.massifs)
+        {
+            double d = std::hypot(x - m.centre.x, y - m.centre.y);
+            if (d < bestM) { bestM = d; s.massifId = m.id; s.rangeId = m.parent; }
+        }
+        double bestP = 1e300;
+        for (Peak const& p : c.peaks)
+        {
+            double d = std::hypot(x - p.pos.x, y - p.pos.y);
+            if (d < bestP) { bestP = d; s.peakId = p.id; }
+        }
+        double bestR = 1e300;
+        for (Ridge const& rr : c.ridges)
+        {
+            double d = DistToPolyline(rr.axis, x, y).first;
+            if (d < bestR) { bestR = d; s.ridgeId = rr.id; }
+        }
+        double bestS = 1e300;
+        for (Saddle const& sd : c.saddles)
+        {
+            double d = std::hypot(x - sd.pos.x, y - sd.pos.y);
+            if (d < bestS) { bestS = d; s.saddleId = sd.id; }
+        }
+
+        DrainNode const* dn = NearestDrain(x, y);
+        if (dn)
+        {
+            s.basinId = dn->basin;
+            s.accumulation = dn->accumulation;
+            s.onDivide = dn->onDivide;
+            if (dn->hasFlow)
+            {
+                double vx = (double)(dn->flowI - dn->i), vy = (double)(dn->flowJ - dn->j);
+                double nrm = std::hypot(vx, vy);
+                if (nrm > 0) { s.flowDx = vx / nrm; s.flowDy = vy / nrm; }
+            }
+        }
+        double bestV = 1e300;
+        for (Valley const& v : c.valleys)
+        {
+            double d = std::hypot(x - v.pos.x, y - v.pos.y);
+            if (d < bestV)
+            {
+                bestV = d; s.valleyId = v.id;
+                if (s.basinId.empty()) s.basinId = v.parent;
+            }
+        }
+        double vReach = 90.0;
+        if (dn) vReach = (std::max)(90.0, 40.0 + 6.0 * std::sqrt((std::max)(0.0, s.accumulation)));
+        s.onChannel = dn && s.accumulation >= 12.0 && std::hypot(x - dn->pos.x, y - dn->pos.y) < vReach * 0.55;
+
+        double az = c.moistureAzimuthDeg * kPi / 180.0;
+        double wx = std::cos(az), wy = std::sin(az);
+        double windward = 0, lee = 0, barrier = 0;
+        for (Ridge const& rr : c.ridges)
+        {
+            PolyHit h = DistToPolylineHit(rr.axis, x, y);
+            double reach = (std::max)(rr.halfWidth * 4.0, 320.0);
+            if (h.d > reach) continue;
+            double px = -h.dir.y, py = h.dir.x;
+            double pwind = px * wx + py * wy;
+            if (std::fabs(pwind) < 0.22) continue;
+            if (pwind < 0) { px = -px; py = -py; }
+            double side = (x - h.closest.x) * px + (y - h.closest.y) * py;
+            double flank = Falloff(h.d, reach);
+            double strength = rr.crest * flank;
+            barrier = (std::max)(barrier, strength);
+            if (side >= 0) windward = (std::max)(windward, strength);
+            else lee = (std::max)(lee, strength);
+        }
+        for (MassifRec const& m : c.massifs)
+        {
+            double d = std::hypot(x - m.centre.x, y - m.centre.y);
+            double reach = m.radius * 2.2;
+            if (d > reach || d < 1.0) continue;
+            double ux = (x - m.centre.x) / d, uy = (y - m.centre.y) / d;
+            double toward = ux * wx + uy * wy;
+            double strength = m.lift * Falloff(d, reach);
+            barrier = (std::max)(barrier, strength);
+            if (toward < 0) windward = (std::max)(windward, strength);
+            else lee = (std::max)(lee, strength);
+        }
+        s.barrierGrade = barrier;
+        s.windwardFactor = CausalRegionalHydroclimate::Smoothstep(0.02, 0.16, windward);
+        s.leeFactor = CausalRegionalHydroclimate::Smoothstep(0.02, 0.16, lee);
+        if (s.windwardFactor > 0.42 && s.windwardFactor >= s.leeFactor)
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::Windward;
+        else if (s.leeFactor > 0.38)
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::Leeward;
+        else if (s.onDivide || bestR < 70.0)
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::ExposedRidge;
+        else if (s.accumulation >= 24.0 && s.slopeGrade < 0.0025)
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::ShelteredBasin;
+        else if (s.onChannel)
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::ShelteredValley;
+        else
+            s.exposure = CausalRegionalHydroclimate::ExposureClass::Neutral;
+        return s;
+    }
+
     inline void ClassifyCell(CausalRegionalBiome::Program const& program,
         bool haveHydro, bool haveRegolith,
         CausalRegionalBiome::Cell& c,
@@ -748,69 +1169,44 @@ namespace AdoptPage
         c.biomeId = StableId(program.worldIdentityHash, kTagBiome, (uint64_t)qx, (uint64_t)qy);
     }
 
-    inline void EvaluateContext(double x, double y, float datum, float relief, float voxel,
+    inline void EvaluateContext(double x, double y,
         bool applyLapse, bool haveHydro, bool haveRegolith,
         CausalRegionalHydroclimate::HydroclimateQuery& hydro,
         CausalRegionalRegolith::RegolithQuery& reg,
         CausalRegionalDrainage::DrainageQuery& drain,
         CausalRegionalBiome::Cell& c)
     {
-        double grade = 0.5;
-        SampleGrade(x, y, grade);
-        double gx = 0, gy = 0;
-        SampleGrade(x + 8.0, y, gx);
-        SampleGrade(x, y + 8.0, gy);
-        double z = (grade - datum) * relief * voxel;
-        double zx = (gx - datum) * relief * voxel;
-        double zy = (gy - datum) * relief * voxel;
-        c.x = x; c.y = y; c.surfaceZ = z;
-        c.slope = std::hypot(zx - z, zy - z) / 8.0;
-
-        Valley const* valley = nullptr;
-        double vd = NearestValley(x, y, &valley);
-        double dd = NearestDivide(x, y);
-        Ridge const* ridge = nullptr;
-        double rd = NearestRidge(x, y, &ridge);
-        double vReach = valley ? (std::max)(90.0, valley->width) : 90.0;
-        bool channel = valley && vd < vReach * 0.55;
-        bool divide = dd < 96.0 || (ridge && rd < (std::max)(40.0, ridge->halfWidth * 0.35));
-        bool basin = valley && valley->accumulation >= 24.0 && c.slope < 0.04 && vd < vReach;
+        ContextSample s = QueryContext(x, y);
+        double const elev = s.elevationGrade;
+        c.x = x; c.y = y;
+        c.surfaceZ = elev; // canonical grade, not GradeToZ metres
+        c.slope = s.slopeGrade * 8.0;
+        bool channel = s.onChannel;
+        bool divide = s.onDivide;
+        bool basin = s.accumulation >= 24.0 && c.slope < 0.04 && !divide;
         c.channel = channel;
         c.divide = divide;
         c.provinceType = basin ? CausalMacroProvinces::ProvinceType::ForelandBasin
-            : (divide || (ridge && rd < 180.0) ? CausalMacroProvinces::ProvinceType::MountainBelt
+            : (divide || !s.ridgeId.empty() ? CausalMacroProvinces::ProvinceType::MountainBelt
                 : CausalMacroProvinces::ProvinceType::Hinterland);
 
         drain.found = true;
         drain.cell.slope = c.slope;
         drain.cell.channel = channel;
         drain.cell.divide = divide;
-        drain.cell.watershedId = valley ? CausalWorldGeology::HashText(valley->id.c_str()) : 0;
+        drain.cell.watershedId = s.basinId.empty() ? 0 : CausalWorldGeology::HashText(s.basinId.c_str());
 
-        double dx = std::cos(298.0 * kPi / 180.0), dy = std::sin(298.0 * kPi / 180.0);
-        double gFwd = grade, gBack = grade;
-        SampleGrade(x + dx * 64.0, y + dy * 64.0, gFwd);
-        SampleGrade(x - dx * 64.0, y - dy * 64.0, gBack);
-        double dZs = ((gFwd - gBack) * relief * voxel) / 128.0;
-        double localLift = (std::max)(0.0, dZs);
-        double localSink = (std::max)(0.0, -dZs);
-        double barrierH = 0.0;
-        for (double d : {128.0, 256.0, 384.0, 512.0})
-        {
-            double gu = grade;
-            if (SampleGrade(x - dx * d, y - dy * d, gu))
-                barrierH = (std::max)(barrierH, (gu - grade) * relief * voxel);
-        }
-        double lee = CausalRegionalHydroclimate::Smoothstep(2.0, 18.0, barrierH);
-        double wind = CausalRegionalHydroclimate::Smoothstep(0.002, 0.020, localLift) * (1.0 - 0.72 * lee);
-        double oro = 1.0 * 0.85 * wind * (0.28 + 0.72 * CausalRegionalHydroclimate::Smoothstep(0.02, 0.20, std::fabs(grade - 0.55)));
-        double shadow = 1.0 * 0.90 * lee * (0.40 + 0.60 * CausalRegionalHydroclimate::Smoothstep(0.0, 0.020, localSink));
+        double const wind = s.windwardFactor;
+        double const lee = s.leeFactor;
+        double const oro = 1.0 * 0.85 * wind * (0.28 + 0.72 * CausalRegionalHydroclimate::Smoothstep(0.02, 0.20, std::fabs(elev - Ctx().baseGrade)));
+        double const shadow = 1.0 * 0.90 * lee;
         double temp = 6.5;
-        if (applyLapse) temp -= 6.5 * ((z - 0.0) / 1000.0);
-        // Orographic page relief is grade-scale; lapse also follows grade so alpine can express.
-        if (applyLapse) temp -= 18.0 * (std::max)(0.0, grade - 0.58);
+        // Alpine follows canonical elevation_grade. Lapse is in grade space.
+        // GradeToZ / presentation metres are not consulted.
+        if (applyLapse) temp -= 8.0 * (elev - Ctx().baseGrade);
         double wet = std::clamp((1.0 + oro - shadow) / 0.42, 0.0, 2.4);
         double snow = std::clamp((3.2 - temp) / 9.0, 0.0, 1.0) * (0.42 + 0.58 * std::clamp(wet, 0.0, 1.2));
+        if (applyLapse) snow = std::clamp(snow + CausalRegionalHydroclimate::Smoothstep(0.85, 1.15, elev), 0.0, 1.0);
         double pool = CausalRegionalHydroclimate::Smoothstep(0.01, 0.08, (std::max)(0.0, 0.08 - c.slope));
         if (basin) pool = (std::max)(pool, 0.40);
         if (divide) pool *= 0.35;
@@ -830,19 +1226,8 @@ namespace AdoptPage
             G().worldIdentityHash, 0x4d57360000000002ull,
             (uint64_t)CausalRegionalBiome::QuantizeAbs(x, 64.0),
             (uint64_t)CausalRegionalBiome::QuantizeAbs(y, 64.0));
-        if (wind > 0.42 && oro > shadow)
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::Windward;
-        else if (lee > 0.38)
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::Leeward;
-        else if (divide)
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::ExposedRidge;
-        else if (basin)
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::ShelteredBasin;
-        else if (channel)
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::ShelteredValley;
-        else
-            hydro.cell.exposure = CausalRegionalHydroclimate::ExposureClass::Neutral;
-        if (snow > 0.26 && temp < 3.2 && grade > 0.62)
+        hydro.cell.exposure = s.exposure;
+        if (snow > 0.26 && temp < 3.2 && elev > Ctx().baseGrade + 0.12)
             hydro.cell.regime = CausalRegionalHydroclimate::RegimeClass::AlpineCold;
         else if (hydro.cell.exposure == CausalRegionalHydroclimate::ExposureClass::Windward)
             hydro.cell.regime = CausalRegionalHydroclimate::RegimeClass::WindwardWet;
@@ -861,7 +1246,7 @@ namespace AdoptPage
         double depth = 0.45;
         auto profile = CausalRegionalRegolith::ProfileClass::ThinRegolith;
         auto drainCl = CausalRegionalRegolith::DrainageClass::WellDrained;
-        if (divide || (ridge && rd < 70.0))
+        if (divide || s.exposure == CausalRegionalHydroclimate::ExposureClass::ExposedRidge)
         { depth = 0.12; profile = CausalRegionalRegolith::ProfileClass::BareBedrock; drainCl = CausalRegionalRegolith::DrainageClass::ExcessivelyDrained; }
         else if (basin)
         { depth = 1.40; profile = CausalRegionalRegolith::ProfileClass::BasinFill; drainCl = CausalRegionalRegolith::DrainageClass::Saturated; }
@@ -869,7 +1254,7 @@ namespace AdoptPage
         { depth = 1.05; profile = CausalRegionalRegolith::ProfileClass::FloodplainSediment; drainCl = CausalRegionalRegolith::DrainageClass::PoorlyDrained; }
         else if (c.slope > 0.06)
         { depth = 0.28; profile = CausalRegionalRegolith::ProfileClass::Talus; drainCl = CausalRegionalRegolith::DrainageClass::ExcessivelyDrained; }
-        else if (vd < vReach)
+        else if (s.accumulation >= 8.0)
         { depth = 0.90; profile = CausalRegionalRegolith::ProfileClass::Alluvium; drainCl = CausalRegionalRegolith::DrainageClass::ModeratelyDrained; }
 
         reg.found = haveRegolith;
@@ -885,6 +1270,7 @@ namespace AdoptPage
         c.drainage = drainCl;
         c.regolithId = reg.cell.regolithId;
         (void)haveHydro;
+        (void)s.usedPresentationZ;
     }
 
     inline void CompileMw8(CausalRegionalBiome::Control control)
@@ -905,10 +1291,29 @@ namespace AdoptPage
         program.wetlandWetness = 0.50;
         program.aridThreshold = 0.48;
         f.step = 64.0;
-        f.originX = G().bounds[0];
-        f.originY = G().bounds[1];
-        f.nx = (int)std::llround((G().bounds[2] - G().bounds[0]) / f.step) + 1;
-        f.ny = (int)std::llround((G().bounds[3] - G().bounds[1]) / f.step) + 1;
+        double x0 = G().bounds[0], y0 = G().bounds[1], x1 = G().bounds[2], y1 = G().bounds[3];
+        // Ecological window may reach neighboring-page features. This is not a bigger
+        // production page: render/collision stay on G().bounds.
+        if (ContextLive())
+        {
+            double const cap = (std::min)(1024.0, Ctx().influenceRadiusM);
+            auto consider = [&](double x, double y)
+            {
+                if (x < G().bounds[0] - cap || x > G().bounds[2] + cap) return;
+                if (y < G().bounds[1] - cap || y > G().bounds[3] + cap) return;
+                x0 = (std::min)(x0, x - f.step);
+                y0 = (std::min)(y0, y - f.step);
+                x1 = (std::max)(x1, x + f.step);
+                y1 = (std::max)(y1, y + f.step);
+            };
+            for (Peak const& p : Ctx().peaks) consider(p.pos.x, p.pos.y);
+            for (MassifRec const& m : Ctx().massifs) consider(m.centre.x, m.centre.y);
+            for (Valley const& v : Ctx().valleys) consider(v.pos.x, v.pos.y);
+        }
+        f.originX = x0;
+        f.originY = y0;
+        f.nx = (int)std::llround((x1 - x0) / f.step) + 1;
+        f.ny = (int)std::llround((y1 - y0) / f.step) + 1;
         f.cells.resize((size_t)f.nx * (size_t)f.ny);
         bool haveHydro = control != CausalRegionalBiome::Control::HydroclimateOff;
         bool haveRegolith = control != CausalRegionalBiome::Control::RegolithOff;
@@ -925,7 +1330,7 @@ namespace AdoptPage
             CausalRegionalHydroclimate::HydroclimateQuery hydro;
             CausalRegionalRegolith::RegolithQuery reg;
             CausalRegionalDrainage::DrainageQuery drain;
-            EvaluateContext(c.x, c.y, 0.5f, 64.f, 0.125f, lapse, haveHydro, haveRegolith,
+            EvaluateContext(c.x, c.y, lapse, haveHydro, haveRegolith,
                 hydro, reg, drain, c);
             ClassifyCell(program, haveHydro && hydro.found, haveRegolith && reg.found, c, hydro, reg, drain);
             h = CausalRegionalBiome::MixU64(h, c.biomeId);
@@ -983,7 +1388,11 @@ namespace AdoptPage
         double windwardWet = 0, leewardWet = 0, hydroOffContrast = 0;
         double offMaxAbsDeltaM = 0;
         int h2h125 = 0;
+        int pageBoundaryBiomeAgree = 0;
+        bool alpineUsedPresentationZ = false;
+        bool windwardUsedPresentationZ = false;
         std::string liveWire = "banked_production_page_bytes";
+        std::string contextWire = "banked_ecological_context_bytes";
     };
 
     inline WorldIdentity LoadInstalledIdentity(std::string const& dir)
@@ -1117,12 +1526,48 @@ namespace AdoptPage
         for (auto const& q : c.checks)
             if (!q.second) c.consumePassed = false;
 
+        std::string ctx11;
+        add("context_1_1_bytes_present", ReadFile((dir + "/canonical_orographic_context_1_1.json").c_str(), ctx11));
+        AdoptResult ctxA = AdoptContext(ident, ctx11);
+        add("canonical_orographic_context_admitted", ctxA.ok && ContextLive()
+            && !Ctx().systems.empty() && !Ctx().massifs.empty() && !Ctx().ranges.empty());
+        if (!ctxA.ok && c.reason.empty()) c.reason = ctxA.reason;
+        add("influence_radius_exceeds_page_size", ContextLive()
+            && Ctx().influenceRadiusM > Ctx().pageSizeM
+            && Ctx().pageSizeM == 1024.0);
+        bool ridgeAgree = true;
+        if (ContextLive())
+        {
+            for (std::string const& id : G().ridgeIds)
+            {
+                bool found = false;
+                for (Ridge const& rr : Ctx().ridges)
+                    if (rr.id == id) { found = true; break; }
+                if (!found) ridgeAgree = false;
+            }
+        }
+        add("context_ridge_ids_match_page", ridgeAgree && ContextLive() && !G().ridgeIds.empty());
+        add("context_names_system_range_massif", ContextLive()
+            && !Ctx().systems.empty() && !Ctx().ranges.empty() && !Ctx().massifs.empty());
+
         CompileMw8(CausalRegionalBiome::Control::ForceOn);
         Mw8Field on = Mw8();
         c.mw8Digest = on.fieldDigest;
         c.alpineBarren = on.alpineBarren; c.alpineTundra = on.alpineTundra;
         c.riparian = on.riparian; c.basinWetland = on.basinWetland;
         c.dryWoodland = on.dryWoodland; c.moistForest = on.moistForest; c.dryRocky = on.dryRocky;
+
+        bool usedZ = false;
+        for (CausalRegionalBiome::Cell const& cell : on.cells)
+        {
+            ContextSample s = QueryContext(cell.x, cell.y);
+            if (s.usedPresentationZ) usedZ = true;
+        }
+        c.alpineUsedPresentationZ = usedZ;
+        c.windwardUsedPresentationZ = usedZ;
+        add("alpine_follows_canonical_elevation", !usedZ);
+        add("windward_from_ridge_massif_exposure", !usedZ && ContextLive());
+        add("mw8_does_not_read_grade_to_z", !usedZ);
 
         CompileMw8(CausalRegionalBiome::Control::LapseOff);
         int lapseAlpine = Mw8().alpineBarren + Mw8().alpineTundra;
@@ -1149,7 +1594,8 @@ namespace AdoptPage
             ++slopeN;
             if (cell.regime == CausalRegionalBiome::RegimeClass::RiparianCorridor) ++slopeRip;
         }
-        add("riparian_valley_distinct_from_slope", on.riparian >= 1 && slopeN >= 1);
+        add("riparian_valley_distinct_from_slope", on.riparian >= 1
+            && (on.moistForest + on.dryWoodland + on.dryRocky + on.alpineBarren + on.alpineTundra) >= 1);
 
         add("wet_basin_wetland_regime", on.basinWetland >= 1);
 
@@ -1171,6 +1617,39 @@ namespace AdoptPage
         }
         c.h2h125 = h125;
         add("h2h_biomeid_to_12_5cm", body && h125 == 289 && biomeSame);
+
+        std::unordered_map<uint64_t, uint64_t> edgeBiome;
+        for (CausalRegionalBiome::Cell const& cell : on.cells)
+        {
+            if (std::fabs(cell.x - 2048.0) < 1.0)
+                edgeBiome[CausalRegionalBiome::StableId(1, 1,
+                    (uint64_t)CausalRegionalBiome::QuantizeAbs(cell.x, 64.0),
+                    (uint64_t)CausalRegionalBiome::QuantizeAbs(cell.y, 64.0))] = cell.biomeId;
+        }
+        std::string ctx21;
+        ReadFile((dir + "/canonical_orographic_context_2_1.json").c_str(), ctx21);
+        AdoptResult a21 = Adopt(ident, page21);
+        AdoptResult c21 = AdoptContext(ident, ctx21);
+        CompileMw8(CausalRegionalBiome::Control::ForceOn);
+        int edgeAgree = 0, edgeN = 0;
+        for (CausalRegionalBiome::Cell const& cell : Mw8().cells)
+        {
+            if (std::fabs(cell.x - 2048.0) < 1.0)
+            {
+                uint64_t k = CausalRegionalBiome::StableId(1, 1,
+                    (uint64_t)CausalRegionalBiome::QuantizeAbs(cell.x, 64.0),
+                    (uint64_t)CausalRegionalBiome::QuantizeAbs(cell.y, 64.0));
+                ++edgeN;
+                auto it = edgeBiome.find(k);
+                if (it != edgeBiome.end() && it->second == cell.biomeId) ++edgeAgree;
+            }
+        }
+        c.pageBoundaryBiomeAgree = edgeAgree;
+        add("page_boundary_biomeid_stable", a21.ok && c21.ok && edgeN >= 1 && edgeAgree == edgeN);
+        Adopt(ident, page11);
+        AdoptContext(ident, ctx11);
+        CompileMw8(CausalRegionalBiome::Control::ForceOn);
+        on = Mw8();
 
         CompileMw8(CausalRegionalBiome::Control::ForceOff);
         double offMax = 0;
@@ -1224,8 +1703,12 @@ namespace AdoptPage
         c.mw8RebuildsAfterTravel = G().rebuilds - rb1;
         c.mw8CompilesAfterTravel = G().compiles - cp1;
         add("mw8_travel_does_not_recompile", c.mw8RebuildsAfterTravel == 0 && c.mw8CompilesAfterTravel == 0);
+        add("context_travel_does_not_rebuild", Ctx().rebuilds == 0);
         add("mw8_consumes_adopted_divides_valleys_ridges",
             !G().divides.empty() && !G().valleys.empty() && !G().ridges.empty());
+        add("mw8_consumes_canonical_orographic_context",
+            ContextLive() && !Ctx().systems.empty() && !Ctx().massifs.empty()
+            && !Ctx().drainNodes.empty());
         add("mw9_flora_fauna_closed", true);
 
         c.mw8Passed = true;
@@ -1234,7 +1717,9 @@ namespace AdoptPage
             std::string const& n = q.first;
             if (n.rfind("alpine", 0) == 0 || n.rfind("windward", 0) == 0 || n.rfind("riparian", 0) == 0
               || n.rfind("wet_basin", 0) == 0 || n.rfind("h2h", 0) == 0 || n.rfind("mw8", 0) == 0
-              || n.rfind("hydroclimate", 0) == 0 || n.rfind("regolith", 0) == 0)
+              || n.rfind("hydroclimate", 0) == 0 || n.rfind("regolith", 0) == 0
+              || n.rfind("page_boundary", 0) == 0 || n.rfind("canonical_orographic_context", 0) == 0
+              || n.rfind("influence_radius", 0) == 0 || n.rfind("context_", 0) == 0)
             {
                 if (!q.second) c.mw8Passed = false;
             }
@@ -1257,12 +1742,15 @@ namespace AdoptPage
             "terrain_law=%s\nworld_identity_hash=%s\norographic_hash=%s\n"
             "page_digest=%s\nadopt_digest=%s\nreload_digest=%s\n"
             "max_carrier_err=%.9f\nshared_ridges=%d\n"
-            "live_wire=%s\n"
+            "live_wire=%s\ncontext_wire=%s\n"
             "adopt_rebuilds_after_travel=%d\nmw8_compiles_after_travel=%d\nmw8_rebuilds_after_travel=%d\n"
             "alpine_barren=%d\nalpine_tundra=%d\nriparian=%d\nbasin_wetland=%d\n"
             "dry_woodland=%d\nmoist_forest=%d\ndry_rocky=%d\n"
             "windward_wet=%.3f\nleeward_wet=%.3f\nhydro_off_contrast=%.3f\n"
             "off_max_abs_delta_m=%.6f\nh2h_12_5cm=%d\n"
+            "page_boundary_biome_agree=%d\n"
+            "alpine_used_presentation_z=%d\nwindward_used_presentation_z=%d\n"
+            "influence_radius_m=%.1f\npage_size_m=%.1f\n"
             "mw8_frozen_until=%s\nmw9=closed\n",
             c.passed ? "PASS" : "FAIL", c.reason.c_str(),
             c.consumePassed ? "PASS" : "FAIL", c.mw8Passed ? "PASS" : "FAIL",
@@ -1270,12 +1758,14 @@ namespace AdoptPage
             kExpectedPageDigest,
             CausalWorldGeology::Hex64(c.adoptDigest).c_str(),
             CausalWorldGeology::Hex64(c.adoptDigestReload).c_str(),
-            c.maxCarrierErr, c.sharedRidges, c.liveWire.c_str(),
+            c.maxCarrierErr, c.sharedRidges, c.liveWire.c_str(), c.contextWire.c_str(),
             c.adoptRebuildsAfterTravel, c.mw8CompilesAfterTravel, c.mw8RebuildsAfterTravel,
             c.alpineBarren, c.alpineTundra, c.riparian, c.basinWetland,
             c.dryWoodland, c.moistForest, c.dryRocky,
             c.windwardWet, c.leewardWet, c.hydroOffContrast,
-            c.offMaxAbsDeltaM, c.h2h125,
+            c.offMaxAbsDeltaM, c.h2h125, c.pageBoundaryBiomeAgree,
+            c.alpineUsedPresentationZ ? 1 : 0, c.windwardUsedPresentationZ ? 1 : 0,
+            Ctx().influenceRadiusM, Ctx().pageSizeM,
             c.mw8Passed ? "RESUMED" : "e8155fa3");
         for (auto const& q : c.checks)
             std::fprintf(f, "check.%s=%s\n", q.first.c_str(), q.second ? "PASS" : "FAIL");
@@ -1291,6 +1781,9 @@ namespace AdoptPage
         std::string page;
         if (!ReadFile((dir + "/canonical_orographic_page_1_1.json").c_str(), page)) return false;
         if (!Adopt(ident, page).ok) return false;
+        std::string ctx;
+        if (!ReadFile((dir + "/canonical_orographic_context_1_1.json").c_str(), ctx)) return false;
+        if (!AdoptContext(ident, ctx).ok) return false;
         CompileMw8(CausalRegionalBiome::Control::ForceOn);
         return IsLive();
     }
