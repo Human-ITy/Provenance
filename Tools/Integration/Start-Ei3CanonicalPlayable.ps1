@@ -284,11 +284,14 @@ try {
         # readiness probe still reads $centerRi/$centerRj under StrictMode.
         $centerRi = 1
         $centerRj = 1
+        $expectedReadinessPages = 9
+        $projectedCachePages = 9
         $effectiveClientArgument += @(
             '--ei3-spawn-x', $spawnX,
             '--ei3-spawn-y', $spawnY,
             '--ei3-spawn-z', $spawnZ,
-            '--ei3-spawn-yaw', $spawnYaw
+            '--ei3-spawn-yaw', $spawnYaw,
+            '--play-orographic-phase17'
         )
         if ($PlayerFacing) {
             Write-Host 'World ready: orographic.phase17 canonical openworld' -ForegroundColor Green
@@ -446,7 +449,13 @@ try {
             '--control-port', "$ControlPort", '--bulk-port', "$BulkPort",
             '--timeout', '120', '--receipt', $probeReceipt
         )
-        if ($WorldSeed -and $RichLandforms) {
+        if ($isOrographicPhase17 -and $RichLandforms) {
+            foreach ($ri in 0..2) {
+                foreach ($rj in 0..2) {
+                    $probeArgs += ("--page-coord={0},{1}" -f $ri, $rj)
+                }
+            }
+        } elseif ($WorldSeed -and $RichLandforms) {
             # Normal play becomes ready when the authoritative page containing
             # the caused spawn is present.  The server remains responsible for
             # every outward page requested during exploration.  The probe's
@@ -472,10 +481,14 @@ try {
         throw "Canonical control/bulk handshake did not become valid: $detail"
     }
     $identity = Get-Content -LiteralPath $probeReceipt -Raw | ConvertFrom-Json
+    $detailOk = $identity.detailed_projection -eq 'ACTIVE'
+    if ($isOrographicPhase17) {
+        $detailOk = $identity.detailed_projection -eq 'SKIPPED' -or $detailOk
+    }
     if ($identity.status -ne 'PASS' -or $identity.authority_session -ne 'VALID' -or
             $identity.control_bulk_same_session -ne $true -or
             $identity.macro_pages_valid -lt $expectedReadinessPages -or
-            $identity.detailed_projection -ne 'ACTIVE') {
+            -not $detailOk) {
         throw 'Canonical authority readiness receipt is incomplete or incompatible.'
     }
     $prewarmCompletedMs = $launchClock.ElapsedMilliseconds

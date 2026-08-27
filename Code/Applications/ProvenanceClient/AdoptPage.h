@@ -4,13 +4,15 @@
 // production pages. Single fail-closed adopt_page boundary: identity/revision
 // is checked here, never in native render/collision/streaming.
 //
-// SampleGrade / SampleZ reconstruct the banked carrier for consume certification
-// only. They are not a second Stage0 heightfield and must not replace native
-// WorldGenesis v11 render, collision, or grounding.
+// SampleGrade / SampleZ reconstruct the adopted orographic.phase17 carrier.
+// Product Stage0 play derives render/collision from these samples after Adopt.
+// That is consume of the admitted page, not a second client-generated heightfield.
+// WorldGenesis v11 macro_page / detailed WorldSubstrate must not replace this
+// result on orographic.phase17 worlds (same page → same landform).
 //
 // MW8 QueryContext consumes orographic_ecological_context_v1 (elevation_grade,
 // SystemId/RangeId/MassifId, ridge/divide/saddle/valley/basin, exposure).
-// GradeToZ remains presentation. MW9 stays CLOSED.
+// GradeToZ remains presentation. MW9 occupancy is realized; play does not draw trees.
 
 #include "CausalRegionalBiome.h"
 
@@ -422,6 +424,11 @@ namespace AdoptPage
         static AdoptedGeography g;
         return g;
     }
+    inline std::unordered_map<uint64_t, AdoptedGeography>& Atlas()
+    {
+        static std::unordered_map<uint64_t, AdoptedGeography> pages;
+        return pages;
+    }
     inline Mw8Field& Mw8()
     {
         static Mw8Field f;
@@ -431,6 +438,45 @@ namespace AdoptPage
     {
         static OrographicContext c;
         return c;
+    }
+    inline uint64_t PageKey(int px, int py)
+    {
+        return (uint64_t)(uint32_t)px << 32 | (uint32_t)py;
+    }
+    inline void PageOf(double x, double y, int& px, int& py, double pageM = 1024.0)
+    {
+        px = (int)std::floor(x / pageM);
+        py = (int)std::floor(y / pageM);
+    }
+    inline AdoptedGeography const* PageAt(double x, double y, double skirtM = 8.0)
+    {
+        int px = 0, py = 0;
+        PageOf(x, y, px, py);
+        auto& atlas = Atlas();
+        auto it = atlas.find(PageKey(px, py));
+        if (it != atlas.end() && it->second.live) return &it->second;
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            if (dx == 0 && dy == 0) continue;
+            it = atlas.find(PageKey(px + dx, py + dy));
+            if (it == atlas.end() || !it->second.live) continue;
+            AdoptedGeography const& p = it->second;
+            if (x >= p.bounds[0] - skirtM && x <= p.bounds[2] + skirtM
+             && y >= p.bounds[1] - skirtM && y <= p.bounds[3] + skirtM)
+                return &p;
+        }
+        if (G().live
+         && x >= G().bounds[0] - skirtM && x <= G().bounds[2] + skirtM
+         && y >= G().bounds[1] - skirtM && y <= G().bounds[3] + skirtM)
+            return &G();
+        return nullptr;
+    }
+    inline int AtlasCount() { return (int)Atlas().size(); }
+    inline bool AtlasHas(int px, int py)
+    {
+        auto it = Atlas().find(PageKey(px, py));
+        return it != Atlas().end() && it->second.live;
     }
 
     inline WorldIdentity IdentityFromGenesis(Json const& genesis)
@@ -614,11 +660,11 @@ namespace AdoptPage
 
     inline bool SampleGrade(double x, double y, double& out)
     {
-        AdoptedGeography const& geo = G();
-        if (!geo.live || geo.smooth.empty()) return false;
-        if (x < geo.bounds[0] || y < geo.bounds[1] || x > geo.bounds[2] || y > geo.bounds[3])
-            return false;
-        double g = SampledOnly(geo, x, y) + SharpFromFeatures(geo, x, y);
+        AdoptedGeography const* page = PageAt(x, y);
+        if (!page || !page->live || page->smooth.empty()) return false;
+        double sx = std::clamp(x, page->bounds[0], page->bounds[2]);
+        double sy = std::clamp(y, page->bounds[1], page->bounds[3]);
+        double g = SampledOnly(*page, sx, sy) + SharpFromFeatures(*page, sx, sy);
         out = std::clamp(g, kGradeMin, kGradeMax);
         return true;
     }
@@ -631,11 +677,46 @@ namespace AdoptPage
         return std::isfinite(outZ);
     }
 
-    inline bool IsLive() { return G().live; }
+    // Presentation sea is GradeToZ(datum) = 0. Do not retune GradeToZ for ecology.
+    inline float PresentationSeaZ() { return 0.f; }
+
+    inline bool FindHighestLand(float datum, float relief, float voxel,
+        float& outX, float& outY, float& outZ)
+    {
+        bool have = false;
+        float sea = PresentationSeaZ();
+        auto consider = [&](AdoptedGeography const& geo)
+        {
+            if (!geo.live || geo.smooth.empty() || !(geo.step > 0.0)) return;
+            double const x0 = geo.bounds[0], y0 = geo.bounds[1];
+            for (int j = 0; j < geo.n; ++j)
+            for (int i = 0; i < geo.n; ++i)
+            {
+                double const x = x0 + i * geo.step;
+                double const y = y0 + j * geo.step;
+                float z = 0.f;
+                if (!SampleZ((float)x, (float)y, datum, relief, voxel, z)) continue;
+                if (z <= sea + 0.25f) continue;
+                if (!have || z > outZ)
+                {
+                    have = true;
+                    outX = (float)x;
+                    outY = (float)y;
+                    outZ = z;
+                }
+            }
+        };
+        for (auto const& kv : Atlas()) consider(kv.second);
+        if (!have && G().live) consider(G());
+        return have;
+    }
+
+    inline bool IsLive() { return G().live || AtlasCount() > 0; }
     inline AdoptedGeography const& Get() { return G(); }
     inline void Reset()
     {
         G() = AdoptedGeography{};
+        Atlas().clear();
         Mw8() = Mw8Field{};
         Ctx() = OrographicContext{};
     }
@@ -715,8 +796,10 @@ namespace AdoptPage
         geo.adoptCount = G().live ? G().adoptCount + 1 : 1;
         geo.rebuilds = 0;
         geo.compiles = 0;
+        geo.adoptDigest = MixSamples(geo);
+        uint64_t const key = PageKey(geo.px, geo.py);
+        Atlas()[key] = geo;
         G() = std::move(geo);
-        G().adoptDigest = MixSamples(G());
         r.ok = true;
         r.reason = "ok";
         return r;

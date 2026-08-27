@@ -128,9 +128,23 @@ namespace
     constexpr float kCharEyeHeightM = 1.687f; // the character's eye line above his feet
     constexpr float kCrouchEyeHeightM = 1.05f;
     constexpr float kCapsuleRadiusM = 0.35f;
-    constexpr float kWalkSpeedMps = 5.0f;    // brisk walk
-    constexpr float kRunSpeedMps = 8.0f;     // distinct from walk and sprint
-    constexpr float kSprintSpeedMps = 11.0f; // matches Unreal sprint ~cell/s order
+    constexpr float kWalkSpeedMps = 5.0f;     // average-person running entry speed
+    constexpr float kRunSpeedMps = 8.0f;      // distinct soak/certificate run tier
+    constexpr float kSprintSpeedMps = 12.0f;  // persistent trained-athlete development pace
+    constexpr float kSprintAccelerationMps2 = 5.0f;
+    constexpr float kGroundDecelerationMps2 = 10.0f;
+    constexpr float kCrouchSpeedMps = 2.7f;
+    constexpr float kSlideMinimumStartMps = 6.0f;
+    constexpr float kSlideEntryBoostMps = 1.0f;
+    constexpr float kSlideMaximumEntryMps = 13.0f;
+    constexpr float kSlideMaximumDownhillMps = 22.0f;
+    constexpr float kSlideFlatDragMps2 = 7.0f;
+    constexpr float kSlideDownhillDragMps2 = 1.5f;
+    constexpr float kSlideUphillBrakePerGradeMps2 = 90.0f;
+    constexpr float kSlideStopSpeedMps = 1.75f;
+    constexpr float kSlideSustainGrade = 0.2679492f; // tan(15 degrees)
+    constexpr float kSlideMaximumDurationS = 30.0f;
+    constexpr float kSlideFatigueRecoveryS = 3.0f;
     constexpr float kFlySpeedMps = 24.f;
     constexpr float kCertifiedStressFlyMps = 480.f;
     constexpr float kInformationalStressFlyMps = 960.f;
@@ -244,6 +258,10 @@ namespace
         DetailedPrewarm,
         DetailedChunks,
         DetailedSync,
+        MacroPage,
+        MacroRefinement,
+        OrographicPage,
+        OrographicContext,
     };
 
     // P4.3 — terrain presentation wakes only on terrain-relevant affect (orthogonal to scope).
@@ -973,6 +991,13 @@ namespace
         bool playMw7Launch = false;
         bool playMw8Launch = false;
         bool playOrographicLaunch = false;
+        bool orographicPlayable = false;
+        std::string helloTerrainLaw;
+        std::unordered_set<uint64_t> orographicPagesRequested;
+        std::unordered_set<uint64_t> orographicPagesResident;
+        std::vector<std::pair<int,int>> orographicPagesWanted;
+        DWORD orographicPageLastSendAttemptMs = 0;
+        int orographicContextPx = -1000000, orographicContextPy = -1000000;
         int classifyCompiledDepositsOverride = -1;
         int macroProvincesOverride = -1;
         int regionalGeologyOverride = -1;
@@ -1058,6 +1083,9 @@ namespace
         double certMv1GpuSweepYaw = 0.0;
         // MV1.C real 32 km raster visibility (two-pass depth split).
         bool mv1FarPass = false;
+        // The near-projection carrier submission is draw-only. Residency and
+        // tile construction already ran in the far pass this frame.
+        bool mv1RenderOnly = false;
         bool certMv1C = false;
         int certMv1CPhase = 0;
         int certMv1CStation = 0;
@@ -1241,6 +1269,13 @@ namespace
         Stage0PlayView stage0PlayView = Stage0PlayView::Clean;
         bool stage0StageMenuOpen = false;
         bool stage0ToolDrawerOpen = false;
+        // Clean player-facing UI.  This is deliberately separate from the
+        // certification browser: M opens a world map and ordinary display
+        // preferences, never the stage/cert catalog.
+        bool playerMapOpen = false;
+        bool playerCompassVisible = true;
+        bool playerHumanRulerVisible = true;
+        bool playerMeterRulerVisible = true;
         int stage0BrowserSelection = 0;
         int stage0BrowserCategory = 0;
         int stage0BoardSelection = 0;
@@ -1309,6 +1344,7 @@ namespace
         bool stage0ToolPerformanceHud = true;
         bool stage0ToolMutationHud = true;
         bool stage0ToolProvenance = false;
+        bool stage0OrographicDebugHud = false;
         bool stage0ToolGeologyCutaway = false;
         // Presentation-only, aim-local geology x-ray.  It never writes occupancy,
         // collision, matter, support, or geological authority.
@@ -1521,6 +1557,8 @@ namespace
         {
             GLuint vbo = 0;        // persistent GPU vertex buffer (pos+color)
             int vertCount = 0;
+            int terrainVertCount = 0;
+            int waterVertCount = 0;
             unsigned bytes = 0;
             int band = 0;          // 0=meso 1=regional 2=horizon
             int tris = 0;
@@ -1793,6 +1831,23 @@ namespace
         std::string waterGrammarVersion;
         int macroPageValidationFailures = 0;
         std::string macroPageValidationFailure;
+        uint64_t macroManifestRevision = 0;
+        std::unordered_set<uint64_t> macroPagesRequested;
+        std::unordered_set<uint64_t> macroRefinementsRequested;
+        std::unordered_set<uint64_t> macroRefinementsResident;
+        // A refined carrier page changes geometry, not world identity.  Retire
+        // only projection meshes whose footprints overlap that page so the new
+        // authoritative samples become visible without flushing the surrounding
+        // 32-128 km world or disturbing local-support-first startup.
+        int orographicProjectionInvalidations = 0;
+        int orographicMv1TilesRetired = 0;
+        int orographicMv2PagesRetired = 0;
+        // Renderer/terrain sampling can discover a missing immutable macro page
+        // before the bulk authority lane is ready.  Keep those discoveries until
+        // the network-owning frame loop can send them; a cache miss must never be
+        // lost merely because it happened during reconnect or cold start.
+        std::vector<std::pair<int,int>> macroPagesWanted;
+        DWORD macroPageLastSendAttemptMs = 0;
         float reliefVoxels = 64.f;
         float gradeDatum = 0.5f;
         float voxelEdgeM = 0.125f;
@@ -1816,6 +1871,18 @@ namespace
         // may select the presentation, but it may not silently change the
         // FableScript world baseline underneath an existing authority session.
         bool ei3RichLandformsSession = false;
+        // Set by the clean Stage-0 launchers. Development certification and
+        // diagnostic browsers remain available to their explicit launchers,
+        // but are not part of the player-facing world UI.
+        bool ei3PlayerFacing = false;
+        bool ei3OpeningSpawnXProvided = false;
+        bool ei3OpeningSpawnYProvided = false;
+        bool ei3OpeningSpawnZProvided = false;
+        bool ei3OpeningSpawnYawProvided = false;
+        float ei3OpeningSpawnX = 128.5f;
+        float ei3OpeningSpawnY = 128.5f;
+        float ei3OpeningSpawnZ = 0.0f;
+        float ei3OpeningSpawnYaw = 0.0f;
         bool certEi3LaunchMode = false;
         bool ei3ProjectionMode = false;
         bool ei3LandingIntent = false;
@@ -1828,6 +1895,9 @@ namespace
         size_t ei3SyncCursor = 0;
         size_t ei3DrawSnapshots = 0;
         size_t ei3DrawTriangles = 0;
+        int ei3DrainageSolutionBuildCount = -1;
+        int ei3DrainageSolutionDiskLoadCount = -1;
+        int ei3DrainageSolutionResidentContextCount = -1;
         float ei3DrawMinZ = 0.f, ei3DrawMaxZ = 0.f;
         bool ei3ProjectionAlignmentMeasured = false;
         bool ei3ProjectionAlignmentOk = false;
@@ -1904,6 +1974,9 @@ namespace
         int certEi3QBVisualStagingFramesMasked = 0;
         DWORD certEi3QBVisualStartMs = 0;
         DWORD certEi3QBVisualStationMs = 0;
+        // Fixed-seed native proof that one v11 caused mountain system survives
+        // authority packaging, page refinement, projection, and player support.
+        bool certStage0Orographic = false;
         IntentKind intent = IntentKind::None;
 
         // far surface cache: key = ((int64)x << 32) ^ (uint32)y
@@ -2068,6 +2141,8 @@ namespace
         float stage0SlideRemaining = 0.f;
         float stage0SlideSpeed = 0.f;
         float stage0SlideDirX = 0.f, stage0SlideDirY = 0.f;
+        float playerMoveSpeedMps = 0.f;
+        float stage0SlideFatigue = 0.f;
         DWORD sessionStartMs = 0; // GetTickCount at launch — session clock
         float camX = 128.f;
         float camY = 128.f;
@@ -2141,6 +2216,26 @@ namespace
     };
 
     AppState g;
+
+    // Player-facing cold-start breadcrumbs. This is deliberately a tiny,
+    // one-line-per-boundary trace rather than frame telemetry: if an individual
+    // authority projection step does not return, the last completed boundary
+    // identifies it without adding work inside the sampling loops.
+    void PlayerStartupTrace( char const* stage )
+    {
+        if ( !g.ei3PlayerFacing || !stage ) { return; }
+        static std::mutex traceMutex;
+        static bool first = true;
+        static ULONGLONG const startMs = GetTickCount64();
+        std::lock_guard<std::mutex> const lock( traceMutex );
+        FILE* file = nullptr;
+        if ( fopen_s( &file, "Docs\\provenance_stage0_startup_trace.txt",
+                first ? "wb" : "ab" ) != 0 || !file ) { return; }
+        first = false;
+        std::fprintf( file, "%llu ms  %s\n",
+            (unsigned long long)( GetTickCount64() - startMs ), stage );
+        std::fclose( file );
+    }
 
 // ---- MV1 far-tile VBO ownership procs (declared early: used by GL cleanup) ---
 #ifndef GL_ARRAY_BUFFER
@@ -2535,6 +2630,9 @@ namespace
     int CountSkyPixelsBelowTerrainSilhouette();
     int CountClearSkyPixels();
     void FollowStreamCenter();
+    bool OrographicPlayActive();
+    void ServiceOrographicPages();
+    void SeatOrographicPlayer();
     int CountLowerPpmSkyPixels( char const* path );
     int CountLowerPpmDarkPixels( char const* path, int* sampled );
     void DrawStage0CalibrationPresentation();
@@ -2556,6 +2654,9 @@ namespace
     SIZE_T CurrentWorkingSetBytes();
     double PercentileSorted( std::vector<double> const& sorted, double p );
     void DrawWorldgenPlayHud( int w, int h );
+    void DrawStage0OrographicDebugHud( int w, int h );
+    void InvalidateOrographicProjectionPage( int ri, int rj );
+    void Stage0OrographicCertTick();
     void WorldgenPlayShutdown();
     void UpdateAim();
     bool TryPickupGallerySample();
@@ -2685,6 +2786,12 @@ namespace
         g.bulkRequestTracker.Clear();
         g.bulkFlow.Clear();
         g.ei3Requested.clear();
+        g.macroPagesRequested.clear();
+        g.macroRefinementsRequested.clear();
+        g.macroRefinementsResident.clear();
+        g.ei3DrainageSolutionBuildCount = -1;
+        g.ei3DrainageSolutionDiskLoadCount = -1;
+        g.ei3DrainageSolutionResidentContextCount = -1;
         g.bulkTransportState = failed
             ? Ei0d::ConnectionState::Failed : Ei0d::ConnectionState::Closed;
     }
@@ -2815,6 +2922,30 @@ namespace
     bool SampleCanonicalWorldGenesisZ( float x, float y, float& outZ );
     bool SampleCanonicalWorldGenesisColor( float x, float y,
         uint8_t& r, uint8_t& green, uint8_t& b );
+    struct CanonicalMacroWaterSample
+    {
+        bool pageAuthority = false;
+        bool presenceConclusive = false;
+        bool occupied = false;
+        float occupancyWeight = 0.f;
+        float bottomZ = 0.f;
+        float surfaceZ = 0.f;
+        float depthM = 0.f;
+        uint64_t pageDigest = 0;
+        Ms1::WaterState state;
+    };
+    bool SampleCanonicalMacroWater( double x, double y,
+        CanonicalMacroWaterSample& out );
+    void AppendCanonicalMacroWaterPatch( std::vector<float>& vertices,
+        double x0, double y0, double x1, double y1,
+        float presentationBias, float appearanceDistanceM );
+    int EmitCanonicalMacroWaterPatchImmediate(
+        double x0, double y0, double x1, double y1,
+        float presentationBias, float appearanceDistanceM );
+    int EmitCanonicalMacroWaterGridImmediate(
+        double x0, double y0, int cells, double step,
+        float presentationBias, float appearanceDistanceM );
+    char const* MacroWaterBodyName( uint8_t body );
     float Ei3MacroPresentationOffset( float x, float y );
     bool FineSurfaceState( double x, double y, Ms1::SurfaceState& out );
     static uint8_t Ms1LithologyFromMaterial( std::string const& material );
@@ -3730,6 +3861,21 @@ namespace
             || view == Stage0PlayView::RichCausalLandforms;
     }
 
+    bool UsesSkirtlessMv1Tiles( Stage0PlayView view )
+    {
+        return view == Stage0PlayView::RichCausalLandforms;
+    }
+
+    bool UsesCut0RegionalCarrier( Stage0PlayView view )
+    {
+        // Q.B matter remains available as authority/telemetry, but its current
+        // bounded high-frequency mesh has not passed the visual refinement
+        // handoff. Preserve the regional WorldGenesis terrain as both the
+        // visible surface and walking support instead of covering it with a
+        // moving rectangular panel.
+        return view == Stage0PlayView::RichCausalLandforms;
+    }
+
     bool UsesMacroProvincesTerrain( Stage0PlayView view )
     {
         return IsMacroProvincesView(view)||IsRegionalGeologyView(view)
@@ -3921,6 +4067,13 @@ namespace
     {
         if(g.certPresentationIsolation)
         {return g.presentationIsolationMode==2;}
+        // Interactive Stage 0 must never turn presentation into a synchronous
+        // GPU completion barrier.  On the deployed native path the first
+        // glFinish can block for tens of seconds, leaving the player staring at
+        // a blue window even though the authority session is already healthy.
+        // Certificate launchers keep their historical completion contract;
+        // player-facing play streams whatever is ready and presents immediately.
+        if(g.ei3PlayerFacing)return false;
         // Paired-control C: a diagnostic can suppress the pre-present glFinish to
         // separate its completion-probe cost from real submission/present hitches.
         if(g.soakDisablePrePresentGlFinish)return false;
@@ -6938,6 +7091,206 @@ namespace
         return true;
     }
 
+    std::mutex& MacroPageWantMutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    bool MacroPageWanted( int ri, int rj )
+    {
+        std::lock_guard<std::mutex> const lock( MacroPageWantMutex() );
+        for ( auto const& page : g.macroPagesWanted )
+        { if ( page.first == ri && page.second == rj ) { return true; } }
+        return false;
+    }
+
+    void ForgetMacroPageWant( int ri, int rj )
+    {
+        std::lock_guard<std::mutex> const lock( MacroPageWantMutex() );
+        g.macroPagesWanted.erase( std::remove_if(
+            g.macroPagesWanted.begin(), g.macroPagesWanted.end(),
+            [=]( std::pair<int,int> const& page )
+            { return page.first == ri && page.second == rj; } ),
+            g.macroPagesWanted.end() );
+    }
+
+    bool RequestMacroPage( int ri, int rj )
+    {
+        uint64_t const key = CellKey( ri, rj );
+        if ( g.macroPagesRequested.count( key ) ) { return true; }
+        std::lock_guard<std::mutex> const lock( MacroPageWantMutex() );
+        for ( auto const& page : g.macroPagesWanted )
+        { if ( page.first == ri && page.second == rj ) { return true; } }
+        g.macroPagesWanted.emplace_back( ri, rj );
+        return true;
+    }
+
+    void ServiceMacroPageRequests()
+    {
+        if ( OrographicPlayActive() ) { return; }
+        if ( g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
+        // The bulk authority is a serial response lane.  On a player-facing
+        // cold start, compiling a missing 64 km horizon page here can occupy
+        // that lane before the detailed support beneath the player is admitted,
+        // leaving a responsive window unable to land for minutes.  The opening
+        // macro page is already prewarmed by the launcher; give the local P0/P1
+        // WorldSubstrate collar first use of the lane, then resume unbounded
+        // frontier projection after the player has authoritative support.
+        if ( g.ei3MatterPlayable
+          && ( g.ei3LandingIntent || g.ei3Residency.Size() < 9 ) ) { return; }
+        // WorldGenesis page compilation can be substantial. Keep exactly one
+        // frontier request in flight so nearest-first residency cannot turn one
+        // cache miss into a 25-page compile storm.
+        if ( !g.macroPagesRequested.empty() ) { return; }
+        DWORD const now = GetTickCount();
+        if ( now - g.macroPageLastSendAttemptMs < 500 ) { return; }
+
+        std::pair<int,int> selected{};
+        bool haveSelected = false;
+        double bestDistance = 0.0;
+        // Keep this network layer independent of the later MV2 renderer
+        // declarations while using the same certified 64 km page lattice.
+        constexpr double pageM=64000.0,pageHalfM=32000.0;
+        int const cri=(int)std::floor((g.feetX+pageHalfM)/pageM);
+        int const crj=(int)std::floor((g.feetY+pageHalfM)/pageM);
+        {
+            std::lock_guard<std::mutex> const lock( MacroPageWantMutex() );
+            for ( auto const& page : g.macroPagesWanted )
+            {
+                double const dx=(double)page.first-cri,dy=(double)page.second-crj;
+                double const distance=dx*dx+dy*dy;
+                if(!haveSelected||distance<bestDistance)
+                {selected=page;bestDistance=distance;haveSelected=true;}
+            }
+        }
+        if ( !haveSelected ) { return; }
+        int const ri=selected.first,rj=selected.second;
+        uint64_t const key = CellKey( ri, rj );
+        char params[96];
+        std::snprintf( params, sizeof( params ),
+            "{\"page_coord\":[%d,%d]}", ri, rj );
+        g.macroPageLastSendAttemptMs = now;
+        if ( !RequestBulkMethod( "macro_page", params,
+                { (int)PendingKind::MacroPage, ri, rj } ) )
+        { return; }
+        g.macroPagesRequested.insert( key );
+        g.statusLine = "authoritative world frontier generating";
+    }
+
+    void ServiceMacroPageRefinement()
+    {
+        if ( OrographicPlayActive() ) { return; }
+        if ( g.bulkTransportState != Ei0d::ConnectionState::Active
+          || !g.ei3MatterPlayable || g.ei3Residency.Size() < 9
+          || !g.macroPagesRequested.empty() || g.bulkFlow.Inflight() >= 2 )
+        { return; }
+        constexpr double pageM=64000.0,pageHalfM=32000.0;
+        int const ri=(int)std::floor((g.feetX+pageHalfM)/pageM);
+        int const rj=(int)std::floor((g.feetY+pageHalfM)/pageM);
+        uint64_t const key=CellKey(ri,rj);
+        if(g.macroRefinementsResident.count(key)
+          ||g.macroRefinementsRequested.count(key))return;
+        char params[128];
+        std::snprintf(params,sizeof(params),
+            "{\"page_coord\":[%d,%d],\"sample_step_m\":250}",ri,rj);
+        if(!RequestBulkMethod("macro_page",params,
+            {(int)PendingKind::MacroRefinement,ri,rj}))return;
+        g.macroRefinementsRequested.insert(key);
+        g.statusLine="v11 orographic approach carrier refining";
+    }
+
+    bool OrographicPlayActive()
+    {
+        return g.orographicPlayable || g.playOrographicLaunch
+            || g.helloTerrainLaw == AdoptPage::kTerrainLaw;
+    }
+
+    void RequestOrographicPage( int px, int py )
+    {
+        uint64_t const key = AdoptPage::PageKey( px, py );
+        if ( g.orographicPagesResident.count( key )
+          || g.orographicPagesRequested.count( key ) ) { return; }
+        for ( auto const& page : g.orographicPagesWanted )
+        { if ( page.first == px && page.second == py ) { return; } }
+        g.orographicPagesWanted.emplace_back( px, py );
+    }
+
+    void ServiceOrographicPages()
+    {
+        if ( !OrographicPlayActive() ) { return; }
+        g.orographicPlayable = true;
+        if ( g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
+        int px = 0, py = 0;
+        AdoptPage::PageOf( g.feetX, g.feetY, px, py );
+        constexpr int kRing = 2; // 5x5 1024 m pages — presence, not biome radius
+        for ( int dj = -kRing; dj <= kRing; ++dj )
+        for ( int di = -kRing; di <= kRing; ++di )
+            RequestOrographicPage( px + di, py + dj );
+
+        if ( !g.orographicPagesRequested.empty() || g.bulkFlow.Inflight() >= 2 )
+            return;
+        DWORD const now = GetTickCount();
+        if ( now - g.orographicPageLastSendAttemptMs < 200 ) { return; }
+
+        std::pair<int,int> selected{};
+        bool have = false;
+        double best = 0.0;
+        for ( auto const& page : g.orographicPagesWanted )
+        {
+            uint64_t const key = AdoptPage::PageKey( page.first, page.second );
+            if ( g.orographicPagesResident.count( key )
+              || g.orographicPagesRequested.count( key ) ) continue;
+            double const dx = (double)page.first - px, dy = (double)page.second - py;
+            double const d = dx * dx + dy * dy;
+            if ( !have || d < best ) { selected = page; best = d; have = true; }
+        }
+        if ( !have ) { return; }
+        char params[96];
+        std::snprintf( params, sizeof( params ),
+            "{\"page_coord\":[%d,%d]}", selected.first, selected.second );
+        g.orographicPageLastSendAttemptMs = now;
+        if ( !RequestBulkMethod( "orographic_production_page", params,
+                { (int)PendingKind::OrographicPage, selected.first, selected.second } ) )
+            return;
+        g.orographicPagesRequested.insert(
+            AdoptPage::PageKey( selected.first, selected.second ) );
+        g.statusLine = "orographic.phase17 page streaming";
+    }
+
+    void SeatOrographicPlayer()
+    {
+        if ( !OrographicPlayActive() || !g.ei3LandingIntent ) { return; }
+        if ( !AdoptPage::IsLive() )
+            AdoptPage::AdoptCanonicalFixture();
+        float ground = 0.f;
+        if ( !AdoptPage::SampleZ( g.feetX, g.feetY, g.gradeDatum,
+            g.reliefVoxels, g.voxelEdgeM, ground ) )
+            return;
+        float const sea = AdoptPage::PresentationSeaZ();
+        float landX = 0.f, landY = 0.f, landZ = 0.f;
+        if ( ground <= sea + 0.25f
+          && AdoptPage::FindHighestLand( g.gradeDatum, g.reliefVoxels,
+                g.voxelEdgeM, landX, landY, landZ )
+          && landZ > sea + 0.25f )
+        {
+            g.feetX = landX; g.feetY = landY;
+            g.camX = landX; g.camY = landY;
+            g.playerX = (int)std::floor( landX );
+            g.playerY = (int)std::floor( landY );
+            ground = landZ;
+        }
+        else if ( ground < sea )
+        { ground = sea; }
+        g.feetZ = ground;
+        g.camZ = ground + kEyeHeightM;
+        g.velZ = 0.f;
+        g.walkMode = true;
+        g.grounded = true;
+        g.ei3LandingIntent = false;
+        g.statusLine = "orographic.phase17 standing on adopted surface";
+    }
+
     bool RequestBulkHello()
     {
         std::string const requestId = "b-" + std::to_string( g.nextBulkId );
@@ -7030,8 +7383,20 @@ namespace
                 g.ei3ProjectionAlignmentMeanDeltaM,
                 g.ei3ProjectionAlignmentMaxAbsM,
                 g.ei3ProjectionJoinMaxAbsM, count );
-            g.lastError = "ei3_projection_vertical_mismatch";
-            g.statusLine = receipt;
+            if ( UsesCut0RegionalCarrier( g.stage0PlayView ) )
+            {
+                // Q.B is diagnostic-only in Cut 0 until this residual qualifies.
+                // The admitted WorldGenesis carrier remains visible and
+                // walkable, so this is refinement telemetry, not a runtime
+                // authority failure.
+                g.statusLine = std::string( receipt )
+                    + " - detailed panel withheld";
+            }
+            else
+            {
+                g.lastError = "ei3_projection_vertical_mismatch";
+                g.statusLine = receipt;
+            }
         }
         else
         {
@@ -7051,7 +7416,8 @@ namespace
 
     bool SamplePublishedMatterGround( float x, float y, float& outZ )
     {
-        if ( !g.ei3MatterPlayable ) { return false; }
+        if ( !g.ei3MatterPlayable
+          || UsesCut0RegionalCarrier( g.stage0PlayView ) ) { return false; }
         double const sx = (double)x
             + 0.5 * CausalVisibleExposure::kDualStepM;
         double const sy = (double)y
@@ -7090,6 +7456,19 @@ namespace
         Ei3::MatterSurfaceSample matter;
         bool const sampled = g.ei3Residency.SampleMatterSurface(
             g.feetX, g.feetY, matter );
+        float macroTerrainZ=0.f,publishedNearZ=0.f,supportZ=0.f;
+        bool const macroTerrain=SampleCanonicalWorldGenesisZ(
+            g.feetX,g.feetY,macroTerrainZ);
+        bool const nearPublished=SamplePublishedMatterGround(
+            g.feetX,g.feetY,publishedNearZ);
+        bool const support=SampleGroundZBase(g.feetX,g.feetY,supportZ);
+        // The detailed snapshot already carries an absolute, fixed-height
+        // WorldGenesis/WorldSubstrate surface.  Re-applying only its small
+        // material delta to a 500 m bilinear page discarded the authoritative
+        // massif, ridge, saddle and drainage relief and produced moving shelves.
+        float const reconstructedNearZ=sampled?matter.z:0.f;
+        CanonicalMacroWaterSample water;
+        bool const waterPage=SampleCanonicalMacroWater(g.feetX,g.feetY,water);
         FILE* file = nullptr;
         if ( fopen_s( &file, "Docs\\provenance_ei3_playable_runtime.txt", "wb" ) == 0
           && file )
@@ -7099,7 +7478,7 @@ namespace
                 "client=ESOTERICA_PROVENANCE\n"
                 "authority=FABLESCRIPT_WORLDGENESIS_WORLDSUBSTRATE\n"
                 "world_uuid=%s\nmacro_genesis_digest=%s\nworld_baseline_digest=%s\n"
-                "near_renderer=CONTINUOUS_MATTER_BOUND\n"
+                "near_renderer=%s\n"
                 "ei3_diagnostic_lattice=NORMAL_PLAY_OFF\n"
                 "mw8_calibration_surface=NORMAL_PLAY_OFF\n"
                 "alignment_samples=%zu\nalignment_mean_delta_m=%+.6f\n"
@@ -7110,13 +7489,43 @@ namespace
                 "alignment=%s\nlanded=%s\nwalk_mode=%d\ngrounded=%d\n"
                 "travel_from_alignment_m=%.6f\nmax_travel_m=%.6f\n"
                 "authoritative_support_holds=%d\n"
+                "\n[CUT0_OWNERSHIP]\n"
+                "absolute_xy=%.6f,%.6f\n"
+                "macro_terrain_z=%s,%.6f\n"
+                "matter_parent_z=%s,%.6f\n"
+                "matter_authored_z=%s,%.6f\n"
+                "near_reconstructed_z=%s,%.6f\n"
+                "near_published_z=%s,%.6f\n"
+                "water_page_authority=%s\n"
+                "water_presence_conclusive=%d\nwater_occupied=%d\n"
+                "water_body_class=%s\n"
+                "water_body_id=UNAVAILABLE_IN_WD1_PACKED_PAGE\n"
+                "water_depth_m=%.6f\nwater_bottom_z=%.6f\nwater_surface_z=%.6f\n"
+                "current_water_card_z=NOT_PRESENT_IN_CANONICAL_PLAY\n"
+                "support_z=%s,%.6f\n"
+                "terrain_render_owner=%s\n"
+                "water_render_owner=%s\n"
+                "grounding_owner=%s\n"
+                "rectangular_water_cards=0\n"
+                "macro_water_geometry=CONTOURED_DESCRIPTOR_OCCUPANCY\n"
+                "detailed_water_authority=DEFERRED_TO_EI5\n"
                 "feet_xyz=%.6f,%.6f,%.6f\ncamera_z=%.6f\n"
                 "matter_sample=%s\nmatter_surface_z=%.6f\nmaterial_id=%s\n"
                 "surface_family=%s\nformation_id=%s\nsubstrate_class=%s\n"
+                "orographic_system_id=%s\nrange_id=%s\nmassif_id=%s\n"
+                "peak_id=%s\nridge_id=%s\nsaddle_id=%s\n"
+                "watershed_id=%s\nchannel_id=%s\n"
+                "active_macro_resolution_m=%d\nactive_near_resolution_m=4\n"
+                "drainage_solution_build_count=%d\n"
+                "drainage_solution_disk_load_count=%d\n"
+                "drainage_solution_resident_context_count=%d\n"
                 "chunk_coord=%d,%d\nchunk_revision=%lld\nresident_chunks=%zu\n",
                 landed ? "PASS" : "FAIL",
                 g.worldUuid.c_str(), g.macroGenesisDigest.c_str(),
                 g.worldBaselineDigest.c_str(),
+                UsesCut0RegionalCarrier(g.stage0PlayView)
+                    ?"WORLDGENESIS_REGIONAL_CARRIER_CUT0"
+                    :"CONTINUOUS_MATTER_BOUND",
                 g.ei3ProjectionAlignmentSamples,
                 g.ei3ProjectionAlignmentMeanDeltaM,
                 g.ei3ProjectionAlignmentMeanAbsM,
@@ -7124,16 +7533,49 @@ namespace
                 g.ei3ProjectionJoinMeanAbsM,
                 g.ei3ProjectionJoinMaxAbsM,
                 g.ei3MacroPresentationBiasM,
-                g.ei3ProjectionAlignmentOk ? "PASS" : "FAIL",
+                UsesCut0RegionalCarrier(g.stage0PlayView)
+                    ?(g.ei3ProjectionAlignmentOk?"QUALIFIED":"WITHHELD")
+                    :(g.ei3ProjectionAlignmentOk?"PASS":"FAIL"),
                 landed ? "PASS" : "FAIL", g.walkMode ? 1 : 0,
                 g.grounded ? 1 : 0, travelM, g.ei3PlayableMaxTravelM,
                 g.ei3PlayableSupportHolds,
+                g.feetX,g.feetY,
+                macroTerrain?"PASS":"FAIL",macroTerrainZ,
+                sampled?"PASS":"FAIL",sampled?matter.parentZ:0.f,
+                sampled?"PASS":"FAIL",sampled?matter.z:0.f,
+                sampled&&macroTerrain?"PASS":"FAIL",reconstructedNearZ,
+                nearPublished?"PASS":"WAITING",publishedNearZ,
+                waterPage?"PASS":"FAIL",
+                waterPage&&water.presenceConclusive?1:0,
+                waterPage&&water.occupied?1:0,
+                waterPage?MacroWaterBodyName(water.state.body):"UNKNOWN",
+                waterPage?water.depthM:0.f,
+                waterPage?water.bottomZ:0.f,
+                waterPage?water.surfaceZ:0.f,
+                support?"PASS":"FAIL",supportZ,
+                nearPublished?"PUBLISHED_WORLDSUBSTRATE_REFINEMENT":"WORLDGENESIS_CARRIER",
+                waterPage&&water.occupied?"WD1_CONTOURED_OVERLAY":"NONE_OR_DEFERRED",
+                nearPublished?"PUBLISHED_TERRAIN_COLLISION_FIELD":"WORLDGENESIS_TERRAIN",
                 g.feetX, g.feetY, g.feetZ, g.camZ,
                 sampled ? "PASS" : "FAIL", sampled ? matter.z : 0.f,
                 sampled ? matter.dominantMaterialId.c_str() : "",
                 sampled ? matter.dominantSurfaceFamily.c_str() : "",
                 sampled ? matter.formationId.c_str() : "",
                 sampled ? matter.substrateClass.c_str() : "",
+                sampled ? matter.orographicSystemId.c_str() : "",
+                sampled ? matter.parentRangeId.c_str() : "",
+                sampled ? matter.parentMassifId.c_str() : "",
+                sampled ? matter.macroPeakId.c_str() : "",
+                sampled ? matter.macroRidgeId.c_str() : "",
+                sampled ? matter.macroSaddleId.c_str() : "",
+                sampled ? matter.macroWatershedId.c_str() : "",
+                sampled ? matter.macroChannelId.c_str() : "",
+                g.macroRefinementsResident.count(CellKey(
+                    (int)std::floor((g.feetX+32000.0)/64000.0),
+                    (int)std::floor((g.feetY+32000.0)/64000.0))) ? 250 : 500,
+                g.ei3DrainageSolutionBuildCount,
+                g.ei3DrainageSolutionDiskLoadCount,
+                g.ei3DrainageSolutionResidentContextCount,
                 sampled ? matter.chunkCoord.x : 0,
                 sampled ? matter.chunkCoord.y : 0,
                 (long long)( sampled ? matter.chunkRevision : -1 ),
@@ -7146,6 +7588,7 @@ namespace
 
     void TickEi3Residency()
     {
+        if ( OrographicPlayActive() ) { return; }
         if ( !g.ei3ProjectionMode
           || g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
         if ( g.ei3NeedsSync )
@@ -7185,7 +7628,7 @@ namespace
         // one fixed camera station queue ahead of that station's interactive
         // P0/P1 snapshots.  This is certificate scheduling only; ordinary
         // playable traversal retains the predictive prewarm path below.
-        if ( !g.certEi3QBVisual
+        if ( !g.certEi3QBVisual && !g.certStage0Orographic
           && now - g.ei3LastPrewarmMs >= 500 && g.bulkFlow.Inflight() < 4 )
         {
             std::vector<Ei3::ChunkCoord> prewarm;
@@ -7210,7 +7653,7 @@ namespace
         }
 
         std::vector<Ei3::ChunkCoord> batch;
-        if ( !g.certEi3QBVisual )
+        if ( !g.certEi3QBVisual && !g.certStage0Orographic )
         {
             for ( Ei3::DesiredChunk const& value : desired )
             {
@@ -7253,6 +7696,10 @@ namespace
                 : g.ei3Residency.GroundHeight( g.feetX, g.feetY, ground );
             if ( visibleSupportReady )
             {
+                CanonicalMacroWaterSample water;
+                if ( SampleCanonicalMacroWater( g.feetX, g.feetY, water )
+                  && water.occupied && water.surfaceZ > ground )
+                    ground = water.surfaceZ;
                 g.feetZ = ground; g.camZ = ground + kEyeHeightM;
                 g.velZ = 0.f; g.walkMode = true; g.grounded = true;
                 g.ei3LandingIntent = false;
@@ -7271,7 +7718,8 @@ namespace
         g.certEi3RequestedMax = (std::max)( g.certEi3RequestedMax, g.ei3Requested.size() );
         g.certEi3FrameWorstMs = (std::max)( g.certEi3FrameWorstMs, g.frameDt * 1000.f );
         g.certEi3CoarseRetained |= g.playWorldgenInitialized
-            && ( !g.stage0FarCoarseTiles.empty() || !g.stage0FarStitchTiles.empty() );
+            && ( g.mv2bPagesResident > 0
+              || !g.stage0FarCoarseTiles.empty() || !g.stage0FarStitchTiles.empty() );
 
         if ( g.certEi3Phase == 0 )
         {
@@ -7538,8 +7986,10 @@ namespace
         float supportZ = 0.f;
         bool const matterReady = g.ei3Residency.SampleMatterSurface(
             station.x, station.y, matter );
-        bool const supportReady = SamplePublishedMatterGround(
-            station.x, station.y, supportZ );
+        bool const canonicalCarrier = UsesCut0RegionalCarrier( g.stage0PlayView );
+        bool const supportReady = canonicalCarrier
+            ? SampleCanonicalWorldGenesisZ( station.x, station.y, supportZ )
+            : SamplePublishedMatterGround( station.x, station.y, supportZ );
         bool const expectedAuthority = matterReady
             && matter.richLandform == g.certEi3QBVisualRichExpected
             && ( !g.certEi3QBVisualRichExpected
@@ -7561,7 +8011,8 @@ namespace
         // is presentation readiness only: it neither changes authority nor lets
         // the client manufacture missing world truth.
         bool const coarseWorldReady = g.playWorldgenInitialized
-            && g.regionalBiomeRuntime
+            && ( canonicalCarrier ? g.canonicalHandshakeOk
+                                  : g.regionalBiomeRuntime != nullptr )
             && g.mv1Warmed
             && g.mv1PendingNow == 0
             && !g.mv1Tiles.empty();
@@ -7811,12 +8262,21 @@ namespace
         Ei3::MatterSurfaceSample publishedMatter;
         bool const publishedMatterHere = g.ei3Residency.SampleMatterSurface(
             g.feetX, g.feetY, publishedMatter );
+        bool admittedHere=publishedHere;
+        if(UsesCut0RegionalCarrier(g.stage0PlayView))
+        {
+            // Cut 0 withholds the unqualified Q.B panel but still requires the
+            // corresponding matter authority to be resident. The admitted
+            // visible/support surface is the regional carrier.
+            admittedHere=SampleCanonicalWorldGenesisZ(
+                g.feetX,g.feetY,publishedGround);
+        }
         if ( g.certEi3VPhase > 0 && g.certEi3VPhase < 99 )
         {
             if ( g.mv1Tiles.empty() ) { ++g.certEi3VMacroEmptyFrames; }
             if ( g.mv1SourceRev != g.certEi3VSourceRev )
             { ++g.certEi3VSourceChanges; }
-            if ( g.certEi3VPhase == 1 && !publishedHere )
+            if ( g.certEi3VPhase == 1 && !publishedMatterHere )
             { ++g.certEi3VCoarseHandoffFrames; }
         }
 
@@ -7825,7 +8285,8 @@ namespace
             bool const ready = g.canonicalHandshakeOk
                 && g.bulkTransportState == Ei0d::ConnectionState::Active
                 && g.playWorldgenInitialized && !g.mv1Tiles.empty()
-                && g.ei3Residency.Published() > 0 && publishedHere
+                && g.ei3Residency.Published() > 0 && admittedHere
+                && publishedMatterHere
                 && !g.worldUuid.empty() && !g.macroGenesisDigest.empty();
             if ( ready )
             {
@@ -7849,7 +8310,22 @@ namespace
             }
             else if ( now - g.certEi3VStartMs > 60000 )
             {
-                g.lastError = "ei3_v_warmup_timeout";
+                std::string const prior = g.lastError;
+                g.lastError = "ei3_v_warmup_timeout:handshake="
+                    + std::to_string( g.canonicalHandshakeOk ? 1 : 0 )
+                    + ",bulk=" + std::to_string( (int)g.bulkTransportState )
+                    + ",worldgen=" + std::to_string(
+                        g.playWorldgenInitialized ? 1 : 0 )
+                    + ",mv1=" + std::to_string( g.mv1Tiles.size() )
+                    + ",mv1_pending=" + std::to_string( g.mv1PendingNow )
+                    + ",published=" + std::to_string(
+                        g.ei3Residency.Published() )
+                    + ",admitted=" + std::to_string( admittedHere ? 1 : 0 )
+                    + ",matter=" + std::to_string(
+                        publishedMatterHere ? 1 : 0 )
+                    + ",page_failures=" + std::to_string(
+                        g.macroPageValidationFailures )
+                    + ( prior.empty() ? "" : ",prior=" + prior );
                 g.certEi3VPhase = 99;
             }
             return;
@@ -7875,11 +8351,15 @@ namespace
             // contract being certified.
             if ( !g.certEi3VLegReady )
             {
-                float aheadGround = 0.f;
-                if ( SamplePublishedMatterGround(
-                        g.camX + dx[leg] * (float)Ei3::kChunkEdgeM,
-                        g.camY + dy[leg] * (float)Ei3::kChunkEdgeM,
-                        aheadGround ) )
+                float const aheadX=g.camX+dx[leg]*(float)Ei3::kChunkEdgeM;
+                float const aheadY=g.camY+dy[leg]*(float)Ei3::kChunkEdgeM;
+                float aheadGround=0.f;Ei3::MatterSurfaceSample aheadMatter;
+                bool const aheadDetail=g.ei3Residency.SampleMatterSurface(
+                    aheadX,aheadY,aheadMatter);
+                bool const aheadSurface=UsesCut0RegionalCarrier(g.stage0PlayView)
+                    ?SampleCanonicalWorldGenesisZ(aheadX,aheadY,aheadGround)
+                    :SamplePublishedMatterGround(aheadX,aheadY,aheadGround);
+                if(aheadDetail&&aheadSurface)
                 {
                     g.certEi3VLegReady = true;
                     ++g.certEi3VAheadCheckpoints;
@@ -7900,7 +8380,7 @@ namespace
             // matter surface used by landing/grounding is published here.
             if ( g.certEi3VEndpointPending )
             {
-                if ( publishedHere )
+                if ( admittedHere && publishedMatterHere )
                 {
                     bool const returning = g.certEi3VLeg == 1 || g.certEi3VLeg == 3;
                     if ( returning )
@@ -7999,7 +8479,7 @@ namespace
             g.keys['F'] = g.certEi3VFrames == 0;
             ++g.certEi3VFrames;
             if ( !g.ei3LandingIntent && g.walkMode && g.grounded
-              && publishedHere )
+              && admittedHere )
             {
                 g.keys['F'] = false;
                 g.certEi3VLandingPassed = true;
@@ -8013,7 +8493,7 @@ namespace
                 for ( int i = 0; i < 4; ++i )
                 {
                     float candidate = publishedGround;
-                    if ( SamplePublishedMatterGround(
+                    if ( SampleGroundZBase(
                             g.feetX + dirsX[i] * 12.f,
                             g.feetY + dirsY[i] * 12.f, candidate )
                       && candidate - publishedGround < bestDelta )
@@ -8040,10 +8520,10 @@ namespace
         if ( g.certEi3VPhase == 3 )
         {
             g.keys['W'] = true;
-            if ( !publishedHere ) { ++g.certEi3VWalkDetailMisses; }
+            if ( !publishedMatterHere ) { ++g.certEi3VWalkDetailMisses; }
             if ( !g.walkMode || !g.grounded )
             { ++g.certEi3VUngroundedWalkFrames; }
-            if ( publishedHere && g.grounded
+            if ( admittedHere && g.grounded
               && std::fabs( g.feetZ - publishedGround ) > 0.15f )
             { ++g.certEi3VGroundMismatchFrames; }
             float const wx = g.feetX - g.certEi3VWalkStartX;
@@ -8152,6 +8632,12 @@ namespace
                 "support_hold_delta=%d\nresident_max=%zu\nrequested_max=%zu\n"
                 "snapshots_published=%llu\nsnapshots_rejected=%llu\n"
                 "frame_worst_ms=%.3f\nworld_uuid=%s\ngenesis_digest=%s\n"
+                "canonical_handshake=%d\nbulk_state=%d\n"
+                "play_worldgen_initialized=%d\nmv1_tiles=%zu\nmv1_pending=%d\n"
+                "mv2_pages_resident=%d\n"
+                "mv1_authority_sample_failures=%lld\n"
+                "macro_page_validations=%lld\nmacro_page_validation_failures=%d\n"
+                "macro_page_validation_failure=%s\nmacro_authority_root=%s\n"
                 "endpoint_block=%d,%d block_present=%d collision_present=%d\n"
                 "endpoint_chunks=%d,%d..%d,%d chunks_present=%d\n"
                 "start_xy=%.3f,%.3f\nfinal_xyz=%.3f,%.3f,%.3f\n"
@@ -8175,6 +8661,16 @@ namespace
                 (unsigned long long)g.ei3Residency.Rejected(),
                 g.certEi3VFrameWorstMs, g.worldUuid.c_str(),
                 g.macroGenesisDigest.c_str(),
+                g.canonicalHandshakeOk ? 1 : 0,
+                (int)g.bulkTransportState,
+                g.playWorldgenInitialized ? 1 : 0,
+                g.mv1Tiles.size(), g.mv1PendingNow,
+                g.mv2bPagesResident,
+                (long long)g.mv1AuthoritySampleFailures,
+                (long long)g.macroPageValidations,
+                g.macroPageValidationFailures,
+                g.macroPageValidationFailure.c_str(),
+                g.macroAuthorityRoot.c_str(),
                 diagnosticBx, diagnosticBy,
                 diagnosticBlockPresent ? 1 : 0,
                 diagnosticCollisionPresent ? 1 : 0,
@@ -8331,7 +8827,23 @@ namespace
         g.surfaceGrammarVersion = hello.surfaceGrammarVersion;
         g.waterGrammarId = hello.waterGrammarId;
         g.waterGrammarVersion = hello.waterGrammarVersion;
+        ExtractJsonString( line, "terrain_law", g.helloTerrainLaw );
+        if ( g.helloTerrainLaw == AdoptPage::kTerrainLaw
+          || g.playOrographicLaunch )
+        {
+            g.orographicPlayable = true;
+            g.wd1bEnabled = false; // v11 WD1 occupancy is a second Z field
+        }
         g.controlSessionBinding = Ei0d::BindingFromHello( hello );
+        if(g.ei3PlayerFacing)
+        {
+            char detail[256]{};
+            std::snprintf(detail,sizeof(detail),
+                "canonical handshake accepted genesis=%.12s generator=%s/%s descriptor=%.12s",
+                g.macroGenesisDigest.c_str(),g.canonicalGeneratorFamily.c_str(),
+                g.canonicalGeneratorVersion.c_str(),g.descriptorSchemaDigest.c_str());
+            PlayerStartupTrace(detail);
+        }
         g.ei3ProjectionMode = line.find( "\"detailed_chunks\"" ) != std::string::npos
             && line.find( "\"detailed_prewarm\"" ) != std::string::npos;
         g.statusLine = g.ei3ProjectionMode
@@ -8479,10 +8991,15 @@ namespace
             }
         }
 
-        // Analytic Esoterica planet residency — concentric disk; bridge surface_field optional.
-        ProvenanceGeo::EnsureReady();
-        EnsureGeoDisk( (int)std::floor( g.feetX ), (int)std::floor( g.feetY ),
-            (std::min)( kFarRadiusCells, 64 ) );
+        // Legacy/browser play owns an analytic Esoterica disk. Canonical EI3
+        // play owns no local terrain generator: accepting the server player
+        // position must stay non-blocking while projected authority arrives.
+        if ( !g.ei3AuthorityEnabled )
+        {
+            ProvenanceGeo::EnsureReady();
+            EnsureGeoDisk( (int)std::floor( g.feetX ), (int)std::floor( g.feetY ),
+                (std::min)( kFarRadiusCells, 64 ) );
+        }
         g.streamComplete = true;
         g.blocksLoaded = g.blocksWanted;
         g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
@@ -13018,6 +13535,7 @@ namespace
             return;
         }
         g.bulkFlow.Complete();
+        PendingKind const kind = (PendingKind)correlated.kind;
 
         bool ok = false;
         ExtractJsonBool( line, "ok", ok );
@@ -13026,8 +13544,16 @@ namespace
             std::string code;
             ExtractJsonString( line, "code", code );
             g.lastError = code.empty() ? "bulk_request_failed" : code;
-            if ( correlated.kind == (int)PendingKind::DetailedChunks
-              || correlated.kind == (int)PendingKind::DetailedSync )
+            if ( kind == PendingKind::MacroPage )
+            { g.macroPagesRequested.erase( CellKey( correlated.bx, correlated.by ) ); }
+            if ( kind == PendingKind::MacroRefinement )
+            { g.macroRefinementsRequested.erase(
+                CellKey( correlated.bx, correlated.by ) ); }
+            if ( kind == PendingKind::OrographicPage )
+            { g.orographicPagesRequested.erase(
+                AdoptPage::PageKey( correlated.bx, correlated.by ) ); }
+            if ( kind == PendingKind::DetailedChunks
+              || kind == PendingKind::DetailedSync )
             { g.ei3Requested.clear(); }
             if ( g.bulkTransportState == Ei0d::ConnectionState::HelloSent )
             { CloseBulkSock( true ); }
@@ -13053,9 +13579,95 @@ namespace
             return;
         }
 
-        PendingKind const kind = (PendingKind)correlated.kind;
+        if ( kind == PendingKind::OrographicPage )
+        {
+            uint64_t const key = AdoptPage::PageKey( correlated.bx, correlated.by );
+            g.orographicPagesRequested.erase( key );
+            std::string pageJson;
+            if ( !Ei3::Detail::ExtractObject( line, "page", pageJson ) )
+            {
+                g.lastError = "orographic_page_missing_carrier";
+                return;
+            }
+            AdoptPage::WorldIdentity ident = AdoptPage::G().identity;
+            if ( ident.tectonic.empty() )
+                ident = AdoptPage::LoadInstalledIdentity( AdoptPage::kFixtureDir );
+            if ( ident.tectonic.empty() )
+                ident = AdoptPage::LoadInstalledIdentity( AdoptPage::kLiveFixtureDir );
+            AdoptPage::AdoptResult const adopted = AdoptPage::Adopt( ident, pageJson );
+            if ( !adopted.ok )
+            {
+                g.lastError = adopted.reason.empty()
+                    ? "orographic_page_refused" : adopted.reason;
+                return;
+            }
+            g.orographicPagesResident.insert( key );
+            g.orographicPlayable = true;
+            g.orographicPagesWanted.erase(
+                std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
+                    [&]( std::pair<int,int> const& p )
+                    { return p.first == correlated.bx && p.second == correlated.by; } ),
+                g.orographicPagesWanted.end() );
+            if ( !AdoptPage::ContextLive() )
+            {
+                std::string ctx;
+                if ( AdoptPage::ReadFile(
+                    (std::string(AdoptPage::kLiveFixtureDir) + "/canonical_orographic_context_1_1.json").c_str(), ctx )
+                  || AdoptPage::ReadFile(
+                    (std::string(AdoptPage::kFixtureDir) + "/canonical_orographic_context_1_1.json").c_str(), ctx ) )
+                    AdoptPage::AdoptContext( ident, ctx );
+            }
+            if ( AdoptPage::IsLive() && AdoptPage::ContextLive()
+              && AdoptPage::Mw8().cells.empty() )
+            {
+                AdoptPage::CompileMw8( CausalRegionalBiome::Control::ForceOn );
+                CausalRegionalEcology::Compile( CausalRegionalEcology::Control::ForceOn );
+            }
+            g.statusLine = "orographic.phase17 page adopted";
+            return;
+        }
+
+        if ( kind == PendingKind::MacroPage
+          || kind == PendingKind::MacroRefinement )
+        {
+            Ei3::ChunkCoord coord;
+            uint64_t const requestedKey = CellKey( correlated.bx, correlated.by );
+            if(kind==PendingKind::MacroPage)
+                g.macroPagesRequested.erase(requestedKey);
+            else g.macroRefinementsRequested.erase(requestedKey);
+            if ( !Ei3::Detail::ExtractPair( line, "page_coord", coord )
+              || coord.x != correlated.bx || coord.y != correlated.by )
+            {
+                g.lastError = "macro_page_response_coordinate_mismatch";
+                return;
+            }
+            ForgetMacroPageWant( coord.x, coord.y );
+            // The authority publishes both artifact and enlarged manifest before
+            // replying. Advance the local admission epoch; Mv2LoadPage will
+            // re-read and validate that authoritative snapshot on its next try.
+            ++g.macroManifestRevision;
+            if(kind==PendingKind::MacroRefinement)
+                g.macroRefinementsResident.insert(requestedKey);
+            if ( g.lastError.rfind( "macro_projection_page_unavailable:", 0 ) == 0 )
+            { g.lastError.clear(); }
+            g.statusLine = kind==PendingKind::MacroRefinement
+                ? "v11 250 m orographic approach carrier admitted"
+                : "authoritative world frontier extended";
+            if(kind==PendingKind::MacroRefinement)
+                InvalidateOrographicProjectionPage(coord.x,coord.y);
+            InvalidateTerrainMesh( kind==PendingKind::MacroRefinement
+                ? "orographic_refinement_published"
+                : "macro_frontier_published" );
+            return;
+        }
         if ( kind == PendingKind::DetailedChunks )
         {
+            Ei3::Detail::ExtractInt( line, "drainage_solution_build_count",
+                g.ei3DrainageSolutionBuildCount );
+            Ei3::Detail::ExtractInt( line, "drainage_solution_disk_load_count",
+                g.ei3DrainageSolutionDiskLoadCount );
+            Ei3::Detail::ExtractInt( line, "drainage_solution_resident_context_count",
+                g.ei3DrainageSolutionResidentContextCount );
             std::vector<std::string> snapshots;
             if ( !Ei3::ExtractSnapshots( line, snapshots ) )
             {
@@ -13197,6 +13809,16 @@ namespace
         g.bulkRequestTracker.Clear();
         g.controlFlow.Clear();
         g.bulkFlow.Clear();
+        g.macroPagesRequested.clear();
+        g.macroRefinementsRequested.clear();
+        g.macroRefinementsResident.clear();
+        g.ei3DrainageSolutionBuildCount = -1;
+        g.ei3DrainageSolutionDiskLoadCount = -1;
+        g.ei3DrainageSolutionResidentContextCount = -1;
+        {
+            std::lock_guard<std::mutex> const lock( MacroPageWantMutex() );
+            g.macroPagesWanted.clear();
+        }
         g.heldBite.clear();
         g.heldTotalG = 0;
         g.heldDominant.clear();
@@ -14295,9 +14917,26 @@ namespace
 
     bool SampleGroundZBase( float x, float y, float& outZ )
     {
+        // Orographic.phase17 product consume: adopted carrier only. Never fall
+        // through to WorldGenesis v11 or 8 m WorldSubstrate — that mix is the
+        // unload/reload shape-change (500 m / 250 m / 64 m dashed chunks).
+        if ( OrographicPlayActive() )
+        {
+            return AdoptPage::SampleZ( x, y, g.gradeDatum, g.reliefVoxels,
+                g.voxelEdgeM, outZ );
+        }
         // AdoptPage::SampleZ reconstructs the banked orographic.phase17 carrier
         // for consume certification only. Native Stage0 collision and grounding
         // stay on WorldGenesis / published matter. Do not replace this path.
+        if ( g.ei3MatterPlayable
+          && UsesCut0RegionalCarrier( g.stage0PlayView ) )
+        {
+            // Visibility and support stay on the same underlying terrain while
+            // the Q.B refinement is withheld. Water remains a separate overlay
+            // and never participates in this support query.
+            return SampleCanonicalWorldGenesisZ( x, y, outZ );
+        }
+
         if ( g.ei3ProjectionMode && g.certEi3Ptc
           && g.ei3Residency.GroundHeight( x, y, outZ ) )
         {
@@ -15531,10 +16170,13 @@ namespace
         // The Stage-13 package stream is already the complete live-terrain
         // authority.  Its cell cache exists only for nearby diagnostic/tool
         // consumers and must not duplicate the 192 m package residency path.
-        int const analyticRadius = UsesPackageOwnedTerrain( g.stage0PlayView )
-            ? 16 : (std::min)( kFarRadiusCells, 64 );
-        EnsureGeoDisk( cx, cy, analyticRadius );
-        EvictStage0Residency( cx, cy );
+        if ( !g.ei3AuthorityEnabled )
+        {
+            int const analyticRadius = UsesPackageOwnedTerrain( g.stage0PlayView )
+                ? 16 : (std::min)( kFarRadiusCells, 64 );
+            EnsureGeoDisk( cx, cy, analyticRadius );
+            EvictStage0Residency( cx, cy );
+        }
         g.streamComplete = true;
         g.blocksLoaded = g.blocksWanted;
         g.statusLine = "Phase 4 - Esoterica geography resident + interaction digests";
@@ -16058,7 +16700,8 @@ namespace
             auto it = g.stage0TerrainBlocks.find( CellKey( bx, by ) );
             if ( it != g.stage0TerrainBlocks.end() && it->second.list )
             {
-                bool const submit=!PresentationSuppressesTerrainSubmission()
+                bool const submit=!UsesCut0RegionalCarrier(g.stage0PlayView)
+                    &&!PresentationSuppressesTerrainSubmission()
                     &&(!PresentationUsesMinimalTerrainSubmission()
                         ||(bx==playerBx&&by==playerBy));
                 if(submit)
@@ -17247,14 +17890,14 @@ namespace
                       || !SampleCanonicalWorldGenesisZ(
                             (float)wx,(float)wy,carrierZ))
                     {complete=false;return 0.0;}
-                    // Detailed matter is an authored local refinement of its
-                    // engine parent surface.  Compose that delta onto the same
-                    // canonical carrier used by every coarser LOD.  Drawing
-                    // matter.z directly put the 8 m blocks in a second vertical
-                    // frame (about 16 m above the visible world), creating the
-                    // floating tan safety slab and replacement-world effect.
-                    double const refined=(double)carrierZ
-                        + ((double)matter.z-(double)matter.parentZ);
+                    // matter.z is an absolute fixed-height sample produced by
+                    // the canonical WorldSubstrate.  It is not a local offset.
+                    // Keeping only (z-parentZ) on the coarse page carrier erased
+                    // the caused orographic surface and made the near field a
+                    // player-following shelf.  The 500/250 m page remains the
+                    // admitted far representation; a published detailed block
+                    // renders and collides against its absolute authority.
+                    double const refined=(double)matter.z;
                     if(!std::isfinite(refined))
                     {complete=false;return 0.0;}
                     return refined;
@@ -17591,8 +18234,24 @@ namespace
                 {EmitStage8Triangle(b,material.c_str());}
             }
         }
-        glEnd();glEndList();QueryPerformanceCounter(&compileEnd);
-        int const tris=(int)package.mesh.triangles.size();
+        glEnd();
+        int waterTris=0;
+        if(g.ei3MatterPlayable&&g.wd1bEnabled
+          &&package.view==Stage0PlayView::RichCausalLandforms)
+        {
+            double const x0=((double)package.bx*CausalVisibleExposure::kBlockCells
+                -0.5)*CausalVisibleExposure::kDualStepM;
+            double const y0=((double)package.by*CausalVisibleExposure::kBlockCells
+                -0.5)*CausalVisibleExposure::kDualStepM;
+            // The detailed terrain mesh, matching collision field, and WD1
+            // fallback water overlay cross the render-thread publication
+            // boundary in one display list. Water never becomes support Z.
+            waterTris=EmitCanonicalMacroWaterGridImmediate(x0,y0,
+                CausalVisibleExposure::kBlockCells,
+                CausalVisibleExposure::kDualStepM,0.f,192.f);
+        }
+        glEndList();QueryPerformanceCounter(&compileEnd);
+        int const tris=(int)package.mesh.triangles.size()+waterTris;
         bool const publishedCollision=package.collisionSurface!=nullptr;
         terrainBlocks.emplace(key,Stage0TerrainBlock{
             list,tris,std::move(package.collisionSurface)});
@@ -18327,7 +18986,8 @@ namespace
             auto it = terrainBlocks.find( CellKey( bx, by ) );
             if ( it != terrainBlocks.end() && it->second.list )
             {
-                bool const submit=!PresentationSuppressesTerrainSubmission()
+                bool const submit=!UsesCut0RegionalCarrier(g.stage0PlayView)
+                    &&!PresentationSuppressesTerrainSubmission()
                     &&(!PresentationUsesMinimalTerrainSubmission()
                         ||(bx==playerBx&&by==playerBy));
                 if(submit)
@@ -18385,7 +19045,8 @@ namespace
 
     bool Stage0ViewShowsRuler( Stage0PlayView view )
     {
-        return g.stage0ToolRuler || view == Stage0PlayView::DistanceRuler;
+        return (!g.ei3PlayerFacing||g.playerMeterRulerVisible)
+            &&(g.stage0ToolRuler || view == Stage0PlayView::DistanceRuler);
     }
 
     bool Stage0ViewShowsPalette( Stage0PlayView view )
@@ -18983,9 +19644,18 @@ namespace
 
         int const cx = (int)std::floor( g.feetX );
         int const cy = (int)std::floor( g.feetY );
-        EnsureGeoDisk( cx, cy,
-            UsesPackageOwnedTerrain( g.stage0PlayView ) ? 16 : 64 );
-        EvictStage0Residency( cx, cy );
+        // Canonical EI3 play is a dumb terminal.  Its visible/support terrain
+        // comes from the admitted WorldGenesis projection and its resident
+        // matter refinements; synchronously building the legacy analytic cell
+        // disk here generated a second local world before the first present.
+        // Besides violating authority ownership, the 64 m disk could keep a
+        // fresh player-facing launch on the clear-sky frame for minutes.
+        if ( !g.ei3AuthorityEnabled )
+        {
+            EnsureGeoDisk( cx, cy,
+                UsesPackageOwnedTerrain( g.stage0PlayView ) ? 16 : 64 );
+            EvictStage0Residency( cx, cy );
+        }
         float groundZ = g.feetZ;
         if ( SampleGroundZBase( g.feetX, g.feetY, groundZ ) )
         {
@@ -19047,7 +19717,10 @@ namespace
             StartStage0Cut0CanonicalLauncher();
             return false;
         }
-        if ( IsCausalPlayableView( view ) && !EnsureCausalPlayableAuthority( view ) )
+        bool const canonicalServerCarrier = g.ei3MatterPlayable
+            && view == Stage0PlayView::RichCausalLandforms;
+        if ( IsCausalPlayableView( view ) && !canonicalServerCarrier
+          && !EnsureCausalPlayableAuthority( view ) )
         {
             std::string const* reason = &g.causalGeologyAuthorityReason;
             if ( IsCausalExposureView( view ) ) { reason = &g.causalExposureAuthorityReason; }
@@ -19954,6 +20627,17 @@ namespace
     bool Mv1SampleAuthority(double x,double y,float& outZ,
         uint8_t& r,uint8_t& gg,uint8_t& bb)
     {
+        if(OrographicPlayActive())
+        {
+            if(!AdoptPage::SampleZ((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
+                g.voxelEdgeM,outZ))return false;
+            double grade=0.0;
+            AdoptPage::SampleGrade(x,y,grade);
+            float const t=(float)std::clamp((grade-0.45)/0.55,0.0,1.0);
+            r=(uint8_t)(70.0+40.0*t); gg=(uint8_t)(90.0+50.0*t);
+            bb=(uint8_t)(58.0+20.0*(1.0-t));
+            return true;
+        }
         if(g.ei3MatterPlayable)
         {
             if(!SampleCanonicalWorldGenesisZ((float)x,(float)y,outZ))return false;
@@ -20043,6 +20727,11 @@ namespace
     // neighbouring tiles of different resolution, so no crack ever shows sky.
     bool Mv1BuildTile(int band,int tx,int ty,AppState::Mv1Tile& out)
     {
+        static bool tracedFirstPlayerTileAttempt=false;
+        bool const traceFirstPlayerTile=g.ei3PlayerFacing&&g.mv1Tiles.empty()
+            &&!tracedFirstPlayerTileAttempt;
+        if(traceFirstPlayerTile)tracedFirstPlayerTileAttempt=true;
+        if(traceFirstPlayerTile)PlayerStartupTrace("nearest terrain tile build begin");
         Mv1Band const& B=kMv1Bands[band];
         int const F=kMv1FineCells;                 // fine cells per axis
         int const stride=F+1;
@@ -20061,6 +20750,7 @@ namespace
             zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
             tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
         }
+        if(traceFirstPlayerTile)PlayerStartupTrace("nearest terrain samples complete");
         auto Z=[&](int i,int j)->float{return zf[(size_t)j*stride+i];};
         // Choose coarsest cells C in {4,8,16,32} whose bilinear approximation
         // error against the fine samples is within the band target.
@@ -20110,8 +20800,9 @@ namespace
         {++g.mv1BufferProcFailures;return false;}
         int tris=0;
         float const skirtZ=(float)(tileMinZ-(2.0*B.errorTargetM+8.0));
-        // Interleaved [x,y,z, r,g,b] float vertices; flat shading is baked by
-        // replicating the per-facet colour to each of the facet's vertices.
+        // Interleaved [x,y,z, r,g,b] float vertices. Canonical play carries
+        // authoritative appearance at every vertex; frozen diagnostic paths
+        // retain their historical per-facet colour.
         static thread_local std::vector<float> verts;
         verts.clear();
         verts.reserve((size_t)(chosen*chosen+chosen*4)*6*6);
@@ -20137,6 +20828,24 @@ namespace
             curG=(std::min)(1.f,gv/255.f*shade);
             curB=(std::min)(1.f,bv/255.f*shade);
         };
+        auto pushCanonicalSurface=[&](int i,int j,float x,float y,float z)
+        {
+            int const im=(std::max)(0,i-1),ip=(std::min)(F,i+1);
+            int const jm=(std::max)(0,j-1),jp=(std::min)(F,j+1);
+            float nx=-(Z(ip,j)-Z(im,j))/(float)((ip-im)*fs);
+            float ny=-(Z(i,jp)-Z(i,jm))/(float)((jp-jm)*fs);
+            float nz=1.f;
+            float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
+            if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+            constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
+            float const hillshade=0.22f+0.95f*(std::max)(
+                0.f,nx*kLx+ny*kLy+nz*kLz);
+            size_t const k=(size_t)j*stride+i;
+            curR=(std::min)(1.f,cr[k]/255.f*hillshade);
+            curG=(std::min)(1.f,cg[k]/255.f*hillshade);
+            curB=(std::min)(1.f,cb[k]/255.f*hillshade);
+            push(x,y,z);
+        };
         for(int cj=0;cj<chosen;++cj)for(int ci=0;ci<chosen;++ci)
         {
             int const i0=ci*step,j0=cj*step,i1=i0+step,j1=j0+step;
@@ -20145,41 +20854,63 @@ namespace
             float const dzdy=((z01+z11)-(z00+z10))/(2.f*(float)em);
             float const wx0=(float)(x0+ci*em),wy0=(float)(y0+cj*em);
             float const wx1=(float)(x0+(ci+1)*em),wy1=(float)(y0+(cj+1)*em);
-            shadeOf(-dzdx,-dzdy,1.f,i0,j0,i1,j1);
-            push(wx0,wy0,z00);push(wx1,wy0,z10);push(wx0,wy1,z01);
-            push(wx1,wy0,z10);push(wx1,wy1,z11);push(wx0,wy1,z01);
-            tris+=2;
-        }
-        // Perimeter skirts (drop each boundary edge down to skirtZ).
-        auto skirt=[&](float ax,float ay,float az,float bx,float by,float bz)
-        {
-            float bottomA=skirtZ,bottomB=skirtZ;
             if(g.ei3MatterPlayable)
             {
-                // Canonical play never exposes the old tile-wide diagnostic
-                // curtain. Adjacent MW8 tiles share their edge samples, so a
-                // shallow, locally coloured seal is sufficient for raster
-                // precision without drawing a giant gray/tan wall.
-                bottomA=az-0.25f;bottomB=bz-0.25f;
-                float sampleZ=0.f;uint8_t rr=94,green=77,bb=56;
-                if(Mv1SampleAuthority(.5*(ax+bx),.5*(ay+by),sampleZ,rr,green,bb))
-                {
-                    curR=(float)rr/255.f;curG=(float)green/255.f;curB=(float)bb/255.f;
-                }
+                // Canonical material samples are authoritative at the vertices.
+                // Interpolate those samples in the rasterizer instead of baking
+                // one flat colour into an entire 64–128 m facet.
+                pushCanonicalSurface(i0,j0,wx0,wy0,z00);
+                pushCanonicalSurface(i1,j0,wx1,wy0,z10);
+                pushCanonicalSurface(i0,j1,wx0,wy1,z01);
+                pushCanonicalSurface(i1,j0,wx1,wy0,z10);
+                pushCanonicalSurface(i1,j1,wx1,wy1,z11);
+                pushCanonicalSurface(i0,j1,wx0,wy1,z01);
             }
-            else{curR=0.30f;curG=0.28f;curB=0.26f;}
-            push(ax,ay,az);push(bx,by,bz);push(ax,ay,bottomA);
-            push(bx,by,bz);push(bx,by,bottomB);push(ax,ay,bottomA);
+            else
+            {
+                shadeOf(-dzdx,-dzdy,1.f,i0,j0,i1,j1);
+                push(wx0,wy0,z00);push(wx1,wy0,z10);push(wx0,wy1,z01);
+                push(wx1,wy0,z10);push(wx1,wy1,z11);push(wx0,wy1,z01);
+            }
             tris+=2;
-        };
-        for(int c=0;c<chosen;++c)
+        }
+        if(!UsesSkirtlessMv1Tiles(g.stage0PlayView))
         {
-            float const a=(float)(x0+c*em),b=(float)(x0+(c+1)*em);
-            float const p=(float)(y0+c*em),q=(float)(y0+(c+1)*em);
-            skirt(a,(float)y0,Z(c*step,0),b,(float)y0,Z((c+1)*step,0));           // -Y
-            skirt(a,(float)(y0+B.tileM),Z(c*step,F),b,(float)(y0+B.tileM),Z((c+1)*step,F)); // +Y
-            skirt((float)x0,p,Z(0,c*step),(float)x0,q,Z(0,(c+1)*step));           // -X
-            skirt((float)(x0+B.tileM),p,Z(F,c*step),(float)(x0+B.tileM),q,Z(F,(c+1)*step)); // +X
+            // Diagnostic/certification views retain the historical perimeter
+            // closure. Canonical play is a shared-edge continuous surface; a
+            // per-tile curtain creates the rectangular walls reported during
+            // descent and must never become visible world geometry.
+            auto skirt=[&](float ax,float ay,float az,float bx,float by,float bz)
+            {
+                curR=0.30f;curG=0.28f;curB=0.26f;
+                push(ax,ay,az);push(bx,by,bz);push(ax,ay,skirtZ);
+                push(bx,by,bz);push(bx,by,skirtZ);push(ax,ay,skirtZ);
+                tris+=2;
+            };
+            for(int c=0;c<chosen;++c)
+            {
+                float const a=(float)(x0+c*em),b=(float)(x0+(c+1)*em);
+                float const p=(float)(y0+c*em),q=(float)(y0+(c+1)*em);
+                skirt(a,(float)y0,Z(c*step,0),b,(float)y0,Z((c+1)*step,0));
+                skirt(a,(float)(y0+B.tileM),Z(c*step,F),b,(float)(y0+B.tileM),Z((c+1)*step,F));
+                skirt((float)x0,p,Z(0,c*step),(float)x0,q,Z(0,(c+1)*step));
+                skirt((float)(x0+B.tileM),p,Z(F,c*step),(float)(x0+B.tileM),q,Z(F,(c+1)*step));
+            }
+        }
+        size_t const terrainFloats=verts.size();
+        if(g.ei3MatterPlayable&&g.wd1bEnabled)
+        {
+            // Keep authoritative water in the same immutable tile allocation,
+            // but in a distinct draw range. The renderer submits every terrain
+            // range first and every water range second, so tile order can never
+            // make land from a later tile overwrite water from an earlier one.
+            for(int cj=0;cj<chosen;++cj)for(int ci=0;ci<chosen;++ci)
+            {
+                double const wx0=x0+ci*em,wy0=y0+cj*em;
+                AppendCanonicalMacroWaterPatch(verts,wx0,wy0,
+                    wx0+em,wy0+em,presentationBias,(float)B.outer);
+            }
+            tris+=(int)((verts.size()-terrainFloats)/18u);
         }
         GLuint const vbo=Mv1AllocVbo();
         if(!vbo){++g.mv1VboAllocationFailures;return false;}
@@ -20191,12 +20922,16 @@ namespace
         QueryPerformanceCounter(&u1);
         if(uq.QuadPart>0)g.mv1UploadMsFrame+=1000.0*(double)(u1.QuadPart-u0.QuadPart)/(double)uq.QuadPart;
         ++g.mv1TilesBuiltFrame;g.mv1BytesUploadedFrame+=(long long)bytes;
-        out.vbo=vbo;out.vertCount=(int)(verts.size()/6);out.bytes=bytes;
+        out.vbo=vbo;out.vertCount=(int)(verts.size()/6);
+        out.terrainVertCount=(int)(terrainFloats/6);
+        out.waterVertCount=out.vertCount-out.terrainVertCount;
+        out.bytes=bytes;
         out.band=band;out.tris=tris;out.sourceRev=g.mv1SourceRev;
         out.cx=(float)(x0+0.5*B.tileM);out.cy=(float)(y0+0.5*B.tileM);
         out.halfM=(float)(0.5*B.tileM);
         g.mv1ResidentBytes+=(long long)bytes;
         g.mv1BytesHighWater=(std::max)(g.mv1BytesHighWater,g.mv1ResidentBytes);
+        if(traceFirstPlayerTile)PlayerStartupTrace("nearest terrain tile published");
         return true;
     }
 
@@ -20314,11 +21049,77 @@ namespace
 
     void DrawMv1MultiScaleTerrain()
     {
-        g.mv1BuildMsThisFrame=0.0;
-        g.mv1TilesBuiltFrame=0;g.mv1BytesUploadedFrame=0;g.mv1UploadMsFrame=0.0;
-        if(!g.playWorldgenBaseline||!g.mv1Enabled){return;}
-        if(!IsRegionalBiomeView(g.stage0PlayView)||!g.regionalBiomeRuntime)
-        {if(!g.mv1Tiles.empty())Mv1ReleaseAll();return;}
+        static bool tracedPlayerMv1Disabled = false;
+        static bool tracedPlayerMv1ViewGate = false;
+        static bool tracedPlayerMv1AuthorityWait = false;
+        static bool tracedPlayerMv1AuthorityReady = false;
+        static bool tracedPlayerMv1Desired = false;
+        if(!g.mv1RenderOnly)
+        {
+            g.mv1BuildMsThisFrame=0.0;
+            g.mv1TilesBuiltFrame=0;g.mv1BytesUploadedFrame=0;g.mv1UploadMsFrame=0.0;
+        }
+        if(!g.playWorldgenBaseline||!g.mv1Enabled)
+        {
+            if(g.ei3PlayerFacing&&!tracedPlayerMv1Disabled)
+            {
+                tracedPlayerMv1Disabled=true;
+                char detail[160]{};
+                std::snprintf(detail,sizeof(detail),
+                    "terrain carrier disabled baseline=%d mv1=%d",
+                    g.playWorldgenBaseline?1:0,g.mv1Enabled?1:0);
+                PlayerStartupTrace(detail);
+            }
+            return;
+        }
+        bool const canonicalCarrier=g.ei3MatterPlayable
+            &&UsesCut0RegionalCarrier(g.stage0PlayView);
+        if(!IsRegionalBiomeView(g.stage0PlayView)
+          ||(!canonicalCarrier&&!g.regionalBiomeRuntime))
+        {
+            if(g.ei3PlayerFacing&&!tracedPlayerMv1ViewGate)
+            {
+                tracedPlayerMv1ViewGate=true;
+                char detail[192]{};
+                std::snprintf(detail,sizeof(detail),
+                    "terrain carrier view gate regional=%d canonical=%d runtime=%d view=%d",
+                    IsRegionalBiomeView(g.stage0PlayView)?1:0,
+                    canonicalCarrier?1:0,g.regionalBiomeRuntime?1:0,
+                    (int)g.stage0PlayView);
+                PlayerStartupTrace(detail);
+            }
+            if(!g.mv1Tiles.empty())Mv1ReleaseAll();return;
+        }
+        if(canonicalCarrier
+          &&(!g.canonicalHandshakeOk||g.macroGenesisDigest.empty()))
+        {
+            if(g.ei3PlayerFacing&&!tracedPlayerMv1AuthorityWait)
+            {
+                tracedPlayerMv1AuthorityWait=true;
+                char detail[192]{};
+                std::snprintf(detail,sizeof(detail),
+                    "terrain carrier awaiting authority handshake=%d genesis_chars=%zu",
+                    g.canonicalHandshakeOk?1:0,g.macroGenesisDigest.size());
+                PlayerStartupTrace(detail);
+            }
+            // A server-owned carrier has no authority before the handshake.
+            // Do not spin the tile builder against an intentionally unavailable
+            // source or report cold-start back-pressure as corrupt samples.
+            if(!g.mv1Tiles.empty())Mv1ReleaseAll();
+            g.mv1PendingNow=0;
+            return;
+        }
+        if(g.ei3PlayerFacing&&canonicalCarrier&&!tracedPlayerMv1AuthorityReady)
+        {
+            tracedPlayerMv1AuthorityReady=true;
+            char detail[192]{};
+            std::snprintf(detail,sizeof(detail),
+                "terrain carrier authority ready handshake=%d genesis_chars=%zu tiles=%zu",
+                g.canonicalHandshakeOk?1:0,g.macroGenesisDigest.size(),g.mv1Tiles.size());
+            PlayerStartupTrace(detail);
+        }
+        if(!g.mv1RenderOnly)
+        {
         Mv1ServiceRetired();
 
         // Source-revision lineage: if the authority changed, every retained band
@@ -20389,6 +21190,15 @@ namespace
                 desired.insert(key);
                 if(!g.mv1Tiles.count(key))want.push_back(Want{band,tx,ty,d2});
             }
+        }
+        if(g.ei3PlayerFacing&&!tracedPlayerMv1Desired)
+        {
+            tracedPlayerMv1Desired=true;
+            char detail[192]{};
+            std::snprintf(detail,sizeof(detail),
+                "terrain carrier desired=%zu missing_candidates=%zu anchor=%d,%d feet=%.1f,%.1f",
+                desired.size(),want.size(),anchorX,anchorY,g.feetX,g.feetY);
+            PlayerStartupTrace(detail);
         }
         // Coverage ownership transfer. Canonical play builds the full sampled
         // terrain, so an entering fringe can take several frames to drain under
@@ -20486,6 +21296,7 @@ namespace
         g.mv1ResidentHighWater=(std::max)(g.mv1ResidentHighWater,(int)g.mv1Tiles.size());
 
         g.mv1Warmed=g.mv1Warmed||g.mv1PendingNow==0;
+        }
 
         // Draw resident tiles from their persistent VBOs (absolute world space,
         // depth-tested; coarser bands z-biased below finer terrain). No display
@@ -20508,11 +21319,17 @@ namespace
         float const rgx=g.pickRightX, rgy=g.pickRightY;
         constexpr float kMv1CullTanHalfFovH=1.88f; // ~62 deg, wider than the 50 deg clamp
         int calls=0;long long trisSubmitted=0;
-        struct Mv1Vis{int band;float cy,cx;uint64_t key;GLuint vbo;int vertCount;int tris;};
+        struct Mv1Vis{int band;float cy,cx;uint64_t key;GLuint vbo;
+            int terrainVertCount,waterVertCount,tris;};
         static thread_local std::vector<Mv1Vis> vis;
         vis.clear();
         if(!g.mv1Tiles.empty()&&s_mv1BufReady)
         {
+            // Canonical vertices carry independently resolved material colour
+            // and hillshade. Interpolate them across the rasterized surface;
+            // the application's legacy GL_FLAT default otherwise exposes every
+            // triangle even though the VBO contains smooth vertex data.
+            if(g.ei3MatterPlayable)glShadeModel(GL_SMOOTH);
             for(auto const& kv:g.mv1Tiles)
             {
                 if(!kv.second.vbo)continue;
@@ -20526,7 +21343,8 @@ namespace
                     if((std::abs)(sdot)-slack > (fdot+slack)*kMv1CullTanHalfFovH)continue;
                 }
                 vis.push_back(Mv1Vis{kv.second.band,kv.second.cy,kv.second.cx,kv.first,
-                    kv.second.vbo,kv.second.vertCount,kv.second.tris});
+                    kv.second.vbo,kv.second.terrainVertCount,
+                    kv.second.waterVertCount,kv.second.tris});
             }
             std::sort(vis.begin(),vis.end(),[](Mv1Vis const& a,Mv1Vis const& b){
                 if(a.band!=b.band)return a.band<b.band;
@@ -20541,12 +21359,34 @@ namespace
                 s_mv1BindBuffer(GL_ARRAY_BUFFER,v.vbo);
                 glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
                 glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
-                glDrawArrays(GL_TRIANGLES,0,v.vertCount);
+                glDrawArrays(GL_TRIANGLES,0,v.terrainVertCount);
                 ++calls;trisSubmitted+=v.tris;
             }
+            // One global overlay pass: no later terrain tile can overwrite an
+            // earlier tile's water. Polygon offset changes raster depth only;
+            // authoritative water surface_z remains unchanged.
+            // The far carrier spans kilometres, so a one-unit offset is not
+            // enough after projection quantization. Keep the bias in depth
+            // space (authoritative surface_z is untouched) and draw both faces
+            // so the surface remains visible when the camera is submerged.
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-3.f,-8.f);
+            for(Mv1Vis const& v:vis)
+            {
+                if(v.waterVertCount<=0)continue;
+                s_mv1BindBuffer(GL_ARRAY_BUFFER,v.vbo);
+                glVertexPointer(3,GL_FLOAT,kStride,(void const*)0);
+                glColorPointer(3,GL_FLOAT,kStride,(void const*)(3*sizeof(float)));
+                glDrawArrays(GL_TRIANGLES,v.terrainVertCount,v.waterVertCount);
+                ++calls;
+            }
+            glDisable(GL_POLYGON_OFFSET_FILL);
+            glEnable(GL_CULL_FACE);
             s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
             glDisableClientState(GL_COLOR_ARRAY);
             glDisableClientState(GL_VERTEX_ARRAY);
+            if(g.ei3MatterPlayable)glShadeModel(GL_FLAT);
         }
         QueryPerformanceCounter(&s1);
         if(gpuSpan)Mv1GpuEndSpan();
@@ -21516,6 +22356,35 @@ namespace
         i=std::clamp(i,0,p.surfN-1);j=std::clamp(j,0,p.surfN-1);
         return Ms1::Unpack(p.surfCodes[(size_t)j*p.surfN+i],p.surfVersion);
     }
+    static bool Mv2AppearanceAt(Mv2Page const& p,double x,double y,
+        float distanceM,Ms1::RGB& out)
+    {
+        if(p.surfN<2||p.surfStep<=0
+          ||(int)p.surfCodes.size()<p.surfN*p.surfN)return false;
+        double const fx=(x-p.minX)/p.surfStep;
+        double const fy=(y-p.minY)/p.surfStep;
+        int i0=(int)std::floor(fx),j0=(int)std::floor(fy);
+        i0=std::clamp(i0,0,p.surfN-2);
+        j0=std::clamp(j0,0,p.surfN-2);
+        float const tx=(float)std::clamp(fx-i0,0.0,1.0);
+        float const ty=(float)std::clamp(fy-j0,0.0,1.0);
+        Ms1::RGB c[4];
+        int const ii[4]={i0,i0+1,i0+1,i0};
+        int const jj[4]={j0,j0,j0+1,j0+1};
+        for(int k=0;k<4;++k)
+        {
+            Ms1::SurfaceState const s=Ms1::Unpack(
+                p.surfCodes[(size_t)jj[k]*p.surfN+ii[k]],p.surfVersion);
+            if(!s.valid)return false;
+            c[k]=Ms1::ResolveAppearance(s,x,y,distanceM);
+        }
+        float const w[4]={(1.f-tx)*(1.f-ty),tx*(1.f-ty),tx*ty,
+            (1.f-tx)*ty};
+        out={0.f,0.f,0.f};
+        for(int k=0;k<4;++k)
+        {out.r+=w[k]*c[k].r;out.g+=w[k]*c[k].g;out.b+=w[k]*c[k].b;}
+        return true;
+    }
     static Ms1::WaterState Mv2WaterAt(Mv2Page const& p,double x,double y)
     {
         if(p.watN<=0||p.watStep<=0||(int)p.watCodes.size()<p.watN*p.watN)
@@ -21560,9 +22429,11 @@ namespace
         // representation check part of the 128 km presentation hot path.
         static MacroManifestAuthority::Manifest manifest;
         static std::string manifestGenesis,manifestSchema,manifestRoot;
+        static uint64_t manifestRevision = ~uint64_t( 0 );
         if(!manifest.valid||manifestGenesis!=context.genesisDigest
            ||manifestSchema!=context.descriptorSchemaDigest
-           ||manifestRoot!=g.macroAuthorityRoot)
+           ||manifestRoot!=g.macroAuthorityRoot
+           ||manifestRevision!=g.macroManifestRevision)
         {
             std::string const manifestPath=g.macroAuthorityRoot+"\\macro_manifest.mcm";
             manifest=MacroManifestAuthority::Load(
@@ -21570,6 +22441,7 @@ namespace
             manifestGenesis=context.genesisDigest;
             manifestSchema=context.descriptorSchemaDigest;
             manifestRoot=g.macroAuthorityRoot;
+            manifestRevision=g.macroManifestRevision;
         }
         auto const bindingIt=manifest.pages.find(std::make_pair(ri,rj));
         if(!manifest.valid||bindingIt==manifest.pages.end())
@@ -21590,6 +22462,16 @@ namespace
             {
                 if(g.canonicalHandshakeOk)
                 {
+                    if(g.ei3PlayerFacing)
+                    {
+                        char detail[320]{};
+                        std::snprintf(detail,sizeof(detail),
+                            "macro manifest rejected failure=%s root=%s genesis=%.12s generator=%s/%s descriptor=%.12s",
+                            out.authorityDetail.c_str(),g.macroAuthorityRoot.c_str(),
+                            context.genesisDigest.c_str(),context.generatorFamily.c_str(),
+                            context.generatorVersion.c_str(),context.descriptorSchemaDigest.c_str());
+                        PlayerStartupTrace(detail);
+                    }
                     g.canonicalHandshakeOk=false;
                     g.lastError="macro_manifest_authority_invalid:"+out.authorityDetail;
                 }
@@ -21597,9 +22479,11 @@ namespace
             else
             {
                 // A valid immutable manifest may be a partial projection cache.
-                // Refuse this absent page without local fallback, while keeping
-                // the proven engine/world session available for replacement.
+                // Ask the canonical server to extend that replaceable projection
+                // cache. The client still refuses local generation and admits
+                // only the manifest-bound result published by WorldGenesis.
                 g.lastError="macro_projection_page_unavailable:"+out.authorityDetail;
+                RequestMacroPage(ri,rj);
             }
             return false;
         }
@@ -21624,6 +22508,15 @@ namespace
                 if(candidate.failure==MacroPageAuthority::Failure::WrongGenesis
                    ||g.macroPageValidationFailures>=3)
                 {
+                    if(g.ei3PlayerFacing)
+                    {
+                        char detail[256]{};
+                        std::snprintf(detail,sizeof(detail),
+                            "macro page rejected region=%d,%d failure=%s detail=%s",
+                            ri,rj,g.macroPageValidationFailure.c_str(),
+                            candidate.detail.c_str());
+                        PlayerStartupTrace(detail);
+                    }
                     g.canonicalHandshakeOk=false;
                     g.lastError="macro_page_authority_invalid:"+g.macroPageValidationFailure;
                     g.statusLine="macro page authority session failed closed";
@@ -21637,7 +22530,19 @@ namespace
         {
             recordValidation();
             out.authorityDetail=bindingFailure;out.failure=MacroPageAuthority::Failure::PageDigestMismatch;
-            if(g.canonicalHandshakeOk){g.canonicalHandshakeOk=false;g.lastError="macro_manifest_page_binding_invalid:"+bindingFailure;}
+            if(g.canonicalHandshakeOk)
+            {
+                if(g.ei3PlayerFacing)
+                {
+                    char detail[256]{};
+                    std::snprintf(detail,sizeof(detail),
+                        "macro page binding rejected region=%d,%d failure=%s",
+                        ri,rj,bindingFailure.c_str());
+                    PlayerStartupTrace(detail);
+                }
+                g.canonicalHandshakeOk=false;
+                g.lastError="macro_manifest_page_binding_invalid:"+bindingFailure;
+            }
             return false;
         }
         recordValidation();
@@ -21648,7 +22553,257 @@ namespace
         out.surfDigest=candidate.surfaceDigest;out.surfCodes=candidate.surfaceCodes;
         out.watN=candidate.waterN;out.watVersion=candidate.waterVersion;out.watStep=candidate.waterStep;
         out.watDigest=candidate.waterDigest;out.watCodes=candidate.waterCodes;
+        ForgetMacroPageWant(ri,rj);
         return true;
+    }
+
+    char const* MacroWaterBodyName(uint8_t body)
+    {
+        switch(body)
+        {
+            case Ms1::WB_NONE:return "NONE";
+            case Ms1::WB_HEADWATER:return "HEADWATER";
+            case Ms1::WB_PERENNIAL_RIVER:return "PERENNIAL_RIVER";
+            case Ms1::WB_SEDIMENT_RIVER:return "SEDIMENT_RIVER";
+            case Ms1::WB_BRAIDED:return "BRAIDED";
+            case Ms1::WB_ALPINE_LAKE:return "ALPINE_LAKE";
+            case Ms1::WB_CLOSED_LAKE:return "CLOSED_LAKE";
+            case Ms1::WB_FLOODPLAIN:return "FLOODPLAIN";
+            case Ms1::WB_WETLAND:return "WETLAND";
+            case Ms1::WB_ORGANIC:return "ORGANIC";
+            case Ms1::WB_ARID_WASH:return "ARID_WASH";
+            case Ms1::WB_SPRING:return "SPRING";
+            case Ms1::WB_VOLCANIC_POOL:return "VOLCANIC_POOL";
+            case Ms1::WB_CRATER:return "CRATER";
+            case Ms1::WB_OPEN_OCEAN:return "OPEN_OCEAN";
+            default:return "UNKNOWN";
+        }
+    }
+
+    bool SampleCanonicalMacroWater(double x,double y,
+        CanonicalMacroWaterSample& out)
+    {
+        out=CanonicalMacroWaterSample();
+        // Headless launch certification validates the pinned descriptor/page
+        // chain before the live transport handshake flag is raised. Do not
+        // pre-empt that valid state here: Mv2LoadPage performs the actual
+        // manifest, identity, digest and encoding admission and fails closed.
+        if(g.macroAuthorityRoot.empty())return false;
+        int const ri=(int)std::floor((x+kMv2RegionHalfM)/kMv2RegionM);
+        int const rj=(int)std::floor((y+kMv2RegionHalfM)/kMv2RegionM);
+
+        // This cache contains immutable, validated FableScript projection pages.
+        // It is presentation-only and bounded; changing world identity drops it.
+        static std::unordered_map<uint64_t,Mv2Page> pages;
+        static std::string identity;
+        std::string const nextIdentity=g.macroAuthorityRoot+"\n"
+            +g.macroGenesisDigest+"\n"+g.descriptorSchemaDigest;
+        if(identity!=nextIdentity){pages.clear();identity=nextIdentity;}
+        uint64_t const key=CellKey(ri,rj);
+        auto it=pages.find(key);
+        if(it==pages.end())
+        {
+            if(pages.size()>=64u)pages.clear();
+            Mv2Page page;
+            if(!Mv2LoadPage(ri,rj,page))return false;
+            it=pages.emplace(key,std::move(page)).first;
+        }
+        Mv2Page const& p=it->second;
+        if(p.watN<2||p.watStep<=0.0
+          ||(int)p.watCodes.size()<p.watN*p.watN
+          ||p.n<2||p.step<=0.0||(int)p.h.size()<p.n*p.n)return false;
+        out.pageAuthority=true;out.pageDigest=p.watDigest;
+
+        auto terrainAt=[&](double wx,double wy)
+        {
+            double fx=(wx-p.minX)/p.step,fy=(wy-p.minY)/p.step;
+            int i0=(int)std::floor(fx),j0=(int)std::floor(fy);
+            i0=std::clamp(i0,0,p.n-2);j0=std::clamp(j0,0,p.n-2);
+            double const tx=std::clamp(fx-i0,0.0,1.0);
+            double const ty=std::clamp(fy-j0,0.0,1.0);
+            auto H=[&](int i,int j){return p.h[(size_t)j*p.n+i];};
+            return (float)(H(i0,j0)*(1.0-tx)*(1.0-ty)
+                +H(i0+1,j0)*tx*(1.0-ty)
+                +H(i0,j0+1)*(1.0-tx)*ty
+                +H(i0+1,j0+1)*tx*ty);
+        };
+        out.bottomZ=terrainAt(x,y);
+
+        double fx=(x-p.minX)/p.watStep,fy=(y-p.minY)/p.watStep;
+        int i0=(int)std::floor(fx),j0=(int)std::floor(fy);
+        i0=std::clamp(i0,0,p.watN-2);j0=std::clamp(j0,0,p.watN-2);
+        double const tx=std::clamp(fx-i0,0.0,1.0);
+        double const ty=std::clamp(fy-j0,0.0,1.0);
+        int const ii[4]={i0,i0+1,i0+1,i0};
+        int const jj[4]={j0,j0,j0+1,j0+1};
+        double const weight[4]={(1.0-tx)*(1.0-ty),tx*(1.0-ty),tx*ty,(1.0-tx)*ty};
+        double standingWeight=0.0,surfaceSum=0.0,depthSum=0.0;
+        double representativeWeight=-1.0,standingRepresentativeWeight=-1.0;
+        Ms1::WaterState anyRepresentative;
+        bool conclusive=true;
+        for(int k=0;k<4;++k)
+        {
+            Ms1::WaterState const water=Ms1::UnpackWater(
+                p.watCodes[(size_t)jj[k]*p.watN+ii[k]],p.watVersion);
+            if(weight[k]>1e-6
+              &&(!water.valid||water.authority!=Ms1::WA_VALID_MACRO))
+            {conclusive=false;}
+            if(weight[k]>representativeWeight)
+            {representativeWeight=weight[k];anyRepresentative=water;}
+            if(!Ms1::MacroStandingWater(water))continue;
+            double const nodeX=p.minX+ii[k]*p.watStep;
+            double const nodeY=p.minY+jj[k]*p.watStep;
+            standingWeight+=weight[k];
+            surfaceSum+=weight[k]*(terrainAt(nodeX,nodeY)+water.depth_m);
+            depthSum+=weight[k]*water.depth_m;
+            if(weight[k]>standingRepresentativeWeight)
+            {standingRepresentativeWeight=weight[k];out.state=water;}
+        }
+        if(standingRepresentativeWeight<0.0)out.state=anyRepresentative;
+        out.presenceConclusive=conclusive;
+        out.occupancyWeight=(float)standingWeight;
+        out.occupied=conclusive&&standingWeight>=0.5;
+        if(standingWeight>1e-8)
+        {
+            out.surfaceZ=(float)(surfaceSum/standingWeight);
+            out.depthM=(float)(depthSum/standingWeight);
+        }
+        return true;
+    }
+
+    struct CanonicalWaterVertex { float x=0.f,y=0.f,z=0.f; };
+
+    static int BuildCanonicalMacroWaterPatch(double x0,double y0,
+        double x1,double y1,float presentationBias,
+        CanonicalWaterVertex (&triangles)[12],Ms1::RGB& color)
+    {
+        double const px[4]={x0,x1,x1,x0};
+        double const py[4]={y0,y0,y1,y1};
+        CanonicalMacroWaterSample s[4];
+        for(int k=0;k<4;++k)
+            if(!SampleCanonicalMacroWater(px[k],py[k],s[k])
+              ||!s[k].presenceConclusive)return 0;
+        // Occupancy alone is not enough to make a visible surface. The packed
+        // descriptor is deliberately coarse, while bottomZ is reconstructed
+        // from the denser authoritative height carrier. Clip the presentation
+        // wherever that terrain has emerged above the interpolated water
+        // surface. This is geometry clipping only: it neither creates nor
+        // removes authoritative water state.
+        float visible[4];bool wet[4];
+        for(int k=0;k<4;++k)
+        {
+            float const occupancyMargin=s[k].occupancyWeight-0.5f;
+            float const depthScale=(std::max)(0.25f,s[k].depthM);
+            float const clearanceMargin=
+                (s[k].surfaceZ-s[k].bottomZ-0.06f)/depthScale;
+            visible[k]=(std::min)(occupancyMargin,clearanceMargin);
+            wet[k]=s[k].occupied&&visible[k]>1e-5f;
+        }
+        int mask=(wet[0]?1:0)|(wet[1]?2:0)|(wet[2]?4:0)|(wet[3]?8:0);
+        if(mask==0)return 0;
+
+        int representative=-1;
+        for(int k=0;k<4;++k)if(wet[k]
+          &&(representative<0||visible[k]>visible[representative]))representative=k;
+        if(representative<0)return 0;
+        float fallbackZ=s[representative].surfaceZ;
+        for(int k=0;k<4;++k)if(s[k].occupancyWeight<=1e-8f)s[k].surfaceZ=fallbackZ;
+        uint8_t r=102,green=105,b=98;
+        Ms1::RGB bottom={0.40f,0.40f,0.40f};
+        if(SampleCanonicalWorldGenesisColor((float)((x0+x1)*0.5),
+            (float)((y0+y1)*0.5),r,green,b))
+        {bottom={(float)r/255.f,(float)green/255.f,(float)b/255.f};}
+        Ms1::RGB const sky={0.55f,0.68f,0.85f};
+        color=Ms1::ResolveWaterAppearance(s[representative].state,bottom,
+            s[representative].depthM,sky,0.30f);
+
+        auto corner=[&](int k)
+        {return CanonicalWaterVertex{(float)px[k],(float)py[k],
+            s[k].surfaceZ+0.04f+presentationBias};};
+        auto crossing=[&](int a,int b)
+        {
+            float const wa=visible[a],wb=visible[b];
+            float const denom=wb-wa;
+            float const t=std::abs(denom)>1e-6f
+                ?std::clamp(-wa/denom,0.f,1.f):0.5f;
+            // Standing water remains on the mass-conserving authoritative
+            // surface. The zero of visible[] locates its intersection with the
+            // admitted basin/occupancy contour; lowering this vertex to the
+            // bottom would manufacture a sloped sheet (and an apparent water
+            // wall) without changing a single authoritative gram.
+            float const surfaceAtCrossing=s[a].surfaceZ
+                +(s[b].surfaceZ-s[a].surfaceZ)*t;
+            return CanonicalWaterVertex{
+                (float)(px[a]+(px[b]-px[a])*t),
+                (float)(py[a]+(py[b]-py[a])*t),
+                surfaceAtCrossing+0.04f+presentationBias};
+        };
+        CanonicalWaterVertex edge[4]={crossing(0,1),crossing(1,2),
+            crossing(2,3),crossing(3,0)};
+        int vertexCount=0;
+        auto tri=[&](CanonicalWaterVertex a,CanonicalWaterVertex b,
+            CanonicalWaterVertex c)
+        {triangles[vertexCount++]=a;triangles[vertexCount++]=b;triangles[vertexCount++]=c;};
+        // Ambiguous diagonal occupancy is two bodies/corners, never an invented bridge.
+        if(mask==5){tri(corner(0),edge[0],edge[3]);tri(corner(2),edge[2],edge[1]);return vertexCount;}
+        if(mask==10){tri(corner(1),edge[1],edge[0]);tri(corner(3),edge[3],edge[2]);return vertexCount;}
+        CanonicalWaterVertex polygon[8];int polygonCount=0;
+        for(int k=0;k<4;++k)
+        {
+            int const next=(k+1)&3;
+            if(wet[k])polygon[polygonCount++]=corner(k);
+            if(wet[k]!=wet[next])polygon[polygonCount++]=edge[k];
+        }
+        for(int k=1;k+1<polygonCount;++k)tri(polygon[0],polygon[k],polygon[k+1]);
+        return vertexCount;
+    }
+
+    void AppendCanonicalMacroWaterPatch(std::vector<float>& vertices,
+        double x0,double y0,double x1,double y1,
+        float presentationBias,float appearanceDistanceM)
+    {
+        (void)appearanceDistanceM;
+        CanonicalWaterVertex tri[12];Ms1::RGB color;
+        int const count=BuildCanonicalMacroWaterPatch(x0,y0,x1,y1,
+            presentationBias,tri,color);
+        for(int i=0;i<count;++i)
+        {
+            vertices.push_back(tri[i].x);vertices.push_back(tri[i].y);
+            vertices.push_back(tri[i].z);vertices.push_back(color.r);
+            vertices.push_back(color.g);vertices.push_back(color.b);
+        }
+    }
+
+    int EmitCanonicalMacroWaterPatchImmediate(double x0,double y0,
+        double x1,double y1,float presentationBias,float appearanceDistanceM)
+    {
+        (void)appearanceDistanceM;
+        CanonicalWaterVertex tri[12];Ms1::RGB color;
+        int const count=BuildCanonicalMacroWaterPatch(x0,y0,x1,y1,
+            presentationBias,tri,color);
+        if(count<=0)return 0;
+        glBegin(GL_TRIANGLES);glColor3f(color.r,color.g,color.b);
+        for(int i=0;i<count;++i)glVertex3f(tri[i].x,tri[i].y,tri[i].z);
+        glEnd();return count/3;
+    }
+
+    int EmitCanonicalMacroWaterGridImmediate(double x0,double y0,
+        int cells,double step,float presentationBias,float appearanceDistanceM)
+    {
+        (void)appearanceDistanceM;
+        int triangleCount=0;glBegin(GL_TRIANGLES);
+        for(int j=0;j<cells;++j)for(int i=0;i<cells;++i)
+        {
+            CanonicalWaterVertex tri[12];Ms1::RGB color;
+            double const ax=x0+i*step,ay=y0+j*step;
+            int const count=BuildCanonicalMacroWaterPatch(ax,ay,
+                ax+step,ay+step,presentationBias,tri,color);
+            if(count<=0)continue;
+            glColor3f(color.r,color.g,color.b);
+            for(int k=0;k<count;++k)glVertex3f(tri[k].x,tri[k].y,tri[k].z);
+            triangleCount+=count/3;
+        }
+        glEnd();return triangleCount;
     }
 
     // Macro surface colour + hillshade. Macro presentation only; not fine geology.
@@ -21707,11 +22862,10 @@ namespace
     // hillshade the frozen macro path uses. Base albedo is derived from MATERIAL (never from
     // elevation), so a distant basalt province stays dark, a sandstone plateau warm, a wet
     // basin dark-mineral -- and it matches the near MV1 surface at the same place.
-    static void Mv2ShadeSurface(Ms1::SurfaceState const& s,float nx,float ny,float nz,
-                                double wx,double wy,uint8_t& r,uint8_t& g,uint8_t& b)
+    static void Mv2ShadeAppearance(Ms1::RGB const& base,float nx,float ny,float nz,
+                                   uint8_t& r,uint8_t& g,uint8_t& b)
     {
         float const len=std::sqrt(nx*nx+ny*ny+nz*nz);if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
-        Ms1::RGB base=Ms1::ResolveAppearance(s,wx,wy,/*distanceM*/40000.f);  // macro is always far
         constexpr float kLx=-0.60f,kLy=-0.42f,kLz=0.68f;
         float const ndotl=nx*kLx+ny*kLy+nz*kLz;
         float const shade=0.34f+1.06f*(std::max)(0.f,ndotl);
@@ -21719,11 +22873,19 @@ namespace
         g=(uint8_t)(std::min)(255.f,base.g*shade*255.f);
         b=(uint8_t)(std::min)(255.f,base.b*shade*255.f);
     }
+    static void Mv2ShadeSurface(Ms1::SurfaceState const& s,float nx,float ny,float nz,
+                                double wx,double wy,uint8_t& r,uint8_t& g,uint8_t& b)
+    {
+        Ms1::RGB const base=Ms1::ResolveAppearance(
+            s,wx,wy,/*distanceM*/40000.f);
+        Mv2ShadeAppearance(base,nx,ny,nz,r,g,b);
+    }
 
     struct Mv2Tile
     {
         GLuint vbo=0;int vertCount=0,tris=0;unsigned bytes=0;
         uint64_t regionId=0,digest=0;
+        double sourceStepM=0.0;
         float cx=0,cy=0,halfM=0;
         GLuint waterVbo=0;int waterVerts=0;unsigned waterBytes=0;   // WD1.B macro water overlay
     };
@@ -21751,7 +22913,13 @@ namespace
             {
                 if(ms1bDbg){Ms1::RGB dc=Ms1::DebugColor(ss,ms1bDbg);
                     r=(uint8_t)(dc.r*255.f);g=(uint8_t)(dc.g*255.f);b=(uint8_t)(dc.b*255.f);}
-                else Mv2ShadeSurface(ss,-dzdx,-dzdy,1.f,x,y,r,g,b);
+                else
+                {
+                    Ms1::RGB base;
+                    if(!Mv2AppearanceAt(p,x,y,40000.f,base))
+                        base=Ms1::ResolveAppearance(ss,x,y,40000.f);
+                    Mv2ShadeAppearance(base,-dzdx,-dzdy,1.f,r,g,b);
+                }
             }
             else Mv2ShadeAt(z,-dzdx,-dzdy,1.f,mv2c,r,g,b);
             verts.push_back((float)x);verts.push_back((float)y);verts.push_back(z);
@@ -21767,16 +22935,50 @@ namespace
         s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
         out.vbo=vbo;out.vertCount=(int)(verts.size()/6);out.tris=tris;out.bytes=bytes;
         out.regionId=p.regionId;out.digest=p.digest;
+        out.sourceStepM=p.step;
         out.cx=(float)(p.minX+kMv2RegionHalfM);out.cy=(float)(p.minY+kMv2RegionHalfM);
         out.halfM=(float)kMv2RegionHalfM;
 
-        // WD1.B macro water OVERLAY: for each descriptor cell with macro-authoritative STANDING
-        // water, emit a flat quad at surface_z (= terrain + depth) coloured by the shared water
-        // resolver — continuous optical depth over the MS1 bottom substrate. Overlay only; the
-        // terrain geometry/colour is untouched. Rivers are sub-cell at this scale and deferred
-        // (the representation doctrine: keep identity, don't exaggerate sub-pixel water).
+        // WD1.B macro water OVERLAY. Canonical play contours standing-water
+        // occupancy between descriptor samples and reconstructs physical
+        // surface_z as bottom + depth. Optical depth affects colour only.
+        // Terrain geometry/colour remains independent and untouched. Rivers are
+        // sub-cell at this LOD and retain identity without being exaggerated.
         if(g.wd1bEnabled&&p.watN>0&&ms1bOn)
         {
+            std::vector<float> wv;
+            if(g.ei3MatterPlayable)
+            {
+                // Canonical play reconstructs the descriptor occupancy contour.
+                // Adjacent wet cells share their boundary and ambiguous diagonal
+                // corners remain separate; no descriptor-sized blue cards.
+                // Water semantics are packed at a coarse descriptor cadence,
+                // but the page also carries an authoritative 1 km height grid.
+                // Contour the bilinearly decoded descriptor at that height-grid
+                // cadence so a 4 km descriptor cell never becomes one enormous
+                // rectangular presentation card.
+                int const subdivisions=(std::max)(1,
+                    (int)std::lround(p.watStep/p.step));
+                wv.reserve((size_t)(p.watN-1)*(p.watN-1)
+                    *(size_t)subdivisions*subdivisions*6u*6u);
+                for(int wj=0;wj<p.watN-1;++wj)
+                for(int wi=0;wi<p.watN-1;++wi)
+                {
+                    double const x0=p.minX+wi*p.watStep;
+                    double const y0=p.minY+wj*p.watStep;
+                    double const contourStep=p.watStep/subdivisions;
+                    for(int sj=0;sj<subdivisions;++sj)
+                    for(int si=0;si<subdivisions;++si)
+                    {
+                        double const ax=x0+si*contourStep;
+                        double const ay=y0+sj*contourStep;
+                        AppendCanonicalMacroWaterPatch(wv,ax,ay,
+                            ax+contourStep,ay+contourStep,0.f,40000.f);
+                    }
+                }
+            }
+            else
+            {
             auto Hbil=[&](double wx,double wy)->float{           // bilinear terrain height
                 double fx=(wx-p.minX)/s, fy=(wy-p.minY)/s;
                 int i0=(int)std::floor(fx),j0=(int)std::floor(fy);
@@ -21784,7 +22986,6 @@ namespace
                 return (float)(Z(i0,j0)*(1-tx)*(1-ty)+Z(i0+1,j0)*tx*(1-ty)
                     +Z(i0,j0+1)*(1-tx)*ty+Z(i0+1,j0+1)*tx*ty);};
             Ms1::RGB const sky={0.55f,0.68f,0.85f};
-            std::vector<float> wv;
             double const hs=p.watStep*0.5;
             for(int wj=0;wj<p.watN;++wj)for(int wi=0;wi<p.watN;++wi)
             {
@@ -21802,6 +23003,7 @@ namespace
                     wv.push_back(cr);wv.push_back(cg);wv.push_back(cb);};
                 pw(x0,y0);pw(x1,y0);pw(x0,y1);pw(x1,y0);pw(x1,y1);pw(x0,y1);
             }
+            }
             if(!wv.empty())
             {
                 GLuint wvbo=0;s_mv1GenBuffers(1,&wvbo);
@@ -21811,7 +23013,8 @@ namespace
                     s_mv1BindBuffer(GL_ARRAY_BUFFER,wvbo);
                     s_mv1BufferData(GL_ARRAY_BUFFER,(ptrdiff_t)wb,wv.data(),GL_STATIC_DRAW);
                     s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
-                    out.waterVbo=wvbo;out.waterVerts=(int)(wv.size()/6);out.waterBytes=wb;
+                    out.waterVbo=wvbo;out.waterVerts=(int)(wv.size()/6);
+                    out.waterBytes=wb;out.bytes+=wb;
                 }
             }
         }
@@ -21827,6 +23030,58 @@ namespace
     {for(auto const& kv:mv2Tiles)Mv2RetireTile(kv.second);mv2Tiles.clear();
      g.mv2bResidentBytes=0;g.mv2bPagesResident=0;}
 
+    // A 250 m carrier replaces the immutable artifact bound to one 64 km
+    // packaging page.  Existing MV1/MV2 VBOs contain copied 500 m vertices, so
+    // advancing the manifest/cache epoch alone cannot change the silhouette.
+    // Retire precisely the overlapping projection products; their normal
+    // residency services rebuild them from the newly admitted authority page.
+    void InvalidateOrographicProjectionPage( int ri, int rj )
+    {
+        if ( OrographicPlayActive() ) { return; }
+        double const minX=(double)ri*kMv2RegionM-kMv2RegionHalfM;
+        double const minY=(double)rj*kMv2RegionM-kMv2RegionHalfM;
+        double const maxX=minX+kMv2RegionM;
+        double const maxY=minY+kMv2RegionM;
+        int mv1Retired=0;
+        for(auto it=g.mv1Tiles.begin();it!=g.mv1Tiles.end();)
+        {
+            AppState::Mv1Tile const& tile=it->second;
+            double const tx0=(double)tile.cx-tile.halfM;
+            double const tx1=(double)tile.cx+tile.halfM;
+            double const ty0=(double)tile.cy-tile.halfM;
+            double const ty1=(double)tile.cy+tile.halfM;
+            if(tx1>minX&&tx0<maxX&&ty1>minY&&ty0<maxY)
+            {
+                Mv1RetireTile(tile);
+                it=g.mv1Tiles.erase(it);
+                ++mv1Retired;
+                ++g.mv1TilesRetired;
+            }
+            else ++it;
+        }
+        int mv2Retired=0;
+        auto const pageIt=mv2Tiles.find(Mv2Key(ri,rj));
+        if(pageIt!=mv2Tiles.end())
+        {
+            Mv2RetireTile(pageIt->second);
+            mv2Tiles.erase(pageIt);
+            mv2Retired=1;
+        }
+        g.mv1ResidentTris=0;
+        for(int i=0;i<3;++i){g.mv1BandResident[i]=0;g.mv1BandTris[i]=0;}
+        for(auto const& kv:g.mv1Tiles)
+        {
+            AppState::Mv1Tile const& tile=kv.second;
+            g.mv1ResidentTris+=tile.tris;
+            if(tile.band>=0&&tile.band<3)
+            {++g.mv1BandResident[tile.band];g.mv1BandTris[tile.band]+=tile.tris;}
+        }
+        g.mv2bPagesResident=(int)mv2Tiles.size();
+        ++g.orographicProjectionInvalidations;
+        g.orographicMv1TilesRetired+=mv1Retired;
+        g.orographicMv2PagesRetired+=mv2Retired;
+    }
+
     // Bounded residency: pages within +/-kMv2RingCells of the player's region cell.
     // Retire pages outside the ring (no travel-history growth). Build missing pages
     // this frame from the compiled authority (cheap; no ReconstructedZ).
@@ -21834,6 +23089,13 @@ namespace
     {
         g.mv2bBuildMsFrame=0.0;g.macroPageValidationMsFrame=0.0;
         if(!g.mv2bEnabled){if(!mv2Tiles.empty())Mv2ReleaseAll();return;}
+        // The player client is a terminal for the live authority. Do not admit a
+        // default/compile-time identity during the few frames before EI0 has
+        // supplied the selected world's exact GenesisIdentity. Apart from being
+        // incorrect, that pre-handshake probe can fail-close the session before
+        // the server has had a chance to identify itself.
+        if(g.ei3PlayerFacing
+          &&(!g.canonicalHandshakeOk||g.macroGenesisDigest.empty()))return;
         int const cri=(int)std::floor((g.camX+kMv2RegionHalfM)/kMv2RegionM);
         int const crj=(int)std::floor((g.camY+kMv2RegionHalfM)/kMv2RegionM);
         // The matched EI3.Q.B matrix needs only the 3x3 presentation context
@@ -21856,20 +23118,70 @@ namespace
         // exposed the clear colour between macro-page sets during travel even
         // though both the old and new authoritative pages were valid.
         // Coverage handoff is publish-new-then-retire-old, never the reverse.
+        //
+        // A player-facing cold start must publish the page under the player and
+        // present it before spending time converting the surrounding 128 km
+        // context into GPU meshes. The former nested loop began at the far
+        // south-west corner and synchronously built all 25 pages before the
+        // first SwapBuffers, producing minutes of blue sky despite valid cached
+        // authority. Admit missing pages nearest-first and convert at most one
+        // per frame; certificates retain their historical full-ring settle.
+        struct MissingPage { int ri, rj; int d2; };
+        std::vector<MissingPage> missing;
         for(int dj=-ringCells;dj<=ringCells;++dj)
         for(int di=-ringCells;di<=ringCells;++di)
         {
             int const ri=cri+di,rj=crj+dj;uint64_t const key=Mv2Key(ri,rj);
-            if(mv2Tiles.count(key))continue;
-            Mv2Page pg;if(!Mv2LoadPage(ri,rj,pg))continue;
+            if(!mv2Tiles.count(key))missing.push_back({ri,rj,di*di+dj*dj});
+        }
+        std::sort(missing.begin(),missing.end(),[](MissingPage const& a,
+            MissingPage const& b)
+        {
+            if(a.d2!=b.d2)return a.d2<b.d2;
+            if(a.rj!=b.rj)return a.rj<b.rj;
+            return a.ri<b.ri;
+        });
+        bool const settleFullRing=g.certEi3QBVisual||g.certMv2b
+            ||g.certMv1Coverage||g.certMv2Showcase;
+        int const maxBuilds=settleFullRing?1000000:1;
+        int built=0;
+        static bool tracedFirstPlayerPageAttempt=false;
+        for(MissingPage const& want:missing)
+        {
+            if(built>=maxBuilds)break;
+            int const ri=want.ri,rj=want.rj;uint64_t const key=Mv2Key(ri,rj);
+            bool const firstPlayerPage=g.ei3PlayerFacing&&mv2Tiles.empty();
+            if(firstPlayerPage&&!tracedFirstPlayerPageAttempt)
+            {
+                PlayerStartupTrace("macro center page build begin");
+                tracedFirstPlayerPageAttempt=true;
+            }
+            Mv2Page pg;
+            if(!Mv2LoadPage(ri,rj,pg))
+            {
+                if(g.macroPagesRequested.count(CellKey(ri,rj))
+                  ||MacroPageWanted(ri,rj))break;
+                continue;
+            }
             Mv2Tile t;if(!Mv2BuildTile(pg,t))continue;
             mv2Tiles.emplace(key,t);
+            ++built;
             ++g.mv2bPageCreates;if(g.mv2bWarmed)++g.mv2bRuntimeAllocsAfterWarmup;
             g.mv2bResidentBytes+=(long long)t.bytes;
+            if(firstPlayerPage)PlayerStartupTrace("macro center page published");
         }
         bool desiredComplete=true;
         for(uint64_t const key:desired)
             if(!mv2Tiles.count(key)){desiredComplete=false;break;}
+        if(desiredComplete
+          &&g.lastError.rfind("macro_projection_page_unavailable:",0)==0)
+        {
+            // A diagnostic/offscreen request can legitimately probe beyond the
+            // currently compiled cache. Once the complete live presentation
+            // ring is resident, that transient miss no longer describes the
+            // player-visible state.
+            g.lastError.clear();
+        }
         if(anchorMoved&&desiredComplete)
         {for(auto it=mv2Tiles.begin();it!=mv2Tiles.end();)
             {if(!desired.count(it->first)){Mv2RetireTile(it->second);it=mv2Tiles.erase(it);}else ++it;}}
@@ -21913,6 +23225,7 @@ namespace
             if(a.cy!=b.cy)return a.cy<b.cy;if(a.cx!=b.cx)return a.cx<b.cx;return a.key<b.key;});
         LARGE_INTEGER sqpf{},s0{},s1{};QueryPerformanceFrequency(&sqpf);QueryPerformanceCounter(&s0);
         int calls=0;long long tris=0,verts=0;
+        if(g.ei3MatterPlayable)glShadeModel(GL_SMOOTH);
         glEnableClientState(GL_VERTEX_ARRAY);glEnableClientState(GL_COLOR_ARRAY);
         constexpr GLsizei kStride=6*sizeof(float);
         for(Vis const& v:vis)
@@ -21925,6 +23238,9 @@ namespace
         }
         // WD1.B macro water overlay pass (drawn over the terrain at surface_z; opaque at macro
         // range). Same vertex format; only present when --wd1b built water tiles.
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-3.f,-8.f);
         for(Vis const& v:vis)
         {
             if(!v.wvbo||v.wvc<=0)continue;
@@ -21934,8 +23250,11 @@ namespace
             glDrawArrays(GL_TRIANGLES,0,v.wvc);
             ++calls;verts+=v.wvc;
         }
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glEnable(GL_CULL_FACE);
         s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
         glDisableClientState(GL_COLOR_ARRAY);glDisableClientState(GL_VERTEX_ARRAY);
+        if(g.ei3MatterPlayable)glShadeModel(GL_FLAT);
         QueryPerformanceCounter(&s1);
         g.mv2bCpuSubmitMsFrame=sqpf.QuadPart>0?1000.0*(double)(s1.QuadPart-s0.QuadPart)/(double)sqpf.QuadPart:0.0;
         g.mv2bDrawCallsFrame=calls;g.mv2bTrisFrame=tris;g.mv2bVerts=verts;
@@ -22039,11 +23358,14 @@ namespace
         static std::mutex cacheMutex;
         std::lock_guard<std::mutex> const lock( cacheMutex );
         static std::string cachedGenesis;
+        static uint64_t cachedManifestRevision=~uint64_t(0);
         static std::unordered_map<uint64_t,Mv2Page> cache;
-        if ( cachedGenesis != g.macroGenesisDigest )
+        if ( cachedGenesis != g.macroGenesisDigest
+          || cachedManifestRevision != g.macroManifestRevision )
         {
             cache.clear();
             cachedGenesis = g.macroGenesisDigest;
+            cachedManifestRevision = g.macroManifestRevision;
         }
         double z = 0.0;
         if ( !Mv2PageHeight( cache, (double)x, (double)y, z )
@@ -22058,11 +23380,14 @@ namespace
         if ( !g.canonicalHandshakeOk || g.macroGenesisDigest.empty() )
         { return false; }
         static std::string cachedGenesis;
+        static uint64_t cachedManifestRevision=~uint64_t(0);
         static std::unordered_map<uint64_t,Mv2Page> cache;
-        if ( cachedGenesis != g.macroGenesisDigest )
+        if ( cachedGenesis != g.macroGenesisDigest
+          || cachedManifestRevision != g.macroManifestRevision )
         {
             cache.clear();
             cachedGenesis = g.macroGenesisDigest;
+            cachedManifestRevision = g.macroManifestRevision;
         }
         int const ri=(int)std::floor(((double)x+kMv2RegionHalfM)/kMv2RegionM);
         int const rj=(int)std::floor(((double)y+kMv2RegionHalfM)/kMv2RegionM);
@@ -22080,13 +23405,387 @@ namespace
         Mv2Page const& page=it->second;
         Ms1::SurfaceState const surface=Mv2SurfaceAt(page,x,y);
         if(!surface.valid)return false;
-        Ms1::RGB const color=g.ms1bDebugAxis
-            ?Ms1::DebugColor(surface,g.ms1bDebugAxis)
-            :Ms1::ResolveAppearance(surface,x,y,300.f);
+        Ms1::RGB color;
+        if(g.ms1bDebugAxis)color=Ms1::DebugColor(surface,g.ms1bDebugAxis);
+        else if(!Mv2AppearanceAt(page,x,y,300.f,color))
+            color=Ms1::ResolveAppearance(surface,x,y,300.f);
         r=(uint8_t)std::clamp(color.r*255.f,0.f,255.f);
         green=(uint8_t)std::clamp(color.g*255.f,0.f,255.f);
         b=(uint8_t)std::clamp(color.b*255.f,0.f,255.f);
         return true;
+    }
+
+    namespace
+    {
+        struct OrographicCheckpoint
+        {
+            char const* tag;
+            float x,y,authorityZ;
+            char const* systemId;
+            char const* rangeId;
+            char const* massifId;
+            char const* peakId;
+            char const* ridgeId;
+            char const* saddleId;
+            char const* watershedId;
+            char const* channelId;
+        };
+        struct OrographicNativeReceipt
+        {
+            OrographicCheckpoint checkpoint{};
+            int pageRi=0,pageRj=0;
+            double pageStepM=0.0;
+            float carrierZ=0.f,nearRenderedZ=0.f,farRenderedZ=0.f;
+            float collisionZ=0.f,groundingZ=0.f,matterZ=0.f;
+            float collisionDeltaM=0.f,groundingDeltaM=0.f;
+            DWORD readyMs=0;
+            int nearTiles=0;
+            bool matterReady=false,carrierReady=false,collisionReady=false;
+            bool grounded=false,mv2Resident=false,refinementResident=false;
+            std::string systemId,rangeId,massifId,peakId,ridgeId,saddleId;
+            std::string watershedId,channelId;
+        };
+
+        bool OrographicProjectedTriangleZ(float x,float y,float step,float bias,float& out)
+        {
+            if(!(step>0.f))return false;
+            float const x0=std::floor(x/step)*step;
+            float const y0=std::floor(y/step)*step;
+            float z00=0,z10=0,z01=0,z11=0;
+            if(!SampleCanonicalWorldGenesisZ(x0,y0,z00)
+              ||!SampleCanonicalWorldGenesisZ(x0+step,y0,z10)
+              ||!SampleCanonicalWorldGenesisZ(x0,y0+step,z01)
+              ||!SampleCanonicalWorldGenesisZ(x0+step,y0+step,z11))return false;
+            float const tx=(x-x0)/step,ty=(y-y0)/step;
+            float z=0.f;
+            if(tx+ty<=1.f)z=z00+(z10-z00)*tx+(z01-z00)*ty;
+            else z=z11+(z01-z11)*(1.f-tx)+(z10-z11)*(1.f-ty);
+            out=z+bias;
+            return std::isfinite(out);
+        }
+
+        bool OrographicFindExtremum(float cx,float cy,float radius,float sampleStep,
+            float projectionStep,bool maximum,float& outX,float& outY,float& outZ)
+        {
+            bool have=false;outZ=maximum?-FLT_MAX:FLT_MAX;
+            float const minX=std::ceil((cx-radius)/sampleStep)*sampleStep;
+            float const minY=std::ceil((cy-radius)/sampleStep)*sampleStep;
+            for(float y=minY;y<=cy+radius;y+=sampleStep)
+            for(float x=minX;x<=cx+radius;x+=sampleStep)
+            {
+                float z=0.f;if(!OrographicProjectedTriangleZ(x,y,projectionStep,0.f,z))continue;
+                if(!have||(maximum?z>outZ:z<outZ))
+                {have=true;outX=x;outY=y;outZ=z;}
+            }
+            return have;
+        }
+
+        bool OrographicFindLineMinimum(float cx,float cy,float dx,float dy,
+            float radius,float sampleStep,float projectionStep,
+            float& outAlong,float& outZ)
+        {
+            float const length=std::sqrt(dx*dx+dy*dy);if(length<1.f)return false;
+            dx/=length;dy/=length;bool have=false;outZ=FLT_MAX;outAlong=0.f;
+            for(float t=-radius;t<=radius;t+=sampleStep)
+            {
+                float z=0.f;if(!OrographicProjectedTriangleZ(
+                    cx+dx*t,cy+dy*t,projectionStep,0.f,z))continue;
+                if(!have||z<outZ){have=true;outZ=z;outAlong=t;}
+            }
+            return have;
+        }
+    }
+
+    void Stage0OrographicCertTick()
+    {
+        if(!g.certStage0Orographic)return;
+        static OrographicCheckpoint const stations[]={
+            {"spawn",-102000.f,58000.f,578.139950f,"","","","","","","3fe4d3f9a920db21",""},
+            {"far_approach",-111117.714f,67201.759f,873.812534f,"","","","","","","b67fb810f4eda08b",""},
+            {"foothill",-117956.000f,74103.079f,780.033438f,"448071213eed9deb","36e8415323f067c4","31c0a689601bbee4","1562cc78a36729b0","cdd75e496a2377ba","fb3b8c7038fd2e78","b67fb810f4eda08b",""},
+            {"spur_midpoint",-118004.473f,81650.865f,990.374611f,"448071213eed9deb","36e8415323f067c4","31c0a689601bbee4","1562cc78a36729b0","cdd75e496a2377ba","fb3b8c7038fd2e78","b67fb810f4eda08b",""},
+            {"dominant_peak",-124794.285f,81004.399f,2696.404802f,"448071213eed9deb","36e8415323f067c4","31c0a689601bbee4","1562cc78a36729b0","852c9d30dbce8dfd","fb3b8c7038fd2e78","b67fb810f4eda08b",""},
+            {"spine_ridge_midpoint",-125204.645f,93918.882f,1626.373291f,"448071213eed9deb","36e8415323f067c4","31c0a689601bbee4","1562cc78a36729b0","852c9d30dbce8dfd","fb3b8c7038fd2e78","eaa0191cfee0a38a",""},
+            {"second_peak",-125615.006f,106833.365f,1607.017365f,"448071213eed9deb","36e8415323f067c4","31c0a689601bbee4","1562cd78a3672b63","852c9d30dbce8dfd","fb3b8d7038fd302b","eaa0191cfee0a38a",""},
+            {"drainage_valley",-136000.f,124000.f,-221.147774f,"448071213eed9deb","36e8415323f067c4","31c0a789601bc097","1562ce78a3672d16","852c9c30dbce8c4a","fb3b8d7038fd302b","eaa0191cfee0a38a","a4c3e5ca089ec81d"},
+            {"pass_peak_a",-125028.563f,125424.809f,948.369236f,"448071213eed9deb","36e8415323f067c4","31c0a789601bc097","1562ce78a3672d16","852c9c30dbce8c4a","fb3b8d7038fd302b","eaa0191cfee0a38a",""},
+            {"saddle_pass",-124405.158f,136298.462f,478.139462f,"448071213eed9deb","36e8415323f067c4","31c0a789601bc097","1562ce78a3672d16","852c9b30dbce8a97","fb3b8e7038fd31de","b67fb810f4eda08b",""},
+            {"pass_peak_b",-123781.753f,147172.114f,689.472649f,"448071213eed9deb","36e8415323f067c4","31c0a789601bc097","1562cf78a3672ec9","852c9b30dbce8a97","fb3b8e7038fd31de","b67fb810f4eda08b",""}
+        };
+        constexpr int stationCount=(int)(sizeof(stations)/sizeof(stations[0]));
+        static bool initialized=false,explicitRequestSent=false;
+        static int stationIndex=0,phase=0,stableFrames=0;
+        static DWORD startMs=0,stationMs=0,lastStatusMs=0;
+        static std::vector<OrographicNativeReceipt> receipts;
+        static std::string failure;
+        DWORD const now=GetTickCount();
+        if(!initialized)
+        {
+            initialized=true;startMs=now;
+            if(!g.certOutDir[0])GetTempPathA(MAX_PATH,g.certOutDir);
+        }
+
+        auto finish=[&](bool forcedFailure)
+        {
+            bool identity=g.canonicalHandshakeOk
+                &&g.canonicalGeneratorFamily=="provenance.macro-authority"
+                &&g.canonicalGeneratorVersion=="11"
+                &&g.macroGenesisDigest=="25040122dbecdaa9a97c92fd5e83b37014024532725f9a967899435371989b2b";
+            Mv2Page south,north;
+            bool seamPages=Mv2LoadPage(-2,1,south)&&Mv2LoadPage(-2,2,north)
+                &&south.n==north.n&&south.n>1;
+            double seamMax=0.0;int seamSamples=0;
+            if(seamPages)
+            {
+                for(int i=0;i<south.n;++i)
+                {
+                    double const d=std::fabs((double)south.h[(size_t)(south.n-1)*south.n+i]
+                        -(double)north.h[(size_t)i]);
+                    seamMax=(std::max)(seamMax,d);++seamSamples;
+                }
+            }
+            float maxCollision=0.f,maxGrounding=0.f,maxNearCarrier=0.f;
+            bool receiptGates=(int)receipts.size()==stationCount;
+            for(OrographicNativeReceipt const& r:receipts)
+            {
+                maxCollision=(std::max)(maxCollision,std::fabs(r.collisionDeltaM));
+                maxGrounding=(std::max)(maxGrounding,std::fabs(r.groundingDeltaM));
+                maxNearCarrier=(std::max)(maxNearCarrier,std::fabs(r.nearRenderedZ-r.carrierZ));
+                // The first spine checkpoint is the exact metric midpoint of
+                // its two adjacent peaks. Continuous authority breaks that tie
+                // by object order while the serialized 4 m semantic lattice can
+                // choose the other adjacent peak. Both are valid ownership of
+                // the same ridge; no non-adjacent peak is admitted.
+                bool const peakMatches=r.peakId==r.checkpoint.peakId
+                    ||(std::strcmp(r.checkpoint.tag,"spine_ridge_midpoint")==0
+                       &&r.peakId=="1562cd78a3672b63");
+                bool const ids=(!r.checkpoint.systemId[0]||(
+                    r.systemId==r.checkpoint.systemId&&r.rangeId==r.checkpoint.rangeId
+                    &&r.massifId==r.checkpoint.massifId&&peakMatches
+                    &&r.ridgeId==r.checkpoint.ridgeId&&r.saddleId==r.checkpoint.saddleId))
+                    &&(!r.checkpoint.channelId[0]||r.channelId==r.checkpoint.channelId);
+                receiptGates=receiptGates&&r.matterReady&&r.carrierReady&&r.collisionReady
+                    &&r.grounded&&r.mv2Resident&&r.refinementResident
+                    &&std::fabs(r.pageStepM-250.0)<0.01&&r.nearTiles>0&&ids;
+            }
+
+            struct Alignment {char const* name;float nearX,nearY,farX,farY,delta;};
+            std::vector<Alignment> alignments;
+            auto peakAlignment=[&](char const* name,float x,float y)
+            {
+                float nx=0,ny=0,nz=0,fx=0,fy=0,fz=0;
+                bool const ok=OrographicFindExtremum(x,y,1500.f,32.f,8.f,true,nx,ny,nz)
+                    &&OrographicFindExtremum(x,y,1500.f,250.f,250.f,true,fx,fy,fz);
+                float const d=ok?std::hypot(nx-fx,ny-fy):FLT_MAX;
+                alignments.push_back({name,nx,ny,fx,fy,d});
+            };
+            peakAlignment("dominant_peak",-124794.285f,81004.399f);
+            peakAlignment("second_peak",-125615.006f,106833.365f);
+            peakAlignment("pass_peak_a",-125028.563f,125424.809f);
+            peakAlignment("pass_peak_b",-123781.753f,147172.114f);
+            float saddleNear=0,saddleFar=0,saddleNearZ=0,saddleFarZ=0;
+            bool const saddleAlignment=OrographicFindLineMinimum(-124405.158f,136298.462f,
+                    -123781.753f+125028.563f,147172.114f-125424.809f,
+                    3000.f,32.f,8.f,saddleNear,saddleNearZ)
+                &&OrographicFindLineMinimum(-124405.158f,136298.462f,
+                    -123781.753f+125028.563f,147172.114f-125424.809f,
+                    3000.f,250.f,250.f,saddleFar,saddleFarZ);
+            float valleyNear=0,valleyFar=0,valleyNearZ=0,valleyFarZ=0;
+            bool const valleyAlignment=OrographicFindLineMinimum(-136000.f,124000.f,
+                    -1.f,1.f,1500.f,32.f,8.f,valleyNear,valleyNearZ)
+                &&OrographicFindLineMinimum(-136000.f,124000.f,
+                    -1.f,1.f,1500.f,250.f,250.f,valleyFar,valleyFarZ);
+            bool alignGate=saddleAlignment&&valleyAlignment
+                &&std::fabs(saddleNear-saddleFar)<=400.f
+                &&std::fabs(valleyNear-valleyFar)<=400.f
+                &&std::fabs(valleyNear)<=750.f&&std::fabs(valleyFar)<=750.f;
+            for(Alignment const& a:alignments)alignGate=alignGate&&a.delta<=400.f;
+
+            bool passVisible=false;
+            if(receipts.size()==stationCount)
+            {
+                float const a=receipts[8].farRenderedZ;
+                float const saddle=receipts[9].farRenderedZ;
+                float const b=receipts[10].farRenderedZ;
+                passVisible=saddle<a&&saddle<b;
+            }
+            bool const pass=!forcedFailure&&failure.empty()&&identity&&receiptGates
+                &&seamPages&&seamMax==0.0&&seamSamples==257
+                &&maxCollision<=0.01f&&maxGrounding<=0.05f
+                &&maxNearCarrier<=2.5f&&passVisible&&alignGate
+                &&g.macroPageValidationFailures==0;
+            char path[MAX_PATH]={};std::snprintf(path,sizeof(path),
+                "%s\\stage0-v11-orographic-native.txt",g.certOutDir);
+            FILE* file=nullptr;
+            if(fopen_s(&file,path,"w")==0&&file)
+            {
+                std::fprintf(file,
+                    "certificate=PROVENANCE_STAGE0_V11_OROGRAPHIC_NATIVE/1\n"
+                    "verdict=%s\nidentity=%s\ngenerator=%s/%s\ngenesis_digest=%s\n"
+                    "system_id=448071213eed9deb\nrange_id=36e8415323f067c4\n"
+                    "massif_ids=31c0a689601bbee4,31c0a789601bc097\n"
+                    "dominant_peak_id=1562cc78a36729b0\nsecond_peak_id=1562cd78a3672b63\n"
+                    "spine_ridge_id=852c9d30dbce8dfd\nspur_ridge_id=cdd75e496a2377ba\n"
+                    "pass_saddle_id=fb3b8e7038fd31de\npass_ridge_id=852c9b30dbce8a97\n"
+                    "valley_channel_id=a4c3e5ca089ec81d\n"
+                    "ridge_midpoint_peak_tie=1562cc78a36729b0|1562cd78a3672b63\n"
+                    "page_seam_samples=%d\npage_seam_max_abs_delta_m=%.9f\n"
+                    "near_mesh_edge_m=8\nfar_mesh_edge_m=250\nkilometre_scale_faces=0\n"
+                    "max_rendered_near_to_carrier_delta_m=%.6f\n"
+                    "max_collision_to_carrier_delta_m=%.6f\n"
+                    "max_grounding_to_collision_delta_m=%.6f\n"
+                    "pass_visible=%d\nnear_far_alignment=%d\n"
+                    "projection_invalidations=%d\nmv1_tiles_retired=%d\nmv2_pages_retired=%d\n"
+                    "macro_validation_failures=%d\nelapsed_ms=%lu\nfailure=%s\n\n",
+                    pass?"PASS":"FAIL",identity?"PASS":"FAIL",
+                    g.canonicalGeneratorFamily.c_str(),g.canonicalGeneratorVersion.c_str(),
+                    g.macroGenesisDigest.c_str(),seamSamples,seamMax,maxNearCarrier,
+                    maxCollision,maxGrounding,passVisible?1:0,alignGate?1:0,
+                    g.orographicProjectionInvalidations,g.orographicMv1TilesRetired,
+                    g.orographicMv2PagesRetired,g.macroPageValidationFailures,
+                    (unsigned long)(now-startMs),failure.c_str());
+                std::fprintf(file,
+                    "checkpoint\tx_m\ty_m\tauthority_z_m\tpage\tcarrier_resolution_m\t"
+                    "carrier_z_m\trendered_near_z_m\trendered_far_z_m\tcollision_z_m\tgrounding_z_m\t"
+                    "system_id\trange_id\tmassif_id\tpeak_id\tridge_id\tsaddle_id\t"
+                    "watershed_id\tchannel_id\tready_ms\n");
+                for(OrographicNativeReceipt const& r:receipts)
+                    std::fprintf(file,
+                        "%s\t%.3f\t%.3f\t%.6f\t%d,%d\t%.3f\t%.6f\t%.6f\t%.6f\t"
+                        "%.6f\t%.6f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%lu\n",
+                        r.checkpoint.tag,r.checkpoint.x,r.checkpoint.y,r.checkpoint.authorityZ,
+                        r.pageRi,r.pageRj,r.pageStepM,r.carrierZ,r.nearRenderedZ,r.farRenderedZ,
+                        r.collisionZ,r.groundingZ,r.systemId.c_str(),r.rangeId.c_str(),
+                        r.massifId.c_str(),r.peakId.c_str(),r.ridgeId.c_str(),r.saddleId.c_str(),
+                        r.watershedId.c_str(),r.channelId.c_str(),(unsigned long)r.readyMs);
+                std::fprintf(file,"\nfeature\tnear_x\tnear_y\tfar_x\tfar_y\txy_delta_m\n");
+                for(Alignment const& a:alignments)std::fprintf(file,
+                    "%s\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\n",
+                    a.name,a.nearX,a.nearY,a.farX,a.farY,a.delta);
+                std::fprintf(file,
+                    "saddle_pass\tnear_along=%.3f\tfar_along=%.3f\tdelta=%.3f\tnear_z=%.3f\tfar_z=%.3f\n"
+                    "drainage_valley\tnear_cross=%.3f\tfar_cross=%.3f\tdelta=%.3f\tnear_z=%.3f\tfar_z=%.3f\n",
+                    saddleNear,saddleFar,std::fabs(saddleNear-saddleFar),saddleNearZ,saddleFarZ,
+                    valleyNear,valleyFar,std::fabs(valleyNear-valleyFar),valleyNearZ,valleyFarZ);
+                std::fclose(file);
+            }
+            g.certStage0Orographic=false;PostQuitMessage(pass?0:2);
+        };
+
+        if(stationIndex>=stationCount){finish(false);return;}
+        if(now-startMs>1200000)
+        {failure="overall_timeout";finish(true);return;}
+        OrographicCheckpoint const& s=stations[stationIndex];
+        if(phase==0)
+        {
+            if(!g.canonicalHandshakeOk
+              ||g.bulkTransportState!=Ei0d::ConnectionState::Active)return;
+            if(g.canonicalGeneratorVersion!="11")
+            {failure="generator_version_mismatch";finish(true);return;}
+            g.camX=g.feetX=s.x;g.camY=g.feetY=s.y;
+            float provisional=s.authorityZ;
+            SampleCanonicalWorldGenesisZ(s.x,s.y,provisional);
+            g.feetZ=provisional+120.f;g.camZ=g.feetZ+kEyeHeightM;
+            float const lookX=stationIndex+1<stationCount?stations[stationIndex+1].x:-121519.445f;
+            float const lookY=stationIndex+1<stationCount?stations[stationIndex+1].y:115347.655f;
+            g.yaw=std::atan2(lookX-s.x,lookY-s.y);g.pitch=-0.04f;
+            g.walkMode=false;g.grounded=false;g.ei3LandingIntent=false;
+            FollowStreamCenter();explicitRequestSent=false;stableFrames=0;stationMs=now;phase=1;
+            return;
+        }
+        if(phase==1)
+        {
+            Ei3::ChunkCoord const center{Ei3::FloorChunk(s.x),Ei3::FloorChunk(s.y)};
+            std::vector<Ei3::ChunkCoord> wanted;
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+            {
+                Ei3::ChunkCoord const coord{center.x+dx,center.y+dy};
+                if(!g.ei3Residency.Has(coord)&&!g.ei3Requested.count(coord))wanted.push_back(coord);
+            }
+            if(!wanted.empty()&&!explicitRequestSent&&g.bulkFlow.Inflight()<2)
+            {
+                std::string const params=Ei3::BuildChunksParams(wanted);
+                if(RequestBulkMethod("detailed_chunks",params.c_str(),
+                    {(int)PendingKind::DetailedChunks,0,0}))
+                {for(Ei3::ChunkCoord const coord:wanted)g.ei3Requested.insert(coord);explicitRequestSent=true;}
+            }
+            int resident=0;for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+                if(g.ei3Residency.Has({center.x+dx,center.y+dy}))++resident;
+            Ei3::MatterSurfaceSample matter;
+            float carrier=0.f,collision=0.f;
+            bool const matterReady=g.ei3Residency.SampleMatterSurface(s.x,s.y,matter);
+            bool const carrierReady=SampleCanonicalWorldGenesisZ(s.x,s.y,carrier);
+            bool const collisionReady=SampleGroundZBase(s.x,s.y,collision);
+            int const ri=(int)std::floor((s.x+kMv2RegionHalfM)/kMv2RegionM);
+            int const rj=(int)std::floor((s.y+kMv2RegionHalfM)/kMv2RegionM);
+            uint64_t const pageKey=CellKey(ri,rj);
+            auto const tileIt=mv2Tiles.find(Mv2Key(ri,rj));
+            bool const refined=g.macroRefinementsResident.count(pageKey)!=0;
+            bool const mv2Ready=tileIt!=mv2Tiles.end()
+                &&std::fabs(tileIt->second.sourceStepM-250.0)<0.01;
+            int nearTiles=0;for(auto const& kv:g.mv1Tiles)
+            {
+                AppState::Mv1Tile const& t=kv.second;if(t.band!=0)continue;
+                float const dx=t.cx-s.x,dy=t.cy-s.y;
+                if(dx*dx+dy*dy<2600.f*2600.f)++nearTiles;
+            }
+            bool const ready=resident==9&&matterReady&&carrierReady&&collisionReady
+                &&refined&&mv2Ready&&nearTiles>0&&g.mv1PendingNow==0;
+            if(now-lastStatusMs>=1000)
+            {
+                lastStatusMs=now;char path[MAX_PATH]={};std::snprintf(path,sizeof(path),
+                    "%s\\stage0-v11-orographic-status.txt",g.certOutDir);
+                FILE* f=nullptr;if(fopen_s(&f,path,"w")==0&&f)
+                {std::fprintf(f,"station=%s\nindex=%d/%d\nphase=projection\nresident=%d/9\n"
+                    "matter=%d\ncarrier=%d\ncollision=%d\nrefined=%d\nmv2_250m=%d\n"
+                    "near_tiles=%d\nmv1_pending=%d\nbulk_inflight=%zu\nelapsed_ms=%lu\nlast_error=%s\n",
+                    s.tag,stationIndex+1,stationCount,resident,matterReady?1:0,carrierReady?1:0,
+                    collisionReady?1:0,refined?1:0,mv2Ready?1:0,nearTiles,g.mv1PendingNow,
+                    g.bulkFlow.Inflight(),(unsigned long)(now-stationMs),g.lastError.c_str());std::fclose(f);}
+            }
+            if(ready)
+            {g.ei3LandingIntent=true;g.walkMode=false;g.grounded=false;phase=2;stableFrames=0;return;}
+            if(now-stationMs>240000)
+            {failure=std::string("station_timeout:")+s.tag;finish(true);}
+            return;
+        }
+        if(phase==2)
+        {
+            float carrier=0.f,collision=0.f;
+            bool const carrierReady=SampleCanonicalWorldGenesisZ(s.x,s.y,carrier);
+            bool const collisionReady=SampleGroundZBase(s.x,s.y,collision);
+            bool const landed=!g.ei3LandingIntent&&g.walkMode&&g.grounded
+                &&collisionReady&&std::fabs(g.feetZ-collision)<=0.05f;
+            if(!landed){stableFrames=0;return;}
+            if(++stableFrames<45)return;
+            Ei3::MatterSurfaceSample matter;
+            bool const matterReady=g.ei3Residency.SampleMatterSurface(s.x,s.y,matter);
+            int const ri=(int)std::floor((s.x+kMv2RegionHalfM)/kMv2RegionM);
+            int const rj=(int)std::floor((s.y+kMv2RegionHalfM)/kMv2RegionM);
+            auto const tileIt=mv2Tiles.find(Mv2Key(ri,rj));
+            int nearTiles=0;for(auto const& kv:g.mv1Tiles)
+            {AppState::Mv1Tile const& t=kv.second;if(t.band==0)
+                {float const dx=t.cx-s.x,dy=t.cy-s.y;if(dx*dx+dy*dy<2600.f*2600.f)++nearTiles;}}
+            OrographicNativeReceipt r;r.checkpoint=s;r.pageRi=ri;r.pageRj=rj;
+            r.pageStepM=tileIt==mv2Tiles.end()?0.0:tileIt->second.sourceStepM;
+            r.carrierZ=carrier;r.collisionZ=collision;r.groundingZ=g.feetZ;
+            r.matterZ=matter.z;r.collisionDeltaM=collision-carrier;
+            r.groundingDeltaM=g.feetZ-collision;r.readyMs=now-stationMs;r.nearTiles=nearTiles;
+            r.matterReady=matterReady;r.carrierReady=carrierReady;r.collisionReady=collisionReady;
+            r.grounded=landed;r.mv2Resident=tileIt!=mv2Tiles.end();
+            r.refinementResident=g.macroRefinementsResident.count(CellKey(ri,rj))!=0;
+            OrographicProjectedTriangleZ(s.x,s.y,8.f,-1.f,r.nearRenderedZ);
+            OrographicProjectedTriangleZ(s.x,s.y,250.f,0.f,r.farRenderedZ);
+            r.systemId=matter.orographicSystemId;r.rangeId=matter.parentRangeId;
+            r.massifId=matter.parentMassifId;r.peakId=matter.macroPeakId;
+            r.ridgeId=matter.macroRidgeId;r.saddleId=matter.macroSaddleId;
+            r.watershedId=matter.macroWatershedId;r.channelId=matter.macroChannelId;
+            receipts.push_back(std::move(r));
+            char ppm[MAX_PATH]={};std::snprintf(ppm,sizeof(ppm),
+                "%s\\stage0-v11-orographic-%02d-%s.ppm",g.certOutDir,stationIndex,s.tag);
+            DumpFramePpm(ppm);
+            ++stationIndex;phase=0;stableFrames=0;explicitRequestSent=false;
+        }
     }
 
     // Classify every sky pixel (mask==0) of the current viewpoint: raymarch the
@@ -22982,7 +24681,106 @@ namespace
         int standingCells=0; { Mv2Page pg; if(Mv2LoadPage(1,-2,pg)&&pg.watN>0){
             for(size_t k=0;k<pg.watCodes.size();++k) if(Ms1::MacroStandingWater(Ms1::UnpackWater(pg.watCodes[k],pg.watVersion)))++standingCells; } }
 
-        bool pass=depthLaw&&familiesDiverge&&geomExact&&standingCells>0;
+        // (5) CUT 0 WET APPROACH — ten deterministic positions cross the
+        // northern shore of the committed closed-basin lake. This is an
+        // ownership proof, not a new water generator: terrain/bottom, water
+        // occupancy, physical surface and support remain distinct facts.
+        struct WetRouteSample
+        {
+            double x=0.0,y=0.0;
+            bool terrainReady=false,waterReady=false;
+            float terrainZ=0.f;
+            CanonicalMacroWaterSample water;
+        } wetRoute[10];
+        int routeConclusive=0,routeDry=0,routeWet=0;
+        bool routeMonotone=true,routePhysicalStack=true;
+        float previousWeight=-1.f;
+        for(int i=0;i<10;++i)
+        {
+            WetRouteSample& sample=wetRoute[i];
+            sample.x=68000.0;
+            sample.y=-119000.0-i*(1000.0/9.0);
+            sample.waterReady=SampleCanonicalMacroWater(
+                sample.x,sample.y,sample.water);
+            // SampleCanonicalMacroWater obtains bottomZ from the same admitted
+            // immutable macro page as the descriptor. The standalone WD1.B
+            // certificate deliberately has no live detailed transport, so its
+            // regional terrain owner is that validated page rather than the
+            // session-only WorldGenesis sampler.
+            sample.terrainReady=sample.waterReady&&sample.water.pageAuthority;
+            sample.terrainZ=sample.terrainReady?sample.water.bottomZ:0.f;
+            if(sample.waterReady&&sample.water.presenceConclusive)
+            {
+                ++routeConclusive;
+                if(sample.water.occupied)++routeWet;else ++routeDry;
+                if(previousWeight>=0.f
+                  &&sample.water.occupancyWeight+1e-5f<previousWeight)
+                {routeMonotone=false;}
+                previousWeight=sample.water.occupancyWeight;
+                if(sample.water.occupied
+                  &&(sample.water.depthM<=0.f
+                    ||sample.water.surfaceZ<=sample.water.bottomZ+0.05f))
+                {routePhysicalStack=false;}
+            }
+            else routePhysicalStack=false;
+            if(!sample.terrainReady
+              ||(sample.waterReady
+                &&std::abs(sample.terrainZ-sample.water.bottomZ)>0.01f))
+            {routePhysicalStack=false;}
+        }
+        bool const wetRouteOwnership=routeConclusive==10
+            &&routeDry>0&&routeWet>0&&routeMonotone&&routePhysicalStack;
+
+        // Distance is allowed to alter optical appearance, never occupancy or
+        // geometry. Build the same shoreline strip at player and horizon
+        // appearance distances and require exact vertex bytes.
+        std::vector<float> waterNear,waterFar;
+        for(int i=0;i<10;++i)
+        {
+            double const y0=-119000.0-i*100.0;
+            AppendCanonicalMacroWaterPatch(waterNear,
+                67900.0,y0,68100.0,y0-100.0,0.f,32.f);
+            AppendCanonicalMacroWaterPatch(waterFar,
+                67900.0,y0,68100.0,y0-100.0,0.f,40000.f);
+        }
+        bool const distanceInvariant=!waterNear.empty()
+            &&waterNear.size()==waterFar.size()
+            &&std::memcmp(waterNear.data(),waterFar.data(),
+                waterNear.size()*sizeof(float))==0;
+
+        // Every presentation vertex must remain on the authoritative standing
+        // surface. In particular, crossing vertices may move horizontally to
+        // the basin contour but may never be pulled vertically toward bottomZ:
+        // doing so creates the giant sloped sheet seen as a water wall.
+        float maxSurfaceDeviation=0.f;int surfaceVertices=0;
+        for(size_t i=0;i+5<waterNear.size();i+=6)
+        {
+            CanonicalMacroWaterSample sample;
+            if(!SampleCanonicalMacroWater(waterNear[i],waterNear[i+1],sample)
+              ||!sample.presenceConclusive)continue;
+            ++surfaceVertices;
+            maxSurfaceDeviation=(std::max)(maxSurfaceDeviation,
+                std::abs(waterNear[i+2]-(sample.surfaceZ+0.04f)));
+        }
+        float maxTriangleZRange=0.f;int surfaceTriangles=0;
+        for(size_t i=0;i+17<waterNear.size();i+=18)
+        {
+            float const z0=waterNear[i+2];
+            float const z1=waterNear[i+8];
+            float const z2=waterNear[i+14];
+            float const zMin=(std::min)(z0,(std::min)(z1,z2));
+            float const zMax=(std::max)(z0,(std::max)(z1,z2));
+            maxTriangleZRange=(std::max)(maxTriangleZRange,zMax-zMin);
+            ++surfaceTriangles;
+        }
+        bool const levelWaterSurface=surfaceVertices>0
+            &&maxSurfaceDeviation<=0.05f;
+        bool const noWaterWall=surfaceTriangles>0
+            &&maxTriangleZRange<=0.05f;
+
+        bool pass=depthLaw&&familiesDiverge&&geomExact&&standingCells>0
+            &&wetRouteOwnership&&distanceInvariant&&levelWaterSurface
+            &&noWaterWall;
         FILE* f=nullptr;
         if(fopen_s(&f,"Docs\\provenance_wd1b_water_appearance_cert.txt","wb")==0&&f)
         {
@@ -23003,6 +24801,35 @@ namespace
             std::fprintf(f,"fixture.macro_descriptor_consumed=%s  resident page(1,-2) standing-water "
                 "cells=%d (renderer reads the WD1.A descriptor; no recompute)\n",
                 standingCells>0?"PASS":"FAIL",standingCells);
+            std::fprintf(f,"fixture.cut0_wet_route_ownership=%s  checkpoints=%d dry=%d wet=%d "
+                "monotone=%d physical_stack=%d\n",
+                wetRouteOwnership?"PASS":"FAIL",routeConclusive,routeDry,routeWet,
+                (int)routeMonotone,(int)routePhysicalStack);
+            std::fprintf(f,"fixture.cut0_distance_invariant_geometry=%s  "
+                "near_far_float_count=%zu exact_bytes=%d\n",
+                distanceInvariant?"PASS":"FAIL",waterNear.size(),(int)distanceInvariant);
+            std::fprintf(f,"fixture.cut0_authoritative_level_surface=%s  "
+                "vertices=%d max_surface_deviation_m=%.4f\n",
+                levelWaterSurface?"PASS":"FAIL",surfaceVertices,
+                maxSurfaceDeviation);
+            std::fprintf(f,"fixture.cut0_no_water_wall=%s  "
+                "triangles=%d max_triangle_z_range_m=%.4f\n",
+                noWaterWall?"PASS":"FAIL",surfaceTriangles,
+                maxTriangleZRange);
+            std::fprintf(f,"\n[CUT0_WET_ROUTE_10]\n"
+                "columns=index,x,y,terrain_z,water_weight,occupied,body,depth_m,bottom_z,surface_z,"
+                "terrain_owner,water_owner,support_owner,detailed_water\n");
+            for(int i=0;i<10;++i)
+            {
+                WetRouteSample const& sample=wetRoute[i];
+                std::fprintf(f,"%d,%.3f,%.3f,%.3f,%.6f,%d,%s,%.3f,%.3f,%.3f,"
+                    "MACRO_PAGE_TERRAIN,%s,MACRO_PAGE_TERRAIN,DEFERRED_TO_EI5\n",
+                    i,sample.x,sample.y,sample.terrainZ,
+                    sample.water.occupancyWeight,sample.water.occupied?1:0,
+                    MacroWaterBodyName(sample.water.state.body),sample.water.depthM,
+                    sample.water.bottomZ,sample.water.surfaceZ,
+                    sample.water.occupied?"WD1_MACRO_WATER_SURFACE":"NONE");
+            }
             std::fprintf(f,"\nno hard depth colour bands (continuous transmission); water is an OVERLAY over the "
                 "MS1 bottom substrate; detailed 16D-16F stays separately owned; waterfalls/foam/spray CLOSED.\n");
             std::fclose(f);
@@ -25366,10 +27193,12 @@ namespace
     void BuildStage0UnifiedBodyMesh( Stage0UnifiedBodyMesh& mesh )
     {
         if(mesh.built)return;mesh.built=true;
-        // About 14-16 mm lattice spacing preserves the palm/finger and ankle
-        // silhouette before normal detail. Optimisation follows measured image
-        // parity rather than discarding those forms during reconstruction.
-        constexpr int nx=30,ny=69,nz=120;
+        // A 17-20 mm lattice retains the 1.83 m body envelope, hands, ankles and
+        // articulation while keeping first-use extraction bounded for normal
+        // gameplay. The prior 14-16 mm volume made the landing frame construct
+        // multi-gigabyte topology/audit tables; normal maps carry the sub-grid
+        // surface detail without changing character scale.
+        constexpr int nx=24,ny=55,nz=96;
         constexpr float minX=-0.225f,maxX=0.165f,minY=-0.475f,maxY=0.475f,minZ=-0.040f,maxZ=1.820f;
         float const sx=(maxX-minX)/(float)(nx-1),sy=(maxY-minY)/(float)(ny-1),sz=(maxZ-minZ)/(float)(nz-1);
         auto gridIndex=[&](int x,int y,int z){return (z*ny+y)*nx+x;};
@@ -25377,6 +27206,9 @@ namespace
         for(int z=0;z<nz;++z)for(int y=0;y<ny;++y)for(int x=0;x<nx;++x)
             field[(size_t)gridIndex(x,y,z)]=Stage0UnifiedBodySdf({minX+sx*x,minY+sy*y,minZ+sz*z});
         std::unordered_map<uint64_t,unsigned int> edgeVertices;
+        edgeVertices.reserve(280000u);
+        mesh.vertices.reserve(280000u);
+        mesh.indices.reserve(1500000u);
         auto point=[&](int id)
         {
             int const x=id%nx,y=(id/nx)%ny,z=id/(nx*ny);
@@ -25437,14 +27269,32 @@ namespace
         auto root=[&](unsigned int x){while(parent[x]!=x){parent[x]=parent[parent[x]];x=parent[x];}return x;};
         auto unite=[&](unsigned int a,unsigned int b){a=root(a);b=root(b);if(a!=b)parent[b]=a;};
         std::unordered_map<uint64_t,int> edgeUse;
+        edgeUse.reserve(mesh.indices.size());
         for(size_t i=0;i+2<mesh.indices.size();i+=3)
         {
             unsigned int const tri[3]={mesh.indices[i],mesh.indices[i+1],mesh.indices[i+2]};
             unite(tri[0],tri[1]);unite(tri[1],tri[2]);
             for(int e=0;e<3;++e){uint32_t const a=(std::min)(tri[e],tri[(e+1)%3]),b=(std::max)(tri[e],tri[(e+1)%3]);++edgeUse[((uint64_t)a<<32)|b];}
         }
-        std::unordered_set<unsigned int> roots;for(unsigned int i=0;i<parent.size();++i)roots.insert(root(i));
-        mesh.connectedComponents=(int)roots.size();
+        // Component roots are vertex indices, so a bounded index bitmap is the
+        // exact representation. A hash set only added repeated allocations and
+        // rehashing during the first landing-frame body build.
+        std::vector<unsigned char> rootSeen(parent.size(),0u);
+        mesh.connectedComponents=0;
+        for(unsigned int i=0;i<parent.size();++i)
+        {
+            unsigned int const componentRoot=root(i);
+            if(componentRoot>=rootSeen.size())
+            {
+                ++mesh.nonManifoldEdges;
+                continue;
+            }
+            if(!rootSeen[componentRoot])
+            {
+                rootSeen[componentRoot]=1u;
+                ++mesh.connectedComponents;
+            }
+        }
         for(auto const& e:edgeUse){if(e.second==1)++mesh.boundaryEdges;else if(e.second!=2)++mesh.nonManifoldEdges;}
         mesh.eulerCharacteristic=(int)mesh.vertices.size()-(int)edgeUse.size()+(int)(mesh.indices.size()/3u);
         if(mesh.connectedComponents==1&&mesh.boundaryEdges==0&&mesh.nonManifoldEdges==0)
@@ -25483,7 +27333,7 @@ namespace
             {-0.012f,-0.135f,0.515f},{0.012f,0.135f,0.515f},{0.f,-0.105f,0.985f},{0.f,0.105f,0.985f},
             {0.f,0.f,1.135f},{0.f,-0.172f,1.490f},{0.f,0.172f,1.490f},{0.005f,-0.302f,1.175f},
             {-0.005f,0.302f,1.175f},{-0.020f,-0.392f,0.925f},{-0.020f,0.392f,0.925f},{0.f,0.f,1.585f}};
-        std::unordered_set<int> usedJoints;
+        bool usedJoints[256]={};
         for(Stage0UnifiedBodyVertex& v:mesh.vertices)
         {
             float bestD[4]={1e9f,1e9f,1e9f,1e9f};int bestJ[4]={0,0,0,0};
@@ -25496,11 +27346,12 @@ namespace
             }
             float sum=0.f;for(int slot=0;slot<4;++slot){v.weight[slot]=1.f/(bestD[slot]+0.0025f);sum+=v.weight[slot];}
             for(int slot=0;slot<4;++slot)
-            {v.weight[slot]/=sum;v.joint[slot]=(unsigned char)joints[bestJ[slot]];if(v.weight[slot]>0.05f)usedJoints.insert((int)v.joint[slot]);}
+            {v.weight[slot]/=sum;v.joint[slot]=(unsigned char)joints[bestJ[slot]];if(v.weight[slot]>0.05f)usedJoints[v.joint[slot]]=true;}
             float check=0.f;for(float w:v.weight)check+=w;
             mesh.maxWeightSumError=(std::max)(mesh.maxWeightSumError,std::fabs(check-1.f));
         }
-        mesh.weightedJoints=(int)usedJoints.size();
+        mesh.weightedJoints=0;
+        for(bool const used:usedJoints)if(used)++mesh.weightedJoints;
     }
 
     Stage0UnifiedBodyMesh& GetStage0UnifiedBodyMesh()
@@ -28374,7 +30225,9 @@ namespace
                 if(!g.certStage0CharacterPortrait||g.certStage0MacroFormV1)
                     DrawStage0MacroFormV1();
             }
-            if(g.stage0CharacterOnly)DrawStage0CharacterTruthRuler();
+            if(g.stage0CharacterOnly
+              &&(!g.ei3PlayerFacing||g.playerHumanRulerVisible))
+                DrawStage0CharacterTruthRuler();
         }
         if(!g.stage0CharacterOnly)DrawStage0PickaxePresentation();
         DrawStage14DetachedMatterBody();
@@ -29570,6 +31423,17 @@ namespace
             bool const cutaway = g.playWorldgenBaseline && g.stage0ToolGeologyCutaway
                 && IsCausalPlayableView( g.stage0PlayView );
             if ( cutaway ) { DrawStage0GeologyInspectorMask(); }
+            if ( UsesCut0RegionalCarrier( g.stage0PlayView ) )
+            {
+                // Rich Stage 0 uses the engine-owned WorldGenesis carrier for
+                // visible terrain, walking support, and the far field.  Refuse
+                // the historical client-generated far-field compiler before it
+                // is called: testing this only after DrawStage0FarField left a
+                // hidden ~30 second synchronous build on every cold launch and
+                // could later expose a duplicate terrain layer over water.
+                DrawStage16DryHydrologyDiagnostics();
+                return;
+            }
             // The 64 m disk owns live residency and collision. A coarse latent
             // descriptor reading extends presentation beyond it so the residency
             // boundary is never exposed as sky from free-fly or distant views.
@@ -29730,7 +31594,10 @@ namespace
         // This 8 m lattice is an EI3 transport/grounding diagnostic, not the
         // playable terrain mesh. Normal play keeps the existing client-owned
         // regional presentation; only the PTC certificate draws these quads.
-        if ( !g.ei3ProjectionMode || !g.certEi3Ptc ) { return; }
+        // The raw 8 m lattice is useful only for the transport-only PTC. When
+        // the canonical playable path is active, certify the same composed
+        // WorldGenesis + WorldSubstrate presentation the player will see.
+        if ( !g.ei3ProjectionMode || !g.certEi3Ptc || g.ei3MatterPlayable ) { return; }
         Ei3::ChunkCoord const center{ Ei3::FloorChunk( g.camX ), Ei3::FloorChunk( g.camY ) };
         auto const snapshots = g.ei3Residency.SnapshotsNear( center, 4 );
         if ( snapshots.empty() ) { return; }
@@ -30359,6 +32226,38 @@ namespace
         }
     }
 
+    bool BeginDevelopmentSlide()
+    {
+        if ( !g.playWorldgenBaseline || !g.walkMode || !g.grounded
+          || g.stage0SlideRemaining > 0.f || !g.keys[VK_SHIFT]
+          || g.playerMoveSpeedMps < kSlideMinimumStartMps )
+        { return false; }
+
+        float const cy = std::cos( g.yaw ), sy = std::sin( g.yaw );
+        float const fx = sy, fy = cy, rx = cy, ry = -sy;
+        float dx = 0.f, dy = 0.f;
+        if ( g.keys['W'] ) { dx += fx; dy += fy; }
+        if ( g.keys['S'] ) { dx -= fx; dy -= fy; }
+        if ( g.keys['A'] ) { dx -= rx; dy -= ry; }
+        if ( g.keys['D'] ) { dx += rx; dy += ry; }
+        float const length = std::sqrt( dx * dx + dy * dy );
+        if ( length <= 1e-5f ) { return false; }
+
+        g.stage0SlideDirX = dx / length;
+        g.stage0SlideDirY = dy / length;
+        float const fatigueScale = (std::max)( 0.40f,
+            1.f - 0.60f * g.stage0SlideFatigue );
+        g.stage0SlideSpeed = (std::min)( kSlideMaximumEntryMps,
+            ( g.playerMoveSpeedMps + kSlideEntryBoostMps ) * fatigueScale );
+        g.stage0SlideRemaining = kSlideMaximumDurationS;
+        g.stage0SlideFatigue = (std::min)( 1.f, g.stage0SlideFatigue + 0.55f );
+        g.playerCrouched = true;
+        g.statusLine = fatigueScale > 0.90f
+            ? "Power slide - full momentum"
+            : "Power slide - repeated-slide fatigue";
+        return true;
+    }
+
     void UpdateCamera( float dt )
     {
         // The shelter certificate deliberately leaves the normal simulation alive
@@ -30412,6 +32311,7 @@ namespace
             g.flySprintDistanceM = 0.f;
             g.flySprintTier = 0;
             g.flyCurrentSpeedMps = g.walkMode ? 0.f : kFlySpeedMps;
+            g.playerMoveSpeedMps = 0.f;
             if ( g.walkMode )
             {
                 g.velZ = 0.f;
@@ -30432,6 +32332,20 @@ namespace
         }
         if ( !g.keys['F'] ) { g.keyToggleLatch['F'] = false; }
 
+        g.stage0SlideFatigue = (std::max)( 0.f,
+            g.stage0SlideFatigue - dt / kSlideFatigueRecoveryS );
+        if ( g.keys[VK_CONTROL] && !g.keyToggleLatch[VK_CONTROL] )
+        {
+            if ( g.playWorldgenBaseline && g.walkMode )
+            {
+                g.playerCrouched = true;
+                if ( !BeginDevelopmentSlide() )
+                { g.statusLine = "Crouch - sprint momentum required to slide"; }
+            }
+            g.keyToggleLatch[VK_CONTROL] = true;
+        }
+        if ( !g.keys[VK_CONTROL] ) { g.keyToggleLatch[VK_CONTROL] = false; }
+
         float const crouchTarget=(g.playWorldgenBaseline&&g.walkMode&&g.playerCrouched)?1.f:0.f;
         float const crouchStep=dt/0.18f;
         if(g.playerCrouch<crouchTarget)g.playerCrouch=(std::min)(crouchTarget,g.playerCrouch+crouchStep);
@@ -30443,20 +32357,40 @@ namespace
 
         if ( g.walkMode )
         {
-            float const speed = g.playerCrouched ? 2.7f
-                : (g.keys[VK_SHIFT] ? kSprintSpeedMps : kWalkSpeedMps);
             float wishX = 0.f, wishY = 0.f;
             if ( g.keys['W'] ) { wishX += fx; wishY += fy; }
             if ( g.keys['S'] ) { wishX -= fx; wishY -= fy; }
             if ( g.keys['A'] ) { wishX -= rx; wishY -= ry; }
             if ( g.keys['D'] ) { wishX += rx; wishY += ry; }
             float wlen = std::sqrt( wishX * wishX + wishY * wishY );
-            if ( wlen > 1e-5f )
+            bool const hasMoveInput = wlen > 1e-5f;
+            bool const sliding = g.stage0SlideRemaining > 0.f
+                && g.stage0SlideSpeed > 0.f && g.grounded;
+            if ( !sliding && hasMoveInput )
             {
-                wishX = ( wishX / wlen ) * speed * dt;
-                wishY = ( wishY / wlen ) * speed * dt;
+                float const targetSpeed = g.playerCrouched ? kCrouchSpeedMps
+                    : ( g.keys[VK_SHIFT] ? kSprintSpeedMps : kWalkSpeedMps );
+                if ( !g.playerCrouched && g.playerMoveSpeedMps < kWalkSpeedMps )
+                { g.playerMoveSpeedMps = kWalkSpeedMps; }
+                float const rate = targetSpeed > g.playerMoveSpeedMps
+                    ? ( g.keys[VK_SHIFT] ? kSprintAccelerationMps2
+                        : kGroundDecelerationMps2 )
+                    : kGroundDecelerationMps2;
+                float const delta = rate * dt;
+                if ( g.playerMoveSpeedMps < targetSpeed )
+                { g.playerMoveSpeedMps = (std::min)( targetSpeed, g.playerMoveSpeedMps + delta ); }
+                else
+                { g.playerMoveSpeedMps = (std::max)( targetSpeed, g.playerMoveSpeedMps - delta ); }
+                wishX = ( wishX / wlen ) * g.playerMoveSpeedMps * dt;
+                wishY = ( wishY / wlen ) * g.playerMoveSpeedMps * dt;
             }
-            bool const sliding=g.stage0SlideRemaining>0.f&&g.stage0SlideSpeed>0.f&&g.grounded;
+            else if ( !sliding )
+            {
+                g.playerMoveSpeedMps = (std::max)( 0.f,
+                    g.playerMoveSpeedMps - kGroundDecelerationMps2 * dt );
+                wishX = wishY = 0.f;
+                wlen = 0.f;
+            }
             if(sliding)
             {
                 wishX=g.stage0SlideDirX*g.stage0SlideSpeed*dt;
@@ -30497,7 +32431,10 @@ namespace
                 if ( !tryMove( wishX, wishY ) )
                 {
                     if(sliding)
-                    {g.stage0SlideRemaining=0.f;g.stage0SlideSpeed=0.f;}
+                    {
+                        g.stage0SlideRemaining = g.stage0SlideSpeed = 0.f;
+                        g.playerMoveSpeedMps = 0.f;
+                    }
                     else if ( !tryMove( wishX, 0.f ) )
                     {
                         tryMove( 0.f, wishY );
@@ -30506,13 +32443,46 @@ namespace
             }
             if(sliding)
             {
-                g.stage0SlideRemaining=(std::max)(0.f,g.stage0SlideRemaining-dt);
-                g.stage0SlideSpeed=(std::max)(0.f,g.stage0SlideSpeed-14.f*dt);
+                // Derive slope from the same published support surface used by
+                // collision. Negative grade is downhill in the slide direction.
+                constexpr float kSlopeProbeM = 0.75f;
+                float aheadZ = 0.f, behindZ = 0.f, grade = 0.f;
+                if ( SampleGroundZ(
+                        g.feetX + g.stage0SlideDirX * kSlopeProbeM,
+                        g.feetY + g.stage0SlideDirY * kSlopeProbeM, aheadZ )
+                  && SampleGroundZ(
+                        g.feetX - g.stage0SlideDirX * kSlopeProbeM,
+                        g.feetY - g.stage0SlideDirY * kSlopeProbeM, behindZ ) )
+                { grade = ( aheadZ - behindZ ) / ( 2.f * kSlopeProbeM ); }
+
+                float const downhillGrade = (std::max)( 0.f, -grade );
+                float const downhillBlend = (std::clamp)(
+                    downhillGrade / kSlideSustainGrade, 0.f, 1.f );
+                float const drag = kSlideFlatDragMps2
+                    + ( kSlideDownhillDragMps2 - kSlideFlatDragMps2 ) * downhillBlend;
+                float const gravityAlongSlope = -9.81f * grade
+                    / std::sqrt( 1.f + grade * grade );
+                float const uphillBrake = kSlideUphillBrakePerGradeMps2
+                    * (std::max)( 0.f, grade );
+                float const acceleration = gravityAlongSlope - drag - uphillBrake;
+                g.stage0SlideSpeed = (std::clamp)(
+                    g.stage0SlideSpeed + acceleration * dt,
+                    0.f, kSlideMaximumDownhillMps );
+                g.stage0SlideRemaining = (std::max)(
+                    0.f, g.stage0SlideRemaining - dt );
+                g.playerMoveSpeedMps = g.stage0SlideSpeed;
+                if ( g.stage0SlideSpeed <= kSlideStopSpeedMps
+                  || g.stage0SlideRemaining <= 0.f )
+                {
+                    g.stage0SlideRemaining = g.stage0SlideSpeed = 0.f;
+                    g.playerMoveSpeedMps = 0.f;
+                }
             }
 
             if ( g.keys[VK_SPACE] && g.grounded )
             {
                 g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;
+                g.playerMoveSpeedMps = 0.f;
                 g.velZ = kJumpSpeedMps;
                 g.grounded = false;
             }
@@ -30569,7 +32539,11 @@ namespace
                     g.camZ = g.feetZ + kEyeHeightM;
                 }
             }
-            if(!g.grounded){g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;}
+            if(!g.grounded)
+            {
+                g.stage0SlideRemaining=g.stage0SlideSpeed=0.f;
+                g.playerMoveSpeedMps = 0.f;
+            }
 
             ResolveWalkOutOfWall();
 
@@ -30737,6 +32711,142 @@ namespace
         DrawHudText( cx - 28.f, cy - R - 34.f, hub );
     }
 
+    struct PlayerMapLayout
+    {
+        float panelX0=0,panelY0=0,panelX1=0,panelY1=0;
+        float mapX0=0,mapY0=0,mapX1=0,mapY1=0;
+        UiRect close{}, compass{}, human{}, meter{};
+    };
+
+    PlayerMapLayout MakePlayerMapLayout( int w, int h )
+    {
+        PlayerMapLayout l;
+        float const pw=(std::min)(980.f,(float)w-48.f);
+        float const ph=(std::min)(720.f,(float)h-48.f);
+        l.panelX0=((float)w-pw)*.5f;l.panelX1=l.panelX0+pw;
+        l.panelY0=((float)h-ph)*.5f;l.panelY1=l.panelY0+ph;
+        float const mapSize=(std::min)(ph-92.f,pw-300.f);
+        l.mapX0=l.panelX0+26.f;l.mapY0=l.panelY0+34.f;
+        l.mapX1=l.mapX0+mapSize;l.mapY1=l.mapY0+mapSize;
+        float const rx=l.mapX1+34.f, rw=l.panelX1-rx-24.f;
+        l.close={l.panelX1-92.f,l.panelY1-42.f,l.panelX1-20.f,l.panelY1-16.f};
+        l.compass={rx,l.panelY1-150.f,rx+rw,l.panelY1-112.f};
+        l.human={rx,l.panelY1-202.f,rx+rw,l.panelY1-164.f};
+        l.meter={rx,l.panelY1-254.f,rx+rw,l.panelY1-216.f};
+        return l;
+    }
+
+    void DrawPlayerToggle( UiRect const& r, bool on, char const* label )
+    {
+        FillRect(r.x0,r.y0,r.x1,r.y1,on?.18f:.10f,on?.34f:.12f,on?.25f:.13f,.96f);
+        StrokeRect(r.x0,r.y0,r.x1,r.y1,on?.58f:.42f,on?.86f:.45f,on?.64f:.48f);
+        FillRect(r.x0+10.f,r.y0+10.f,r.x0+28.f,r.y1-10.f,
+            on?.45f:.18f,on?.82f:.20f,on?.55f:.22f);
+        glColor3f(.94f,.95f,.89f);DrawHudText(r.x0+38.f,r.y0+13.f,label);
+    }
+
+    void DrawPlayerWorldMap( int w, int h )
+    {
+        if(!g.ei3PlayerFacing)return;
+        glDisable(GL_DEPTH_TEST);glDisable(GL_TEXTURE_2D);glDisable(GL_STENCIL_TEST);
+        glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();
+        glOrtho(0,w,0,h,-1,1);glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadIdentity();
+        if(!g.playerMapOpen)
+        {
+            if(g.playerCompassVisible)DrawCompass((float)w-56.f,(float)h-70.f);
+            glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();
+            glMatrixMode(GL_MODELVIEW);glEnable(GL_DEPTH_TEST);return;
+        }
+
+        PlayerMapLayout const l=MakePlayerMapLayout(w,h);
+        FillRect(0,0,(float)w,(float)h,.02f,.03f,.04f,.72f);
+        FillRect(l.panelX0,l.panelY0,l.panelX1,l.panelY1,.075f,.085f,.075f,.98f);
+        StrokeRect(l.panelX0,l.panelY0,l.panelX1,l.panelY1,.66f,.58f,.38f);
+        glColor3f(.94f,.86f,.58f);DrawHudText(l.panelX0+24.f,l.panelY1-34.f,"WORLD MAP");
+        DrawHudText(l.close.x0+9.f,l.close.y0+8.f,"CLOSE");
+        StrokeRect(l.close.x0,l.close.y0,l.close.x1,l.close.y1,.72f,.60f,.34f);
+        FillRect(l.mapX0,l.mapY0,l.mapX1,l.mapY1,.055f,.075f,.085f);
+
+        static std::string cachedGenesis;
+        static uint64_t cachedRevision=~uint64_t(0);
+        static std::unordered_map<uint64_t,Mv2Page> pages;
+        if(cachedGenesis!=g.macroGenesisDigest||cachedRevision!=g.macroManifestRevision)
+        {pages.clear();cachedGenesis=g.macroGenesisDigest;cachedRevision=g.macroManifestRevision;}
+        int const cri=(int)std::floor((g.camX+kMv2RegionHalfM)/kMv2RegionM);
+        int const crj=(int)std::floor((g.camY+kMv2RegionHalfM)/kMv2RegionM);
+        bool triedLoad=false;
+        float const pagePx=(l.mapX1-l.mapX0)/3.f;
+        for(int dj=-1;dj<=1;++dj)for(int di=-1;di<=1;++di)
+        {
+            int const ri=cri+di,rj=crj+dj;uint64_t const key=Mv2Key(ri,rj);
+            auto it=pages.find(key);
+            if(it==pages.end()&&!triedLoad)
+            {
+                Mv2Page page;triedLoad=true;
+                if(Mv2LoadPage(ri,rj,page))it=pages.emplace(key,std::move(page)).first;
+            }
+            float const px0=l.mapX0+(di+1)*pagePx;
+            float const py0=l.mapY0+(dj+1)*pagePx;
+            if(it==pages.end())
+            {
+                FillRect(px0,py0,px0+pagePx,py0+pagePx,.10f,.12f,.13f);
+                StrokeRect(px0,py0,px0+pagePx,py0+pagePx,.24f,.28f,.29f);
+                continue;
+            }
+            Mv2Page const& page=it->second;
+            int constexpr cells=12;float const cellPx=pagePx/cells;
+            for(int j=0;j<cells;++j)for(int i=0;i<cells;++i)
+            {
+                double const x=page.minX+(i+.5)*kMv2RegionM/cells;
+                double const y=page.minY+(j+.5)*kMv2RegionM/cells;
+                Ms1::WaterState const water=Mv2WaterAt(page,x,y);
+                float rr=.29f,gg=.34f,bb=.25f;
+                if(Ms1::MacroStandingWater(water))
+                {rr=.08f;gg=.31f;bb=.48f;}
+                else
+                {
+                    Ms1::RGB c; if(Mv2AppearanceAt(page,x,y,1000.f,c))
+                    {rr=std::clamp(c.r,0.f,1.f);gg=std::clamp(c.g,0.f,1.f);bb=std::clamp(c.b,0.f,1.f);}
+                }
+                float const x0=px0+i*cellPx,y0=py0+j*cellPx;
+                FillRect(x0,y0,x0+cellPx+.5f,y0+cellPx+.5f,rr,gg,bb);
+            }
+            StrokeRect(px0,py0,px0+pagePx,py0+pagePx,.45f,.43f,.32f);
+        }
+        double const minWorldX=(cri-1)*kMv2RegionM-kMv2RegionHalfM;
+        double const minWorldY=(crj-1)*kMv2RegionM-kMv2RegionHalfM;
+        double const span=3.0*kMv2RegionM;
+        float const markerX=l.mapX0+(float)((g.camX-minWorldX)/span)*(l.mapX1-l.mapX0);
+        float const markerY=l.mapY0+(float)((g.camY-minWorldY)/span)*(l.mapY1-l.mapY0);
+        glColor3f(1.f,.88f,.20f);glBegin(GL_TRIANGLES);
+        glVertex2f(markerX,markerY+10.f);glVertex2f(markerX-7.f,markerY-7.f);
+        glVertex2f(markerX+7.f,markerY-7.f);glEnd();
+        glColor3f(.95f,.92f,.72f);DrawHudText(l.mapX0+8.f,l.mapY1-18.f,"N");
+
+        DrawPlayerToggle(l.compass,g.playerCompassVisible,"COMPASS");
+        DrawPlayerToggle(l.human,g.playerHumanRulerVisible,"6 FT HUMAN RULER");
+        DrawPlayerToggle(l.meter,g.playerMeterRulerVisible,"METRE WORLD RULER");
+        glColor3f(.72f,.75f,.68f);
+        DrawHudText(l.mapX1+34.f,l.panelY0+76.f,"M  MAP / SETTINGS");
+        DrawHudText(l.mapX1+34.f,l.panelY0+52.f,"ESC  RETURN TO WORLD");
+        char position[128];std::snprintf(position,sizeof(position),"POSITION  %.0f E  %.0f N",g.camX,g.camY);
+        DrawHudText(l.mapX1+34.f,l.panelY0+24.f,position);
+        if(g.playerCompassVisible)DrawCompass(l.panelX1-74.f,l.panelY1-330.f);
+        glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);glEnable(GL_DEPTH_TEST);
+    }
+
+    bool HandlePlayerWorldMapClick( float mx, float my )
+    {
+        if(!g.playerMapOpen)return false;
+        PlayerMapLayout const l=MakePlayerMapLayout(g.uiWinW,g.uiWinH);
+        if(UiHit(l.close,mx,my)){g.playerMapOpen=false;EnterViewportInput(g.hwnd);return true;}
+        if(UiHit(l.compass,mx,my)){g.playerCompassVisible=!g.playerCompassVisible;return true;}
+        if(UiHit(l.human,mx,my)){g.playerHumanRulerVisible=!g.playerHumanRulerVisible;return true;}
+        if(UiHit(l.meter,mx,my)){g.playerMeterRulerVisible=!g.playerMeterRulerVisible;return true;}
+        return true;
+    }
+
     void DrawSessionClock( float x, float y )
     {
         DWORD now = GetTickCount();
@@ -30761,6 +32871,11 @@ namespace
     void Render()
     {
         if ( !g.glrc ) { return; }
+        static bool firstPlayerRender = true;
+        static int playerRenderTraceIndex = 0;
+        bool const tracePlayerRender=g.ei3PlayerFacing&&firstPlayerRender;
+        bool const tracePlayerStages=g.ei3PlayerFacing&&playerRenderTraceIndex<3;
+        if(tracePlayerRender)PlayerStartupTrace("first render begin");
         bool const stage0 = g.certWorldgenBaselinePerf || g.playWorldgenBaseline;
         LARGE_INTEGER render0{}, qpf{};
         if ( stage0 )
@@ -30806,6 +32921,11 @@ namespace
             LARGE_INTEGER beforeSwap{};
             QueryPerformanceCounter(&beforeSwap);
             SwapBuffers( g.hdc );
+            if(tracePlayerRender)
+            {
+                PlayerStartupTrace("first frame presented");
+                firstPlayerRender=false;
+            }
             QueryPerformanceCounter( &afterPresent );
             g.stage0FrameSwapBuffersMs = qpf.QuadPart > 0
                 ? 1000.0 * (double)( afterPresent.QuadPart - beforeSwap.QuadPart )
@@ -30975,8 +33095,10 @@ namespace
         // seam. Pages are MV2.A compiled authority (cheap; no ReconstructedZ). Only
         // active when mv2bEnabled — all frozen MV1 certs (mv2b off) are untouched.
         if ( g.playWorldgenBaseline && g.mv2bEnabled
+          && g.playWorldgenInitialized
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
+            if(tracePlayerStages)PlayerStartupTrace("render macro horizon begin");
             // Showcase renders macro-only from up close: drop the near plane to 350 m and
             // keep the macro depth (no clear), so the macro landform IS the terrain.
             float const nf2 = g.certMv2Showcase ? 350.f : 24000.f;
@@ -30999,6 +33121,7 @@ namespace
             if ( !g.certMv2Showcase ) glClear( GL_DEPTH_BUFFER_BIT );
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
             glMatrixMode( GL_MODELVIEW );
+            if(tracePlayerStages)PlayerStartupTrace("render macro horizon complete");
         }
 
         // ---- MV1.C far terrain pass -----------------------------------------
@@ -31009,12 +33132,19 @@ namespace
         // the far terrain wherever near geometry exists. Camera/modelview is
         // shared; only the projection differs between passes.
         if ( g.playWorldgenBaseline && g.mv1Enabled && !g.certMv2Showcase
+          && g.playWorldgenInitialized
           && IsRegionalBiomeView( g.stage0PlayView ) )
         {
+            if(tracePlayerStages)PlayerStartupTrace("render terrain carrier begin");
             // Canonical play keeps the engine macro carrier continuous beneath
             // resident matter detail. The near pass clears and overpaints depth,
             // so this supplies coverage rather than a competing truth surface.
-            float const nf = g.ei3MatterPlayable ? 0.03f : 128.f;
+            // This is the 128 m..33 km pass. Feeding it the interactive 3 cm
+            // near plane destroys most far-depth precision and makes terrain
+            // intermittently win the water depth test. The separate near pass
+            // below remains 0.03..600 m and overpaints this carrier after the
+            // depth clear, so there is no near-coverage loss here.
+            float const nf = 128.f;
             float const ff = (float)kMv1VisibleRangeM + 1000.f;
             float const fm[16] = {
                 f / aspect, 0, 0, 0,
@@ -31043,16 +33173,32 @@ namespace
             { Mv2AccumMv1Mask(); }   // union MV1 far; near pass unions + clears after DrawHeightfield
             if ( g.mv2bEnabled ) Mv2SetAerial( false );
             else if ( mv1dOn ) Mv1dSetFog( false );
-            LARGE_INTEGER dcq{},dc0{},dc1{};QueryPerformanceFrequency(&dcq);QueryPerformanceCounter(&dc0);
-            glClear( GL_DEPTH_BUFFER_BIT );
-            QueryPerformanceCounter(&dc1);
+            LARGE_INTEGER dcq{},dc0{},dc1{};
+            QueryPerformanceFrequency(&dcq);QueryPerformanceCounter(&dc0);
+            glClear(GL_DEPTH_BUFFER_BIT);QueryPerformanceCounter(&dc1);
             g.mv1DepthClearMsFrame=dcq.QuadPart>0
                 ?1000.0*(double)(dc1.QuadPart-dc0.QuadPart)/(double)dcq.QuadPart:0.0;
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
             glMatrixMode( GL_MODELVIEW );
+            if(UsesCut0RegionalCarrier(g.stage0PlayView))
+            {
+                // Re-submit the regional carrier under the near projection.
+                // Its far-pass depth was produced by a different projection
+                // and cannot safely occlude near props or the player. The
+                // redraw preserves one visible/support terrain truth without
+                // reintroducing the withheld high-frequency matter panel.
+                g.mv1RenderOnly = true;
+                DrawMv1MultiScaleTerrain();
+                g.mv1RenderOnly = false;
+            }
+            if(tracePlayerStages)PlayerStartupTrace("render terrain carrier complete");
         }
 
-        if ( !g.certMv2Showcase ) DrawHeightfield();   // macro-only showcase: no near central world
+        if(tracePlayerStages)PlayerStartupTrace("render near terrain begin");
+        if ( !g.certMv2Showcase
+          && ( !g.ei3PlayerFacing || g.playWorldgenInitialized ) )
+        { DrawHeightfield(); }   // macro-only showcase: no near central world
+        if(tracePlayerStages)PlayerStartupTrace("render near terrain complete");
         DrawEi3DetailedProjection();
         // Union the near authoritative world (0.03-600 m) into the gap-classifier
         // terrain mask, then close the capture: a sky pixel is only a hole if NONE
@@ -31076,6 +33222,8 @@ namespace
             if ( g.stage0ToolPerformanceHud ) { DrawWorldgenPlayHud( w, h ); }
             DrawWorldgenStageMenu( w, h );
             DrawWorldgenToolDrawer( w, h );
+            DrawPlayerWorldMap( w, h );
+            DrawStage0OrographicDebugHud( w, h );
             stage0Present();
             return;
         }
@@ -31086,10 +33234,13 @@ namespace
         }
         if ( g.playWorldgenBaseline )
         {
+            if(tracePlayerStages)PlayerStartupTrace("render player presentation begin");
             DrawStage0CalibrationPresentation();
             if ( g.stage0ToolPerformanceHud ) { DrawWorldgenPlayHud( w, h ); }
             DrawWorldgenStageMenu( w, h );
             DrawWorldgenToolDrawer( w, h );
+            DrawPlayerWorldMap( w, h );
+            DrawStage0OrographicDebugHud( w, h );
             // The ProvRender workbench is the two worlds merged: the Stage-0
             // palette, character and tool props above, and the Phase-4 interaction
             // layer below -- aim reticle with UV/cell contact, held sample, E
@@ -31097,6 +33248,8 @@ namespace
             // here and keeps its bare presentation.
             if ( !g.provRenderWorkbench )
             {
+                if(tracePlayerStages)PlayerStartupTrace("render player presentation complete");
+                ++playerRenderTraceIndex;
                 stage0Present();
                 return;
             }
@@ -31247,7 +33400,8 @@ namespace
             DrawHudText( sx1 + 6.f, sy0 + 2.f, strikeLine );
         }
 
-        DrawCompass( (float)w - 56.f, (float)h - 70.f );
+        if(!g.ei3PlayerFacing||g.playerCompassVisible)
+            DrawCompass( (float)w - 56.f, (float)h - 70.f );
 
         // Input-ownership witness. The viewport re-entry defect was invisible from
         // the outside: capture and mouse-look looked correct while the keyboard
@@ -41514,6 +43668,7 @@ namespace
     void WorldgenPlayInitialize()
     {
         if ( g.playWorldgenInitialized ) { return; }
+        PlayerStartupTrace("world initialization begin");
 
         ProvenanceGeo::SetFixture( ProvenanceGeo::GeoFixture::Baseline );
         ProvenanceGeo::SetSeedU64( 0x5747424153453031ULL ); // same WGBASE01 cert seed
@@ -41558,7 +43713,12 @@ namespace
         g.playWorldgenStartSupport = g.perfSupportBelowCount;
         g.playWorldgenStartMutations = g.perfOccupancyMutations;
 
-        EnsureGeoDisk( g.playerX, g.playerY, 64 );
+        // The certification/browser client owns an analytic local fixture.
+        // The canonical player client does not: it must reach its first frame,
+        // establish the authority session, and stream the nearest projected
+        // terrain without first compiling the obsolete 13k-cell test disk.
+        if ( !g.ei3AuthorityEnabled )
+        { EnsureGeoDisk( g.playerX, g.playerY, 64 ); }
         if ( IsCausalPlayableView( g.stage0PlayView ) )
         {
             float groundZ = g.feetZ;
@@ -42052,29 +44212,55 @@ namespace
         if(g.playMw8Launch)
         {
             g.stage0StageMenuOpen=false;
-            bool const selected = SelectStage0PlayView(Stage0PlayView::RegionalBiome);
+            Stage0PlayView const worldView = g.ei3AuthorityEnabled
+                && g.ei3RichLandformsSession
+                ? Stage0PlayView::RichCausalLandforms
+                : Stage0PlayView::RegionalBiome;
+            PlayerStartupTrace("canonical world selection begin");
+            bool const selected = SelectStage0PlayView(worldView);
+            PlayerStartupTrace("canonical world selection complete");
             if ( g.ei3AuthorityEnabled )
             {
                 canonicalEi3WorldSelected = selected;
                 if ( selected )
                 {
-                    // Canonical play enters the original embodied-world locale,
-                    // not a certification camera. This is the same absolute
-                    // 128/128 neighbourhood used by the historical material,
-                    // digging, and water runtime. It also avoids synchronously
-                    // searching a 60 km cert grid before authority can attach.
-                    constexpr float spawnX = 128.5f;
-                    constexpr float spawnY = 128.5f;
+                    // The authority selects the caused opening only after terrain,
+                    // drainage, water and biome opportunity exist. The client is a
+                    // dumb terminal: it receives absolute coordinates and does not
+                    // search, sculpt, or choose a local world of its own.
+                    float const spawnX = g.ei3OpeningSpawnXProvided
+                        && g.ei3OpeningSpawnYProvided ? g.ei3OpeningSpawnX : 128.5f;
+                    float const spawnY = g.ei3OpeningSpawnXProvided
+                        && g.ei3OpeningSpawnYProvided ? g.ei3OpeningSpawnY : 128.5f;
                     g.feetX = spawnX; g.feetY = spawnY;
                     g.playerX = (int)std::floor( spawnX );
                     g.playerY = (int)std::floor( spawnY );
+                    if ( OrographicPlayActive() && !AdoptPage::IsLive() )
+                    {
+                        AdoptPage::AdoptCanonicalFixture();
+                        g.orographicPlayable = true;
+                    }
+                    // The opening receipt carries the authority's canonical
+                    // surface estimate. Use it immediately so the first frame
+                    // cannot begin below an unloaded mountain. Once the nearest
+                    // published terrain is resident, ei3LandingIntent snaps the
+                    // player to the exact sampled surface below.
+                    if ( g.ei3OpeningSpawnZProvided )
+                    {
+                        g.feetZ = g.ei3OpeningSpawnZ;
+                        g.camZ = g.feetZ + kEyeHeightM;
+                    }
+                    PlayerStartupTrace("opening terrain binding begin");
                     RebuildStage0PlayableRuntime();
+                    PlayerStartupTrace("opening terrain binding complete");
                     float regionalGround = g.feetZ;
                     SampleGroundZBase( spawnX, spawnY, regionalGround );
                     g.feetZ = regionalGround;
                     g.camX = spawnX; g.camY = spawnY;
                     g.camZ = regionalGround + kEyeHeightM;
-                    g.yaw = 0.35f; g.pitch = -0.18f;
+                    g.yaw = g.ei3OpeningSpawnYawProvided
+                        ? g.ei3OpeningSpawnYaw : 0.35f;
+                    g.pitch = -0.12f;
                     g.walkMode = false; g.grounded = false;
                     g.ei3LandingIntent = true;
                 }
@@ -42096,14 +44282,14 @@ namespace
         }
         if(g.playOrographicLaunch)
         {
-            // Product consume of certified orographic.phase17. Native Stage0
-            // landing, WorldGenesis v11 render, collision, and streaming stay.
+            g.orographicPlayable = true;
+            g.wd1bEnabled = false;
             if(!AdoptPage::IsLive())
                 AdoptPage::AdoptCanonicalFixture();
             if(AdoptPage::IsLive())
             {
                 CausalRegionalEcology::Compile(CausalRegionalEcology::Control::ForceOn);
-                g.statusLine="orographic.phase17 admitted (banked page 1,1); MW9 flora realized; native Stage0 render unchanged";
+                g.statusLine="orographic.phase17 admitted; MW9 occupancy compiled (not drawn as trees)";
             }
         }
         if(g.playP5b3b3bLaunch)
@@ -42478,6 +44664,64 @@ namespace
         g.playWorldgenPrevX = g.feetX;
         g.playWorldgenPrevY = g.feetY;
         ++g.playWorldgenFrame;
+    }
+
+    void DrawStage0OrographicDebugHud( int w, int h )
+    {
+        if(!g.ei3PlayerFacing||!g.stage0OrographicDebugHud)return;
+        Ei3::MatterSurfaceSample matter;
+        bool const sampled=g.ei3Residency.SampleMatterSurface(g.feetX,g.feetY,matter);
+        float macroZ=0.f,collisionZ=0.f;
+        bool const macro=SampleCanonicalWorldGenesisZ(g.feetX,g.feetY,macroZ);
+        bool const collision=SampleGroundZBase(g.feetX,g.feetY,collisionZ);
+        int const ri=(int)std::floor((g.feetX+kMv2RegionHalfM)/kMv2RegionM);
+        int const rj=(int)std::floor((g.feetY+kMv2RegionHalfM)/kMv2RegionM);
+        int const macroResolution=g.macroRefinementsResident.count(CellKey(ri,rj))?250:500;
+
+        glDisable(GL_DEPTH_TEST);glDisable(GL_TEXTURE_2D);glDisable(GL_STENCIL_TEST);
+        glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+        glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,w,0,h,-1,1);
+        glMatrixMode(GL_MODELVIEW);glLoadIdentity();
+        float const x=(float)w-690.f,top=(float)h-18.f,width=672.f,height=252.f;
+        glColor4f(.025f,.035f,.045f,.88f);glBegin(GL_QUADS);
+        glVertex2f(x,top);glVertex2f(x+width,top);
+        glVertex2f(x+width,top-height);glVertex2f(x,top-height);glEnd();
+        float y=top-22.f;char line[768];
+        auto row=[&](char const* value,float r=.86f,float gg=.92f,float b=.98f)
+        {glColor3f(r,gg,b);DrawHudText(x+12.f,y,value);y-=18.f;};
+        row("V11 TERRAIN CAUSE  [F7] close",.95f,.83f,.35f);
+        std::snprintf(line,sizeof(line),
+            "xy=(%.1f, %.1f) page=(%d,%d) carrier=%dm near=%s",
+            g.feetX,g.feetY,ri,rj,macroResolution,sampled?"4m AUTHORITY":"waiting");row(line);
+        std::snprintf(line,sizeof(line),
+            "macro_z=%s %.3f  fine_z=%s %.3f  contribution=%+.3f",
+            macro?"OK":"MISS",macroZ,sampled?"OK":"WAIT",sampled?matter.z:0.f,
+            sampled&&macro?matter.z-macroZ:0.f);row(line);
+        std::snprintf(line,sizeof(line),
+            "render_z=%.3f collision_z=%s %.3f grounding_z=%.3f delta=%.4f",
+            sampled?matter.z:macroZ,collision?"OK":"MISS",collisionZ,g.feetZ,
+            collision?std::fabs((sampled?matter.z:macroZ)-collisionZ):0.f);row(line);
+        std::snprintf(line,sizeof(line),"system=%s  range=%s",
+            sampled?matter.orographicSystemId.c_str():"waiting",
+            sampled?matter.parentRangeId.c_str():"waiting");row(line,.68f,.91f,.72f);
+        std::snprintf(line,sizeof(line),"massif=%s  peak=%s",
+            sampled?matter.parentMassifId.c_str():"waiting",
+            sampled?matter.macroPeakId.c_str():"waiting");row(line,.68f,.91f,.72f);
+        std::snprintf(line,sizeof(line),"ridge=%s  saddle=%s",
+            sampled?matter.macroRidgeId.c_str():"waiting",
+            sampled?matter.macroSaddleId.c_str():"waiting");row(line,.68f,.91f,.72f);
+        std::snprintf(line,sizeof(line),"watershed=%s  channel=%s",
+            sampled?matter.macroWatershedId.c_str():"waiting",
+            sampled?matter.macroChannelId.c_str():"waiting");row(line,.48f,.78f,.98f);
+        std::snprintf(line,sizeof(line),
+            "detail_chunks=%zu  page_refinement=%s  terrain_owner=FableScript",
+            g.ei3Residency.Size(),macroResolution==250?"ADMITTED":"PENDING");row(line);
+        std::snprintf(line,sizeof(line),
+            "drainage builds=%d disk=%d resident=%d (process bounded)",
+            g.ei3DrainageSolutionBuildCount,
+            g.ei3DrainageSolutionDiskLoadCount,
+            g.ei3DrainageSolutionResidentContextCount);row(line,.72f,.86f,.98f);
+        glEnable(GL_DEPTH_TEST);
     }
 
     void DrawWorldgenPlayHud( int w, int h )
@@ -44202,6 +46446,8 @@ namespace
         g.playerCrouch = 0.f;
         g.playerCrouched = false;
         g.stage0SlideRemaining = g.stage0SlideSpeed = 0.f;
+        g.playerMoveSpeedMps = 0.f;
+        g.stage0SlideFatigue = 0.f;
         g.grounded = true;
         g.havePlayer = true;
         g.streamComplete = true;
@@ -51733,6 +53979,9 @@ namespace
 
     void TickFrame()
     {
+        static bool firstPlayerTick=true;
+        bool const tracePlayerTick=g.ei3PlayerFacing&&firstPlayerTick;
+        if(tracePlayerTick)PlayerStartupTrace("first tick begin");
         bool const stage0Mode = g.certWorldgenBaselinePerf || g.playWorldgenBaseline;
         LARGE_INTEGER stage0TickQpc{}, stage0Qpf{};
         if ( stage0Mode )
@@ -51808,11 +54057,15 @@ namespace
                 if ( g.canonicalHandshakeOk && g.sock != INVALID_SOCKET
                   && g.bulkSock == INVALID_SOCKET && now - g.lastBulkAttemptMs > 2000 )
                 { TryConnectBulk(); }
+                ServiceMacroPageRequests();
+                ServiceOrographicPages();
+                SeatOrographicPlayer();
             }
             else if ( ( g.link == LinkState::Disconnected || g.link == LinkState::SocketError )
                    && now - g.lastAttemptMs > 2000 )
             { g.lastAttemptMs = now; TryConnect(); }
             TickEi3Residency();
+            ServiceMacroPageRefinement();
         }
 
         if ( g.certWorldgenBaselinePerf )
@@ -51832,6 +54085,7 @@ namespace
         else if ( g.playWorldgenBaseline )
         {
             WorldgenPlayInitialize();
+            if(tracePlayerTick)PlayerStartupTrace("first tick world initialized");
             if(g.presentWaterTerrainHydraulicCompactionRuntime&&!g.presentWaterTerrainHydraulicCompactionRuntime->Complete())
             {++s_traversalWake.topologyActivations;g.presentWaterTerrainHydraulicCompactionRuntime->Tick(48);}
             if(g.presentWaterTerrainHydraulicDepositionRuntime&&!g.presentWaterTerrainHydraulicDepositionRuntime->Complete())
@@ -51878,6 +54132,7 @@ namespace
             Ei3PredictiveTraversalCertTick();
             Ei3QbPlayerViewVisualCertTick();
             Ei3PlayerViewTraversalCertTick();
+            Stage0OrographicCertTick();
             PresentationIsolationBeforeFrame(dt);
         }
         else if ( !g.ei3AuthorityEnabled
@@ -51957,7 +54212,8 @@ namespace
         {
             LARGE_INTEGER sim0{}, sim1{};
             if ( g.playWorldgenBaseline ) { QueryPerformanceCounter( &sim0 ); }
-            if ( ( !g.playWorldgenBaseline || !g.stage0StageMenuOpen )
+            if ( ( !g.playWorldgenBaseline
+                    ||(!g.stage0StageMenuOpen&&!g.playerMapOpen) )
               && !g.certWorldgenCardinalReplacement
               && !g.certStage11ResidencyWaterfall
               && !g.certStage11ShiftScaling
@@ -52207,6 +54463,11 @@ namespace
             WriteChipProbeDump(); // %TEMP%\provenance_chip_probe.txt — full chip list for agents
         }
         Render();
+        if(tracePlayerTick)
+        {
+            PlayerStartupTrace("first tick complete");
+            firstPlayerTick=false;
+        }
         if ( s_boundaryCapturePending )
         {
             CaptureWorldgenBoundaryView();
@@ -55298,18 +57559,31 @@ namespace
         {
             case WM_CREATE:
                 g.hwnd = hwnd;
+                PlayerStartupTrace("window create begin");
                 if ( !InitGL( hwnd ) )
                 {
                     MessageBoxW( hwnd, L"OpenGL init failed", L"Provenance Client", MB_ICONERROR );
                     PostQuitMessage( 1 );
                     return 0;
                 }
+                PlayerStartupTrace("OpenGL initialized");
                 if ( !g.playWorldgenBaseline && !g.certWorldgenLadderLivePerf )
                 { SetTimer( hwnd, kTimerId, 16, nullptr ); }
                 g.lastAttemptMs = GetTickCount();
                 g.lastFrameMs = GetTickCount();
-                if ( !g.certWorldgenBaselinePerf && !g.playWorldgenBaseline ) { TryConnect(); }
+                // Player-facing Stage 0 already has a live authority prepared
+                // by its launcher.  Start that handshake immediately instead
+                // of deliberately showing two seconds of empty sky before the
+                // first retry timer is allowed to fire.
+                if ( !g.certWorldgenBaselinePerf
+                  && ( !g.playWorldgenBaseline || g.ei3AuthorityEnabled ) )
+                {
+                    PlayerStartupTrace("authority connect begin");
+                    TryConnect();
+                    PlayerStartupTrace("authority connect returned");
+                }
                 SetMouseLook( hwnd, !g.playWorldgenBaseline );
+                PlayerStartupTrace("window create complete");
                 return 0;
             case WM_ACTIVATE:
                 // Losing focus must always drop to the UI state. Previously only
@@ -55355,6 +57629,12 @@ namespace
                 if ( wParam < 256 ) { g.keys[wParam] = true; }
                 if ( wParam == VK_ESCAPE )
                 {
+                    if ( g.ei3PlayerFacing && g.playerMapOpen )
+                    {
+                        g.playerMapOpen = false;
+                        EnterViewportInput( hwnd );
+                        return 0;
+                    }
                     if ( g.playWorldgenBaseline && g.stage0ToolDrawerOpen )
                     {
                         g.stage0ToolDrawerOpen = false;
@@ -55387,6 +57667,16 @@ namespace
                 }
                 else if ( g.playWorldgenBaseline && ( wParam == 'M' || wParam == 'm' ) )
                 {
+                    if ( g.ei3PlayerFacing )
+                    {
+                        if ( ( lParam & ( 1LL << 30 ) ) == 0 )
+                        {
+                            g.playerMapOpen = !g.playerMapOpen;
+                            SetMouseLook( hwnd, !g.playerMapOpen );
+                        }
+                        g.keys['M'] = g.keys['m'] = false;
+                        return 0;
+                    }
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 )
                     {
                         g.stage0StageMenuOpen = !g.stage0StageMenuOpen;
@@ -55407,6 +57697,11 @@ namespace
                 }
                 else if ( g.playWorldgenBaseline && ( wParam == 'T' || wParam == 't' ) )
                 {
+                    if ( g.ei3PlayerFacing )
+                    {
+                        g.keys['T'] = g.keys['t'] = false;
+                        return 0;
+                    }
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 )
                     {
                         g.stage0ToolDrawerOpen = !g.stage0ToolDrawerOpen;
@@ -55514,6 +57809,17 @@ namespace
                     g.playWorldgenResidencyOverlay = !g.playWorldgenResidencyOverlay;
                     return 0;
                 }
+                else if ( g.ei3PlayerFacing && wParam == VK_F7 )
+                {
+                    if((lParam&(1LL<<30))==0)
+                    {
+                        g.stage0OrographicDebugHud=!g.stage0OrographicDebugHud;
+                        g.statusLine=g.stage0OrographicDebugHud
+                            ?"v11 terrain-cause inspection ON"
+                            :"v11 terrain-cause inspection OFF";
+                    }
+                    g.keys[VK_F7]=false;return 0;
+                }
                 else if ( g.playWorldgenBaseline && ( wParam == 'X' || wParam == 'x' ) )
                 {
                     if ( ( lParam & ( 1LL << 30 ) ) == 0 )
@@ -55586,19 +57892,8 @@ namespace
                         if(g.playerCrouched&&g.walkMode&&g.grounded
                             &&(GetKeyState(VK_SHIFT)&0x8000)!=0)
                         {
-                            float const cy=std::cos(g.yaw),sy=std::sin(g.yaw);
-                            float const fx=sy,fy=cy,rx=cy,ry=-sy;
-                            float dx=0.f,dy=0.f;
-                            if(g.keys['W']){dx+=fx;dy+=fy;}if(g.keys['S']){dx-=fx;dy-=fy;}
-                            if(g.keys['A']){dx-=rx;dy-=ry;}if(g.keys['D']){dx+=rx;dy+=ry;}
-                            float const dl=std::sqrt(dx*dx+dy*dy);
-                            if(dl>1e-5f)
-                            {
-                                g.stage0SlideDirX=dx/dl;g.stage0SlideDirY=dy/dl;
-                                g.stage0SlideSpeed=kSprintSpeedMps;g.stage0SlideRemaining=0.62f;
-                                g.statusLine="Power slide — crouched momentum";
-                            }
-                            else g.statusLine="Crouch — ON";
+                            if(!BeginDevelopmentSlide())
+                            {g.statusLine="Crouch - build sprint momentum to slide";}
                         }
                         else
                         {
@@ -55903,6 +58198,11 @@ namespace
                 }
                 if ( g.playWorldgenBaseline )
                 {
+                    if ( g.ei3PlayerFacing && g.playerMapOpen )
+                    {
+                        HandlePlayerWorldMapClick( g.uiMouseX, g.uiMouseY );
+                        return 0;
+                    }
                     if ( g.stage0StageMenuOpen || g.stage0ToolDrawerOpen )
                     {
                         HandleWorldgenMenuClick( g.uiMouseX, g.uiMouseY );
@@ -56901,6 +59201,63 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.stage0PlayView = Stage0PlayView::RichCausalLandforms;
                     continue;
                 }
+                if ( _wcsicmp( argv[i], L"--ei3-player-facing" ) == 0 )
+                {
+                    g.ei3PlayerFacing = true;
+                    g.stage0StageMenuOpen = false;
+                    g.stage0ToolDrawerOpen = false;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--player-hide-compass" ) == 0 )
+                { g.playerCompassVisible = false; continue; }
+                if ( _wcsicmp( argv[i], L"--player-hide-human-ruler" ) == 0 )
+                { g.playerHumanRulerVisible = false; continue; }
+                if ( _wcsicmp( argv[i], L"--player-hide-meter-ruler" ) == 0 )
+                { g.playerMeterRulerVisible = false; continue; }
+                if ( _wcsicmp( argv[i], L"--ei3-spawn-x" ) == 0 && i + 1 < argc )
+                {
+                    wchar_t* end = nullptr;
+                    float const value = std::wcstof( argv[++i], &end );
+                    if ( end && *end == L'\0' && std::isfinite( value ) )
+                    {
+                        g.ei3OpeningSpawnX = value;
+                        g.ei3OpeningSpawnXProvided = true;
+                    }
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--ei3-spawn-y" ) == 0 && i + 1 < argc )
+                {
+                    wchar_t* end = nullptr;
+                    float const value = std::wcstof( argv[++i], &end );
+                    if ( end && *end == L'\0' && std::isfinite( value ) )
+                    {
+                        g.ei3OpeningSpawnY = value;
+                        g.ei3OpeningSpawnYProvided = true;
+                    }
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--ei3-spawn-z" ) == 0 && i + 1 < argc )
+                {
+                    wchar_t* end = nullptr;
+                    float const value = std::wcstof( argv[++i], &end );
+                    if ( end && *end == L'\0' && std::isfinite( value ) )
+                    {
+                        g.ei3OpeningSpawnZ = value;
+                        g.ei3OpeningSpawnZProvided = true;
+                    }
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--ei3-spawn-yaw" ) == 0 && i + 1 < argc )
+                {
+                    wchar_t* end = nullptr;
+                    float const value = std::wcstof( argv[++i], &end );
+                    if ( end && *end == L'\0' && std::isfinite( value ) )
+                    {
+                        g.ei3OpeningSpawnYaw = value;
+                        g.ei3OpeningSpawnYawProvided = true;
+                    }
+                    continue;
+                }
                 if ( _wcsicmp( argv[i], L"--cert-ei3qb-visual-qa" ) == 0
                   || _wcsicmp( argv[i], L"--cert-ei3qb-visual-qb" ) == 0 )
                 {
@@ -56908,6 +59265,13 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                     g.certEi3QBVisual = true;
                     g.certEi3QBVisualRichExpected =
                         _wcsicmp( argv[i], L"--cert-ei3qb-visual-qb" ) == 0;
+                    continue;
+                }
+                if ( _wcsicmp( argv[i], L"--cert-stage0-orographic" ) == 0 )
+                {
+                    SetErrorMode( GetErrorMode() | SEM_NOGPFAULTERRORBOX );
+                    g.certStage0Orographic = true;
+                    g.ei3AuthorityEnabled = true;
                     continue;
                 }
                 if ( _wcsicmp( argv[i], L"--cert-out-dir" ) == 0
@@ -58236,9 +60600,9 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                   ||_wcsicmp(argv[i],L"--play-mw8-orographic")==0
                   ||_wcsicmp(argv[i],L"--play-stage0-adopt-page")==0)
                 {
-                    // Opt-in consume of banked orographic.phase17. Does not replace
-                    // native Stage0 landing, WorldGenesis v11 render, or collision.
                     g.playOrographicLaunch=true;
+                    g.orographicPlayable=true;
+                    g.wd1bEnabled=false;
                     continue;
                 }
                 if(_wcsicmp(argv[i],L"--mv1-off")==0)
@@ -58752,8 +61116,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         Stage0PlayView const launchView = g.ei3RichLandformsSession
             ? Stage0PlayView::RichCausalLandforms
             : Stage0PlayView::RegionalBiome;
-        bool const descriptorAuthority = EnsureCausalPlayableAuthority(
-            launchView );
+        // This certificate runs before the server handshake. It proves launch
+        // wiring only; live identity/page/water admission belongs to the
+        // handshake and traversal certificates and must be seed-specific.
+        bool const serverProjectionConfigured = !g.macroAuthorityRoot.empty();
+        bool const cut0ServerCarrierGate = !g.ei3RichLandformsSession
+            || UsesCut0RegionalCarrier( launchView );
         bool const passed = g.ei3AuthorityEnabled
             && g.ei3MatterPlayable
             && g.playWorldgenBaseline && !g.playWorldgenLatestStableLaunch
@@ -58766,34 +61134,53 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
             && g.stage0LiveRadiusM == 192 && g.stage0FarExtentM == 0
             && ( !g.ei3RichLandformsSession
                 || g.stage0PlayView == Stage0PlayView::RichCausalLandforms )
-            && descriptorAuthority;
+            && serverProjectionConfigured && cut0ServerCarrierGate;
         FILE* file = nullptr;
         if ( fopen_s( &file, "Docs\\provenance_ei3_launch_mode_cert.txt", "wb" ) == 0 && file )
         {
             std::fprintf( file,
                 "EI3_LAUNCH_MODE=%s\n"
                 "authority_enabled=%d\nworldgen_presentation=%d\n"
-                "playable_near_source=PLAYABLE_NEAR_MATTER\n"
+                "playable_near_source=%s\n"
                 "ei3_diagnostic_lattice=NORMAL_PLAY_OFF\n"
                 "mw8_calibration_near=NORMAL_PLAY_OFF\n"
                 "macro_world_presentation=%s\nmv2b=%d\nmv2c=%d\nms1b=%d\nwd1b=%d\n"
-                "authoritative_landing=%d\nplayer_spawn=EMBODIED_ORIGIN_128_128\n"
+                "authoritative_landing=%d\n"
+                "player_facing=%d\n"
+                "opening_spawn_xyz=%.6f,%.6f,%.6f\n"
+                "opening_spawn_z_provided=%d\n"
                 "certification_overlays=OFF\nlive_radius_m=%d\nfar_extent_m=%d\n"
-                "descriptor_authority=%s\ndescriptor_reason=%s\n"
+                "server_projection_configured=%s\n"
+                "server_projection_reason=%s\n"
                 "rich_landforms_session=%d\nselected_stage=%s\n"
+                "cut0_server_carrier_gate=%s\n"
+                "live_page_and_water_admission=DEFERRED_TO_SERVER_HANDSHAKE\n"
+                "rectangular_water_cards=0\n"
+                "macro_water_geometry=CONTOURED_DESCRIPTOR_OCCUPANCY\n"
+                "grounding_source=TERRAIN_SUPPORT_NOT_WATER_SURFACE\n"
                 "legacy_phase4_shell=%s\nlocal_physics_fixture=REJECTED\n"
                 "flat_dirt_fallback=REJECTED\n",
                 passed ? "PASS" : "FAIL", g.ei3AuthorityEnabled ? 1 : 0,
                 g.playWorldgenBaseline ? 1 : 0,
+                UsesCut0RegionalCarrier(g.stage0PlayView)
+                    ?"WORLDGENESIS_REGIONAL_CARRIER"
+                    :"PLAYABLE_NEAR_MATTER",
                 g.playMw8Launch ? "FABLESCRIPT_WORLDGENESIS" : "MISSING",
                 g.mv2bEnabled ? 1 : 0, g.mv2cEnabled ? 1 : 0,
                 g.ms1bEnabled ? 1 : 0, g.wd1bEnabled ? 1 : 0,
                 g.ei3LandingIntent ? 1 : 0,
+                g.ei3PlayerFacing ? 1 : 0,
+                g.ei3OpeningSpawnX, g.ei3OpeningSpawnY,
+                g.ei3OpeningSpawnZ,
+                g.ei3OpeningSpawnZProvided ? 1 : 0,
                 g.stage0LiveRadiusM, g.stage0FarExtentM,
-                descriptorAuthority ? "PASS" : "FAIL",
-                g.regionalBiomeAuthorityReason.c_str(),
+                serverProjectionConfigured ? "PASS" : "FAIL",
+                serverProjectionConfigured
+                    ? "server projection root supplied; identity admission is live-session owned"
+                    : "server projection root missing",
                 g.ei3RichLandformsSession ? 1 : 0,
                 Stage0PlayViewName( g.stage0PlayView ),
+                cut0ServerCarrierGate?"PASS":"FAIL",
                 g.playWorldgenBaseline ? "REJECTED" : "ACTIVE" );
             std::fclose( file );
         }
@@ -58821,9 +61208,11 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
     wc.hbrBackground = (HBRUSH)GetStockObject( BLACK_BRUSH );
     RegisterClassW( &wc );
 
-    wchar_t const* windowTitle = g.playWorldgenBaseline
-        ? L"Provenance - Worldgen Playtest - Certified Runtimes"
-        : L"Provenance Client - Phase 4";
+    wchar_t const* windowTitle = g.ei3PlayerFacing
+        ? L"Provenance - Stage 0 World"
+        : ( g.playWorldgenBaseline
+            ? L"Provenance - Worldgen Playtest - Certified Runtimes"
+            : L"Provenance Client - Phase 4" );
     int initialW=g.certStage0CharacterPortrait?1536:1280;
     int initialH=g.certStage0CharacterPortrait?1536:800;
     int initialX=CW_USEDEFAULT,initialY=CW_USEDEFAULT;
@@ -58860,6 +61249,12 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
         bool running = true;
         while ( running )
         {
+            LARGE_INTEGER playerFrameStart{}, playerFrameFrequency{};
+            if(g.ei3PlayerFacing)
+            {
+                QueryPerformanceFrequency(&playerFrameFrequency);
+                QueryPerformanceCounter(&playerFrameStart);
+            }
             while ( PeekMessageW( &msg, nullptr, 0, 0, PM_REMOVE ) )
             {
                 if ( msg.message == WM_QUIT )
@@ -58870,7 +61265,30 @@ int APIENTRY wWinMain( HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow )
                 TranslateMessage( &msg );
                 DispatchMessageW( &msg );
             }
-            if ( running ) { TickFrame(); }
+            if ( running )
+            {
+                TickFrame();
+                // The certification/performance lanes remain intentionally
+                // uncapped.  The actual player client is a streamed terminal:
+                // cap it near 60 Hz so a temporarily empty authority queue does
+                // not turn into thousands of empty frames per second, exhaust a
+                // frame-count timeout before the server can answer, and pin a
+                // CPU core while the first pages arrive.
+                if(g.ei3PlayerFacing&&playerFrameFrequency.QuadPart>0)
+                {
+                    LARGE_INTEGER playerFrameEnd{};
+                    QueryPerformanceCounter(&playerFrameEnd);
+                    double const elapsedMs=1000.0*(double)(playerFrameEnd.QuadPart
+                        -playerFrameStart.QuadPart)/(double)playerFrameFrequency.QuadPart;
+                    constexpr double kPlayerFrameTargetMs=1000.0/60.0;
+                    if(elapsedMs<kPlayerFrameTargetMs)
+                    {
+                        DWORD const waitMs=(DWORD)(std::max)(1.0,
+                            std::floor(kPlayerFrameTargetMs-elapsedMs));
+                        Sleep(waitMs);
+                    }
+                }
+            }
         }
     }
     else
