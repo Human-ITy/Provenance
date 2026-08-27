@@ -24,9 +24,21 @@ if (-not $CanonicalWorkspaceRoot -or -not (Test-Path -LiteralPath $CanonicalWork
 $worldStateRoot = Join-Path $CanonicalWorkspaceRoot 'State\canonical-playable'
 New-Item -ItemType Directory -Force -Path $libraryRoot | Out-Null
 
-function New-WorldRecord([string] $Name,[string] $Seed) {
+function New-WorldRecord([string] $Name,[string] $Seed,[string] $TerrainLaw='orographic.phase17') {
     [pscustomobject]@{ id=[guid]::NewGuid().ToString('N'); name=$Name; seed=$Seed
+        terrain_law=$TerrainLaw
         created_utc=[DateTime]::UtcNow.ToString('o'); last_played_utc=$null }
+}
+function Resolve-TerrainLaw($World) {
+    $law = ''
+    if ($World.PSObject.Properties['terrain_law']) { $law = [string]$World.terrain_law }
+    if ($law) { return $law }
+    $seed = [string]$World.seed
+    if ($seed -eq '20260827' -or $seed -eq 'orographic-phase17-canonical') {
+        return 'orographic.phase17'
+    }
+    if ($seed -like 'provenance-*') { return 'worldgenesis.v11' }
+    return 'orographic.phase17'
 }
 function Load-Library {
     if (Test-Path -LiteralPath $libraryPath -PathType Leaf) {
@@ -72,9 +84,15 @@ function Remove-WorldData($World) {
 }
 
 $library=Load-Library
+foreach($w in $library.worlds){
+    $resolved=Resolve-TerrainLaw $w
+    if(-not $w.PSObject.Properties['terrain_law'] -or [string]$w.terrain_law -ne $resolved){
+        $w | Add-Member -NotePropertyName terrain_law -NotePropertyValue $resolved -Force
+    }
+}
 $hasCanonical=$false
 foreach($w in $library.worlds){
-    if([string]$w.name -eq 'Stage 0 Orographic' -or [string]$w.seed -eq 'orographic-phase17-canonical'){ $hasCanonical=$true; break }
+    if([string]$w.name -eq 'Stage 0 Orographic' -or [string]$w.seed -eq 'orographic-phase17-canonical' -or [string]$w.seed -eq '20260827'){ $hasCanonical=$true; break }
 }
 if(-not $hasCanonical){
     $oro=New-WorldRecord 'Stage 0 Orographic' '20260827'
@@ -138,7 +156,12 @@ $list.Add_SelectedIndexChanged({$w=Selected-World;if($w){$nameBox.Text=[string]$
 $newButton.Add_Click({$list.ClearSelected();$nameBox.Text='Stage 0 Orographic';$seedBox.Text='20260827';$nameBox.SelectAll();$nameBox.Focus()})
 $saveButton.Add_Click({$name=$nameBox.Text.Trim();$seed=$seedBox.Text.Trim()
     if(-not$name-or-not$seed){[void][Windows.Forms.MessageBox]::Show('A world name and seed are required.','Provenance');return}
-    $w=Selected-World;if($w){$w.name=$name;$w.seed=$seed}else{$w=New-WorldRecord $name $seed;[void]$library.worlds.Add($w)}
+    $w=Selected-World
+    if($w){$w.name=$name;$w.seed=$seed
+        if(-not $w.PSObject.Properties['terrain_law'] -or -not [string]$w.terrain_law){
+            $w | Add-Member -NotePropertyName terrain_law -NotePropertyValue (Resolve-TerrainLaw $w) -Force
+        }
+    }else{$w=New-WorldRecord $name $seed 'orographic.phase17';[void]$library.worlds.Add($w)}
     Save-Library;Refresh-WorldList ([string]$w.id)})
 $deleteButton.Add_Click({$w=Selected-World;if(-not$w){return}
     $a=[Windows.Forms.MessageBox]::Show("Delete '$($w.name)'?`r`n`r`nIts saved identity and generated terrain cache will be removed.",'Delete world','YesNo','Warning')
@@ -153,5 +176,6 @@ Refresh-WorldList ([string]$library.last_world_id);$selectedWorld=$null
 [void]$form.ShowDialog();if(-not$selectedWorld){exit 0}
 $clientArguments=@('--ei3-authority');if(-not$library.compass){$clientArguments+='--player-hide-compass'}
 if(-not$library.human_ruler){$clientArguments+='--player-hide-human-ruler'};if(-not$library.meter_ruler){$clientArguments+='--player-hide-meter-ruler'}
-& $playScript -PlayerFacing -RichLandforms -WorldSeed ([string]$selectedWorld.seed) -CanonicalWorkspaceRoot $CanonicalWorkspaceRoot -ClientArgument $clientArguments
+$playLaw=Resolve-TerrainLaw $selectedWorld
+& $playScript -PlayerFacing -RichLandforms -WorldSeed ([string]$selectedWorld.seed) -TerrainLaw $playLaw -CanonicalWorkspaceRoot $CanonicalWorkspaceRoot -ClientArgument $clientArguments
 exit $LASTEXITCODE

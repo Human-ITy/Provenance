@@ -199,6 +199,7 @@ namespace AdoptPage
         std::string cacheKey;
         int px = 0, py = 0;
         double bounds[4] = {};
+        double pageSizeM = 1024;
         double step = 500;
         int n = 0;
         std::vector<std::vector<double>> smooth;
@@ -468,9 +469,12 @@ namespace AdoptPage
         static OrographicContext c;
         return c;
     }
-    inline uint64_t PageKey(int px, int py)
+    inline uint64_t PageKey(int px, int py, int pageM = 1024)
     {
-        return (uint64_t)(uint32_t)px << 32 | (uint32_t)py;
+        uint64_t h = (uint64_t)(uint32_t)px << 32 | (uint32_t)py;
+        if (pageM != 1024)
+            h ^= (uint64_t)(uint32_t)pageM * 0x9e3779b97f4a7c15ull;
+        return h;
     }
     inline void PageOf(double x, double y, int& px, int& py, double pageM = 1024.0)
     {
@@ -483,31 +487,24 @@ namespace AdoptPage
 
     inline AdoptedGeography const* PageAt(double x, double y, double skirtM = kPageSkirtM)
     {
-        int px = 0, py = 0;
-        PageOf(x, y, px, py);
-        auto& atlas = Atlas();
-        auto it = atlas.find(PageKey(px, py));
-        if (it != atlas.end() && it->second.live) return &it->second;
-        for (int dy = -1; dy <= 1; ++dy)
-        for (int dx = -1; dx <= 1; ++dx)
+        AdoptedGeography const* best = nullptr;
+        double bestArea = 1e300;
+        auto consider = [&](AdoptedGeography const& p)
         {
-            if (dx == 0 && dy == 0) continue;
-            it = atlas.find(PageKey(px + dx, py + dy));
-            if (it == atlas.end() || !it->second.live) continue;
-            AdoptedGeography const& p = it->second;
-            if (x >= p.bounds[0] - skirtM && x <= p.bounds[2] + skirtM
-             && y >= p.bounds[1] - skirtM && y <= p.bounds[3] + skirtM)
-                return &p;
-        }
-        if (G().live
-         && x >= G().bounds[0] - skirtM && x <= G().bounds[2] + skirtM
-         && y >= G().bounds[1] - skirtM && y <= G().bounds[3] + skirtM)
-            return &G();
-        return nullptr;
+            if (!p.live || p.smooth.empty()) return;
+            double const x0 = p.bounds[0] - skirtM, y0 = p.bounds[1] - skirtM;
+            double const x1 = p.bounds[2] + skirtM, y1 = p.bounds[3] + skirtM;
+            if (x < x0 || x > x1 || y < y0 || y > y1) return;
+            double const area = (p.bounds[2] - p.bounds[0]) * (p.bounds[3] - p.bounds[1]);
+            if (area < bestArea) { bestArea = area; best = &p; }
+        };
+        for (auto const& kv : Atlas()) consider(kv.second);
+        if (G().live) consider(G());
+        return best;
     }
     // Presentation fill only: keep a tile that overhangs the atlas from punching
     // sky. Collision / grounding stay on the strict PageAt path.
-    inline AdoptedGeography const* NearestLivePage(double x, double y, double maxDistM = 4096.0)
+    inline AdoptedGeography const* NearestLivePage(double x, double y, double maxDistM = 24576.0)
     {
         if (AdoptedGeography const* hit = PageAt(x, y)) return hit;
         AdoptedGeography const* best = nullptr;
@@ -526,9 +523,9 @@ namespace AdoptPage
         return best;
     }
     inline int AtlasCount() { return (int)Atlas().size(); }
-    inline bool AtlasHas(int px, int py)
+    inline bool AtlasHas(int px, int py, int pageM = 1024)
     {
-        auto it = Atlas().find(PageKey(px, py));
+        auto it = Atlas().find(PageKey(px, py, pageM));
         return it != Atlas().end() && it->second.live;
     }
 
@@ -963,10 +960,18 @@ namespace AdoptPage
         static char const* kinds[] = { "peaks", "ridges", "saddles", "spurs", "divides", "valleys" };
         if (!defs || defs->kind != Json::Obj)
         { r.reason = "page omitted feature_definitions"; return r; }
+        double pageSizeM = page.num("page_size_m", 0.0);
+        if (!(pageSizeM > 0.0))
+        {
+            if (Json const* b = page.get("bounds"); b && b->kind == Json::Arr && b->a.size() >= 4)
+                pageSizeM = b->a[2].n - b->a[0].n;
+        }
         for (char const* k : kinds)
         {
             Json const* arr = defs->get(k);
-            if (!arr || arr->kind != Json::Arr || arr->a.empty())
+            if (!arr || arr->kind != Json::Arr)
+            { r.reason = std::string("production page omitted ") + k + " definitions"; return r; }
+            if (arr->a.empty() && pageSizeM <= 1024.5)
             { r.reason = std::string("production page carried no ") + k + " definitions"; return r; }
         }
 
@@ -977,6 +982,10 @@ namespace AdoptPage
         { geo.px = (int)pg->a[0].n; geo.py = (int)pg->a[1].n; }
         if (Json const* b = page.get("bounds"); b && b->kind == Json::Arr && b->a.size() >= 4)
             for (int i = 0; i < 4; ++i) geo.bounds[i] = b->a[(size_t)i].n;
+        geo.pageSizeM = page.num("page_size_m", 0.0);
+        if (!(geo.pageSizeM > 0.0) && geo.bounds[2] > geo.bounds[0])
+            geo.pageSizeM = geo.bounds[2] - geo.bounds[0];
+        if (!(geo.pageSizeM > 0.0)) geo.pageSizeM = 1024.0;
         geo.step = page.num("step", 500);
         geo.n = (int)page.num("n", 0);
         if (Json const* sm = page.get("smooth"); sm && sm->kind == Json::Arr)
@@ -996,7 +1005,7 @@ namespace AdoptPage
         geo.rebuilds = 0;
         geo.compiles = 0;
         geo.adoptDigest = MixSamples(geo);
-        uint64_t const key = PageKey(geo.px, geo.py);
+        uint64_t const key = PageKey(geo.px, geo.py, (int)std::lround(geo.pageSizeM));
         Atlas()[key] = geo;
         G() = std::move(geo);
         r.ok = true;

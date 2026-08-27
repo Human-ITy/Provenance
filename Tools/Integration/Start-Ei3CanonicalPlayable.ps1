@@ -8,6 +8,7 @@ param(
     [string] $ValidatedMacroCacheRoot = '',
     [string] $CanonicalWorkspaceRoot = '',
     [string] $WorldSeed = '',
+    [string] $TerrainLaw = '',
     [int] $ControlPort = 8765,
     [int] $BulkPort = 8766
 )
@@ -52,6 +53,9 @@ $clientExe = Join-Path $clientRoot 'Build\x64_Release\ProvenanceClient.exe'
 $pendingClientExe = Join-Path $clientRoot 'Build\x64_Release\ProvenanceClient.pending.exe'
 $macroCache = Join-Path $clientRoot 'Data\Worldgen\MacroAuthority-v11'
 $worldStateRoot = Join-Path $workspaceRoot 'State\canonical-playable'
+$isOrographicPhase17 = ($WorldSeed -eq '20260827' -or
+    $WorldSeed -eq 'orographic-phase17-canonical' -or
+    $TerrainLaw -eq 'orographic.phase17')
 $worldInstanceName = if ($WorldSeed) {
     # The player-facing .cmd deliberately invokes inbox Windows PowerShell 5.1.
     # SHA256.HashData and Convert.ToHexString are newer .NET APIs, so use the
@@ -64,7 +68,6 @@ $worldInstanceName = if ($WorldSeed) {
         $seedHasher.Dispose()
     }
     $seedHash = (-join ($seedDigest | ForEach-Object { $_.ToString('x2') })).Substring(0, 16)
-    $isOrographicPhase17 = ($WorldSeed -eq '20260827' -or $WorldSeed -eq 'orographic-phase17-canonical')
     if ($isOrographicPhase17) {
         # Distinct instance file from world-instance-stage0-genesis-v11-*.
         # Existing v11 origins on the v11 path are not rewritten.
@@ -146,7 +149,8 @@ function Stop-Ei3PreviouslyOwnedAuthority {
 }
 $worldInstance = Join-Path $worldStateRoot $worldInstanceName
 $openingReceipt = "$worldInstance.opening.json"
-$isOrographicPhase17 = $worldInstanceName -like 'world-instance-stage0-orographic-phase17-*'
+$isOrographicPhase17 = $isOrographicPhase17 -or
+    ($worldInstanceName -like 'world-instance-stage0-orographic-phase17-*')
 $compiledContexts = Join-Path $workspaceRoot 'Cache\Worldgen\compiled_context\drainage'
 $evidenceRoot = Join-Path $workspaceRoot 'Evidence\Playable\launcher-runs'
 $workspaceManifest = Join-Path $workspaceRoot 'CANONICAL_WORKSPACE.json'
@@ -273,8 +277,9 @@ $clientStartedMs = $null
 try {
     $prewarmStartedMs = $launchClock.ElapsedMilliseconds
     if ($isOrographicPhase17 -and $RichLandforms) {
-        # Canonical orographic.phase17 lands on certified page (1,1). Do not
-        # reuse the v11 caused-opening for provenance-stage0-genesis-010.
+        # Orographic.phase17 has no forest openings. Do not run
+        # select_stage0_opening.py; land on certified page (1,1).
+        # Existing v11 library worlds keep the caused-opening path below.
         $spawnX = '1536'
         $spawnY = '1536'
         $spawnZ = '0'

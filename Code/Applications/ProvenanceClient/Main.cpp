@@ -261,6 +261,7 @@ namespace
         MacroPage,
         MacroRefinement,
         OrographicPage,
+        OrographicFarPage,
         OrographicContext,
     };
 
@@ -995,7 +996,8 @@ namespace
         std::string helloTerrainLaw;
         std::unordered_set<uint64_t> orographicPagesRequested;
         std::unordered_set<uint64_t> orographicPagesResident;
-        std::vector<std::pair<int,int>> orographicPagesWanted;
+        struct OrographicPageWant { int px = 0, py = 0, pageM = 1024; };
+        std::vector<OrographicPageWant> orographicPagesWanted;
         DWORD orographicPageLastSendAttemptMs = 0;
         int orographicStreamGeneration = 0;
         int orographicContextPx = -1000000, orographicContextPy = -1000000;
@@ -7208,14 +7210,14 @@ namespace
             || g.helloTerrainLaw == AdoptPage::kTerrainLaw;
     }
 
-    void RequestOrographicPage( int px, int py )
+    void RequestOrographicPage( int px, int py, int pageM = 1024 )
     {
-        uint64_t const key = AdoptPage::PageKey( px, py );
+        uint64_t const key = AdoptPage::PageKey( px, py, pageM );
         if ( g.orographicPagesResident.count( key )
           || g.orographicPagesRequested.count( key ) ) { return; }
         for ( auto const& page : g.orographicPagesWanted )
-        { if ( page.first == px && page.second == py ) { return; } }
-        g.orographicPagesWanted.emplace_back( px, py );
+        { if ( page.px == px && page.py == py && page.pageM == pageM ) { return; } }
+        g.orographicPagesWanted.push_back( { px, py, pageM } );
     }
 
     void ServiceOrographicPages()
@@ -7225,23 +7227,35 @@ namespace
         if ( g.bulkTransportState != Ei0d::ConnectionState::Active ) { return; }
         int px = 0, py = 0;
         AdoptPage::PageOf( g.feetX, g.feetY, px, py );
-        // Coverage hierarchy uses the same 1024 m adopted pages. Near is a
-        // 9×9 keep (ring 4). Mid/far request out to 32 km so MV1 never falls
-        // through to a leftover v11 64 km strip. Coarser tessellation is an
-        // MV1 band choice; authority stays AdoptPage::SampleZ.
-        constexpr int kNearRing = 4;  // 9×9 = 9.2 km
-        constexpr int kFarRing = 16;  // 33×33 = 33.8 km, matches MV1 far
+        // Cheap continuous hierarchy: fine 1024 m keep near the player, then a
+        // coarsened 8192 m far underlay from the same adopted SampleZ. Do not
+        // compile 33×33 = 1089 fine pages — that hitch starved mid/far fill
+        // and opened the sky band. Far fills while near is still streaming.
+        constexpr int kNearRing = 1;       // 3×3 = 3.1 km keep
+        constexpr int kFarPageM = 8192;
+        constexpr int kFarRing = 2;        // 5×5 = 41 km coarse underlay
+        for ( int dj = -kNearRing; dj <= kNearRing; ++dj )
+        for ( int di = -kNearRing; di <= kNearRing; ++di )
+            RequestOrographicPage( px + di, py + dj, 1024 );
+        int fx = 0, fy = 0;
+        AdoptPage::PageOf( g.feetX, g.feetY, fx, fy, (double)kFarPageM );
         for ( int dj = -kFarRing; dj <= kFarRing; ++dj )
         for ( int di = -kFarRing; di <= kFarRing; ++di )
-            RequestOrographicPage( px + di, py + dj );
+            RequestOrographicPage( fx + di, fy + dj, kFarPageM );
 
         g.orographicPagesWanted.erase(
             std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
-                [&]( std::pair<int,int> const& page )
+                [&]( AppState::OrographicPageWant const& page )
                 {
-                    int const dx = page.first - px, dy = page.second - py;
-                    return dx > kFarRing || dx < -kFarRing
-                        || dy > kFarRing || dy < -kFarRing;
+                    if ( page.pageM == kFarPageM )
+                    {
+                        int const dx = page.px - fx, dy = page.py - fy;
+                        return dx > kFarRing || dx < -kFarRing
+                            || dy > kFarRing || dy < -kFarRing;
+                    }
+                    int const dx = page.px - px, dy = page.py - py;
+                    return dx > kNearRing || dx < -kNearRing
+                        || dy > kNearRing || dy < -kNearRing;
                 } ),
             g.orographicPagesWanted.end() );
 
@@ -7252,33 +7266,46 @@ namespace
         while ( (int)g.orographicPagesRequested.size() < kMaxInflight
              && g.bulkFlow.Inflight() < kMaxInflight )
         {
-            std::pair<int,int> selected{};
+            AppState::OrographicPageWant selected{};
             bool have = false;
             double best = 0.0;
             bool preferNear = false;
             for ( auto const& page : g.orographicPagesWanted )
             {
-                uint64_t const key = AdoptPage::PageKey( page.first, page.second );
+                uint64_t const key = AdoptPage::PageKey( page.px, page.py, page.pageM );
                 if ( g.orographicPagesResident.count( key )
                   || g.orographicPagesRequested.count( key ) ) continue;
-                int const adx = page.first - px, ady = page.second - py;
-                bool const near = (std::abs)(adx) <= kNearRing && (std::abs)(ady) <= kNearRing;
-                double const d = (double)adx * adx + (double)ady * ady;
+                bool const near = page.pageM <= 1024;
+                double const d = (double)( page.px - ( near ? px : fx ) )
+                    * (double)( page.px - ( near ? px : fx ) )
+                    + (double)( page.py - ( near ? py : fy ) )
+                    * (double)( page.py - ( near ? py : fy ) );
                 if ( !have || ( near && !preferNear ) || ( near == preferNear && d < best ) )
                 {
                     selected = page; best = d; have = true; preferNear = near;
                 }
             }
             if ( !have ) { break; }
-            char params[96];
-            std::snprintf( params, sizeof( params ),
-                "{\"page_coord\":[%d,%d]}", selected.first, selected.second );
+            char params[160];
+            if ( selected.pageM > 1024 )
+            {
+                std::snprintf( params, sizeof( params ),
+                    "{\"page_coord\":[%d,%d],\"page_size_m\":%d,\"step\":512}",
+                    selected.px, selected.py, selected.pageM );
+            }
+            else
+            {
+                std::snprintf( params, sizeof( params ),
+                    "{\"page_coord\":[%d,%d]}", selected.px, selected.py );
+            }
             g.orographicPageLastSendAttemptMs = now;
+            PendingKind const kind = selected.pageM > 1024
+                ? PendingKind::OrographicFarPage : PendingKind::OrographicPage;
             if ( !RequestBulkMethod( "orographic_production_page", params,
-                    { (int)PendingKind::OrographicPage, selected.first, selected.second } ) )
+                    { (int)kind, selected.px, selected.py } ) )
                 break;
             g.orographicPagesRequested.insert(
-                AdoptPage::PageKey( selected.first, selected.second ) );
+                AdoptPage::PageKey( selected.px, selected.py, selected.pageM ) );
             g.statusLine = "orographic.phase17 page streaming";
             if ( ++sent >= kMaxInflight ) break;
         }
@@ -13575,9 +13602,11 @@ namespace
             if ( kind == PendingKind::MacroRefinement )
             { g.macroRefinementsRequested.erase(
                 CellKey( correlated.bx, correlated.by ) ); }
-            if ( kind == PendingKind::OrographicPage )
+            if ( kind == PendingKind::OrographicPage
+              || kind == PendingKind::OrographicFarPage )
             { g.orographicPagesRequested.erase(
-                AdoptPage::PageKey( correlated.bx, correlated.by ) ); }
+                AdoptPage::PageKey( correlated.bx, correlated.by,
+                    kind == PendingKind::OrographicFarPage ? 8192 : 1024 ) ); }
             if ( kind == PendingKind::DetailedChunks
               || kind == PendingKind::DetailedSync )
             { g.ei3Requested.clear(); }
@@ -13605,9 +13634,11 @@ namespace
             return;
         }
 
-        if ( kind == PendingKind::OrographicPage )
+        if ( kind == PendingKind::OrographicPage
+          || kind == PendingKind::OrographicFarPage )
         {
-            uint64_t const key = AdoptPage::PageKey( correlated.bx, correlated.by );
+            int const pageM = kind == PendingKind::OrographicFarPage ? 8192 : 1024;
+            uint64_t const key = AdoptPage::PageKey( correlated.bx, correlated.by, pageM );
             g.orographicPagesRequested.erase( key );
             std::string pageJson;
             if ( !Ei3::Detail::ExtractObject( line, "page", pageJson ) )
@@ -13633,8 +13664,8 @@ namespace
             Mv1InvalidateAdoptedPage( correlated.bx, correlated.by );
             g.orographicPagesWanted.erase(
                 std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
-                    [&]( std::pair<int,int> const& p )
-                    { return p.first == correlated.bx && p.second == correlated.by; } ),
+                    [&]( AppState::OrographicPageWant const& p )
+                    { return p.px == correlated.bx && p.py == correlated.by && p.pageM == pageM; } ),
                 g.orographicPagesWanted.end() );
             if ( !AdoptPage::ContextLive() )
             {
@@ -20538,9 +20569,9 @@ namespace
     // mid/far coarsen tessellation only. Horizon sits ~80 uu under near/mid
     // so LOD seams do not open sky (do not repeat v366).
     static constexpr Mv1Band kOroMv1Bands[3] = {
-        {     0,   8192,  256,   8,  5.0,  -1.0f },
-        {  6144,  20480, 2048,  64, 18.0,  -8.0f },
-        { 16384,  32768, 4096, 128, 45.0, -80.0f },
+        {     0,   3072,  512,  16,  8.0,  -1.0f },
+        {  2048,  16384, 2048,  64, 18.0,  -8.0f },
+        { 12288,  32768, 8192, 256, 45.0, -80.0f },
     };
     static Mv1Band const& Mv1BandOf(int band)
     {
@@ -20671,6 +20702,8 @@ namespace
         if(OrographicPlayActive())
         {
             if(!AdoptPage::SampleZ((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
+                g.voxelEdgeM,outZ)
+              && !AdoptPage::SampleZNearest((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
                 g.voxelEdgeM,outZ))
                 return false;
             char const* mat=AdoptPage::AppearanceMaterial(x,y);
@@ -20754,10 +20787,18 @@ namespace
 
     void Mv1InvalidateAdoptedPage( int px, int py )
     {
-        double const x0 = (double)px * 1024.0 - AdoptPage::kPageSkirtM;
-        double const y0 = (double)py * 1024.0 - AdoptPage::kPageSkirtM;
-        double const x1 = (double)(px + 1) * 1024.0 + AdoptPage::kPageSkirtM;
-        double const y1 = (double)(py + 1) * 1024.0 + AdoptPage::kPageSkirtM;
+        double x0 = (double)px * 1024.0 - AdoptPage::kPageSkirtM;
+        double y0 = (double)py * 1024.0 - AdoptPage::kPageSkirtM;
+        double x1 = (double)(px + 1) * 1024.0 + AdoptPage::kPageSkirtM;
+        double y1 = (double)(py + 1) * 1024.0 + AdoptPage::kPageSkirtM;
+        if ( AdoptPage::Get().live && AdoptPage::Get().px == px && AdoptPage::Get().py == py
+          && AdoptPage::Get().bounds[2] > AdoptPage::Get().bounds[0] )
+        {
+            x0 = AdoptPage::Get().bounds[0] - AdoptPage::kPageSkirtM;
+            y0 = AdoptPage::Get().bounds[1] - AdoptPage::kPageSkirtM;
+            x1 = AdoptPage::Get().bounds[2] + AdoptPage::kPageSkirtM;
+            y1 = AdoptPage::Get().bounds[3] + AdoptPage::kPageSkirtM;
+        }
         for ( auto it = g.mv1Tiles.begin(); it != g.mv1Tiles.end(); )
         {
             AppState::Mv1Tile const& tile = it->second;
