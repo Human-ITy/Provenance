@@ -993,6 +993,7 @@ namespace
         bool playMw8Launch = false;
         bool playOrographicLaunch = false;
         bool orographicPlayable = false;
+        bool orographicFeatureFootprints = false; // F6 debug PeakId paint; default play ground
         std::string helloTerrainLaw;
         std::unordered_set<uint64_t> orographicPagesRequested;
         std::unordered_set<uint64_t> orographicPagesResident;
@@ -2634,7 +2635,8 @@ namespace
     int CountClearSkyPixels();
     void FollowStreamCenter();
     bool OrographicPlayActive();
-    void Mv1InvalidateAdoptedPage( int px, int py );
+    void Mv1ReleaseAll();
+    void Mv1InvalidateAdoptedPage( int px, int py, int pageM = 1024 );
     void ServiceOrographicPages();
     void SeatOrographicPlayer();
     int CountLowerPpmSkyPixels( char const* path );
@@ -13661,7 +13663,7 @@ namespace
             g.orographicPagesResident.insert( key );
             g.orographicPlayable = true;
             ++g.orographicStreamGeneration;
-            Mv1InvalidateAdoptedPage( correlated.bx, correlated.by );
+            Mv1InvalidateAdoptedPage( correlated.bx, correlated.by, pageM );
             g.orographicPagesWanted.erase(
                 std::remove_if( g.orographicPagesWanted.begin(), g.orographicPagesWanted.end(),
                     [&]( AppState::OrographicPageWant const& p )
@@ -20706,7 +20708,7 @@ namespace
               && !AdoptPage::SampleZNearest((float)x,(float)y,g.gradeDatum,g.reliefVoxels,
                 g.voxelEdgeM,outZ))
                 return false;
-            char const* mat=AdoptPage::AppearanceMaterial(x,y);
+            char const* mat=AdoptPage::AppearanceMaterial(x,y,g.orographicFeatureFootprints);
             r=110;gg=88;bb=58;CapColor(mat,r,gg,bb);
             return true;
         }
@@ -20785,19 +20787,25 @@ namespace
         for(int i=0;i<4;++i)g.mv1TileCellsHist[i]=0;
     }
 
-    void Mv1InvalidateAdoptedPage( int px, int py )
+    void Mv1InvalidateAdoptedPage( int px, int py, int pageM )
     {
-        double x0 = (double)px * 1024.0 - AdoptPage::kPageSkirtM;
-        double y0 = (double)py * 1024.0 - AdoptPage::kPageSkirtM;
-        double x1 = (double)(px + 1) * 1024.0 + AdoptPage::kPageSkirtM;
-        double y1 = (double)(py + 1) * 1024.0 + AdoptPage::kPageSkirtM;
-        if ( AdoptPage::Get().live && AdoptPage::Get().px == px && AdoptPage::Get().py == py
-          && AdoptPage::Get().bounds[2] > AdoptPage::Get().bounds[0] )
+        double const span = pageM > 0 ? (double)pageM : 1024.0;
+        double x0 = (double)px * span - AdoptPage::kPageSkirtM;
+        double y0 = (double)py * span - AdoptPage::kPageSkirtM;
+        double x1 = (double)(px + 1) * span + AdoptPage::kPageSkirtM;
+        double y1 = (double)(py + 1) * span + AdoptPage::kPageSkirtM;
+        auto const atlasIt = AdoptPage::Atlas().find( AdoptPage::PageKey( px, py, pageM ) );
+        AdoptPage::AdoptedGeography const* geo = ( atlasIt != AdoptPage::Atlas().end() )
+            ? &atlasIt->second : nullptr;
+        if ( !geo && AdoptPage::Get().live && AdoptPage::Get().px == px
+          && AdoptPage::Get().py == py )
+            geo = &AdoptPage::Get();
+        if ( geo && geo->live && geo->bounds[2] > geo->bounds[0] )
         {
-            x0 = AdoptPage::Get().bounds[0] - AdoptPage::kPageSkirtM;
-            y0 = AdoptPage::Get().bounds[1] - AdoptPage::kPageSkirtM;
-            x1 = AdoptPage::Get().bounds[2] + AdoptPage::kPageSkirtM;
-            y1 = AdoptPage::Get().bounds[3] + AdoptPage::kPageSkirtM;
+            x0 = geo->bounds[0] - AdoptPage::kPageSkirtM;
+            y0 = geo->bounds[1] - AdoptPage::kPageSkirtM;
+            x1 = geo->bounds[2] + AdoptPage::kPageSkirtM;
+            y1 = geo->bounds[3] + AdoptPage::kPageSkirtM;
         }
         for ( auto it = g.mv1Tiles.begin(); it != g.mv1Tiles.end(); )
         {
@@ -20857,23 +20865,46 @@ namespace
             }
         }
         if(hitN==0)
-        {++g.mv1AuthoritySampleFailures;return false;}
+        {
+            if(!OrographicPlayActive())
+            {++g.mv1AuthoritySampleFailures;return false;}
+        }
         if(hitN<(stride*stride)&&OrographicPlayActive())
         {
             // Continuity before cull: a tile that overlaps adopted pages must
             // not open sky at the keep edge. Fill only the missing samples from
-            // the nearest live page; do not invent a second generator.
+            // the nearest live page; do not invent a second generator. Never
+            // refuse the whole tile — a partial 24 km miss was dropping the
+            // 8192 m far ring and leaving a knife-edge horizon.
+            float fillZ=0.f;uint8_t fr=110,fg=88,fb=58;bool haveFill=false;
+            for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
+            {
+                size_t const k=(size_t)j*stride+i;
+                if(hit[k]){fillZ=zf[k]-presentationBias;fr=cr[k];fg=cg[k];fb=cb[k];haveFill=true;continue;}
+                float z=0.f;
+                uint8_t r=110,gg=88,bb=58;
+                if(AdoptPage::SampleZNearest((float)(x0+i*fs),(float)(y0+j*fs),
+                    g.gradeDatum,g.reliefVoxels,g.voxelEdgeM,z))
+                {
+                    char const* mat=AdoptPage::AppearanceMaterial(x0+i*fs,y0+j*fs,
+                        g.orographicFeatureFootprints);
+                    CapColor(mat,r,gg,bb);
+                    zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;hit[k]=1;
+                    fillZ=z;fr=r;fg=gg;fb=bb;haveFill=true;
+                    tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+                    continue;
+                }
+                if(!haveFill)continue;
+                zf[k]=fillZ+presentationBias;cr[k]=fr;cg[k]=fg;cb[k]=fb;hit[k]=1;
+                tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
+            }
+            if(!haveFill)
+            {++g.mv1AuthoritySampleFailures;return false;}
             for(int j=0;j<=F;++j)for(int i=0;i<=F;++i)
             {
                 size_t const k=(size_t)j*stride+i;
                 if(hit[k])continue;
-                float z=0.f;
-                if(!AdoptPage::SampleZNearest((float)(x0+i*fs),(float)(y0+j*fs),
-                    g.gradeDatum,g.reliefVoxels,g.voxelEdgeM,z))
-                {++g.mv1AuthoritySampleFailures;return false;}
-                char const* mat=AdoptPage::AppearanceMaterial(x0+i*fs,y0+j*fs);
-                uint8_t r=110,gg=88,bb=58;CapColor(mat,r,gg,bb);
-                zf[k]=z+presentationBias;cr[k]=r;cg[k]=gg;cb[k]=bb;
+                zf[k]=fillZ+presentationBias;cr[k]=fr;cg[k]=fg;cb[k]=fb;
                 tileMinZ=(std::min)(tileMinZ,(double)zf[k]);
             }
         }
@@ -20941,8 +20972,17 @@ namespace
          verts.push_back(curR);verts.push_back(curG);verts.push_back(curB);};
         auto shadeOf=[&](float nx,float ny,float nz,int i0,int j0,int i1,int j1)
         {
-            float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
-            if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+            float const len0=std::sqrt(nx*nx+ny*ny+nz*nz);
+            if(len0>1e-6f){nx/=len0;ny/=len0;nz/=len0;}
+            if(OrographicPlayActive())
+            {
+                // Lighting-only slope gain so ~10 m reconstructed ridges read as
+                // low relief. Geometry / GradeToZ are unchanged.
+                constexpr float kGain=8.f;
+                nx*=kGain;ny*=kGain;
+                float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
+                if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
+            }
             size_t const kA=(size_t)j0*stride+i0,kB=(size_t)j1*stride+i1;
             float const rr=.5f*(cr[kA]+cr[kB]),gv=.5f*(cg[kA]+cg[kB]),bv=.5f*(cb[kA]+cb[kB]);
             constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
@@ -20952,7 +20992,7 @@ namespace
             // MS1.B: elevation must NOT drive appearance (material already encodes it); keep
             // only the directional hillshade. Frozen path keeps the elevation brightening.
             float const elevBright=g.ms1bEnabled?1.f:0.72f+0.46f*std::clamp((zc+200.f)/1800.f,0.f,1.f);
-            float const shade=hillshade*elevBright;
+            float const shade=hillshade*(OrographicPlayActive()?1.f:elevBright);
             curR=(std::min)(1.f,rr/255.f*shade);
             curG=(std::min)(1.f,gv/255.f*shade);
             curB=(std::min)(1.f,bv/255.f*shade);
@@ -20964,6 +21004,11 @@ namespace
             float nx=-(Z(ip,j)-Z(im,j))/(float)((ip-im)*fs);
             float ny=-(Z(i,jp)-Z(i,jm))/(float)((jp-jm)*fs);
             float nz=1.f;
+            if(OrographicPlayActive())
+            {
+                constexpr float kGain=8.f;
+                nx*=kGain;ny*=kGain;
+            }
             float const len=std::sqrt(nx*nx+ny*ny+nz*nz);
             if(len>1e-6f){nx/=len;ny/=len;nz/=len;}
             constexpr float kLx=-0.62f,kLy=-0.44f,kLz=0.65f;
@@ -20983,7 +21028,7 @@ namespace
             float const dzdy=((z01+z11)-(z00+z10))/(2.f*(float)em);
             float const wx0=(float)(x0+ci*em),wy0=(float)(y0+cj*em);
             float const wx1=(float)(x0+(ci+1)*em),wy1=(float)(y0+(cj+1)*em);
-            if(g.ei3MatterPlayable)
+            if(g.ei3MatterPlayable||OrographicPlayActive())
             {
                 // Canonical material samples are authoritative at the vertices.
                 // Interpolate those samples in the rasterizer instead of baking
@@ -21109,7 +21154,7 @@ namespace
             GLfloat const c[4]={kMv1dFogR,kMv1dFogG,kMv1dFogB,1.f};
             glFogi(GL_FOG_MODE,GL_EXP2);
             glFogfv(GL_FOG_COLOR,c);
-            glFogf(GL_FOG_DENSITY,kMv1dFogDensity);
+            glFogf(GL_FOG_DENSITY,OrographicPlayActive()?2.20e-5f:kMv1dFogDensity);
             glHint(GL_FOG_HINT,GL_NICEST);
             glEnable(GL_FOG);
         }
@@ -21459,7 +21504,7 @@ namespace
             // and hillshade. Interpolate them across the rasterized surface;
             // the application's legacy GL_FLAT default otherwise exposes every
             // triangle even though the VBO contains smooth vertex data.
-            if(g.ei3MatterPlayable)glShadeModel(GL_SMOOTH);
+            if(g.ei3MatterPlayable||OrographicPlayActive())glShadeModel(GL_SMOOTH);
             for(auto const& kv:g.mv1Tiles)
             {
                 if(!kv.second.vbo)continue;
@@ -21516,7 +21561,7 @@ namespace
             s_mv1BindBuffer(GL_ARRAY_BUFFER,0);
             glDisableClientState(GL_COLOR_ARRAY);
             glDisableClientState(GL_VERTEX_ARRAY);
-            if(g.ei3MatterPlayable)glShadeModel(GL_FLAT);
+            if(g.ei3MatterPlayable||OrographicPlayActive())glShadeModel(GL_FLAT);
         }
         QueryPerformanceCounter(&s1);
         if(gpuSpan)Mv1GpuEndSpan();
@@ -31553,14 +31598,12 @@ namespace
             bool const cutaway = g.playWorldgenBaseline && g.stage0ToolGeologyCutaway
                 && IsCausalPlayableView( g.stage0PlayView );
             if ( cutaway ) { DrawStage0GeologyInspectorMask(); }
-            if ( UsesCut0RegionalCarrier( g.stage0PlayView ) )
+            if ( UsesCut0RegionalCarrier( g.stage0PlayView ) || OrographicPlayActive() )
             {
                 // Rich Stage 0 uses the engine-owned WorldGenesis carrier for
-                // visible terrain, walking support, and the far field.  Refuse
-                // the historical client-generated far-field compiler before it
-                // is called: testing this only after DrawStage0FarField left a
-                // hidden ~30 second synchronous build on every cold launch and
-                // could later expose a duplicate terrain layer over water.
+                // visible terrain, walking support, and the far field. Orographic
+                // play uses the same MV1 ladder on AdoptPage::SampleZ — Stage8 /
+                // Stage0FarField are a competing unlit pancake and must not draw.
                 DrawStage16DryHydrologyDiagnostics();
                 return;
             }
@@ -33313,13 +33356,15 @@ namespace
                 ?1000.0*(double)(dc1.QuadPart-dc0.QuadPart)/(double)dcq.QuadPart:0.0;
             glMatrixMode( GL_PROJECTION ); glLoadMatrixf( m );
             glMatrixMode( GL_MODELVIEW );
-            if(UsesCut0RegionalCarrier(g.stage0PlayView))
+            if(UsesCut0RegionalCarrier(g.stage0PlayView)||OrographicPlayActive())
             {
-                // Re-submit the regional carrier under the near projection.
+                // Re-submit the regional / adopted carrier under the near projection.
                 // Its far-pass depth was produced by a different projection
                 // and cannot safely occlude near props or the player. The
                 // redraw preserves one visible/support terrain truth without
                 // reintroducing the withheld high-frequency matter panel.
+                // Orographic must take this path: Stage8 overpaint after the
+                // depth clear hid the 8192 m far underlay behind a 600 m pancake.
                 g.mv1RenderOnly = true;
                 DrawMv1MultiScaleTerrain();
                 g.mv1RenderOnly = false;
@@ -44815,7 +44860,7 @@ namespace
         glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
         glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,w,0,h,-1,1);
         glMatrixMode(GL_MODELVIEW);glLoadIdentity();
-        float const x=(float)w-690.f,top=(float)h-18.f,width=672.f,height=252.f;
+        float const x=(float)w-690.f,top=(float)h-18.f,width=672.f,height=270.f;
         glColor4f(.025f,.035f,.045f,.88f);glBegin(GL_QUADS);
         glVertex2f(x,top);glVertex2f(x+width,top);
         glVertex2f(x+width,top-height);glVertex2f(x,top-height);glEnd();
@@ -44823,6 +44868,10 @@ namespace
         auto row=[&](char const* value,float r=.86f,float gg=.92f,float b=.98f)
         {glColor3f(r,gg,b);DrawHudText(x+12.f,y,value);y-=18.f;};
         row("V11 TERRAIN CAUSE  [F7] close",.95f,.83f,.35f);
+        std::snprintf(line,sizeof(line),
+            "orographic play materials=%s  [F6] footprint paint",
+            g.orographicFeatureFootprints?"FEATURE FOOTPRINTS":"dirt/rock/loam");
+        row(line,.90f,.86f,.70f);
         std::snprintf(line,sizeof(line),
             "xy=(%.1f, %.1f) page=(%d,%d) carrier=%dm near=%s",
             g.feetX,g.feetY,ri,rj,macroResolution,sampled?"4m AUTHORITY":"waiting");row(line);
@@ -57941,6 +57990,18 @@ namespace
                 {
                     g.playWorldgenResidencyOverlay = !g.playWorldgenResidencyOverlay;
                     return 0;
+                }
+                else if ( g.ei3PlayerFacing && wParam == VK_F6 )
+                {
+                    if((lParam&(1LL<<30))==0 && OrographicPlayActive())
+                    {
+                        g.orographicFeatureFootprints=!g.orographicFeatureFootprints;
+                        Mv1ReleaseAll();
+                        g.statusLine=g.orographicFeatureFootprints
+                            ?"feature footprint colors ON (PeakId paint)"
+                            :"play ground materials (dirt/rock/loam)";
+                    }
+                    g.keys[VK_F6]=false;return 0;
                 }
                 else if ( g.ei3PlayerFacing && wParam == VK_F7 )
                 {

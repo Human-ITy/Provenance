@@ -503,8 +503,10 @@ namespace AdoptPage
         return best;
     }
     // Presentation fill only: keep a tile that overhangs the atlas from punching
-    // sky. Collision / grounding stay on the strict PageAt path.
-    inline AdoptedGeography const* NearestLivePage(double x, double y, double maxDistM = 24576.0)
+    // sky. Collision / grounding stay on the strict PageAt path. Do not refuse a
+    // nearest live page at range — a 24 km cap dropped the 8192 m far ring and
+    // opened the knife-edge horizon. Stretch is replaced when the far page adopts.
+    inline AdoptedGeography const* NearestLivePage(double x, double y, double maxDistM = 40960.0)
     {
         if (AdoptedGeography const* hit = PageAt(x, y)) return hit;
         AdoptedGeography const* best = nullptr;
@@ -519,7 +521,7 @@ namespace AdoptPage
         };
         for (auto const& kv : Atlas()) consider(kv.second);
         if (G().live) consider(G());
-        if (!best || bestD > maxDistM) return nullptr;
+        (void)maxDistM;
         return best;
     }
     inline int AtlasCount() { return (int)Atlas().size(); }
@@ -858,10 +860,40 @@ namespace AdoptPage
         return t;
     }
 
-    // Terrain/material presentation for adopted pages. Not MW9 flora.
-    // The previous orographic MV1 path used a solid olive grade-lerp
-    // (70+40t, 90+50t, 58+20(1-t)) — untextured debug, not a gallery albedo.
-    inline char const* AppearanceMaterial(double x, double y)
+    inline CausalRegionalBiome::Cell const* CellAt(double x, double y);
+
+    // Play albedo: continuous ground from substrate, never PeakId paint.
+    // Reconstruction stays in SampleZ. alpine_barren white is debug-only.
+    inline char const* SubstratePlayMaterial(double x, double y)
+    {
+        if (CausalRegionalBiome::Cell const* c = CellAt(x, y))
+        {
+            using P = CausalRegionalRegolith::ProfileClass;
+            switch (c->profile)
+            {
+            case P::BareBedrock:
+            case P::WeatheredBedrock:
+            case P::Talus:
+                return "rock";
+            case P::Alluvium:
+            case P::FloodplainSediment:
+            case P::BasinFill:
+            case P::OrganicCapable:
+                return "loam";
+            default:
+                return "dirt";
+            }
+        }
+        SampleTrace const t = TraceSample(x, y, 0.5f, 64.f, 0.125f);
+        if (!t.ok) return "dirt";
+        if (!t.valleyId.empty() && t.sampledCarrier < 0.55) return "loam";
+        if (t.ridgeContribution >= 0.05 || t.saddleContribution <= -0.02)
+            return "rock";
+        return "dirt";
+    }
+
+    // Debug PeakId / ridge occupancy paint — looks like white worm-strips, not mountains.
+    inline char const* FeatureFootprintMaterial(double x, double y)
     {
         SampleTrace const t = TraceSample(x, y, 0.5f, 64.f, 0.125f);
         if (!t.ok) return "dirt";
@@ -871,6 +903,14 @@ namespace AdoptPage
         if (!t.valleyId.empty() && t.sampledCarrier < 0.55) return "loam";
         if (t.grade >= 1.05) return "biome_alpine_tundra";
         return "dirt";
+    }
+
+    // Terrain/material presentation for adopted pages. Not MW9 flora.
+    // Default play is dirt/rock/loam. Pass featureFootprints for the old highlighter.
+    inline char const* AppearanceMaterial(double x, double y, bool featureFootprints = false)
+    {
+        return featureFootprints ? FeatureFootprintMaterial(x, y)
+                                 : SubstratePlayMaterial(x, y);
     }
 
     // Presentation sea is GradeToZ(datum) = 0. Do not retune GradeToZ for ecology.
