@@ -1,0 +1,37 @@
+{
+  "resources": [
+    "data://provenance/tools/hammer/v001/guild_hammer_image_1_albedotexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_0_pbr.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_0_normaltexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_0.material",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_3_albedotexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_1_pbr.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_2_normaltexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_1.material",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_5_albedotexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_2_pbr.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_4_normaltexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_2.material",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_7_albedotexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_3_pbr.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_image_6_normaltexture.texture",
+    "data://provenance/tools/hammer/v001/guild_hammer_mat_3.material",
+    "data://provenance/tools/hammer/v001/guild_hammer.mesh",
+    "data://provenance/provenancesandbox.map"
+  ],
+  "placement": {
+    "world_position": [
+      1.03,
+      35.4,
+      0.514029303
+    ],
+    "rotation_degrees": [
+      0,
+      0,
+      0
+    ],
+    "footprint_surface_range_m": 0.011152293,
+    "support": "granite ledge, upright selection display",
+    "terrain_clear": true
+  }
+}

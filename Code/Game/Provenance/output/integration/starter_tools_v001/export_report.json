@@ -1,0 +1,56 @@
+[
+  {
+    "id": "stone_shovel",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_shovel\\stone_shovel_lod0.glb",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_shovel\\stone_shovel_lod0.glb",
+    "source_sha256": "827d78c901f5d809d5e17304bc17233f14e3e4fa42243a540a5dfe75f63f7fd5",
+    "bounds_z_up": [
+      [
+        -0.13699999451637268,
+        -0.04951104521751404,
+        0.0
+      ],
+      [
+        0.13699999451637268,
+        0.0348997637629509,
+        1.1920018196105957
+      ]
+    ]
+  },
+  {
+    "id": "stone_axe",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_axe\\stone_axe_lod0.glb",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_axe\\stone_axe_lod0.glb",
+    "source_sha256": "b3ff9edda02aa91c4bc5e3f9c4e30570048fb7cbe32971e65f8848fd535a85bd",
+    "bounds_z_up": [
+      [
+        -0.2628750801086426,
+        -0.046240001916885376,
+        -0.005550912115722895
+      ],
+      [
+        0.039607010781764984,
+        0.04190000146627426,
+        0.8327698707580566
+      ]
+    ]
+  },
+  {
+    "id": "stone_pickaxe",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_pickaxe\\stone_pickaxe_lod0.glb",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\starter_stone\\v001\\stone_pickaxe\\stone_pickaxe_lod0.glb",
+    "source_sha256": "31199c5bc570fddc555c94d45a9bc3312d5d83dd9c9b2d3adf83c60cc15ed40a",
+    "bounds_z_up": [
+      [
+        -0.39249593019485474,
+        -0.04500000178813934,
+        -0.007100649643689394
+      ],
+      [
+        0.25350406765937805,
+        0.045900002121925354,
+        0.9830890893936157
+      ]
+    ]
+  }
+]

@@ -1,0 +1,7 @@
+<Type TypeID="EE::Render::TextureResourceDescriptor" Version="0">
+  <Property ID="m_sourcePaths">
+    <Property Index="0" Value="data://provenance/materials/landscape/creek_bank_mud_v001_seamless_color.png" />
+  </Property>
+  <Property ID="m_textureGroup" Value="data://render/texturegroups/albedotexture.txtg" />
+  <Property ID="m_name" Value="Creek silty sediment color 1K" />
+</Type>

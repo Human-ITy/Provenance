@@ -307,7 +307,9 @@ namespace EE::Render
                 {
                     EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, shaderPipelineBucket.m_shaderName.data() );
 
-                    RHI::CmdSetPipeline( pCommandBuffer, shaderPipelineBucket.m_pDepthOnlyPipeline );
+                    // Cutout casters must discard transparent texels, just as
+                    // the forward depth prepass does; opaque depth casts cards.
+                    RHI::CmdSetPipeline( pCommandBuffer, shaderPipelineBucket.m_pDepthOnlyAlphaTestPipeline );
                     RHI::CmdSetRootConstants( pCommandBuffer, 0, nullptr, sizeof( ShaderTypes::DrawRootConstants ) );
                     {
                         MaterialShaderRenderBucket const& renderBucket = renderViewBucket.m_alphaTestBucket;

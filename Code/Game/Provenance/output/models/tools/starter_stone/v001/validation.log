@@ -1,0 +1,48 @@
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:47 | INFO: Data are loaded, start creating Blender stuff
+17:15:47 | INFO: Blender create Mesh node Stone socket diagonal tie
+17:15:47 | INFO: Blender create Mesh node Upper shaft rawhide
+17:15:47 | INFO: Blender create Mesh node Broad chipped stone spade
+17:15:47 | INFO: Blender create Mesh node Timber shaft and blade socket
+17:15:47 | INFO: glTF import finished in 0.02s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:47 | INFO: Data are loaded, start creating Blender stuff
+17:15:47 | INFO: Blender create Mesh node Stone socket diagonal tie.002
+17:15:47 | INFO: Blender create Mesh node Upper shaft rawhide.001
+17:15:47 | INFO: Blender create Mesh node Broad chipped stone spade.001
+17:15:47 | INFO: Blender create Mesh node Timber shaft and blade socket.001
+17:15:47 | INFO: glTF import finished in 0.01s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:47 | INFO: Data are loaded, start creating Blender stuff
+17:15:47 | INFO: Blender create Mesh node Sphere
+17:15:47 | INFO: Blender create Mesh node Crossed rawhide head lashing
+17:15:47 | INFO: Blender create Mesh node Hide grip underlay
+17:15:47 | INFO: Blender create Mesh node Knapped axe head
+17:15:47 | INFO: Blender create Mesh node Crooked timber haft
+17:15:47 | INFO: glTF import finished in 0.02s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:47 | INFO: Data are loaded, start creating Blender stuff
+17:15:47 | INFO: Blender create Mesh node Sphere.001
+17:15:47 | INFO: Blender create Mesh node Crossed rawhide head lashing.004
+17:15:47 | INFO: Blender create Mesh node Hide grip underlay.001
+17:15:47 | INFO: Blender create Mesh node Knapped axe head.001
+17:15:47 | INFO: Blender create Mesh node Crooked timber haft.001
+17:15:47 | INFO: glTF import finished in 0.02s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:48 | INFO: Data are loaded, start creating Blender stuff
+17:15:48 | INFO: Blender create Mesh node Crossed rawhide head lashing
+17:15:48 | INFO: Blender create Mesh node Hide grip underlay
+17:15:48 | INFO: Blender create Mesh node Point and adze stone head
+17:15:48 | INFO: Blender create Mesh node Crooked timber haft
+17:15:48 | INFO: glTF import finished in 0.02s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:48 | INFO: Data are loaded, start creating Blender stuff
+17:15:48 | INFO: Blender create Mesh node Crossed rawhide head lashing.004
+17:15:48 | INFO: Blender create Mesh node Hide grip underlay.001
+17:15:48 | INFO: Blender create Mesh node Point and adze stone head.001
+17:15:48 | INFO: Blender create Mesh node Crooked timber haft.001
+17:15:48 | INFO: glTF import finished in 0.01s
+THREE_TOOLS_SIX_LODS_VALIDATED
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

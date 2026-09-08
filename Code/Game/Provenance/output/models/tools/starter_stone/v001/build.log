@@ -1,0 +1,104 @@
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\build_tools.py:12: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  m=bpy.data.materials.new(name);m.use_nodes=True;b=m.node_tree.nodes['Principled BSDF'];b.inputs['Roughness'].default_value=rough;b.inputs['Metallic'].default_value=0
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+Warning: No mesh data to join
+INFO Draco is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_draco_bridge.dll
+INFO MeshOptimizer is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_meshopt_bridge.dll
+17:15:30 | INFO: Starting glTF 2.0 export
+17:15:30 | INFO: Extracting primitive: Stone socket diagonal tie
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Upper shaft rawhide
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Broad chipped stone spade
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Timber shaft and blade socket
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Finished glTF 2.0 export in 0.14148759841918945 s
+
+17:15:30 | INFO: Starting glTF 2.0 export
+17:15:30 | INFO: Extracting primitive: Stone socket diagonal tie.002
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Upper shaft rawhide.001
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Broad chipped stone spade.001
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Extracting primitive: Timber shaft and blade socket.001
+17:15:30 | INFO: Primitives created: 1
+17:15:30 | INFO: Finished glTF 2.0 export in 0.022089481353759766 s
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\build_tools.py:192: DeprecationWarning: 'World.use_nodes' is expected to be removed in Blender 6.0
+  world=bpy.data.worlds.new('Studio');world.use_nodes=True;world.node_tree.nodes['Background'].inputs[1].default_value=.18;scene.world=world
+00:03.891  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_shovel\review.png'
+00:04.406  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_shovel\inventory_icon.png'
+
+Info: Saved as "stone_shovel.blend"
+TOOL_COMPLETE stone_shovel [4860, 2523]
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\build_tools.py:12: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  m=bpy.data.materials.new(name);m.use_nodes=True;b=m.node_tree.nodes['Principled BSDF'];b.inputs['Roughness'].default_value=rough;b.inputs['Metallic'].default_value=0
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+Warning: No mesh data to join
+Warning: No mesh data to join
+17:15:33 | INFO: Starting glTF 2.0 export
+17:15:33 | INFO: Extracting primitive: Sphere
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Crossed rawhide head lashing
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Hide grip underlay
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Knapped axe head
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Crooked timber haft
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Finished glTF 2.0 export in 0.14405131340026855 s
+
+17:15:33 | INFO: Starting glTF 2.0 export
+17:15:33 | INFO: Extracting primitive: Sphere.001
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Crossed rawhide head lashing.004
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Hide grip underlay.001
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Knapped axe head.001
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Extracting primitive: Crooked timber haft.001
+17:15:33 | INFO: Primitives created: 1
+17:15:33 | INFO: Finished glTF 2.0 export in 0.03222823143005371 s
+00:06.687  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_axe\review.png'
+00:07.156  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_axe\inventory_icon.png'
+00:08.891  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_axe\front_alignment.png'
+00:10.516  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_axe\right_alignment.png'
+
+Info: Saved as "stone_axe.blend"
+TOOL_COMPLETE stone_axe [5964, 3098]
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+Warning: No mesh data to join
+17:15:39 | INFO: Starting glTF 2.0 export
+17:15:39 | INFO: Extracting primitive: Crossed rawhide head lashing
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Hide grip underlay
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Point and adze stone head
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Crooked timber haft
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Finished glTF 2.0 export in 0.1096181869506836 s
+
+17:15:39 | INFO: Starting glTF 2.0 export
+17:15:39 | INFO: Extracting primitive: Crossed rawhide head lashing.004
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Hide grip underlay.001
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Point and adze stone head.001
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Extracting primitive: Crooked timber haft.001
+17:15:39 | INFO: Primitives created: 1
+17:15:39 | INFO: Finished glTF 2.0 export in 0.026537418365478516 s
+00:12.687  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_pickaxe\review.png'
+00:13.172  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_pickaxe\inventory_icon.png'
+00:14.937  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_pickaxe\front_alignment.png'
+00:16.609  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\stone_pickaxe\right_alignment.png'
+
+Info: Saved as "stone_pickaxe.blend"
+TOOL_COMPLETE stone_pickaxe [6352, 3300]
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

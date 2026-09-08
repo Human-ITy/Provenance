@@ -1,0 +1,30 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/naturetrial/v001/violet_lantern.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Violet_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Warm_Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Violet_Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Violet_Skirt/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_3.material" />
+    </Type>
+    <Type Index="4" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Warm_Gill_Edges/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_4.material" />
+    </Type>
+    <Type Index="5" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Violet_Lantern/Violet_Cap_Scales/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/violet_lantern_mat_5.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

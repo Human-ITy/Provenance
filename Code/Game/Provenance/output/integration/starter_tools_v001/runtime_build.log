@@ -1,0 +1,3 @@
+
+  GraniteOutcropLab.cpp
+LINK : fatal error LNK1168: cannot open C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\Esoterica.Game.Runtime.dll for writing [C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Esoterica.Game.Runtime.vcxproj]

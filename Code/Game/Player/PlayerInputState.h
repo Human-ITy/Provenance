@@ -43,6 +43,14 @@ namespace EE
         Input::GameInputSignal             m_interact;
         Input::GameInputSignal             m_meleeAttack;
 
+        // Development-facing Provenance Granite strike lab controls. These
+        // are deliberately separate from the controller weapon inputs so the
+        // player can exercise the authority path with mouse/keyboard without
+        // changing ordinary combat bindings.
+        Input::GameInputSignal             m_graniteToolStrike;
+        Input::GameInputSignal             m_graniteToolStrikeReset;
+        Input::GameInputSignal             m_graniteToolStrikeNextSeed;
+
         //-------------------------------------------------------------------------
 
         Input::ControllerAxisUpdater       m_moveUpdater;
@@ -64,5 +72,8 @@ namespace EE
         Input::GameInputSignalUpdater      m_reloadUpdater;
         Input::GameInputSignalUpdater      m_interactUpdater;
         Input::GameInputSignalUpdater      m_meleeAttackUpdater;
+        Input::GameInputSignalUpdater      m_graniteToolStrikeUpdater;
+        Input::GameInputSignalUpdater      m_graniteToolStrikeResetUpdater;
+        Input::GameInputSignalUpdater      m_graniteToolStrikeNextSeedUpdater;
     };
 }

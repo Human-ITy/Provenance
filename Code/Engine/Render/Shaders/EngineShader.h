@@ -58,6 +58,7 @@ namespace EE::Render
     public:
 
         friend class RenderSystem;
+        friend class RenderWorldSystem;
 
         inline bool IsValid() const
         {

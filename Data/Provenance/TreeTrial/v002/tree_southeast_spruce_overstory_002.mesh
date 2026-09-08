@@ -1,0 +1,18 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.southeast_spruce.overstory.002.foliage.001/Spruce needles - alpha mask/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.southeast_spruce.overstory.002.roots.001/Spruce bark/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.southeast_spruce.overstory.002.wood.001/Spruce bark/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_1.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

@@ -1,0 +1,138 @@
+[
+  {
+    "id": "healing_bush",
+    "local": [
+      -1.32,
+      -1.48,
+      0.578928896
+    ],
+    "world": [
+      -2.719999976,
+      33.52,
+      0.698928894
+    ],
+    "yaw": 25,
+    "initial_grass_cover": 1,
+    "footprint_height_range": 0.150608019,
+    "clear": true
+  },
+  {
+    "id": "stamina_bush",
+    "local": [
+      5.58,
+      2.32,
+      0.427042118
+    ],
+    "world": [
+      4.180000024,
+      37.32,
+      0.547042116
+    ],
+    "yaw": -35,
+    "initial_grass_cover": 1,
+    "footprint_height_range": 0.167444923,
+    "clear": true
+  },
+  {
+    "id": "chestnut",
+    "local": [
+      0.37,
+      1.01,
+      0.312806963
+    ],
+    "world": [
+      -1.029999976,
+      36.01,
+      0.432806961
+    ],
+    "yaw": 15,
+    "initial_grass_cover": 0.498132,
+    "footprint_height_range": 0.035907486,
+    "clear": true
+  },
+  {
+    "id": "bell",
+    "local": [
+      1.2,
+      0.35,
+      0.305703495
+    ],
+    "world": [
+      -0.199999976,
+      35.35,
+      0.425703493
+    ],
+    "yaw": -20,
+    "initial_grass_cover": 0.808425,
+    "footprint_height_range": 0.03106165,
+    "clear": true
+  },
+  {
+    "id": "ivory",
+    "local": [
+      4.77,
+      0.92,
+      0.198030453
+    ],
+    "world": [
+      3.370000024,
+      35.92,
+      0.31803045
+    ],
+    "yaw": 35,
+    "initial_grass_cover": 1,
+    "footprint_height_range": 0.002202152,
+    "clear": true
+  },
+  {
+    "id": "ochre",
+    "local": [
+      2.68,
+      2.26,
+      0.296024093
+    ],
+    "world": [
+      1.280000024,
+      37.26,
+      0.416024091
+    ],
+    "yaw": -10,
+    "initial_grass_cover": 0.616468,
+    "footprint_height_range": 0.010242721,
+    "clear": true
+  },
+  {
+    "id": "cyan_pair",
+    "local": [
+      -0.25,
+      2.03,
+      0.195806597
+    ],
+    "world": [
+      -1.649999976,
+      37.03,
+      0.315806594
+    ],
+    "yaw": 25,
+    "initial_grass_cover": 1,
+    "footprint_height_range": 0.011926219,
+    "clear": true
+  },
+  {
+    "id": "violet_lantern",
+    "local": [
+      4.33,
+      2.21,
+      0.206829397
+    ],
+    "world": [
+      2.930000024,
+      37.21,
+      0.326829394
+    ],
+    "yaw": -25,
+    "initial_grass_cover": 1,
+    "footprint_height_range": 0.011178272,
+    "clear": true
+  }
+]

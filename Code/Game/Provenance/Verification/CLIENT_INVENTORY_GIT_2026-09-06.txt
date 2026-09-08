@@ -1,0 +1,177 @@
+Inventory Git snapshot (read-only capture, before inventory report files were added)
+Repository: C:/Users/D-Day/ProvenanceWorkspace/Client/ProvenanceClient
+Branch: integration/ei3-recovery-byte-integrity-client
+HEAD: 6a60dab3ab81e91d9697fe418b7c3a3898205d5e
+Command: git --no-optional-locks status --porcelain=v1 --untracked-files=all
+Global ignore file was inaccessible; warning retained below. This is status, not authorship.
+
+warning: unable to access 'C:\Users\D-Day/.config/git/ignore': Permission denied
+warning: unable to access 'C:\Users\D-Day/.config/git/ignore': Permission denied
+ M Code/Applications/BuildGenerator/Esoterica.Applications.BuildGenerator.vcxproj
+ M Code/Applications/Editor/EditorUI.cpp
+ M Code/Applications/Editor/Esoterica.Applications.Editor.vcxproj
+ M Code/Applications/Engine/Esoterica.Applications.Engine.vcxproj
+ M Code/Applications/ProvenanceClient/Main.cpp
+ M Code/Applications/Reflector/Esoterica.Applications.Reflector.vcxproj
+ M Code/Applications/ResourceCompiler/Esoterica.Applications.ResourceCompiler.vcxproj
+ M Code/Applications/ResourceServer/Esoterica.Applications.ResourceServer.vcxproj
+ M Code/Applications/Tester/Esoterica.Applications.Tester.vcxproj
+ M Code/Base/Esoterica.Base.vcxproj
+ M Code/Base/Memory/Memory.cpp
+ M Code/Engine/Camera/Components/Component_ToolsCamera.cpp
+ M Code/Engine/Camera/Components/Component_ToolsCamera.h
+ M Code/Engine/Debug/Widgets/PerformanceStatsWidget.cpp
+ M Code/Engine/Esoterica.Engine.Runtime.vcxproj
+ M Code/Engine/Esoterica.Engine.Runtime.vcxproj.filters
+ M Code/Engine/Render/Device/DeviceRenderWorld.cpp
+ M Code/Engine/Render/Device/DeviceRenderWorld.h
+ M Code/Engine/Render/RenderGeometryBuilder.cpp
+ M Code/Engine/Render/RenderGeometryBuilder.h
+ M Code/Engine/Render/RenderMaterial.h
+ M Code/Engine/Render/RenderSystem.cpp
+ M Code/Engine/Render/Shaders/CommonFlags.esh
+ M Code/Engine/Render/Shaders/EngineShader.h
+ M Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh
+ M Code/Engine/Render/Systems/WorldSystem_Render.cpp
+ M Code/Engine/Render/Systems/WorldSystem_Render.h
+ M Code/EngineTools/Core/EditorTool.cpp
+ M Code/EngineTools/Esoterica.Engine.Tools.vcxproj
+ M Code/Game/Esoterica.Game.Runtime.vcxproj
+ M Code/Game/Esoterica.Game.Runtime.vcxproj.filters
+ M Code/Game/Player/PlayerInputState.cpp
+ M Code/Game/Player/PlayerInputState.h
+ M Code/Game/Player/Systems/EntitySystem_Player.cpp
+ M Code/Game/_Module/API.h
+ M Code/GameTools/Esoterica.Game.Tools.vcxproj
+ M Code/PropertySheets/EA.props
+ M Code/PropertySheets/RenderDoc.props
+ M Code/Scripts/Reflect/Esoterica.Scripts.Reflect.vcxproj
+ M Docs/provenance_ei3_playable_runtime.txt
+ M Docs/provenance_worldgen_playtest_summary.txt
+ M Docs/provenance_worldgen_playtest_trace.csv
+ M Esoterica.slnx
+?? Code/Applications/ProvenanceClient/Phase18MacroPageAuthority.h
+?? Code/Applications/ProvenanceVerifier/Esoterica.Applications.ProvenanceVerifier.vcxproj
+?? Code/Applications/ProvenanceVerifier/Esoterica.Applications.ProvenanceVerifier.vcxproj.filters
+?? Code/Applications/ProvenanceVerifier/Main.cpp
+?? Code/Engine.zip
+?? Code/Engine/Render/Shaders/Materials/ProvenanceGraniteTriplanarPBR.esf
+?? Code/Engine/Render/Shaders/Materials/ProvenanceGrassSoilPBR.esf
+?? Code/Engine/Render/Shaders/Materials/ProvenanceSoilTriplanarPBR.esf
+?? Code/Game/Provenance.zip
+?? Code/Game/Provenance/Components/Component_ProvenanceWorldSettings.h
+?? Code/Game/Provenance/Geometry/GraniteContactCast.h
+?? Code/Game/Provenance/Geometry/GraniteContactDebris.h
+?? Code/Game/Provenance/Geometry/GraniteExcavation.h
+?? Code/Game/Provenance/Geometry/GraniteExcavation.inl
+?? Code/Game/Provenance/Geometry/GraniteGeometry.cpp
+?? Code/Game/Provenance/Geometry/GraniteGeometry.h
+?? Code/Game/Provenance/Geometry/GraniteLabContact.h
+?? Code/Game/Provenance/Geometry/GraniteLabMovement.h
+?? Code/Game/Provenance/Geometry/GraniteOutcrop.h
+?? Code/Game/Provenance/Geometry/GraniteOutcropAuthoredShape.h
+?? Code/Game/Provenance/Geometry/GraniteOutcropGround.h
+?? Code/Game/Provenance/Geometry/GraniteOutcropV2.h
+?? Code/Game/Provenance/Geometry/GraniteStructuralSupport.h
+?? Code/Game/Provenance/Geometry/GrassCover.h
+?? Code/Game/Provenance/Geometry/MaterialGeometry.cpp
+?? Code/Game/Provenance/Geometry/MaterialGeometry.h
+?? Code/Game/Provenance/Geometry/SoilGeometry.cpp
+?? Code/Game/Provenance/Geometry/SoilGeometry.h
+?? Code/Game/Provenance/Geometry/SoilHeightfieldV26.h
+?? Code/Game/Provenance/Geometry/SoilScoop.h
+?? Code/Game/Provenance/GraniteContactCastTest.obj
+?? Code/Game/Provenance/GraniteDebrisPerformanceTest.exe
+?? Code/Game/Provenance/GraniteDebrisPerformanceTest.obj
+?? Code/Game/Provenance/GraniteDebrisPerformanceTestDebug.exe
+?? Code/Game/Provenance/GraniteDebrisPerformanceTestDebug.obj
+?? Code/Game/Provenance/GraniteLabContactTest.exe
+?? Code/Game/Provenance/GraniteLabContactTest.obj
+?? Code/Game/Provenance/GraniteLabContactTestDebug.exe
+?? Code/Game/Provenance/GraniteLabContactTestDebug.obj
+?? Code/Game/Provenance/GraniteLabMovementTest.exe
+?? Code/Game/Provenance/GraniteLabMovementTest.obj
+?? Code/Game/Provenance/GraniteLabMovementTestDebug.exe
+?? Code/Game/Provenance/GraniteLabMovementTestDebug.obj
+?? Code/Game/Provenance/GraniteLocalUpdateTest.exe
+?? Code/Game/Provenance/GraniteLocalUpdateTest.obj
+?? Code/Game/Provenance/GraniteLocalUpdateTestDebug.exe
+?? Code/Game/Provenance/GraniteLocalUpdateTestDebug.obj
+?? Code/Game/Provenance/GrassCoverTest.obj
+?? Code/Game/Provenance/SoilScoopTest.exe
+?? Code/Game/Provenance/SoilScoopTest.obj
+?? Code/Game/Provenance/SoilScoopTestDebug.exe
+?? Code/Game/Provenance/SoilScoopTestDebug.obj
+?? Code/Game/Provenance/Systems/GraniteExcavationLab.inl
+?? Code/Game/Provenance/Systems/GraniteOutcropLab.inl
+?? Code/Game/Provenance/Systems/ProvenanceSurfaceEvaluation.cpp
+?? Code/Game/Provenance/Systems/ProvenanceSurfaceEvaluation.h
+?? Code/Game/Provenance/Systems/WorldSystem_Provenance.cpp
+?? Code/Game/Provenance/Systems/WorldSystem_Provenance.h
+?? Code/Game/Provenance/Systems/WorldSystem_Provenance_Debug.cpp
+?? Code/Game/Provenance/Systems/WorldSystem_Provenance_Workbench.cpp
+?? Code/Game/Provenance/Verification/AllocatorMemoryCounterTest.cpp
+?? Code/Game/Provenance/Verification/EDITOR_MOUSE_LOCKOUT.md
+?? Code/Game/Provenance/Verification/GRANITE_OUTCROP_AUTHORING.md
+?? Code/Game/Provenance/Verification/GRANITE_OUTCROP_LAB.md
+?? Code/Game/Provenance/Verification/GraniteAuthorityVerifier.cpp
+?? Code/Game/Provenance/Verification/GraniteAuthorityVerifier.h
+?? Code/Game/Provenance/Verification/GraniteClusterBuildTest.cpp
+?? Code/Game/Provenance/Verification/GraniteContactCastTest.cpp
+?? Code/Game/Provenance/Verification/GraniteDebrisPerformanceTest.cpp
+?? Code/Game/Provenance/Verification/GraniteExcavationCertificate.inl
+?? Code/Game/Provenance/Verification/GraniteLabContactTest.cpp
+?? Code/Game/Provenance/Verification/GraniteLabMovementTest.cpp
+?? Code/Game/Provenance/Verification/GraniteLocalUpdateTest.cpp
+?? Code/Game/Provenance/Verification/GraniteOutcropShapeTool.cpp
+?? Code/Game/Provenance/Verification/GraniteOutcropTest.cpp
+?? Code/Game/Provenance/Verification/GraniteOutcropV2Test.cpp
+?? Code/Game/Provenance/Verification/GraniteStructuralSupportTest.cpp
+?? Code/Game/Provenance/Verification/GrassCoverTest.cpp
+?? Code/Game/Provenance/Verification/LOCAL_EXCAVATION_V1.md
+?? Code/Game/Provenance/Verification/ProceduralRootUploadTest.cpp
+?? Code/Game/Provenance/Verification/SoilScoopTest.cpp
+?? Code/Game/Provenance/Verification/SurfaceAuthorityVerifier.cpp
+?? Code/Game/Provenance/Verification/SurfaceAuthorityVerifier.h
+?? Code/Game/Provenance/Verification/editor_mouse_regression_source.py
+?? Code/Game/Provenance/Verification/render_outcrop_shape.py
+?? Data/Provenance/Materials/Granite/Granite.material
+?? Data/Provenance/Materials/Granite/GraniteAlbedo.texture
+?? Data/Provenance/Materials/Granite/GraniteNormal.texture
+?? Data/Provenance/Materials/Granite/T_Granite_A_1K_RUNTIME.png
+?? Data/Provenance/Materials/Granite/T_Granite_A_2K_MASTER_SEAMLESS.png
+?? Data/Provenance/Materials/Granite/T_Granite_H_FROM_ALBEDO_2K_DEV.png
+?? Data/Provenance/Materials/Granite/T_Granite_N_1K_RUNTIME.png
+?? Data/Provenance/Materials/Granite/T_Granite_N_2K_MASTER.png
+?? Data/Provenance/Materials/Soil/Soil.material
+?? Data/Provenance/Materials/Soil/soilalbedo.texture
+?? Data/Provenance/Materials/Soil/soilnormal.texture
+?? Data/Provenance/Materials/Soil/t_soil_a_2k_master.png
+?? Data/Provenance/Materials/Soil/t_soil_n_2k.png
+?? Data/Provenance/Materials/grass/grassalbedo.texture
+?? Data/Provenance/Materials/grass/grassbladeatlasa.texture
+?? Data/Provenance/Materials/grass/grassbladeatlasb.texture
+?? Data/Provenance/Materials/grass/grasscover.material
+?? Data/Provenance/Materials/grass/grassnormal.texture
+?? Data/Provenance/Materials/grass/t_grass_a_2k_master_v006.png
+?? Data/Provenance/Materials/grass/t_grass_blade_atlas_a.png
+?? Data/Provenance/Materials/grass/t_grass_blade_atlas_b.png
+?? Data/Provenance/Materials/grass/t_grass_n_2k_v006.png
+?? Data/Provenance/ProvenanceSandbox.map
+?? Data/Worldgen/MacroAuthorityPhase18/macro_manifest.mcm
+?? Data/Worldgen/MacroAuthorityPhase18/page_0_0.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_0_1.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_0_2.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_1_0.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_1_1.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_1_2.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_2_0.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_2_1.mcp
+?? Data/Worldgen/MacroAuthorityPhase18/page_2_2.mcp
+?? "External (2).zip"
+?? External.zip
+?? Tools/Worldgen/__pycache__/phase18_macro_authority.cpython-314.pyc
+?? Tools/Worldgen/__pycache__/phase18_macro_page_contract.cpython-314.pyc
+?? Tools/Worldgen/cert_phase18_macro_authority.py
+?? Tools/Worldgen/phase18_macro_authority.py
+?? Tools/Worldgen/phase18_macro_page_contract.py

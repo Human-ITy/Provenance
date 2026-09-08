@@ -1,0 +1,22 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/tools/starterstone/v001/stone_pickaxe.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="stone_pickaxe_fiber/fiber/1" />
+    <Property ID="m_material" Value="data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="stone_pickaxe_leather/leather/1" />
+    <Property ID="m_material" Value="data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="stone_pickaxe_stone/stone/1" />
+    <Property ID="m_material" Value="data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="stone_pickaxe_wood/wood/1" />
+    <Property ID="m_material" Value="data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

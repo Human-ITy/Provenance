@@ -1,0 +1,64 @@
+TerrainResponseBaseline.cpp
+Seam presentation checks PASS
+kind,index,prepare_ms,support_ms,commit_ms,patches,removed_mg
+pick,0,64.612,14.812,0.507,2,129418
+pick,1,76.690,18.355,0.516,1,303535
+pick,2,74.648,18.384,0.569,1,500088
+pick,3,84.338,22.424,0.676,1,715161
+pick,4,80.447,24.215,0.615,1,962430
+pick,5,85.332,26.512,0.571,1,1104856
+pick,6,121.664,55.160,0.847,1,1364057
+pick,7,108.468,55.053,0.545,1,1500606
+phase,index,complete,cut_ms,patch_ms,collision_ms,support_ms,cache_ms,graph_ms,solve_ms,storage_ms,commit_ms,nodes,modified_bytes
+collision_reference,0,reference_ms,42.269,profiled_ms,42.048,assembly_ms,7.189,tree_ms,34.858,triangles,123708
+phase,0,1,5.382,0.519,42.048,14.664,1.261,13.017,0.368,0.011,0.384,357,844192
+collision_reference,1,reference_ms,42.800,profiled_ms,42.808,assembly_ms,6.727,tree_ms,36.081,triangles,124836
+phase,1,1,13.975,0.351,42.808,18.036,2.789,14.197,1.011,0.028,0.596,804,1941664
+collision_reference,2,reference_ms,42.193,profiled_ms,42.075,assembly_ms,7.281,tree_ms,34.794,triangles,125645
+phase,2,1,14.981,0.491,42.075,18.827,2.518,14.962,1.305,0.031,0.778,1099,2720756
+collision_reference,3,reference_ms,44.325,profiled_ms,42.635,assembly_ms,7.157,tree_ms,35.478,triangles,127041
+phase,3,1,18.246,0.635,42.635,23.680,3.475,18.043,2.045,0.058,0.634,1686,4106640
+collision_reference,4,reference_ms,42.455,profiled_ms,42.689,assembly_ms,6.933,tree_ms,35.756,triangles,128079
+phase,4,1,12.525,0.632,42.689,24.609,2.440,19.490,2.542,0.067,0.601,2070,5068548
+collision_reference,5,reference_ms,42.648,profiled_ms,42.256,assembly_ms,6.918,tree_ms,35.338,triangles,129014
+phase,5,1,14.174,0.724,42.256,26.729,2.918,20.747,2.911,0.113,0.617,2424,5991044
+collision_reference,6,reference_ms,44.908,profiled_ms,43.986,assembly_ms,7.318,tree_ms,36.667,triangles,130277
+phase,6,1,20.315,0.936,43.986,52.562,4.251,22.315,3.440,0.111,0.715,2870,7100216
+collision_reference,7,reference_ms,44.049,profiled_ms,42.682,assembly_ms,6.641,tree_ms,36.040,triangles,131007
+phase,7,1,8.778,0.860,42.682,54.790,2.018,22.570,3.808,0.090,0.813,3121,7742952
+Preparation observer and exact collision/boundary/ledger differential checks PASS
+dig sequence: four sites, eight successive downward scoops each
+dig,0,46.146,7.577,0.004,7,2454917
+dig,1,41.296,7.484,0.008,10,7151067
+dig,2,40.072,0.023,0.008,8,11882351
+dig,3,32.709,0.024,0.009,12,16626315
+dig,4,28.858,0.026,0.012,13,21374533
+dig,5,16.080,0.024,0.006,6,26093114
+dig,6,36.955,0.024,0.009,10,30843366
+dig,7,32.393,0.025,0.013,13,35583339
+dig,8,40.484,10.178,0.007,5,38002511
+dig,9,38.943,2.611,0.009,9,42705193
+dig,10,28.626,2.498,0.011,12,47440248
+dig,11,23.298,0.047,0.014,13,52191198
+dig,12,21.418,0.046,0.009,9,56918678
+dig,13,22.526,0.046,0.011,12,61664823
+dig,14,20.880,0.047,0.013,13,66411457
+dig,15,10.964,0.045,0.010,6,71135020
+dig,16,45.767,5.043,0.008,9,73608167
+dig,17,26.941,2.536,0.013,11,78268745
+dig,18,12.258,0.061,0.011,6,83006011
+dig,19,29.407,0.062,0.012,11,87745022
+dig,20,23.778,0.062,0.017,13,92495241
+dig,21,10.214,0.061,0.011,6,97217859
+dig,22,11.665,0.060,0.011,6,102070439
+dig_empty,23,column_max_field,0
+dig,24,42.431,3.623,0.008,6,104553991
+dig,25,39.058,3.789,0.012,7,109226386
+dig,26,48.774,0.076,0.015,10,113944873
+dig,27,38.788,0.077,0.017,13,118695109
+dig,28,20.363,0.076,0.013,6,123435135
+dig,29,21.585,0.075,0.013,6,128355852
+dig_empty,30,column_max_field,0
+dig_empty,31,column_max_field,0
+Repeated digging checks PASS; accepted 29; empty column attempts 3 (excluded from removal timings)
+Headless timings exclude input queue, scheduling, GPU publication and frame presentation.

@@ -1,0 +1,22 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/tools/hammer/v001/guild_hammer.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Hammer_Dark_leather/Dark leather/1" />
+    <Property ID="m_material" Value="data://provenance/tools/hammer/v001/guild_hammer_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Hammer_Forged_dark_iron/Forged dark iron/1" />
+    <Property ID="m_material" Value="data://provenance/tools/hammer/v001/guild_hammer_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Hammer_Walnut_shaft/Walnut shaft/1" />
+    <Property ID="m_material" Value="data://provenance/tools/hammer/v001/guild_hammer_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Hammer_Worn_brass/Worn brass/1" />
+    <Property ID="m_material" Value="data://provenance/tools/hammer/v001/guild_hammer_mat_3.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

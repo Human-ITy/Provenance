@@ -1,0 +1,56 @@
+{
+  "id": "stone_axe",
+  "units": "metres",
+  "blender_and_engine_up": "Z",
+  "gltf_up": "Y",
+  "bounds_z_up": [
+    [
+      -0.2628750801086426,
+      -0.046240001916885376,
+      -0.005550912115722895
+    ],
+    [
+      0.039607010781764984,
+      0.04190000146627426,
+      0.8327698707580566
+    ]
+  ],
+  "anchors_z_up": {
+    "grip": [
+      0.010438637664584891,
+      0,
+      0.2
+    ],
+    "head_joint": [
+      -0.03987508609441637,
+      0,
+      0.735
+    ],
+    "lashing_cross_front": [
+      -0.03987508609441637,
+      -0.0395,
+      0.735
+    ],
+    "primary_strike": [
+      -0.25787508609441634,
+      0,
+      0.719
+    ]
+  },
+  "visual_lods": [
+    "stone_axe_lod0.glb",
+    "stone_axe_lod1.glb"
+  ],
+  "triangles": [
+    5964,
+    3098
+  ],
+  "materials": [
+    "stone",
+    "wood",
+    "fiber",
+    "leather",
+    "accent"
+  ],
+  "interpretation": "Reference-led silhouette and bindings. Hidden construction inferred; shovel blade interpreted as stone per user designation, with timber tongue and hide attachment."
+}

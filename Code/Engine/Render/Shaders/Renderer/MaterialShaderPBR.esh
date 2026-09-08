@@ -56,6 +56,9 @@ struct MaterialShaderOutput
     float  m_roughness;
     float  m_occlusion;
     float3 m_normal;
+    // Geometric receiver-bias direction, independent of normal-map lighting.
+    // Shader-local only: not a reflected parameter or GPU buffer layout.
+    float3 m_shadowNormal;
     float3 m_emissiveColor;
     
     PrimitiveOutputFlags m_primitiveFlags;
@@ -69,6 +72,7 @@ struct MaterialShaderOutput
         materialOutput.m_roughness              = 1.0;
         materialOutput.m_occlusion              = 1.0;
         materialOutput.m_normal                 = materialInput.m_vertex.m_worldNormal;
+        materialOutput.m_shadowNormal           = materialInput.m_vertex.m_worldNormal;
         materialOutput.m_emissiveColor          = 0.0.xxx;
         materialOutput.m_primitiveFlags         = ( PrimitiveOutputFlags ) 0;
         return materialOutput;
@@ -109,6 +113,11 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
 
     MaterialShaderInput  materialInput    = MaterialShaderInput::New( vertex, primitive, RootCBV.m_cameraPosition.xyz );
     MaterialShaderOutput materialOutput   = MaterialShaderMain( materialInput );
+    // Material shaders may opt individual surfaces out of lighting features
+    // such as SSAO. Honor those flags during lighting, not only later in the
+    // development visualization block.
+    RendererGlobalFlags rendererGlobalFlags = materialOutput.m_primitiveFlags.m_rendererGlobalFlags;
+    rendererGlobalFlags |= primitive.m_primitiveFlags.m_rendererGlobalFlags;
     
     if ( !isFrontFace )
     {
@@ -135,7 +144,7 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
 
     float4 result = float4( 0.0.xxx, materialOutput.m_opacity );
 
-    [branch] if ( ( primitive.m_primitiveFlags.m_rendererGlobalFlags & RENDERER_GLOBAL_FLAG_DISABLE_LIGHTING ) == 0 )
+    [branch] if ( ( rendererGlobalFlags & RENDERER_GLOBAL_FLAG_DISABLE_LIGHTING ) == 0 )
     {
         Texture2D   dfgTexture          = GetTexture( RootCBV.m_dfgTexture );
         TextureCube radianceTexture     = GetTexture( RootCBV.m_radianceTexture );
@@ -145,7 +154,7 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
         float2      screenUV            = vertex.m_clipPosition.xy * RootCBV.m_viewportSize.zw;
         
         static const RendererGlobalFlags SSAO_EXCLUDE_FLAGS = RENDERER_GLOBAL_FLAG_DISABLE_LIGHTING | RENDERER_GLOBAL_FLAG_DISABLE_SSAO;
-        [branch] if ( ( primitive.m_primitiveFlags.m_rendererGlobalFlags & SSAO_EXCLUDE_FLAGS ) == 0 )
+        [branch] if ( ( rendererGlobalFlags & SSAO_EXCLUDE_FLAGS ) == 0 )
         {
             float ssao = ssaoTexture.SampleLevel( linearClampSampler, screenUV, 0 ).r;
             IBL *= ssao;
@@ -180,10 +189,11 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
 
                 float3 lightColor = UnpackColor( directionalLight.m_packedTintedColor ).rgb * directionalLight.m_maxIntensity;
 
-                if ( directionalLight.m_cascadedShadowIndex != 0xFFFF )
+                if ( directionalLight.m_cascadedShadowIndex != 0xFFFF &&
+                     ( rendererGlobalFlags & RENDERER_GLOBAL_FLAG_DISABLE_CAST_SHADOWS ) == 0 )
                 {
                     CascadedShadow cascadedShadow = cascadedShadowBuffer[directionalLight.m_cascadedShadowIndex];
-                    shadowDir = SampleShadow( cascadedShadow, directionalLight.m_lightDirection, vertex.m_worldPosition, vertex.m_clipPosition.z, materialInput.m_vertex.m_worldNormal, debugShadowColor );
+                    shadowDir = SampleShadow( cascadedShadow, directionalLight.m_lightDirection, vertex.m_worldPosition, vertex.m_clipPosition.z, materialOutput.m_shadowNormal, debugShadowColor );
 
                     #if EE_DEVELOPMENT_TOOLS
                         debugShadow = min( debugShadow, shadowDir );
@@ -268,9 +278,6 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
     result.rgb += materialOutput.m_emissiveColor;
 
     #if EE_DEVELOPMENT_TOOLS
-        RendererGlobalFlags rendererGlobalFlags = materialOutput.m_primitiveFlags.m_rendererGlobalFlags;
-        rendererGlobalFlags |= primitive.m_primitiveFlags.m_rendererGlobalFlags;
-        
         RendererDebugVisualizationMode debugVisMode = primitive.m_primitiveFlags.m_rendererDebugVisualizationMode;
         
         RendererDebugFlags debugFlags = materialOutput.m_primitiveFlags.m_rendererDebugFlags;

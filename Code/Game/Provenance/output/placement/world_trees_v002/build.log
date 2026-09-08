@@ -1,0 +1,116 @@
+PASS 117 placements: exact rendered terrain collar error 6.43929354283e-15 m; 24 root-footprint samples per tree clear of creek, floor edge and protected lab.
+
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_adolescent_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_adolescent_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_adolescent_wood.001
+16:18:30 | INFO: glTF import finished in 0.05s
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_ancient_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_ancient_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_ancient_wood.001
+16:18:30 | INFO: glTF import finished in 0.04s
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_wood.001
+16:18:30 | INFO: glTF import finished in 0.07s
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_1_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_1_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_1_wood.001
+16:18:30 | INFO: glTF import finished in 0.08s
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_2_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_2_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_grown_variant_2_wood.001
+16:18:30 | INFO: glTF import finished in 0.08s
+16:18:30 | INFO: Data are loaded, start creating Blender stuff
+16:18:30 | INFO: Blender create Mesh node norway_spruce_mature_foliage.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_mature_roots.001
+16:18:30 | INFO: Blender create Mesh node norway_spruce_mature_wood.001
+16:18:31 | INFO: glTF import finished in 0.12s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node norway_spruce_sapling_foliage.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_sapling_roots.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_sapling_wood.001
+16:18:31 | INFO: glTF import finished in 0.02s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node norway_spruce_seedling_roots.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_seedling_wood.001
+16:18:31 | INFO: glTF import finished in 0.01s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_foliage.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_roots.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_wood.001
+16:18:31 | INFO: glTF import finished in 0.03s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_1_foliage.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_1_roots.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_1_wood.001
+16:18:31 | INFO: glTF import finished in 0.03s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_2_foliage.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_2_roots.001
+16:18:31 | INFO: Blender create Mesh node norway_spruce_young_variant_2_wood.001
+16:18:31 | INFO: glTF import finished in 0.03s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_adolescent_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_adolescent_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_adolescent_wood.001
+16:18:31 | INFO: glTF import finished in 0.07s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_wood.001
+16:18:31 | INFO: glTF import finished in 0.10s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_variant_2_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_variant_2_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_grown_variant_2_wood.001
+16:18:31 | INFO: glTF import finished in 0.10s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_mature_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_mature_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_mature_wood.001
+16:18:31 | INFO: glTF import finished in 0.14s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_sapling_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_sapling_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_sapling_wood.001
+16:18:31 | INFO: glTF import finished in 0.01s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_seedling_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_seedling_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_seedling_wood.001
+16:18:31 | INFO: glTF import finished in 0.01s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_wood.001
+16:18:31 | INFO: glTF import finished in 0.04s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_1_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_1_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_1_wood.001
+16:18:31 | INFO: glTF import finished in 0.04s
+16:18:31 | INFO: Data are loaded, start creating Blender stuff
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_2_foliage.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_2_roots.001
+16:18:31 | INFO: Blender create Mesh node silver_birch_young_variant_2_wood.001
+16:18:31 | INFO: glTF import finished in 0.04s
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\placement\world_trees_v002\build_world.py:182: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat=bpy.data.materials.new('Authoring ground: coverage + birch litter (not runtime shader)');mat.use_nodes=True
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\placement\world_trees_v002\build_world.py:202: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat=bpy.data.materials.new('Granite reference - authoring approximation');mat.use_nodes=True
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\placement\world_trees_v002\build_world.py:236: DeprecationWarning: 'World.use_nodes' is expected to be removed in Blender 6.0
+  world=bpy.data.worlds.new('Soft daylight');scene.world=world;world.use_nodes=True
+00:15.688  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\placement\world_trees_v002\world_overview.png'
+00:34.610  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\placement\world_trees_v002\creek_birch_view.png'
+Info: Packed 1 file(s)
+Info: Saved as "WorldTreePlacement.blend"
+WORLD_TREE_AUTHORING_COMPLETE 117 {'0': 3254178, '1': 1804650, '2': 1266201}
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

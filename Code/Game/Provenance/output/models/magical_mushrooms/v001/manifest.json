@@ -1,0 +1,47 @@
+{
+  "blender": "5.2.1 LTS",
+  "units": "meters",
+  "models": [
+    {
+      "name": "Cyan_Tall",
+      "triangles": 26716,
+      "height_m": 0.29,
+      "materials": [
+        "Cyan_Cap",
+        "Cyan_Gills",
+        "Cyan_Stem",
+        "Cyan_Luminous_Filaments"
+      ]
+    },
+    {
+      "name": "Cyan_Young",
+      "triangles": 21980,
+      "height_m": 0.18,
+      "materials": [
+        "Cyan_Cap",
+        "Cyan_Gills",
+        "Cyan_Stem",
+        "Cyan_Luminous_Filaments"
+      ]
+    },
+    {
+      "name": "Violet_Lantern",
+      "triangles": 44000,
+      "height_m": 0.315,
+      "materials": [
+        "Violet_Cap",
+        "Warm_Gills",
+        "Violet_Stem",
+        "Violet_Skirt",
+        "Warm_Gill_Edges",
+        "Violet_Cap_Scales"
+      ]
+    }
+  ],
+  "notes": [
+    "Reference-inspired original meshes, not exact image reconstruction.",
+    "Low constant emissive materials plus optional local point lights. No automatic darkness detection.",
+    "Preview lighting excluded from exports.",
+    "No collision, LOD or game integration."
+  ]
+}

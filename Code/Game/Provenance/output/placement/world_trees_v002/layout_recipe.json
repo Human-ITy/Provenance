@@ -1,0 +1,21 @@
+{
+  "seed": 9072026,
+  "description": "Broken mixed woodland framing an open central meadow; birch regeneration at lighter grove margins; creek and granite lab kept accessible.",
+  "groves": [
+    {"id":"northwest_spruce", "center":[-34,31], "radius":[11,12], "species":"norway_spruce", "overstory":6, "regeneration":10},
+    {"id":"west_birch_margin", "center":[-30,2], "radius":[10,14], "species":"silver_birch", "overstory":5, "regeneration":12},
+    {"id":"southwest_mixed", "center":[-35,-32], "radius":[10,11], "species":"norway_spruce", "overstory":6, "regeneration":10},
+    {"id":"south_birch", "center":[3,-34], "radius":[14,9], "species":"silver_birch", "overstory":5, "regeneration":14},
+    {"id":"southeast_spruce", "center":[33,-26], "radius":[10,15], "species":"norway_spruce", "overstory":5, "regeneration":12},
+    {"id":"east_birch", "center":[34,6], "radius":[10,10], "species":"silver_birch", "overstory":3, "regeneration":12},
+    {"id":"northeast_mixed", "center":[29,33], "radius":[13,10], "species":"norway_spruce", "overstory":5, "regeneration":12}
+  ],
+  "clearings": [{"center":[5,2], "radius":[19,21]}],
+  "walk_corridors": [
+    {"a":[0,30], "b":[5,2], "half_width_m":2.5},
+    {"a":[5,2], "b":[-21,-8], "half_width_m":2.0},
+    {"a":[5,2], "b":[14,-49], "half_width_m":2.0},
+    {"a":[5,2], "b":[49,19], "half_width_m":2.0}
+  ],
+  "limits": {"max_instances":140, "max_all_lod1_triangles":3000000, "root_creek_setback_m":1.5, "lab_root_setback_m":3.0}
+}

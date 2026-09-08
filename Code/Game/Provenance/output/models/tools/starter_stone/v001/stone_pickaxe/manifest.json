@@ -1,0 +1,60 @@
+{
+  "id": "stone_pickaxe",
+  "units": "metres",
+  "blender_and_engine_up": "Z",
+  "gltf_up": "Y",
+  "bounds_z_up": [
+    [
+      -0.39249593019485474,
+      -0.04500000178813934,
+      -0.007100649643689394
+    ],
+    [
+      0.25350406765937805,
+      0.045900002121925354,
+      0.9830890893936157
+    ]
+  ],
+  "anchors_z_up": {
+    "grip": [
+      0.02218354270291761,
+      0,
+      0.21
+    ],
+    "head_joint": [
+      -0.047495919126136474,
+      0,
+      0.891
+    ],
+    "lashing_cross_front": [
+      -0.047495919126136474,
+      -0.0435,
+      0.891
+    ],
+    "primary_strike": [
+      -0.39249591912613646,
+      0,
+      0.797
+    ],
+    "secondary_strike": [
+      0.2495040808738635,
+      0,
+      0.85
+    ]
+  },
+  "visual_lods": [
+    "stone_pickaxe_lod0.glb",
+    "stone_pickaxe_lod1.glb"
+  ],
+  "triangles": [
+    6352,
+    3300
+  ],
+  "materials": [
+    "stone",
+    "wood",
+    "fiber",
+    "leather"
+  ],
+  "interpretation": "Reference-led silhouette and bindings. Hidden construction inferred; shovel blade interpreted as stone per user designation, with timber tongue and hide attachment."
+}

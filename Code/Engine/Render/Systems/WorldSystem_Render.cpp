@@ -7,6 +7,8 @@
 #include "Engine/Render/Components/Component_SkeletalMesh.h"
 #include "Engine/Render/Components/Component_StaticMesh.h"
 #include "Engine/Render/Device/DeviceRenderWorld.h"
+#include "Engine/Render/RenderGeometryBuilder.h"
+#include "Engine/Render/RenderMaterial.h"
 #include "Engine/Render/RenderViewport.h"
 #include "Base/Types/Arrays.h"
 #include "Base/Profiling.h"
@@ -114,8 +116,490 @@ namespace EE::Render
         m_pIrradianceTexture = RHI::CreateTexture( m_pRenderSystem->GetContextRHI(), renderTargetParameters );
     }
 
+    ProceduralMeshID RenderWorldSystem::RegisterProceduralMesh
+    (
+        TArrayView<ProceduralMeshVertex const> vertices,
+        TArrayView<uint32_t const>             indices,
+        Material const*                        pMaterial,
+        Transform const&                       worldTransform,
+        TBitFlags<ViewLayer>                   viewLayers,
+        bool                                  fastBuild,
+        float                                 vertexDisplacementRadius
+    )
+    {
+        if ( vertices.empty() ||
+             indices.empty() ||
+             ( indices.size() % 3 ) != 0 )
+        {
+            return 0;
+        }
+
+        if ( pMaterial == nullptr )
+        {
+            pMaterial = m_pRenderSystem->GetPlaceholderMaterial();
+        }
+
+        EE_ASSERT( pMaterial != nullptr && pMaterial->IsValid() );
+
+        GeometryBuilder geometryBuilder;
+        geometryBuilder.SetNumTextureCoordinateAttributes( 2 );
+        geometryBuilder.SetNumColorAttributes( 1 );
+        geometryBuilder.InitializeVertexFormat();
+        geometryBuilder.SetIndices( indices, false );
+        geometryBuilder.SetNumVertices( vertices.size() );
+
+        for ( size_t vertexIndex = 0;
+              vertexIndex < vertices.size();
+              ++vertexIndex )
+        {
+            ProceduralMeshVertex const& vertex = vertices[vertexIndex];
+            geometryBuilder.SetPositionAttribute
+            (
+                vertexIndex,
+                { vertex.m_position, vertex.m_normal }
+            );
+            geometryBuilder.SetTextureCoordinateAttribute( vertexIndex, 0, vertex.m_uv0 );
+            geometryBuilder.SetTextureCoordinateAttribute( vertexIndex, 1, vertex.m_uv1 );
+            geometryBuilder.SetColorAttribute( vertexIndex, 0, Color( vertex.m_color ) );
+        }
+
+        // Runtime geometry arrives as triangle lists and commonly repeats the
+        // same position/normal at every adjacent face (fracture boundaries and
+        // crossed foliage cards are the two largest producers). Deduplicate
+        // exact vertex attributes before cache/fetch optimization. This does
+        // not simplify or move geometry, but substantially lowers meshlet
+        // vertex pressure and near-camera cluster work.
+        geometryBuilder.Optimize( TBitFlags<GeometryOptimizeFlags>(
+            GeometryOptimizeFlags::VertexRemap,
+            GeometryOptimizeFlags::VertexCache,
+            GeometryOptimizeFlags::VertexFetch ) );
+
+        ProceduralMeshInstance instance;
+        instance.m_ID = m_nextProceduralMeshID++;
+        instance.m_pMaterial = pMaterial;
+        instance.m_viewLayers = viewLayers;
+        instance.m_worldTransform = worldTransform;
+        instance.m_geometry.SetVertexStride( sizeof( StaticMeshVertex ) );
+        AABB bounds = geometryBuilder.ComputeAABB();
+        float const displacement = Math::Max( 0.0f, vertexDisplacementRadius );
+        bounds.Expand( Vector( displacement ) );
+        instance.m_geometry.SetBounds( OBB( bounds ) );
+        geometryBuilder.BuildAndAppendGeometry( instance.m_geometry, fastBuild );
+        // Both instance and meshlet culling must contain animated vertices.
+        auto* clusters = reinterpret_cast<MeshCluster*>( instance.m_geometry.GetClusters().data() );
+        for ( uint32_t i = 0; i < instance.m_geometry.GetNumClusters(); ++i )
+        {
+            clusters[i].m_boundingSphereRadius += displacement;
+        }
+
+        ProceduralMeshID const result = instance.m_ID;
+        m_proceduralMeshInstances.emplace_back( eastl::move( instance ) );
+        return result;
+    }
+
+    bool RenderWorldSystem::UpdateProceduralMeshTransform( ProceduralMeshID meshID, Transform const& worldTransform )
+    {
+        for ( auto& instance : m_proceduralMeshInstances )
+        {
+            if ( instance.m_ID != meshID ) continue;
+            instance.m_worldTransform = worldTransform;
+            instance.m_transformUpdatePending = true;
+            return true;
+        }
+        return false;
+    }
+
+    Material const* RenderWorldSystem::CreateSurfaceCoverMaterial( Material const* pSource )
+    {
+        if ( m_pSurfaceCoverMaterial ) return m_pSurfaceCoverMaterial;
+        if ( !pSource || !pSource->m_shaderParametersInstance.IsValid() ) return nullptr;
+        auto const& source = pSource->m_shaderParametersInstance;
+        if ( !source.FindParameter( StringID( "m_coverTexture" ) ).IsValid() ) return nullptr;
+        m_pSurfaceCoverMaterial = EE::New<Material>();
+        m_pSurfaceCoverMaterial->m_shaderIndex = pSource->m_shaderIndex;
+        m_surfaceCoverSourceParameters.assign( source.m_parametersMemory.begin(), source.m_parametersMemory.end() );
+        return m_pSurfaceCoverMaterial;
+    }
+
+    void RenderWorldSystem::SetSurfaceCoverData( uint32_t width, uint32_t height, TArrayView<Float4 const> pixels )
+    {
+        if ( !m_pSurfaceCoverMaterial || width == 0 || height == 0 || width > 2048 || height > 2048 || pixels.size() != size_t(width) * height ) return;
+        if ( m_pSurfaceCoverTexture && (width!=m_surfaceCoverWidth || height!=m_surfaceCoverHeight) ) return;
+        m_surfaceCoverWidth = width; m_surfaceCoverHeight = height;
+        m_surfaceCoverPixels.assign( pixels.begin(), pixels.end() );
+        m_surfaceCoverDirty = true;
+    }
+
+    void RenderWorldSystem::SetSurfaceCoverWindPhase( float phase )
+    {
+        m_surfaceCoverWindPhase = phase;
+        m_surfaceCoverWindDirty = true;
+    }
+
+    void RenderWorldSystem::UpdateSurfaceCoverWindResources()
+    {
+        if ( !m_pSurfaceCoverMaterial || !m_surfaceCoverWindDirty ) return;
+        auto& parameters = m_pSurfaceCoverMaterial->m_shaderParametersInstance;
+        if ( !parameters.IsValid() ) return;
+        auto parameter = parameters.FindParameter( StringID( "m_windPhase" ) );
+        if ( !parameter.IsValid() ) return;
+        parameters.SetScalar( parameter, m_surfaceCoverWindPhase );
+        m_pRenderSystem->QueueShaderParametersUpdate( parameters );
+        m_surfaceCoverWindDirty = false;
+    }
+
+    void RenderWorldSystem::UpdateSurfaceCoverResources()
+    {
+        if ( !m_pSurfaceCoverMaterial || !m_surfaceCoverDirty ) return;
+        auto& parameters = m_pSurfaceCoverMaterial->m_shaderParametersInstance;
+        if ( !parameters.IsValid() )
+        {
+            parameters = m_pRenderSystem->CreateShaderParameters( m_pSurfaceCoverMaterial->m_shaderIndex );
+            EE_ASSERT( parameters.m_parametersMemory.size() == m_surfaceCoverSourceParameters.size() );
+            std::memcpy( parameters.m_parametersMemory.data(), m_surfaceCoverSourceParameters.data(), m_surfaceCoverSourceParameters.size() );
+            m_surfaceCoverSourceParameters.clear();
+        }
+        auto copy = [this]( uint8_t* dst, size_t, uint32_t rowStride, uint32_t row )
+        { std::memcpy( dst, m_surfaceCoverPixels.data() + size_t(row)*m_surfaceCoverWidth, Math::Min( size_t(rowStride), size_t(m_surfaceCoverWidth)*sizeof(Float4) ) ); };
+        if ( !m_pSurfaceCoverTexture )
+        {
+            RHI::TextureParameters texture;
+            texture.m_width = m_surfaceCoverWidth; texture.m_height = m_surfaceCoverHeight;
+            texture.m_format = RHI::DataFormat::RGBA32_SFloat;
+            texture.m_initialState = RHI::TextureState::Common;
+            texture.m_debugName = "Provenance grass cover";
+            m_pSurfaceCoverTexture = m_pRenderSystem->QueueTextureCreate( copy, texture );
+            parameters.SetTexture( parameters.FindParameter( StringID("m_coverTexture") ), RHI::GetTextureHandle( m_pSurfaceCoverTexture, RHI::DescriptorTypeFlags::Texture, 0 ) );
+            parameters.SetScalar( parameters.FindParameter( StringID("m_coverEnabled") ), 1.0f );
+            m_pRenderSystem->QueueShaderParametersUpdate( parameters );
+        }
+        else
+        {
+            RHI::TextureCopyRegion region;region.m_width=m_surfaceCoverWidth;region.m_height=m_surfaceCoverHeight;
+            m_pRenderSystem->QueueTextureUpdate( copy, m_pSurfaceCoverTexture, region, 1, 1, RHI::TextureState::Common );
+        }
+        m_surfaceCoverDirty=false;
+    }
+
+    void RenderWorldSystem::ReleaseSurfaceCoverMaterial()
+    {
+        if ( m_pSurfaceCoverTexture ) m_pRenderSystem->QueueResourceDelete( eastl::move(m_pSurfaceCoverTexture) );
+        m_pSurfaceCoverTexture=nullptr;
+        if ( m_pSurfaceCoverMaterial )
+        {
+            if ( m_pSurfaceCoverMaterial->m_shaderParametersInstance.IsValid() ) m_pRenderSystem->QueueResourceDelete( eastl::move(m_pSurfaceCoverMaterial->m_shaderParametersInstance) );
+            EE::Delete( m_pSurfaceCoverMaterial );
+            m_pSurfaceCoverMaterial=nullptr;
+        }
+        m_surfaceCoverPixels.clear();m_surfaceCoverSourceParameters.clear();m_surfaceCoverDirty=false;
+        m_surfaceCoverWindPhase=0.0f;m_surfaceCoverWindDirty=false;
+    }
+
+    void RenderWorldSystem::CreateProceduralMeshDeviceResources
+    (
+        ProceduralMeshInstance& instance
+    )
+    {
+        EE_ASSERT( instance.m_deviceCreatePending );
+
+        auto CopyClusterVertices = [&geometry = instance.m_geometry]
+        (
+            uint8_t* pDstMemory_WriteCombined,
+            size_t   dstSize
+        )
+        {
+            Memory::CopyToWriteCombined
+            (
+                pDstMemory_WriteCombined,
+                geometry.GetClusterVertices().data(),
+                dstSize
+            );
+        };
+
+        RHI::BufferParameters vertexBufferParameters = {};
+        vertexBufferParameters.m_bufferSize =
+            instance.m_geometry.GetNumClusterVertices() *
+            instance.m_geometry.GetClusterVertexStride();
+        vertexBufferParameters.m_descriptorTypes.SetMultipleFlags
+        (
+            RHI::DescriptorTypeFlags::Buffer,
+            RHI::DescriptorTypeFlags::Raw
+        );
+        vertexBufferParameters.m_debugName = "Procedural Mesh Vertices";
+
+        instance.m_pClusterVertexBuffer = m_pRenderSystem->QueueBufferCreate
+        (
+            CopyClusterVertices,
+            vertexBufferParameters
+        );
+
+        auto CopyClusterTriangles = [&geometry = instance.m_geometry]
+        (
+            uint8_t* pDstMemory_WriteCombined,
+            size_t   dstSize
+        )
+        {
+            Memory::CopyToWriteCombined
+            (
+                pDstMemory_WriteCombined,
+                geometry.GetClusterTriangles().data(),
+                dstSize
+            );
+        };
+
+        RHI::BufferParameters triangleBufferParameters = {};
+        triangleBufferParameters.m_bufferSize =
+            instance.m_geometry.GetNumClusterTriangles() *
+            sizeof( uint32_t );
+        triangleBufferParameters.m_bufferStride = sizeof( uint32_t );
+        triangleBufferParameters.m_debugName = "Procedural Mesh Triangles";
+
+        instance.m_pClusterTriangleBuffer = m_pRenderSystem->QueueBufferCreate
+        (
+            CopyClusterTriangles,
+            triangleBufferParameters
+        );
+
+        MeshUpdate meshUpdate = m_pRenderSystem->CreateMesh
+        (
+            1,
+            instance.m_geometry.GetNumClusters()
+        );
+
+        instance.m_meshHandle = meshUpdate.m_meshHandle;
+        instance.m_clustersHandle = meshUpdate.m_clustersHandle;
+
+        meshUpdate.m_deviceMeshes[0].m_clusterVertexBuffer = RHI::GetBufferHandle
+        (
+            instance.m_pClusterVertexBuffer,
+            RHI::DescriptorTypeFlags::Buffer
+        );
+
+        meshUpdate.m_deviceMeshes[0].m_clusterTriangleBuffer = RHI::GetBufferHandle
+        (
+            instance.m_pClusterTriangleBuffer,
+            RHI::DescriptorTypeFlags::Buffer
+        );
+
+        meshUpdate.m_deviceMeshes[0].m_numBones = 0;
+
+        m_pRenderSystem->WriteCommonMeshData
+        (
+            meshUpdate,
+            0,
+            0,
+            instance.m_geometry
+        );
+
+        m_pRenderSystem->QueueMeshUpdate
+        (
+            meshUpdate.m_meshHandle,
+            meshUpdate.m_clustersHandle
+        );
+
+        AddProceduralMeshClusters( instance );
+
+        instance.m_meshInstanceRootProxy =
+            m_deviceRenderWorld.AllocateMeshInstanceRoot( 2 );
+
+        instance.m_meshInstanceProxy =
+            m_deviceRenderWorld.AllocateMeshInstance( 1 );
+
+        Matrix43 const localTransform;
+        instance.m_meshInstanceProxy.WriteLocalTransforms
+        (
+            TArrayView<Matrix43 const>( &localTransform, 1 )
+        );
+
+        instance.m_deviceCreatePending = false;
+        instance.m_rootUploadPending = true;
+    }
+
+    void RenderWorldSystem::UploadProceduralMeshRootAndInitialize
+    (
+        ProceduralMeshInstance& instance
+    )
+    {
+        EE_ASSERT( instance.m_rootUploadPending );
+
+        TArray<uint32_t, 32> rootUpload = {};
+        ShaderTypes::MeshInstanceRoot root = {};
+        root.m_renderViewLayerFlags = instance.m_viewLayers;
+        root.m_numLODs = 1;
+        root.m_boneOffset = ~0U;
+        root.m_firstInstance = uint32_t
+        (
+            instance.m_meshInstanceProxy.m_instanceHandle.m_offset
+        );
+        root.m_numInstances = 1;
+
+        Matrix const rootMatrix = instance.m_worldTransform.ToMatrix();
+        rootMatrix.GetRow( 0 ).StoreFloat3( root.m_rootTransform + 0 );
+        rootMatrix.GetRow( 1 ).StoreFloat3( root.m_rootTransform + 3 );
+        rootMatrix.GetRow( 2 ).StoreFloat3( root.m_rootTransform + 6 );
+        rootMatrix.GetRow( 3 ).StoreFloat3( root.m_rootTransform + 9 );
+
+        std::memcpy( rootUpload.data(), &root, sizeof( root ) );
+
+        auto CopyRootData = [rootUpload]
+        (
+            uint8_t* pDstMemory_WriteCombined,
+            size_t   dstSize
+        )
+        {
+            EE_ASSERT( dstSize == rootUpload.size() * sizeof( uint32_t ) );
+            // Lambda captures (including copies made by QueueBufferUpdate) do
+            // not inherit a variable's alignment. Stage the tiny root payload
+            // in aligned storage inside the callback, at the point of use.
+            alignas( 32 ) uint32_t alignedRootUpload[32];
+            std::memcpy( alignedRootUpload, rootUpload.data(), sizeof( alignedRootUpload ) );
+            Memory::CopyToWriteCombined
+            (
+                pDstMemory_WriteCombined,
+                alignedRootUpload,
+                dstSize
+            );
+        };
+
+        m_pRenderSystem->QueueBufferUpdate
+        (
+            CopyRootData,
+            m_deviceRenderWorld.GetMeshInstanceRootBuffer(),
+            instance.m_meshInstanceRootProxy.m_instanceHandle.m_offset *
+                sizeof( ShaderTypes::MeshInstanceRoot ),
+            instance.m_meshInstanceRootProxy.m_instanceHandle.m_size *
+                sizeof( ShaderTypes::MeshInstanceRoot )
+        );
+
+        m_deviceRenderWorld.QueueProceduralMeshInstanceInitialize
+        (
+            uint32_t( instance.m_meshInstanceProxy.m_instanceHandle.m_offset ),
+            uint32_t( instance.m_meshInstanceRootProxy.m_instanceHandle.m_offset ),
+            instance.m_meshHandle,
+            instance.m_geometry,
+            instance.m_pClusterVertexBuffer,
+            instance.m_pClusterTriangleBuffer,
+            instance.m_pMaterial
+        );
+
+        instance.m_rootUploadPending = false;
+    }
+
+    void RenderWorldSystem::UnregisterProceduralMesh( ProceduralMeshID meshID )
+    {
+        if ( meshID == 0 )
+        {
+            return;
+        }
+
+        for ( size_t instanceIndex = 0;
+              instanceIndex < m_proceduralMeshInstances.size();
+              ++instanceIndex )
+        {
+            ProceduralMeshInstance& instance =
+                m_proceduralMeshInstances[instanceIndex];
+
+            if ( instance.m_ID != meshID )
+            {
+                continue;
+            }
+
+            if ( !instance.m_deviceCreatePending )
+            {
+                RemoveProceduralMeshClusters( instance );
+
+                m_deviceRenderWorld.DeallocateMeshInstance
+                (
+                    eastl::move( instance.m_meshInstanceProxy )
+                );
+
+                m_deviceRenderWorld.DeallocateMeshInstanceRoot
+                (
+                    eastl::move( instance.m_meshInstanceRootProxy )
+                );
+
+                m_pRenderSystem->QueueResourceDelete
+                (
+                    eastl::move( instance.m_pClusterVertexBuffer ),
+                    eastl::move( instance.m_pClusterTriangleBuffer ),
+                    TPair
+                    {
+                        eastl::move( instance.m_meshHandle ),
+                        eastl::move( instance.m_clustersHandle )
+                    }
+                );
+            }
+
+            m_proceduralMeshInstances.erase
+            (
+                m_proceduralMeshInstances.begin() + instanceIndex
+            );
+            return;
+        }
+    }
+
+    void RenderWorldSystem::AddProceduralMeshClusters
+    (
+        ProceduralMeshInstance const& instance
+    )
+    {
+        int32_t const shaderIndex = instance.m_pMaterial->GetShaderIndex();
+        EE_ASSERT( shaderIndex != -1 );
+
+        uint32_t const clusterCount = instance.m_geometry.GetNumClusters();
+        m_materialShaderClusterCapacity.AddGlobalClusters( clusterCount );
+
+        ForEachViewLayer
+        (
+            [this, &instance, shaderIndex, clusterCount]
+            ( ViewLayer viewLayer )
+            {
+                if ( instance.m_viewLayers.IsFlagSet( viewLayer ) )
+                {
+                    m_materialShaderClusterCapacity.AddViewLayerClusters
+                    (
+                        uint32_t( viewLayer ),
+                        shaderIndex,
+                        clusterCount
+                    );
+                }
+            }
+        );
+    }
+
+    void RenderWorldSystem::RemoveProceduralMeshClusters
+    (
+        ProceduralMeshInstance const& instance
+    )
+    {
+        int32_t const shaderIndex = instance.m_pMaterial->GetShaderIndex();
+        EE_ASSERT( shaderIndex != -1 );
+
+        uint32_t const clusterCount = instance.m_geometry.GetNumClusters();
+        m_materialShaderClusterCapacity.RemoveGlobalClusters( clusterCount );
+
+        ForEachViewLayer
+        (
+            [this, &instance, shaderIndex, clusterCount]
+            ( ViewLayer viewLayer )
+            {
+                if ( instance.m_viewLayers.IsFlagSet( viewLayer ) )
+                {
+                    m_materialShaderClusterCapacity.RemoveViewLayerClusters
+                    (
+                        uint32_t( viewLayer ),
+                        shaderIndex,
+                        clusterCount
+                    );
+                }
+            }
+        );
+    }
+
     void RenderWorldSystem::ShutdownSystem()
     {
+        EE_ASSERT( m_proceduralMeshInstances.empty() );
+        ReleaseSurfaceCoverMaterial();
         m_pRenderSystem->WaitAllQueuesIdle();
 
         m_materialShaderClusterCapacity.Shutdown();
@@ -421,8 +905,37 @@ namespace EE::Render
     void RenderWorldSystem::UpdateDeviceResources()
     {
         EE_PROFILE_FUNCTION_RENDER();
+        UpdateSurfaceCoverResources();
+        UpdateSurfaceCoverWindResources();
+
+        // Procedural requests can arrive from world/debug updates, outside the
+        // render system's resource-update stage. Defer all GPU allocation to
+        // this stage, before DeviceRenderWorld sizes its instance buffers.
+        for ( ProceduralMeshInstance& instance : m_proceduralMeshInstances )
+        {
+            if ( instance.m_deviceCreatePending )
+            {
+                CreateProceduralMeshDeviceResources( instance );
+            }
+            // Submit rigid transforms before DeviceRenderWorld snapshots the
+            // update-command counts and schedules their uploads.
+            if ( !instance.m_rootUploadPending && instance.m_transformUpdatePending )
+            {
+                instance.m_meshInstanceRootProxy.WriteRootTransform( instance.m_worldTransform, Float3::One );
+                instance.m_transformUpdatePending = false;
+            }
+        }
 
         m_deviceRenderWorld.UpdateDeviceResources_BeforeInstanceInitialize( m_pRenderSystem );
+
+        for ( ProceduralMeshInstance& instance : m_proceduralMeshInstances )
+        {
+            if ( instance.m_rootUploadPending )
+            {
+                UploadProceduralMeshRootAndInitialize( instance );
+                instance.m_transformUpdatePending = false;
+            }
+        }
 
         // InstanceUpdate StaticMesh
         //---------------------------------------------------------------------------------------------------

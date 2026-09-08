@@ -1,0 +1,5 @@
+<Type TypeID="EE::Render::TextureResourceDescriptor" Version="0">
+  <Property ID="m_sourcePaths"><Property Index="0" Value="data://provenance/materials/grass/t_grass_a_2k_master_v006.png" /></Property>
+  <Property ID="m_textureGroup" Value="data://render/texturegroups/albedotexture.txtg" />
+  <Property ID="m_name" Value="Provenance Grass Albedo 2K v006" />
+</Type>

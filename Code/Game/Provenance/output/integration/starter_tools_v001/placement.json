@@ -1,0 +1,65 @@
+[
+  {
+    "id": "stone_shovel",
+    "support_world": [
+      -0.925,
+      35.67,
+      0.633326921
+    ],
+    "support_height_range_m": 0.034503404,
+    "support": "granite ledge",
+    "world_position": [
+      -0.925,
+      35.67,
+      0.636326921
+    ],
+    "rotation_degrees": [
+      0,
+      0,
+      0
+    ],
+    "scale": 1
+  },
+  {
+    "id": "stone_axe",
+    "support_world": [
+      0.03,
+      35.92,
+      1.054952297
+    ],
+    "support_height_range_m": 0.005348279,
+    "support": "granite ledge",
+    "world_position": [
+      0.03,
+      35.92,
+      1.0635032091157228
+    ],
+    "rotation_degrees": [
+      0,
+      0,
+      0
+    ],
+    "scale": 1
+  },
+  {
+    "id": "stone_pickaxe",
+    "support_world": [
+      1.75,
+      36.32,
+      1.081203749
+    ],
+    "support_height_range_m": 0.030063217,
+    "support": "granite ledge",
+    "world_position": [
+      1.75,
+      36.32,
+      1.0913043986436892
+    ],
+    "rotation_degrees": [
+      0,
+      0,
+      0
+    ],
+    "scale": 1
+  }
+]

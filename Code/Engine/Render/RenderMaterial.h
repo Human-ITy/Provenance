@@ -15,6 +15,7 @@ namespace EE::Render
 
         friend class MaterialCompiler;
         friend class MaterialLoader;
+        friend class RenderWorldSystem;
 
         EE_SERIALIZE( m_shaderID, m_parameterStorage );
 

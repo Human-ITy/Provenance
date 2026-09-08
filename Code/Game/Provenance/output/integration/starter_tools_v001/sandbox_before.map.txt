@@ -1,0 +1,343 @@
+<Type TypeID="EE::EntityModel::EntityMapResourceDescriptor" Version="0">
+  <Property ID="m_editorCameraTransform" Value="6.25001,2.13443e-07,113.25,-66.9054,-31.5799,21.0594,1" />
+</Type>
+<CustomData>
+  <Entities>
+    <Entity Name="SkyDome">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Static Mesh Component" />
+          <Property Path="m_transform" Value="0,-0,0,0,0,0,300" />
+          <Property Path="m_submeshesHidden" Value="1" />
+          <Property Path="m_submeshesHidden/0" Value="False" />
+          <Property Path="m_materialOverrides" Value="1" />
+          <Property Path="m_materialOverrides/0" Value="" />
+          <Property Path="m_viewLayers" Value="ForwardShading|GlobalEnvironmentMap" />
+          <Property Path="m_mesh" Value="data://editor/skydome/skydome.mesh" />
+        </Type>
+        <Type TypeID="EE::Render::DirectionalLightComponent" SpatialParent="Static Mesh Component">
+          <Property Path="m_name" Value="Directional Light Component" />
+          <Property Path="m_transform" Value="135,-0,0,0,0,0,1" />
+          <Property Path="m_shadowed" Value="True" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://editor/skydome/skydome.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TestFLoor">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Static Mesh Component" />
+          <Property Path="m_submeshesHidden" Value="1" />
+          <Property Path="m_submeshesHidden/0" Value="False" />
+          <Property Path="m_materialOverrides" Value="1" />
+          <Property Path="m_materialOverrides/0" Value="" />
+          <Property Path="m_mesh" Value="data://editor/floor/floor.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://editor/floor/floor.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="WorldSettings">
+      <Components>
+        <Type TypeID="EE::ProvenanceWorldSettingsComponent">
+          <Property Path="m_name" Value="Provenance World Settings Component" />
+          <Property Path="m_seed" Value="8675309" />
+          <Property Path="m_graniteMaterial" Value="data://provenance/materials/granite/granite.material" />
+          <Property Path="m_soilMaterial" Value="data://provenance/materials/soil/soil.material" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/materials/granite/granite.material" />
+        <Resource ID="data://provenance/materials/soil/soil.material" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_healing_bush">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,25,-2.719999976,33.520000000,0.698928894,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/healing_bush.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/healing_bush.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_stamina_bush">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,-35,4.180000024,37.320000000,0.547042116,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/stamina_bush.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/stamina_bush.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_chestnut">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,15,-1.029999976,36.010000000,0.432806961,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/chestnut.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/chestnut.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_bell">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,-20,-0.199999976,35.350000000,0.425703493,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/bell.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/bell.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_ivory">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,35,3.370000024,35.920000000,0.318030450,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/ivory.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/ivory.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_ochre">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,-10,1.280000024,37.260000000,0.416024091,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/ochre.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/ochre.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_cyan_pair">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,25,-1.649999976,37.030000000,0.315806594,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/cyan_pair.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/cyan_pair.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="NatureTrial_violet_lantern">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Nature Trial Visual" />
+          <Property Path="m_transform" Value="0,0,-25,2.930000024,37.210000000,0.326829394,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/naturetrial/v001/violet_lantern.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/naturetrial/v001/violet_lantern.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="ToolPickup_GuildHammer">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Guild hammer pickup" />
+          <Property Path="m_transform" Value="0,0,0,1.03,35.4,0.514029303,1" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/tools/hammer/v001/guild_hammer.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/tools/hammer/v001/guild_hammer.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_east_birch_overstory_002">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_east_birch_overstory_002.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_east_birch_overstory_002.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_east_birch_regeneration_009">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_east_birch_regeneration_009.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_east_birch_regeneration_009.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_northeast_mixed_overstory_004">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_northeast_mixed_regeneration_003">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_northwest_spruce_overstory_004">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_northwest_spruce_regeneration_008">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_south_birch_overstory_001">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_south_birch_overstory_001.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_south_birch_overstory_001.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_south_birch_regeneration_005">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_south_birch_regeneration_005.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_south_birch_regeneration_005.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_southeast_spruce_overstory_002">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_southeast_spruce_regeneration_005">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_southwest_mixed_overstory_004">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_southwest_mixed_regeneration_006">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_west_birch_margin_overstory_002">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TreeTrial_tree_west_birch_margin_regeneration_010">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Grounded v002 Tree Visual" />
+          <Property Path="m_viewLayers" Value="ShadowMap|ForwardShading" />
+          <Property Path="m_mesh" Value="data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010.mesh" />
+      </ReferencedResources>
+    </Entity>
+  </Entities>
+</CustomData>

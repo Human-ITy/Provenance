@@ -1,0 +1,60 @@
+Movement diagnosis seed=8675309 dimensions=4.20,2.40 crest=1.393005 radius=0.230 step=0.220 normalGate=0.500 dt=1/60
+LEGACY-START ground=0.196598 feetZ=0.003000 liveSoilOverlap=1
+LEGACY feet=(2.100000,-0.093333,0.299909) ground=0.276010 Ygate=0 aboveGround=1; LIVE-same-start feet=(2.100000,-0.600000,0.003000)
+  witness feet=(2.100000,-0.093333,0.299909) nextRock=1 nextSoil=0 leadSurfaceZ=0.425048 normalZ=0.951172 tread=0.425048 grounded=1
+  localTreadRay hit=1 z=0.425048 normalZ=0.955568 sampledClearLift=0.034 (not a slope permission)
+LEGACY-WITH-ROCK-STEPS feet=(2.100000,0.600000,0.713765) originalAssertion=1
+GROUND u=0.25 startZ=0.176570 end=(1.026906,3.653333,0.414619) grounded=1 embedded=0
+  witness feet=(1.026906,3.653333,0.414619) nextRock=0 nextSoil=1 leadSurfaceZ=-999.000000 normalZ=-999.000000 tread=0.504278 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.010 (not a slope permission)
+GROUND u=0.50 startZ=0.197706 end=(2.100000,3.666667,0.314922) grounded=1 embedded=0
+  witness feet=(2.100000,3.666667,0.314922) nextRock=0 nextSoil=1 leadSurfaceZ=-999.000000 normalZ=-999.000000 tread=0.407657 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.008 (not a slope permission)
+GROUND u=0.75 startZ=0.191771 end=(3.150000,3.666667,0.397355) grounded=1 embedded=0
+  witness feet=(3.150000,3.666667,0.397355) nextRock=0 nextSoil=1 leadSurfaceZ=-999.000000 normalZ=-999.000000 tread=0.486998 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.009 (not a slope permission)
+GROUND-SIDE side=0 start=(-0.600000,1.440000,0.198683) end=(0.493333,1.440000,0.302334) grounded=1 embedded=0
+  witness feet=(0.493333,1.440000,0.302334) nextRock=1 nextSoil=0 leadSurfaceZ=0.597010 normalZ=0.254530 tread=0.294376 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.100 (not a slope permission)
+GROUND-SIDE side=1 start=(4.800000,1.440000,0.210988) end=(3.680000,1.440000,0.343513) grounded=1 embedded=0
+  witness feet=(3.680000,1.440000,0.343513) nextRock=1 nextSoil=0 leadSurfaceZ=0.590989 normalZ=0.452366 tread=0.325950 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.068 (not a slope permission)
+GROUND-SIDE side=2 start=(1.050000,3.000000,0.197996) end=(1.050000,2.120000,0.392988) grounded=1 embedded=0
+  witness feet=(1.050000,2.120000,0.392988) nextRock=1 nextSoil=0 leadSurfaceZ=0.675364 normalZ=0.270380 tread=0.272316 grounded=1
+  localTreadRay hit=0 z=-999.000000 normalZ=-999.000000 sampledClearLift=0.077 (not a slope permission)
+ROUTE fresh/01 start=(1.050,0.840,0.861) end=(3.157,0.840,0.683) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=1 rise=0.0172 fall=0.0317 probes=24 worstMs=<timing> CLEAR
+ROUTE fresh/02 start=(3.150,0.840,0.688) end=(1.043,0.840,0.865) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=1 rise=0.0317 fall=0.0153 probes=23 worstMs=<timing> CLEAR
+ROUTE fresh/03 start=(1.050,1.200,1.318) end=(3.157,1.200,0.942) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=0 rise=0.0189 fall=0.0241 probes=21 worstMs=<timing> CLEAR
+ROUTE fresh/04 start=(3.150,1.200,0.939) end=(1.043,1.200,1.322) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=3 rise=0.0262 fall=0.0197 probes=24 worstMs=<timing> CLEAR
+ROUTE fresh/05 start=(1.050,1.560,1.376) end=(3.157,1.560,0.888) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=13 rise=0.0217 fall=0.0354 probes=19 worstMs=<timing> CLEAR
+ROUTE fresh/06 start=(3.150,1.560,0.886) end=(1.043,1.560,1.372) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=4 rise=0.0415 fall=0.0219 probes=24 worstMs=<timing> CLEAR
+ROUTE fresh/07 start=(1.260,0.600,0.837) end=(1.260,1.800,1.247) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=1 rise=0.0388 fall=0.0175 probes=24 worstMs=<timing> CLEAR
+ROUTE fresh/08 start=(1.260,1.800,1.246) end=(1.260,0.600,0.836) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=10 rise=0.0192 fall=0.0317 probes=20 worstMs=<timing> CLEAR
+ROUTE fresh/09 start=(2.100,0.600,0.711) end=(2.100,1.800,0.637) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=0 rise=0.0206 fall=0.0120 probes=21 worstMs=<timing> CLEAR
+ROUTE fresh/10 start=(2.100,1.800,0.636) end=(2.100,0.600,0.711) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=0 rise=0.0148 fall=0.0208 probes=22 worstMs=<timing> CLEAR
+ROUTE fresh/11 start=(2.940,0.600,0.753) end=(2.940,1.800,0.665) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=5 rise=0.0169 fall=0.0284 probes=19 worstMs=<timing> CLEAR
+ROUTE fresh/12 start=(2.940,1.800,0.501) end=(2.940,0.600,0.753) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=1 rise=0.0526 fall=0.0175 probes=24 worstMs=<timing> CLEAR
+ROUTE fresh/13 start=(1.260,0.720,0.907) end=(2.950,1.686,0.700) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=14 rise=0.0105 fall=0.0208 probes=32 worstMs=<timing> CLEAR
+ROUTE fresh/14 start=(1.260,1.680,1.319) end=(2.950,0.714,0.777) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=0 rise=0.0193 fall=0.0252 probes=35 worstMs=<timing> CLEAR
+ROUTE fresh/15 start=(2.940,1.680,0.688) end=(1.366,0.714,0.929) requested=1.935 progress=1.846 longestCatch=0 embedded=0 air=10 rise=0.0250 fall=0.0109 probes=36 worstMs=<timing> CLEAR
+ROUTE fresh/16 start=(2.940,0.720,0.775) end=(1.250,1.686,1.321) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=7 rise=0.0242 fall=0.0175 probes=41 worstMs=<timing> CLEAR
+EDGE airborneDuringTravel=14 maxFrameDrop=0.030625 settled=(2.100000,-4.400000,-0.117000) grounded=1 embedded=0
+EDITED chips=4 rockRemovedM3=0.000040423 scoopM3=0.001537309 committed=1 (static collision; loose debris simulation excluded)
+ROUTE edited/01 start=(1.050,0.840,0.861) end=(3.157,0.840,0.683) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=1 rise=0.0172 fall=0.0317 probes=24 worstMs=<timing> CLEAR
+ROUTE edited/02 start=(3.150,0.840,0.688) end=(1.043,0.840,0.865) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=1 rise=0.0317 fall=0.0153 probes=23 worstMs=<timing> CLEAR
+ROUTE edited/03 start=(1.050,1.200,1.318) end=(3.157,1.200,0.942) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=0 rise=0.0189 fall=0.0241 probes=21 worstMs=<timing> CLEAR
+ROUTE edited/04 start=(3.150,1.200,0.939) end=(1.043,1.200,1.322) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=3 rise=0.0262 fall=0.0197 probes=24 worstMs=<timing> CLEAR
+ROUTE edited/05 start=(1.050,1.560,1.376) end=(3.157,1.560,0.888) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=13 rise=0.0217 fall=0.0354 probes=19 worstMs=<timing> CLEAR
+ROUTE edited/06 start=(3.150,1.560,0.886) end=(1.043,1.560,1.372) requested=2.100 progress=2.107 longestCatch=0 embedded=0 air=4 rise=0.0415 fall=0.0219 probes=24 worstMs=<timing> CLEAR
+ROUTE edited/07 start=(1.260,0.600,0.837) end=(1.260,1.800,1.247) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=1 rise=0.0388 fall=0.0175 probes=24 worstMs=<timing> CLEAR
+ROUTE edited/08 start=(1.260,1.800,1.246) end=(1.260,0.600,0.836) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=10 rise=0.0192 fall=0.0317 probes=20 worstMs=<timing> CLEAR
+ROUTE edited/09 start=(2.100,0.600,0.711) end=(2.100,1.800,0.637) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=0 rise=0.0206 fall=0.0120 probes=21 worstMs=<timing> CLEAR
+ROUTE edited/10 start=(2.100,1.800,0.636) end=(2.100,0.600,0.711) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=0 rise=0.0148 fall=0.0208 probes=22 worstMs=<timing> CLEAR
+ROUTE edited/11 start=(2.940,0.600,0.753) end=(2.940,1.800,0.665) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=5 rise=0.0169 fall=0.0284 probes=19 worstMs=<timing> CLEAR
+ROUTE edited/12 start=(2.940,1.800,0.501) end=(2.940,0.600,0.753) requested=1.200 progress=1.200 longestCatch=0 embedded=0 air=1 rise=0.0526 fall=0.0175 probes=24 worstMs=<timing> CLEAR
+ROUTE edited/13 start=(1.260,0.720,0.907) end=(2.950,1.686,0.700) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=14 rise=0.0105 fall=0.0208 probes=32 worstMs=<timing> CLEAR
+ROUTE edited/14 start=(1.260,1.680,1.319) end=(2.950,0.714,0.777) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=0 rise=0.0193 fall=0.0252 probes=35 worstMs=<timing> CLEAR
+ROUTE edited/15 start=(2.940,1.680,0.688) end=(1.366,0.714,0.929) requested=1.935 progress=1.846 longestCatch=0 embedded=0 air=10 rise=0.0250 fall=0.0109 probes=36 worstMs=<timing> CLEAR
+ROUTE edited/16 start=(2.940,0.720,0.775) end=(1.250,1.686,1.321) requested=1.935 progress=1.947 longestCatch=0 embedded=0 air=7 rise=0.0242 fall=0.0175 probes=41 worstMs=<timing> CLEAR
+DUG-APPROACH feet=(2.100000,1.666667,0.685212) grounded=1 embedded=0
+DIAGNOSTIC routes=32 flagged=0 safetyFlags=0 trajectoryFingerprint=4be88ffdb1f73f25

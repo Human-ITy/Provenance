@@ -5,6 +5,7 @@
 #include "Game/Player/PlayerInputState.h"
 #include "Game/Player/PlayerGameState.h"
 #include "Game/Damage/Components/Component_Damage.h"
+#include "Game/Provenance/Systems/WorldSystem_Provenance.h"
 #include "Engine/Animation/Graph/Animation_RuntimeGraph_Controller.h"
 #include "Engine/Physics/Systems/WorldSystem_Physics.h"
 #include "Engine/Input/Components/Component_GameInput.h"
@@ -220,6 +221,49 @@ namespace EE
 
         // Update camera position relative to new character position
         m_actionContext.m_pCamera->FinalizeCamera();
+
+        //-------------------------------------------------------------------------
+        // P3C.11A-1 playable Granite tool-strike lab
+        //
+        // Mouse/keyboard input and the camera ray are player-side concerns.
+        // The world system performs only an exact triangle hit on the lab
+        // target, then delegates the structural decision to the engine-free
+        // GraniteToolStrike contract. A miss is not consumed.
+        //-------------------------------------------------------------------------
+
+#if EE_DEVELOPMENT_TOOLS
+        if ( auto pProvenanceWorldSystem =
+                 ctx.GetWorldSystem<ProvenanceWorldSystem>() )
+        {
+            if ( m_actionContext.m_pInput->m_graniteToolStrikeReset.WasPressed() )
+            {
+                pProvenanceWorldSystem->ResetGraniteToolStrikeLab
+                (
+                    ctx,
+                    false
+                );
+            }
+
+            if ( m_actionContext.m_pInput->m_graniteToolStrikeNextSeed.WasPressed() )
+            {
+                pProvenanceWorldSystem->ResetGraniteToolStrikeLab
+                (
+                    ctx,
+                    true
+                );
+            }
+
+            if ( m_actionContext.m_pInput->m_graniteToolStrike.WasPressed() )
+            {
+                pProvenanceWorldSystem->TryGraniteToolStrike
+                (
+                    ctx,
+                    m_actionContext.m_pCamera->GetCameraPosition().ToFloat3(),
+                    m_actionContext.m_pCamera->GetCameraRelativeForwardVector().ToFloat3()
+                );
+            }
+        }
+#endif
     }
 
     void PlayerSystem::UpdateGamePostPhysics( EntityWorldUpdateContext const& ctx )

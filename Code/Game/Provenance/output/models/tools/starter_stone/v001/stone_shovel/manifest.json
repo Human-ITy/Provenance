@@ -1,0 +1,50 @@
+{
+  "id": "stone_shovel",
+  "units": "metres",
+  "blender_and_engine_up": "Z",
+  "gltf_up": "Y",
+  "bounds_z_up": [
+    [
+      -0.13699999451637268,
+      -0.04951104521751404,
+      0.0
+    ],
+    [
+      0.13699999451637268,
+      0.0348997637629509,
+      1.1920018196105957
+    ]
+  ],
+  "anchors_z_up": {
+    "grip": [
+      0,
+      0,
+      1.165
+    ],
+    "support_hand": [
+      0,
+      0,
+      0.65
+    ],
+    "primary_strike": [
+      0,
+      0,
+      0
+    ]
+  },
+  "visual_lods": [
+    "stone_shovel_lod0.glb",
+    "stone_shovel_lod1.glb"
+  ],
+  "triangles": [
+    4860,
+    2523
+  ],
+  "materials": [
+    "stone",
+    "wood",
+    "fiber",
+    "leather"
+  ],
+  "interpretation": "Reference-led silhouette and bindings. Hidden construction inferred; shovel blade interpreted as stone per user designation, with timber tongue and hide attachment."
+}

@@ -1,0 +1,32 @@
+{
+  "pass": true,
+  "native_binary_hashes_verified": 42,
+  "native_descriptors_verified": 55,
+  "existing_entities_preserved": 26,
+  "added_pickups": 3,
+  "native_resource_compiles": 56,
+  "head_alignment": [
+    {
+      "id": "stone_axe",
+      "head_joint": [
+        -0.03987508609441637,
+        0,
+        0.735
+      ],
+      "cross_projection_error_m": 0
+    },
+    {
+      "id": "stone_pickaxe",
+      "head_joint": [
+        -0.047495919126136474,
+        0,
+        0.891
+      ],
+      "cross_projection_error_m": 0
+    }
+  ],
+  "runtime_verified": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\starter_tools_v001\\staged\\Esoterica.Game.Runtime.dll",
+  "corrected_runtime_installed": false,
+  "runtime_sha256": "2a7909dc8b7d25c9aa14f4f4e2f8ea517d9d6c125b687f676c554f2087ad2598",
+  "interactive_editor_pickup_test": "not performed"
+}

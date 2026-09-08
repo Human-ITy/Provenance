@@ -1,0 +1,35 @@
+Observed maintained integration suite, 2026-09-07.
+First run optimized, second Debug. Wall-clock values normalized.
+No live interactive certification is implied.
+
+GraniteLabMovementTest.cpp
+Slow blocked frame probes 8
+Real approach feet 2.100 0.600 0.714
+Fresh exterior slide dy 2.354 avg probes 12.3 worst 20 at 4 feet 0.512 1.571 0.318 stalled 0 worst <timing> ms
+Fresh-rock slow frame probes 13 time <timing> ms
+Rear shoulder u 0.22 feet 0.924 2.150 0.331 crossed 1
+Rear shoulder u 0.38 feet 1.596 2.150 0.325 crossed 1
+Rear shoulder u 0.58 feet 2.436 -0.250 0.257 crossed 1
+Rear shoulder u 0.76 feet 3.192 2.363 0.345 crossed 0
+Rear shoulder u 0.88 feet 3.637 -0.202 0.256 crossed 1
+Steep exterior 1 feet 3.680 1.440 0.344
+Steep exterior 2 feet 1.050 2.173 0.300
+Dug-tunnel slow frame chips 16 probes 9 time <timing> ms
+Elevated cavity-lip slide dx 1.828 feet 2.991 0.571 0.731 worst probes 39 stalled 0 worst <timing> ms
+Granite lab movement: 38 checks, 0 failures
+GraniteLabMovementTest.cpp
+Slow blocked frame probes 8
+Real approach feet 2.100 0.600 0.714
+Fresh exterior slide dy 2.354 avg probes 12.3 worst 20 at 4 feet 0.512 1.571 0.318 stalled 0 worst <timing> ms
+Fresh-rock slow frame probes 13 time <timing> ms
+Rear shoulder u 0.22 feet 0.924 2.150 0.331 crossed 1
+Rear shoulder u 0.38 feet 1.596 2.150 0.325 crossed 1
+Rear shoulder u 0.58 feet 2.436 -0.250 0.257 crossed 1
+Rear shoulder u 0.76 feet 3.192 2.363 0.345 crossed 0
+Rear shoulder u 0.88 feet 3.637 -0.202 0.256 crossed 1
+Steep exterior 1 feet 3.680 1.440 0.344
+Steep exterior 2 feet 1.050 2.173 0.300
+Dug-tunnel slow frame chips 16 probes 9 time <timing> ms
+Elevated cavity-lip slide dx 1.828 feet 2.991 0.571 0.731 worst probes 39 stalled 0 worst <timing> ms
+Granite lab movement: 38 checks, 0 failures
+

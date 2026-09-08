@@ -1,0 +1,940 @@
+{
+  "units": "meters",
+  "bushes": [
+    {
+      "asset_id": "healing_red_bush",
+      "effect_role": "healing",
+      "root_height_m": 0.8,
+      "berries": [
+        {
+          "id": "healing_red_fruit_001",
+          "node_name": "healing_red_fruit_001",
+          "socket_node": "healing_red_fruit_001_Socket",
+          "position_m_blender_z_up": [
+            0.26415085792541504,
+            -0.23696103692054749,
+            0.5795705914497375
+          ],
+          "position_m_gltf_y_up": [
+            0.26415085792541504,
+            0.5795705914497375,
+            0.23696103692054749
+          ],
+          "radius_m": 0.014072679666850817,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_002",
+          "node_name": "healing_red_fruit_002",
+          "socket_node": "healing_red_fruit_002_Socket",
+          "position_m_blender_z_up": [
+            0.29892435669898987,
+            -0.2261335849761963,
+            0.5823693871498108
+          ],
+          "position_m_gltf_y_up": [
+            0.29892435669898987,
+            0.5823693871498108,
+            0.2261335849761963
+          ],
+          "radius_m": 0.014481403594299185,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_003",
+          "node_name": "healing_red_fruit_003",
+          "socket_node": "healing_red_fruit_003_Socket",
+          "position_m_blender_z_up": [
+            -0.24996143579483032,
+            0.01300121285021305,
+            0.48310720920562744
+          ],
+          "position_m_gltf_y_up": [
+            -0.24996143579483032,
+            0.48310720920562744,
+            -0.01300121285021305
+          ],
+          "radius_m": 0.015513364759646356,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_004",
+          "node_name": "healing_red_fruit_004",
+          "socket_node": "healing_red_fruit_004_Socket",
+          "position_m_blender_z_up": [
+            -0.28566762804985046,
+            0.00582502968609333,
+            0.4858083426952362
+          ],
+          "position_m_gltf_y_up": [
+            -0.28566762804985046,
+            0.4858083426952362,
+            -0.00582502968609333
+          ],
+          "radius_m": 0.013734619253667583,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_005",
+          "node_name": "healing_red_fruit_005",
+          "socket_node": "healing_red_fruit_005_Socket",
+          "position_m_blender_z_up": [
+            0.03420054540038109,
+            -0.23630711436271667,
+            0.4728633165359497
+          ],
+          "position_m_gltf_y_up": [
+            0.03420054540038109,
+            0.4728633165359497,
+            0.23630711436271667
+          ],
+          "radius_m": 0.012873985653122316,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_006",
+          "node_name": "healing_red_fruit_006",
+          "socket_node": "healing_red_fruit_006_Socket",
+          "position_m_blender_z_up": [
+            0.06802500784397125,
+            -0.2498103380203247,
+            0.47606560587882996
+          ],
+          "position_m_gltf_y_up": [
+            0.06802500784397125,
+            0.47606560587882996,
+            0.2498103380203247
+          ],
+          "radius_m": 0.013486166021819542,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_007",
+          "node_name": "healing_red_fruit_007",
+          "socket_node": "healing_red_fruit_007_Socket",
+          "position_m_blender_z_up": [
+            -0.2662985324859619,
+            -0.11628448963165283,
+            0.5585601925849915
+          ],
+          "position_m_gltf_y_up": [
+            -0.2662985324859619,
+            0.5585601925849915,
+            0.11628448963165283
+          ],
+          "radius_m": 0.01424511632301325,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_008",
+          "node_name": "healing_red_fruit_008",
+          "socket_node": "healing_red_fruit_008_Socket",
+          "position_m_blender_z_up": [
+            -0.2594177722930908,
+            -0.15204879641532898,
+            0.5631417036056519
+          ],
+          "position_m_gltf_y_up": [
+            -0.2594177722930908,
+            0.5631417036056519,
+            0.15204879641532898
+          ],
+          "radius_m": 0.01289217715593799,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_009",
+          "node_name": "healing_red_fruit_009",
+          "socket_node": "healing_red_fruit_009_Socket",
+          "position_m_blender_z_up": [
+            -0.23214027285575867,
+            -0.1698836386203766,
+            0.47706741094589233
+          ],
+          "position_m_gltf_y_up": [
+            -0.23214027285575867,
+            0.47706741094589233,
+            0.1698836386203766
+          ],
+          "radius_m": 0.015063873067304097,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_010",
+          "node_name": "healing_red_fruit_010",
+          "socket_node": "healing_red_fruit_010_Socket",
+          "position_m_blender_z_up": [
+            -0.2543151378631592,
+            -0.19877493381500244,
+            0.47891345620155334
+          ],
+          "position_m_gltf_y_up": [
+            -0.2543151378631592,
+            0.47891345620155334,
+            0.19877493381500244
+          ],
+          "radius_m": 0.015539168365427621,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_011",
+          "node_name": "healing_red_fruit_011",
+          "socket_node": "healing_red_fruit_011_Socket",
+          "position_m_blender_z_up": [
+            0.19631391763687134,
+            -0.14423145353794098,
+            0.4635295867919922
+          ],
+          "position_m_gltf_y_up": [
+            0.19631391763687134,
+            0.4635295867919922,
+            0.14423145353794098
+          ],
+          "radius_m": 0.01278061100450916,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_012",
+          "node_name": "healing_red_fruit_012",
+          "socket_node": "healing_red_fruit_012_Socket",
+          "position_m_blender_z_up": [
+            0.22752857208251953,
+            -0.12546776235103607,
+            0.46998724341392517
+          ],
+          "position_m_gltf_y_up": [
+            0.22752857208251953,
+            0.46998724341392517,
+            0.12546776235103607
+          ],
+          "radius_m": 0.01280757381791503,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_013",
+          "node_name": "healing_red_fruit_013",
+          "socket_node": "healing_red_fruit_013_Socket",
+          "position_m_blender_z_up": [
+            0.25742098689079285,
+            -0.07669918984174728,
+            0.5035569071769714
+          ],
+          "position_m_gltf_y_up": [
+            0.25742098689079285,
+            0.5035569071769714,
+            0.07669918984174728
+          ],
+          "radius_m": 0.01295165067608742,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_014",
+          "node_name": "healing_red_fruit_014",
+          "socket_node": "healing_red_fruit_014_Socket",
+          "position_m_blender_z_up": [
+            0.29320386052131653,
+            -0.08348266780376434,
+            0.5050332546234131
+          ],
+          "position_m_gltf_y_up": [
+            0.29320386052131653,
+            0.5050332546234131,
+            0.08348266780376434
+          ],
+          "radius_m": 0.014473026436763658,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_015",
+          "node_name": "healing_red_fruit_015",
+          "socket_node": "healing_red_fruit_015_Socket",
+          "position_m_blender_z_up": [
+            -0.05561843514442444,
+            0.25639158487319946,
+            0.5310569405555725
+          ],
+          "position_m_gltf_y_up": [
+            -0.05561843514442444,
+            0.5310569405555725,
+            -0.25639158487319946
+          ],
+          "radius_m": 0.015291515283564362,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_016",
+          "node_name": "healing_red_fruit_016",
+          "socket_node": "healing_red_fruit_016_Socket",
+          "position_m_blender_z_up": [
+            -0.06672579795122147,
+            0.2910766899585724,
+            0.5343255996704102
+          ],
+          "position_m_gltf_y_up": [
+            -0.06672579795122147,
+            0.5343255996704102,
+            -0.2910766899585724
+          ],
+          "radius_m": 0.013952096015925081,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_017",
+          "node_name": "healing_red_fruit_017",
+          "socket_node": "healing_red_fruit_017_Socket",
+          "position_m_blender_z_up": [
+            0.23558607697486877,
+            0.0336809903383255,
+            0.3923652172088623
+          ],
+          "position_m_gltf_y_up": [
+            0.23558607697486877,
+            0.3923652172088623,
+            -0.0336809903383255
+          ],
+          "radius_m": 0.0131060841493528,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_018",
+          "node_name": "healing_red_fruit_018",
+          "socket_node": "healing_red_fruit_018_Socket",
+          "position_m_blender_z_up": [
+            0.24600234627723694,
+            0.06857987493276596,
+            0.3964172303676605
+          ],
+          "position_m_gltf_y_up": [
+            0.24600234627723694,
+            0.3964172303676605,
+            -0.06857987493276596
+          ],
+          "radius_m": 0.01338505272493652,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_019",
+          "node_name": "healing_red_fruit_019",
+          "socket_node": "healing_red_fruit_019_Socket",
+          "position_m_blender_z_up": [
+            -0.20042449235916138,
+            -0.2796612083911896,
+            0.5534406304359436
+          ],
+          "position_m_gltf_y_up": [
+            -0.20042449235916138,
+            0.5534406304359436,
+            0.2796612083911896
+          ],
+          "radius_m": 0.012889274697251325,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_020",
+          "node_name": "healing_red_fruit_020",
+          "socket_node": "healing_red_fruit_020_Socket",
+          "position_m_blender_z_up": [
+            -0.1808634102344513,
+            -0.3103824555873871,
+            0.5582846999168396
+          ],
+          "position_m_gltf_y_up": [
+            -0.1808634102344513,
+            0.5582846999168396,
+            0.3103824555873871
+          ],
+          "radius_m": 0.014618850441877239,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_021",
+          "node_name": "healing_red_fruit_021",
+          "socket_node": "healing_red_fruit_021_Socket",
+          "position_m_blender_z_up": [
+            0.024783793836832047,
+            0.3128681778907776,
+            0.5515099167823792
+          ],
+          "position_m_gltf_y_up": [
+            0.024783793836832047,
+            0.5515099167823792,
+            -0.3128681778907776
+          ],
+          "radius_m": 0.015420483430182902,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_022",
+          "node_name": "healing_red_fruit_022",
+          "socket_node": "healing_red_fruit_022_Socket",
+          "position_m_blender_z_up": [
+            -0.007356894202530384,
+            0.32999730110168457,
+            0.5554482340812683
+          ],
+          "position_m_gltf_y_up": [
+            -0.007356894202530384,
+            0.5554482340812683,
+            -0.32999730110168457
+          ],
+          "radius_m": 0.014452156548412283,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_023",
+          "node_name": "healing_red_fruit_023",
+          "socket_node": "healing_red_fruit_023_Socket",
+          "position_m_blender_z_up": [
+            -0.1382456123828888,
+            -0.20047399401664734,
+            0.41728365421295166
+          ],
+          "position_m_gltf_y_up": [
+            -0.1382456123828888,
+            0.41728365421295166,
+            0.20047399401664734
+          ],
+          "radius_m": 0.013449721046669909,
+          "effect_role": "healing"
+        },
+        {
+          "id": "healing_red_fruit_024",
+          "node_name": "healing_red_fruit_024",
+          "socket_node": "healing_red_fruit_024_Socket",
+          "position_m_blender_z_up": [
+            -0.12162463366985321,
+            -0.2328803837299347,
+            0.42235425114631653
+          ],
+          "position_m_gltf_y_up": [
+            -0.12162463366985321,
+            0.42235425114631653,
+            0.2328803837299347
+          ],
+          "radius_m": 0.015509302863358785,
+          "effect_role": "healing"
+        }
+      ],
+      "balance_values": null
+    },
+    {
+      "asset_id": "stamina_blue_bush",
+      "effect_role": "stamina",
+      "root_height_m": 0.57,
+      "berries": [
+        {
+          "id": "stamina_blue_fruit_001",
+          "node_name": "stamina_blue_fruit_001",
+          "socket_node": "stamina_blue_fruit_001_Socket",
+          "position_m_blender_z_up": [
+            0.20367252826690674,
+            0.032623350620269775,
+            0.2478451132774353
+          ],
+          "position_m_gltf_y_up": [
+            0.20367252826690674,
+            0.2478451132774353,
+            -0.032623350620269775
+          ],
+          "radius_m": 0.011272515148671785,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_002",
+          "node_name": "stamina_blue_fruit_002",
+          "socket_node": "stamina_blue_fruit_002_Socket",
+          "position_m_blender_z_up": [
+            0.2094743549823761,
+            0.06712104380130768,
+            0.24921312928199768
+          ],
+          "position_m_gltf_y_up": [
+            0.2094743549823761,
+            0.24921312928199768,
+            -0.06712104380130768
+          ],
+          "radius_m": 0.012346775677705018,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_003",
+          "node_name": "stamina_blue_fruit_003",
+          "socket_node": "stamina_blue_fruit_003_Socket",
+          "position_m_blender_z_up": [
+            0.18998168408870697,
+            0.07835820317268372,
+            0.25058111548423767
+          ],
+          "position_m_gltf_y_up": [
+            0.18998168408870697,
+            0.25058111548423767,
+            -0.07835820317268372
+          ],
+          "radius_m": 0.010649342797977052,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_004",
+          "node_name": "stamina_blue_fruit_004",
+          "socket_node": "stamina_blue_fruit_004_Socket",
+          "position_m_blender_z_up": [
+            0.18660837411880493,
+            -0.12951207160949707,
+            0.33539247512817383
+          ],
+          "position_m_gltf_y_up": [
+            0.18660837411880493,
+            0.33539247512817383,
+            0.12951207160949707
+          ],
+          "radius_m": 0.012082594221953409,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_005",
+          "node_name": "stamina_blue_fruit_005",
+          "socket_node": "stamina_blue_fruit_005_Socket",
+          "position_m_blender_z_up": [
+            0.21614541113376617,
+            -0.1107686460018158,
+            0.3375505805015564
+          ],
+          "position_m_gltf_y_up": [
+            0.21614541113376617,
+            0.3375505805015564,
+            0.1107686460018158
+          ],
+          "radius_m": 0.01066554381441553,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_006",
+          "node_name": "stamina_blue_fruit_006",
+          "socket_node": "stamina_blue_fruit_006_Socket",
+          "position_m_blender_z_up": [
+            0.21147429943084717,
+            -0.08875913172960281,
+            0.3397086560726166
+          ],
+          "position_m_gltf_y_up": [
+            0.21147429943084717,
+            0.3397086560726166,
+            0.08875913172960281
+          ],
+          "radius_m": 0.012072096829550604,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_007",
+          "node_name": "stamina_blue_fruit_007",
+          "socket_node": "stamina_blue_fruit_007_Socket",
+          "position_m_blender_z_up": [
+            0.06703466176986694,
+            0.26626667380332947,
+            0.4087889790534973
+          ],
+          "position_m_gltf_y_up": [
+            0.06703466176986694,
+            0.4087889790534973,
+            -0.26626667380332947
+          ],
+          "radius_m": 0.010611742015737584,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_008",
+          "node_name": "stamina_blue_fruit_008",
+          "socket_node": "stamina_blue_fruit_008_Socket",
+          "position_m_blender_z_up": [
+            0.03950882703065872,
+            0.2878555953502655,
+            0.408263236284256
+          ],
+          "position_m_gltf_y_up": [
+            0.03950882703065872,
+            0.408263236284256,
+            -0.2878555953502655
+          ],
+          "radius_m": 0.012692037863149154,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_009",
+          "node_name": "stamina_blue_fruit_009",
+          "socket_node": "stamina_blue_fruit_009_Socket",
+          "position_m_blender_z_up": [
+            0.020319819450378418,
+            0.27610740065574646,
+            0.40773749351501465
+          ],
+          "position_m_gltf_y_up": [
+            0.020319819450378418,
+            0.40773749351501465,
+            -0.27610740065574646
+          ],
+          "radius_m": 0.01090946520018854,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_010",
+          "node_name": "stamina_blue_fruit_010",
+          "socket_node": "stamina_blue_fruit_010_Socket",
+          "position_m_blender_z_up": [
+            0.03026397153735161,
+            0.19839796423912048,
+            0.2824150621891022
+          ],
+          "position_m_gltf_y_up": [
+            0.03026397153735161,
+            0.2824150621891022,
+            -0.19839796423912048
+          ],
+          "radius_m": 0.01092831028424681,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_011",
+          "node_name": "stamina_blue_fruit_011",
+          "socket_node": "stamina_blue_fruit_011_Socket",
+          "position_m_blender_z_up": [
+            -0.0005203969776630402,
+            0.21501344442367554,
+            0.28445395827293396
+          ],
+          "position_m_gltf_y_up": [
+            -0.0005203969776630402,
+            0.28445395827293396,
+            -0.21501344442367554
+          ],
+          "radius_m": 0.011154392630818405,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_012",
+          "node_name": "stamina_blue_fruit_012",
+          "socket_node": "stamina_blue_fruit_012_Socket",
+          "position_m_blender_z_up": [
+            -0.017442652955651283,
+            0.20018526911735535,
+            0.28649285435676575
+          ],
+          "position_m_gltf_y_up": [
+            -0.017442652955651283,
+            0.28649285435676575,
+            -0.20018526911735535
+          ],
+          "radius_m": 0.011056802344399189,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_013",
+          "node_name": "stamina_blue_fruit_013",
+          "socket_node": "stamina_blue_fruit_013_Socket",
+          "position_m_blender_z_up": [
+            0.132778137922287,
+            -0.2913091480731964,
+            0.4431353509426117
+          ],
+          "position_m_gltf_y_up": [
+            0.132778137922287,
+            0.4431353509426117,
+            0.2913091480731964
+          ],
+          "radius_m": 0.010902324737736453,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_014",
+          "node_name": "stamina_blue_fruit_014",
+          "socket_node": "stamina_blue_fruit_014_Socket",
+          "position_m_blender_z_up": [
+            0.16620974242687225,
+            -0.28100961446762085,
+            0.4454752206802368
+          ],
+          "position_m_gltf_y_up": [
+            0.16620974242687225,
+            0.4454752206802368,
+            0.28100961446762085
+          ],
+          "radius_m": 0.012265510789363297,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_015",
+          "node_name": "stamina_blue_fruit_015",
+          "socket_node": "stamina_blue_fruit_015_Socket",
+          "position_m_blender_z_up": [
+            0.16750220954418182,
+            -0.25854700803756714,
+            0.44781509041786194
+          ],
+          "position_m_gltf_y_up": [
+            0.16750220954418182,
+            0.44781509041786194,
+            0.25854700803756714
+          ],
+          "radius_m": 0.011853508771656519,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_016",
+          "node_name": "stamina_blue_fruit_016",
+          "socket_node": "stamina_blue_fruit_016_Socket",
+          "position_m_blender_z_up": [
+            0.12484219670295715,
+            0.16746488213539124,
+            0.24780911207199097
+          ],
+          "position_m_gltf_y_up": [
+            0.12484219670295715,
+            0.24780911207199097,
+            -0.16746488213539124
+          ],
+          "radius_m": 0.011100297243027996,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_017",
+          "node_name": "stamina_blue_fruit_017",
+          "socket_node": "stamina_blue_fruit_017_Socket",
+          "position_m_blender_z_up": [
+            0.10195329785346985,
+            0.1939195841550827,
+            0.25004324316978455
+          ],
+          "position_m_gltf_y_up": [
+            0.10195329785346985,
+            0.25004324316978455,
+            -0.1939195841550827
+          ],
+          "radius_m": 0.010451607122839586,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_018",
+          "node_name": "stamina_blue_fruit_018",
+          "socket_node": "stamina_blue_fruit_018_Socket",
+          "position_m_blender_z_up": [
+            0.08087166398763657,
+            0.18605811893939972,
+            0.2522774040699005
+          ],
+          "position_m_gltf_y_up": [
+            0.08087166398763657,
+            0.2522774040699005,
+            -0.18605811893939972
+          ],
+          "radius_m": 0.01187897155051259,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_019",
+          "node_name": "stamina_blue_fruit_019",
+          "socket_node": "stamina_blue_fruit_019_Socket",
+          "position_m_blender_z_up": [
+            -0.04714234173297882,
+            0.24858906865119934,
+            0.3756445646286011
+          ],
+          "position_m_gltf_y_up": [
+            -0.04714234173297882,
+            0.3756445646286011,
+            -0.24858906865119934
+          ],
+          "radius_m": 0.01133062196522084,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_020",
+          "node_name": "stamina_blue_fruit_020",
+          "socket_node": "stamina_blue_fruit_020_Socket",
+          "position_m_blender_z_up": [
+            -0.058182548731565475,
+            0.28178346157073975,
+            0.3763637840747833
+          ],
+          "position_m_gltf_y_up": [
+            -0.058182548731565475,
+            0.3763637840747833,
+            -0.28178346157073975
+          ],
+          "radius_m": 0.012395039034438029,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_021",
+          "node_name": "stamina_blue_fruit_021",
+          "socket_node": "stamina_blue_fruit_021_Socket",
+          "position_m_blender_z_up": [
+            -0.08066831529140472,
+            0.28257620334625244,
+            0.3770830035209656
+          ],
+          "position_m_gltf_y_up": [
+            -0.08066831529140472,
+            0.3770830035209656,
+            -0.28257620334625244
+          ],
+          "radius_m": 0.012808012050841458,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_022",
+          "node_name": "stamina_blue_fruit_022",
+          "socket_node": "stamina_blue_fruit_022_Socket",
+          "position_m_blender_z_up": [
+            0.2342795729637146,
+            -0.058531150221824646,
+            0.32900139689445496
+          ],
+          "position_m_gltf_y_up": [
+            0.2342795729637146,
+            0.32900139689445496,
+            0.058531150221824646
+          ],
+          "radius_m": 0.010595424700799463,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_023",
+          "node_name": "stamina_blue_fruit_023",
+          "socket_node": "stamina_blue_fruit_023_Socket",
+          "position_m_blender_z_up": [
+            0.26912930607795715,
+            -0.05548989772796631,
+            0.33097055554389954
+          ],
+          "position_m_gltf_y_up": [
+            0.26912930607795715,
+            0.33097055554389954,
+            0.05548989772796631
+          ],
+          "radius_m": 0.011317621260230868,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_024",
+          "node_name": "stamina_blue_fruit_024",
+          "socket_node": "stamina_blue_fruit_024_Socket",
+          "position_m_blender_z_up": [
+            0.275115042924881,
+            -0.033800989389419556,
+            0.3329397141933441
+          ],
+          "position_m_gltf_y_up": [
+            0.275115042924881,
+            0.3329397141933441,
+            0.033800989389419556
+          ],
+          "radius_m": 0.010689307129054358,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_025",
+          "node_name": "stamina_blue_fruit_025",
+          "socket_node": "stamina_blue_fruit_025_Socket",
+          "position_m_blender_z_up": [
+            -0.17391620576381683,
+            0.2539435625076294,
+            0.4459996223449707
+          ],
+          "position_m_gltf_y_up": [
+            -0.17391620576381683,
+            0.4459996223449707,
+            -0.2539435625076294
+          ],
+          "radius_m": 0.010762378704041538,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_026",
+          "node_name": "stamina_blue_fruit_026",
+          "socket_node": "stamina_blue_fruit_026_Socket",
+          "position_m_blender_z_up": [
+            -0.20444363355636597,
+            0.23686058819293976,
+            0.4473477303981781
+          ],
+          "position_m_gltf_y_up": [
+            -0.20444363355636597,
+            0.4473477303981781,
+            -0.23686058819293976
+          ],
+          "radius_m": 0.011750759556182079,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_027",
+          "node_name": "stamina_blue_fruit_027",
+          "socket_node": "stamina_blue_fruit_027_Socket",
+          "position_m_blender_z_up": [
+            -0.20099562406539917,
+            0.21462661027908325,
+            0.4486958682537079
+          ],
+          "position_m_gltf_y_up": [
+            -0.20099562406539917,
+            0.4486958682537079,
+            -0.21462661027908325
+          ],
+          "radius_m": 0.010740934266228309,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_028",
+          "node_name": "stamina_blue_fruit_028",
+          "socket_node": "stamina_blue_fruit_028_Socket",
+          "position_m_blender_z_up": [
+            -0.20242972671985626,
+            0.062312886118888855,
+            0.2855425179004669
+          ],
+          "position_m_gltf_y_up": [
+            -0.20242972671985626,
+            0.2855425179004669,
+            -0.062312886118888855
+          ],
+          "radius_m": 0.010855900361701242,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_029",
+          "node_name": "stamina_blue_fruit_029",
+          "socket_node": "stamina_blue_fruit_029_Socket",
+          "position_m_blender_z_up": [
+            -0.2187945544719696,
+            0.031394533812999725,
+            0.2879873812198639
+          ],
+          "position_m_gltf_y_up": [
+            -0.2187945544719696,
+            0.2879873812198639,
+            -0.031394533812999725
+          ],
+          "radius_m": 0.010554960555930469,
+          "effect_role": "stamina"
+        },
+        {
+          "id": "stamina_blue_fruit_030",
+          "node_name": "stamina_blue_fruit_030",
+          "socket_node": "stamina_blue_fruit_030_Socket",
+          "position_m_blender_z_up": [
+            -0.2038293480873108,
+            0.014593318104743958,
+            0.29043224453926086
+          ],
+          "position_m_gltf_y_up": [
+            -0.2038293480873108,
+            0.29043224453926086,
+            -0.014593318104743958
+          ],
+          "radius_m": 0.01198605354856514,
+          "effect_role": "stamina"
+        }
+      ],
+      "balance_values": null
+    }
+  ],
+  "harvest_contract": "Remove or hide only the berry mesh node; preserve its socket, pedicel and bush body. Regrowth reuses the same socket. Effect amounts, timing and inventory behavior are not implemented."
+}

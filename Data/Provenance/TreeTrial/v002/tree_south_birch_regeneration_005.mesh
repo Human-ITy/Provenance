@@ -1,0 +1,18 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/treetrial/v002/tree_south_birch_regeneration_005.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.south_birch.regeneration.005.foliage.001/Birch individual leaf - alpha mask/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.south_birch.regeneration.005.roots.001/Juvenile bark.006/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="tree.south_birch.regeneration.005.wood.001/Juvenile bark.006/1" />
+    <Property ID="m_material" Value="data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_1.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

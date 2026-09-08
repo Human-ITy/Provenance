@@ -1,0 +1,27 @@
+#ifndef PROVENANCE_GRASS_WIND_ESH
+#define PROVENANCE_GRASS_WIND_ESH
+
+// Shared scalar formulas: the headless certificate compiles this same source.
+#ifdef __cplusplus
+#include <cmath>
+namespace ProvenanceGrassWind {
+using std::sin;
+#endif
+
+float GrassWindAlong(float phase, float spatial, float tuft)
+{
+    return .35f + .45f*sin(13.f*phase-spatial) + .20f*sin(29.f*phase+tuft);
+}
+float GrassWindAcross(float phase, float spatial, float tuft)
+{
+    return .18f*sin(19.f*phase-.7f*spatial+tuft);
+}
+float GrassWindWeight(float heightFraction)
+{
+    return heightFraction*heightFraction;
+}
+
+#ifdef __cplusplus
+}
+#endif
+#endif

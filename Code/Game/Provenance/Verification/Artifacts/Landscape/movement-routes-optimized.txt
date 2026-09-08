@@ -1,0 +1,8 @@
+Immutable terrain setup 49.265 ms; excluded from warmed route samples
+outer_idle: n=600 mean=0.000074 p95=0.000100 p99=0.000100 max=0.000200 ms queries=0 end=15.000,0.000,1.607 invalid=0
+outer_walk: n=600 mean=0.000241 p95=0.000400 p99=0.000600 max=0.004100 ms queries=953 end=15.000,6.000,1.570 invalid=0
+outer_sprint: n=600 mean=0.000498 p95=0.000600 p99=0.000800 max=0.000900 ms queries=2300 end=20.000,14.000,1.587 invalid=0
+creek_cross_east: n=360 mean=0.000288 p95=0.000600 p99=0.000900 max=0.001000 ms queries=672 end=-6.808,5.000,1.070 invalid=0
+creek_cross_west: n=360 mean=0.000274 p95=0.000600 p99=0.000800 max=0.000900 ms queries=612 end=-22.596,-10.000,1.044 invalid=0
+lab_apron: n=240 mean=0.023918 p95=0.033700 p99=0.145100 max=0.148600 ms queries=816 end=3.400,31.400,0.284 invalid=0
+Observational CPU routes, not graphics/FPS certification. Setup, rendering, grass wear/uploads and tools excluded.

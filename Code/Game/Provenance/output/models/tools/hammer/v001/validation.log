@@ -1,0 +1,18 @@
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+16:52:23 | INFO: Data are loaded, start creating Blender stuff
+16:52:23 | INFO: Blender create Mesh node Cone.006
+16:52:23 | INFO: Blender create Mesh node Cube
+16:52:23 | INFO: Blender create Mesh node Cone.005
+16:52:23 | INFO: Blender create Mesh node Cube.002
+16:52:23 | INFO: glTF import finished in 0.07s
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+16:52:23 | INFO: Data are loaded, start creating Blender stuff
+16:52:23 | INFO: Blender create Mesh node Cone.012
+16:52:23 | INFO: Blender create Mesh node Cube.010
+16:52:23 | INFO: Blender create Mesh node Cone.011
+16:52:23 | INFO: Blender create Mesh node Cube.011
+16:52:23 | INFO: glTF import finished in 0.04s
+HAMMER_VALIDATION_PASS [('guild_hammer_lod0.glb', 22520), ('guild_hammer_lod1.glb', 12380)]
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

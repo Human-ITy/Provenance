@@ -1,0 +1,20 @@
+<Type TypeID="EE::Render::MaterialResourceDescriptor" Version="0">
+  <Property ID="m_shader" Value="ProvenanceGrassSoilPBR" />
+  <Type ID="m_shaderParameters" TypeID="EE::Render::Shaders::ProvenanceGrassSoilPBRParameters">
+    <Property ID="m_shaderFlags" Value="AlphaTest" />
+    <Property ID="m_albedoTexture" Value="data://provenance/materials/soil/soilalbedo.texture" />
+    <Property ID="m_normalTexture" Value="data://provenance/materials/soil/soilnormal.texture" />
+    <Property ID="m_grassAlbedoTexture" Value="data://provenance/materials/grass/grassalbedo.texture" />
+    <Property ID="m_grassNormalTexture" Value="data://provenance/materials/grass/grassnormal.texture" />
+    <Property ID="m_grassBladeAtlasA" Value="data://provenance/materials/grass/grassbladeatlasa.texture" />
+    <Property ID="m_grassBladeAtlasB" Value="data://provenance/materials/grass/grassbladeatlasb.texture" />
+    <Property ID="m_mudAlbedoTexture" Value="data://provenance/materials/landscape/creekmud.texture" />
+    <Property ID="m_tileScaleMeters" Value="1.0" />
+    <Property ID="m_normalStrength" Value="0.35" />
+    <Property ID="m_grassNormalStrength" Value="0.3" />
+    <Property ID="m_grassTileScaleMeters" Value="1.0" />
+    <Property ID="m_roughness" Value="0.95" />
+    <Property ID="m_coverEnabled" Value="0.0" />
+    <Property ID="m_windTipMeters" Value="0.04" />
+  </Type>
+</Type>

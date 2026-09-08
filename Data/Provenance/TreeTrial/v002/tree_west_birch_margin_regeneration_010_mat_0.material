@@ -1,0 +1,9 @@
+<Type TypeID="EE::Render::MaterialResourceDescriptor" Version="0">
+  <Property ID="m_shader" Value="ComplexSurfacePBR" />
+  <Type ID="m_shaderParameters" TypeID="EE::Render::Shaders::ComplexSurfacePBRParameters">
+    <Property ID="m_shaderFlags" Value="TwoSided|AlphaTest" />
+    <Property ID="m_albedoTexture" Value="data://provenance/treetrial/v002/tree_east_birch_regeneration_009_image_0_albedotexture.texture" />
+    <Property ID="m_pbrTexture" Value="data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_0_pbr.texture" />
+    <Property ID="m_alphaCutoff" Value="0.3499999940395355" />
+  </Type>
+</Type>

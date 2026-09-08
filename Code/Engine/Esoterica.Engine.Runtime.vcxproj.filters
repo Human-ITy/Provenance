@@ -1629,6 +1629,9 @@
     <None Include="Render\Shaders\Materials\ComplexSurfacePBR.esf">
       <Filter>Render\Shaders\Materials</Filter>
     </None>
+    <None Include="Render\Shaders\Materials\ProvenanceGraniteTriplanarPBR.esf">
+      <Filter>Render\Shaders\Materials</Filter>
+    </None>
     <None Include="Render\Shaders\Materials\DefaultPBR.esf">
       <Filter>Render\Shaders\Materials</Filter>
     </None>

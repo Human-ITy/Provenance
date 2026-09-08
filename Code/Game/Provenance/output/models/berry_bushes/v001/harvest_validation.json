@@ -1,0 +1,12 @@
+{
+  "healing_red": {
+    "body_geometry_and_uvs_identical": true,
+    "socket_transforms_preserved": true,
+    "socket_count": 24
+  },
+  "stamina_blue": {
+    "body_geometry_and_uvs_identical": true,
+    "socket_transforms_preserved": true,
+    "socket_count": 30
+  }
+}

@@ -269,7 +269,9 @@ namespace EE
             #if EE_USE_CUSTOM_ALLOCATOR
             rpmalloc_global_statistics_t stats;
             rpmalloc_global_statistics( &stats );
-            return stats.mapped_total + s_totalVirtualMemoryCommitted;
+            // mapped_total is lifetime allocation traffic, not live RAM. It
+            // only grows, including after resources have been released.
+            return stats.mapped + s_totalVirtualMemoryCommitted;
             #else
             return 0;
             #endif

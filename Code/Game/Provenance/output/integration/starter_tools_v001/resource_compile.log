@@ -1,0 +1,543 @@
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:16][Message][Resource][TextureCompiler] Dependency tree creation took: 1.98ms
+[17:17:16][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][TextureCompiler] Compression Time: 213.5ms
+[17:17:17][Message][Resource][TextureCompiler] Compilation took: 278.97ms
+[17:17:17][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_1_albedotexture.texture
+[17:17:17][Message][Resource][TextureCompiler] Total time: 278.97ms
+[17:17:17][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_1_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][TextureCompiler] Dependency tree creation took: 1.29ms
+[17:17:17][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:17][Message][Resource][TextureCompiler] Compilation took: 10.65ms
+[17:17:17][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_0_pbr.texture
+[17:17:17][Message][Resource][TextureCompiler] Total time: 10.65ms
+[17:17:17][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_0_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][TextureCompiler] Dependency tree creation took: 1.82ms
+[17:17:17][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][TextureCompiler] Compression Time: 12.1ms
+[17:17:17][Message][Resource][TextureCompiler] Compilation took: 71.87ms
+[17:17:17][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_0_normaltexture.texture
+[17:17:17][Message][Resource][TextureCompiler] Total time: 71.87ms
+[17:17:17][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_0_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][MaterialCompiler] Dependency tree creation took: 6.01ms
+[17:17:17][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][MaterialCompiler] Compilation took: 10.44ms
+[17:17:17][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_0.material
+[17:17:17][Message][Resource][MaterialCompiler] Total time: 10.44ms
+[17:17:17][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_0.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][TextureCompiler] Dependency tree creation took: 2.21ms
+[17:17:17][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][TextureCompiler] Compression Time: 222.6ms
+[17:17:17][Message][Resource][TextureCompiler] Compilation took: 298.68ms
+[17:17:17][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_3_albedotexture.texture
+[17:17:17][Message][Resource][TextureCompiler] Total time: 298.68ms
+[17:17:17][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_3_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][TextureCompiler] Dependency tree creation took: 1.28ms
+[17:17:17][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:17][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:17][Message][Resource][TextureCompiler] Compilation took: 10.83ms
+[17:17:17][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_1_pbr.texture
+[17:17:17][Message][Resource][TextureCompiler] Total time: 10.83ms
+[17:17:17][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_1_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:17][Message][Resource][TextureCompiler] Dependency tree creation took: 1.85ms
+[17:17:17][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][TextureCompiler] Compression Time: 12.9ms
+[17:17:18][Message][Resource][TextureCompiler] Compilation took: 112.02ms
+[17:17:18][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_2_normaltexture.texture
+[17:17:18][Message][Resource][TextureCompiler] Total time: 112.02ms
+[17:17:18][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_2_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.72ms
+[17:17:18][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][MaterialCompiler] Compilation took: 10.43ms
+[17:17:18][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_1.material
+[17:17:18][Message][Resource][MaterialCompiler] Total time: 10.43ms
+[17:17:18][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_1.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][TextureCompiler] Dependency tree creation took: 1.71ms
+[17:17:18][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][TextureCompiler] Compression Time: 221.0ms
+[17:17:18][Message][Resource][TextureCompiler] Compilation took: 326.82ms
+[17:17:18][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_5_albedotexture.texture
+[17:17:18][Message][Resource][TextureCompiler] Total time: 326.82ms
+[17:17:18][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_5_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][TextureCompiler] Dependency tree creation took: 1.26ms
+[17:17:18][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:18][Message][Resource][TextureCompiler] Compilation took: 10.90ms
+[17:17:18][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_2_pbr.texture
+[17:17:18][Message][Resource][TextureCompiler] Total time: 10.90ms
+[17:17:18][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_2_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][TextureCompiler] Dependency tree creation took: 1.73ms
+[17:17:18][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][TextureCompiler] Compression Time: 11.8ms
+[17:17:18][Message][Resource][TextureCompiler] Compilation took: 117.24ms
+[17:17:18][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_4_normaltexture.texture
+[17:17:18][Message][Resource][TextureCompiler] Total time: 117.24ms
+[17:17:18][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_4_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.71ms
+[17:17:18][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:18][Message][Resource][MaterialCompiler] Compilation took: 9.99ms
+[17:17:18][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_2.material
+[17:17:18][Message][Resource][MaterialCompiler] Total time: 9.99ms
+[17:17:18][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_2.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:18][Message][Resource][TextureCompiler] Dependency tree creation took: 1.80ms
+[17:17:18][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 230.1ms
+[17:17:19][Message][Resource][TextureCompiler] Compilation took: 294.42ms
+[17:17:19][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_7_albedotexture.texture
+[17:17:19][Message][Resource][TextureCompiler] Total time: 294.42ms
+[17:17:19][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_7_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][TextureCompiler] Dependency tree creation took: 1.31ms
+[17:17:19][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:19][Message][Resource][TextureCompiler] Compilation took: 10.93ms
+[17:17:19][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_3_pbr.texture
+[17:17:19][Message][Resource][TextureCompiler] Total time: 10.93ms
+[17:17:19][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_3_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][TextureCompiler] Dependency tree creation took: 1.99ms
+[17:17:19][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 12.2ms
+[17:17:19][Message][Resource][TextureCompiler] Compilation took: 71.99ms
+[17:17:19][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_image_6_normaltexture.texture
+[17:17:19][Message][Resource][TextureCompiler] Total time: 71.99ms
+[17:17:19][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_image_6_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][MaterialCompiler] Dependency tree creation took: 6.21ms
+[17:17:19][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][MaterialCompiler] Compilation took: 10.19ms
+[17:17:19][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel_mat_3.material
+[17:17:19][Message][Resource][MaterialCompiler] Total time: 10.19ms
+[17:17:19][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel_mat_3.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][StaticMeshCompiler] Dependency tree creation took: 5.80ms
+[17:17:19][Message][Resource][StaticMeshCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][StaticMeshCompiler] Compilation took: 16.21ms
+[17:17:19][Message][Resource][StaticMeshCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_shovel.mesh
+[17:17:19][Message][Resource][StaticMeshCompiler] Total time: 16.21ms
+[17:17:19][Message][Resource][StaticMeshCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_shovel.mesh
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][TextureCompiler] Dependency tree creation took: 1.90ms
+[17:17:19][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 226.5ms
+[17:17:19][Message][Resource][TextureCompiler] Compilation took: 294.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_1_albedotexture.texture
+[17:17:19][Message][Resource][TextureCompiler] Total time: 294.00ms
+[17:17:19][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_1_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][TextureCompiler] Dependency tree creation took: 1.70ms
+[17:17:19][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:19][Message][Resource][TextureCompiler] Compilation took: 11.44ms
+[17:17:19][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_0_pbr.texture
+[17:17:19][Message][Resource][TextureCompiler] Total time: 11.44ms
+[17:17:19][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_0_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:19][Message][Resource][TextureCompiler] Dependency tree creation took: 2.37ms
+[17:17:19][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:19][Message][Resource][TextureCompiler] Compression Time: 12.4ms
+[17:17:20][Message][Resource][TextureCompiler] Compilation took: 71.47ms
+[17:17:20][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_0_normaltexture.texture
+[17:17:20][Message][Resource][TextureCompiler] Total time: 71.47ms
+[17:17:20][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_0_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.32ms
+[17:17:20][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:20][Message][Resource][MaterialCompiler] Compilation took: 12.43ms
+[17:17:20][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_0.material
+[17:17:20][Message][Resource][MaterialCompiler] Total time: 12.43ms
+[17:17:20][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_0.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][TextureCompiler] Dependency tree creation took: 1.90ms
+[17:17:20][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:20][Message][Resource][TextureCompiler] Compression Time: 223.6ms
+[17:17:20][Message][Resource][TextureCompiler] Compilation took: 289.90ms
+[17:17:20][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_3_albedotexture.texture
+[17:17:20][Message][Resource][TextureCompiler] Total time: 289.90ms
+[17:17:20][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_3_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][TextureCompiler] Dependency tree creation took: 1.40ms
+[17:17:20][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:20][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:20][Message][Resource][TextureCompiler] Compilation took: 11.59ms
+[17:17:20][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_1_pbr.texture
+[17:17:20][Message][Resource][TextureCompiler] Total time: 11.59ms
+[17:17:20][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_1_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][TextureCompiler] Dependency tree creation took: 1.90ms
+[17:17:20][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:20][Message][Resource][TextureCompiler] Compression Time: 12.2ms
+[17:17:20][Message][Resource][TextureCompiler] Compilation took: 73.51ms
+[17:17:20][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_2_normaltexture.texture
+[17:17:20][Message][Resource][TextureCompiler] Total time: 73.51ms
+[17:17:20][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_2_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][MaterialCompiler] Dependency tree creation took: 6.06ms
+[17:17:20][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:20][Message][Resource][MaterialCompiler] Compilation took: 9.94ms
+[17:17:20][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_1.material
+[17:17:20][Message][Resource][MaterialCompiler] Total time: 9.94ms
+[17:17:20][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_1.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:20][Message][Resource][TextureCompiler] Dependency tree creation took: 1.55ms
+[17:17:20][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 224.5ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 299.13ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_5_albedotexture.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 299.13ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_5_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][TextureCompiler] Dependency tree creation took: 1.34ms
+[17:17:21][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 11.24ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_2_pbr.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 11.24ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_2_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][TextureCompiler] Dependency tree creation took: 1.84ms
+[17:17:21][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 12.2ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 85.35ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_4_normaltexture.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 85.35ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_4_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.20ms
+[17:17:21][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][MaterialCompiler] Compilation took: 9.97ms
+[17:17:21][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_2.material
+[17:17:21][Message][Resource][MaterialCompiler] Total time: 9.97ms
+[17:17:21][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_2.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][TextureCompiler] Dependency tree creation took: 1.50ms
+[17:17:21][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 219.8ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 297.96ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_7_albedotexture.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 297.96ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_7_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][TextureCompiler] Dependency tree creation took: 1.38ms
+[17:17:21][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 12.41ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_3_pbr.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 12.41ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_3_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][TextureCompiler] Dependency tree creation took: 1.74ms
+[17:17:21][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][TextureCompiler] Compression Time: 12.1ms
+[17:17:21][Message][Resource][TextureCompiler] Compilation took: 114.88ms
+[17:17:21][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_6_normaltexture.texture
+[17:17:21][Message][Resource][TextureCompiler] Total time: 114.88ms
+[17:17:21][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_6_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:21][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.95ms
+[17:17:21][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:21][Message][Resource][MaterialCompiler] Compilation took: 9.92ms
+[17:17:21][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_3.material
+[17:17:21][Message][Resource][MaterialCompiler] Total time: 9.92ms
+[17:17:21][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_3.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][TextureCompiler] Dependency tree creation took: 1.79ms
+[17:17:22][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:22][Message][Resource][TextureCompiler] Compression Time: 225.6ms
+[17:17:22][Message][Resource][TextureCompiler] Compilation took: 317.01ms
+[17:17:22][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_9_albedotexture.texture
+[17:17:22][Message][Resource][TextureCompiler] Total time: 317.01ms
+[17:17:22][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_9_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][TextureCompiler] Dependency tree creation took: 1.25ms
+[17:17:22][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:22][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:22][Message][Resource][TextureCompiler] Compilation took: 11.11ms
+[17:17:22][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_4_pbr.texture
+[17:17:22][Message][Resource][TextureCompiler] Total time: 11.11ms
+[17:17:22][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_4_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][TextureCompiler] Dependency tree creation took: 1.76ms
+[17:17:22][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:22][Message][Resource][TextureCompiler] Compression Time: 12.5ms
+[17:17:22][Message][Resource][TextureCompiler] Compilation took: 71.99ms
+[17:17:22][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_image_8_normaltexture.texture
+[17:17:22][Message][Resource][TextureCompiler] Total time: 71.99ms
+[17:17:22][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_image_8_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.82ms
+[17:17:22][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:22][Message][Resource][MaterialCompiler] Compilation took: 9.87ms
+[17:17:22][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe_mat_4.material
+[17:17:22][Message][Resource][MaterialCompiler] Total time: 9.87ms
+[17:17:22][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe_mat_4.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][StaticMeshCompiler] Dependency tree creation took: 6.07ms
+[17:17:22][Message][Resource][StaticMeshCompiler] Up to Date Check took: 0.00ms
+[17:17:22][Message][Resource][StaticMeshCompiler] Compilation took: 17.17ms
+[17:17:22][Message][Resource][StaticMeshCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_axe.mesh
+[17:17:22][Message][Resource][StaticMeshCompiler] Total time: 17.17ms
+[17:17:22][Message][Resource][StaticMeshCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_axe.mesh
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:22][Message][Resource][TextureCompiler] Dependency tree creation took: 1.71ms
+[17:17:22][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 221.5ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 288.07ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_1_albedotexture.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 288.07ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_1_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.22ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 39.81ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0_pbr.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 39.81ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_0_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.80ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 11.5ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 71.88ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_0_normaltexture.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 71.88ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_0_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.63ms
+[17:17:23][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][MaterialCompiler] Compilation took: 11.61ms
+[17:17:23][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0.material
+[17:17:23][Message][Resource][MaterialCompiler] Total time: 11.61ms
+[17:17:23][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_0.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.64ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 222.3ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 296.45ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_3_albedotexture.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 296.45ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_3_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.38ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 11.96ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1_pbr.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 11.96ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_1_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.76ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][TextureCompiler] Compression Time: 12.3ms
+[17:17:23][Message][Resource][TextureCompiler] Compilation took: 86.23ms
+[17:17:23][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_2_normaltexture.texture
+[17:17:23][Message][Resource][TextureCompiler] Total time: 86.23ms
+[17:17:23][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_2_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.79ms
+[17:17:23][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:23][Message][Resource][MaterialCompiler] Compilation took: 10.34ms
+[17:17:23][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1.material
+[17:17:23][Message][Resource][MaterialCompiler] Total time: 10.34ms
+[17:17:23][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_1.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:23][Message][Resource][TextureCompiler] Dependency tree creation took: 1.63ms
+[17:17:23][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][TextureCompiler] Compression Time: 224.7ms
+[17:17:24][Message][Resource][TextureCompiler] Compilation took: 302.68ms
+[17:17:24][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_5_albedotexture.texture
+[17:17:24][Message][Resource][TextureCompiler] Total time: 302.68ms
+[17:17:24][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_5_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:24][Message][Resource][TextureCompiler] Dependency tree creation took: 1.28ms
+[17:17:24][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:24][Message][Resource][TextureCompiler] Compilation took: 12.30ms
+[17:17:24][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2_pbr.texture
+[17:17:24][Message][Resource][TextureCompiler] Total time: 12.30ms
+[17:17:24][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_2_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:24][Message][Resource][TextureCompiler] Dependency tree creation took: 1.75ms
+[17:17:24][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][TextureCompiler] Compression Time: 12.1ms
+[17:17:24][Message][Resource][TextureCompiler] Compilation took: 88.47ms
+[17:17:24][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_4_normaltexture.texture
+[17:17:24][Message][Resource][TextureCompiler] Total time: 88.47ms
+[17:17:24][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_4_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:24][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.23ms
+[17:17:24][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][MaterialCompiler] Compilation took: 9.64ms
+[17:17:24][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2.material
+[17:17:24][Message][Resource][MaterialCompiler] Total time: 9.64ms
+[17:17:24][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_2.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:24][Message][Resource][TextureCompiler] Dependency tree creation took: 1.61ms
+[17:17:24][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][TextureCompiler] Compression Time: 225.4ms
+[17:17:24][Message][Resource][TextureCompiler] Compilation took: 286.88ms
+[17:17:24][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_7_albedotexture.texture
+[17:17:24][Message][Resource][TextureCompiler] Total time: 286.88ms
+[17:17:24][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_7_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:24][Message][Resource][TextureCompiler] Dependency tree creation took: 1.32ms
+[17:17:24][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:24][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[17:17:24][Message][Resource][TextureCompiler] Compilation took: 11.78ms
+[17:17:24][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3_pbr.texture
+[17:17:24][Message][Resource][TextureCompiler] Total time: 11.78ms
+[17:17:24][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_3_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:25][Message][Resource][TextureCompiler] Dependency tree creation took: 2.38ms
+[17:17:25][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[17:17:25][Message][Resource][TextureCompiler] Compression Time: 13.2ms
+[17:17:25][Message][Resource][TextureCompiler] Compilation took: 100.68ms
+[17:17:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_image_6_normaltexture.texture
+[17:17:25][Message][Resource][TextureCompiler] Total time: 100.68ms
+[17:17:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_image_6_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:25][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.53ms
+[17:17:25][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[17:17:25][Message][Resource][MaterialCompiler] Compilation took: 11.26ms
+[17:17:25][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3.material
+[17:17:25][Message][Resource][MaterialCompiler] Total time: 11.26ms
+[17:17:25][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe_mat_3.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:25][Message][Resource][StaticMeshCompiler] Dependency tree creation took: 5.12ms
+[17:17:25][Message][Resource][StaticMeshCompiler] Up to Date Check took: 0.00ms
+[17:17:25][Message][Resource][StaticMeshCompiler] Compilation took: 17.03ms
+[17:17:25][Message][Resource][StaticMeshCompiler] Compiled successfully: data://provenance/tools/starterstone/v001/stone_pickaxe.mesh
+[17:17:25][Message][Resource][StaticMeshCompiler] Total time: 17.03ms
+[17:17:25][Message][Resource][StaticMeshCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\starterstone\v001\stone_pickaxe.mesh
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[17:17:25][Message][Resource][EntityMapCompiler] Dependency tree creation took: 1.65ms
+[17:17:25][Message][Resource][EntityMapCompiler] Up to Date Check took: 0.00ms
+[17:17:25][Message][Resource][EntityMapCompiler] Compilation took: 4.79ms
+[17:17:25][Message][Resource][EntityMapCompiler] Compiled successfully: data://provenance/provenancesandbox.map
+[17:17:25][Message][Resource][EntityMapCompiler] Total time: 4.79ms
+[17:17:25][Message][Resource][EntityMapCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\provenancesandbox.map

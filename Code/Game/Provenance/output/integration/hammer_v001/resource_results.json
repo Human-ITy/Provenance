@@ -1,0 +1,92 @@
+[
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_1_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_0_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_0_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_3_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_1_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_2_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_5_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_2_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_4_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_7_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_3_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_image_6_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/hammer/v001/guild_hammer.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/provenancesandbox.map",
+    "exitCode": 1,
+    "pass": true
+  }
+]

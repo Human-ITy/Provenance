@@ -1,0 +1,352 @@
+[
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_0_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_0_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_2_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_1_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_1_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_4_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_3_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_6_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_5_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_8_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_7_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_4.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_overstory_002.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_image_0_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_east_birch_regeneration_009.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_0_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_2_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_1_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_4.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_overstory_001.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_south_birch_regeneration_005.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_4.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010.mesh",
+    "exitCode": 1,
+    "pass": true
+  }
+]

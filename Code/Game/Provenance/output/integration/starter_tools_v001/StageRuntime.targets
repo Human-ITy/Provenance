@@ -1,0 +1,12 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(ProjectName)'=='Esoterica.Game.Runtime'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(ProjectName)'=='Esoterica.Game.Runtime'">
+    <Link>
+      <OutputFile>$(MSBuildThisFileDirectory)staged\Esoterica.Game.Runtime.dll</OutputFile>
+      <ProgramDatabaseFile>$(MSBuildThisFileDirectory)staged\Esoterica.Game.Runtime.pdb</ProgramDatabaseFile>
+      <ImportLibrary>$(MSBuildThisFileDirectory)staged\Esoterica.Game.Runtime.lib</ImportLibrary>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

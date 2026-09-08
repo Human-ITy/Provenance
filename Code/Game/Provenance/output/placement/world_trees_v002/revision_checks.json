@@ -1,0 +1,592 @@
+{
+  "unchanged_positions_heights_yaw_ids": true,
+  "instances": 117,
+  "clearance_failures": [],
+  "choices": [
+    {
+      "instance_id": "tree.northwest_spruce.overstory.000",
+      "old_asset_id": "norway_spruce_ancient",
+      "new_asset_id": "norway_spruce_ancient"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.overstory.001",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.overstory.002",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.overstory.003",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown_variant_2"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.overstory.004",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.overstory.005",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.overstory.000",
+      "old_asset_id": "silver_birch_mature",
+      "new_asset_id": "silver_birch_mature"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.overstory.001",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.overstory.002",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.overstory.003",
+      "old_asset_id": "silver_birch_grown",
+      "new_asset_id": "silver_birch_grown_variant_2"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.overstory.004",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.000",
+      "old_asset_id": "norway_spruce_mature",
+      "new_asset_id": "norway_spruce_mature"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.001",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.002",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.003",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown_variant_1"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.004",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.overstory.005",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown_variant_1"
+    },
+    {
+      "instance_id": "tree.south_birch.overstory.000",
+      "old_asset_id": "silver_birch_mature",
+      "new_asset_id": "silver_birch_mature"
+    },
+    {
+      "instance_id": "tree.south_birch.overstory.001",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.south_birch.overstory.002",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.south_birch.overstory.003",
+      "old_asset_id": "silver_birch_grown",
+      "new_asset_id": "silver_birch_grown"
+    },
+    {
+      "instance_id": "tree.south_birch.overstory.004",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.overstory.000",
+      "old_asset_id": "norway_spruce_mature",
+      "new_asset_id": "norway_spruce_mature"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.overstory.001",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.overstory.002",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.overstory.003",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.overstory.004",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.east_birch.overstory.000",
+      "old_asset_id": "silver_birch_mature",
+      "new_asset_id": "silver_birch_mature"
+    },
+    {
+      "instance_id": "tree.east_birch.overstory.001",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.east_birch.overstory.002",
+      "old_asset_id": "silver_birch_adolescent",
+      "new_asset_id": "silver_birch_adolescent"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.overstory.000",
+      "old_asset_id": "norway_spruce_mature",
+      "new_asset_id": "norway_spruce_mature"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.overstory.001",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.overstory.002",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.overstory.003",
+      "old_asset_id": "norway_spruce_grown",
+      "new_asset_id": "norway_spruce_grown_variant_1"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.overstory.004",
+      "old_asset_id": "norway_spruce_adolescent",
+      "new_asset_id": "norway_spruce_adolescent"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.000",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.001",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.002",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.003",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.004",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_1"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.005",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_2"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.006",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.007",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_1"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.008",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.northwest_spruce.regeneration.009",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.000",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.001",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.002",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.003",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.004",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.005",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.006",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.007",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.008",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.009",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.010",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.west_birch_margin.regeneration.011",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.000",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_1"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.001",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.002",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.003",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.004",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.005",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.006",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.007",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.008",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southwest_mixed.regeneration.009",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.000",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.001",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.002",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.003",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.004",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.005",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.006",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.007",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.008",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.009",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.010",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.011",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.012",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.south_birch.regeneration.013",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.000",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.001",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.002",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_1"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.003",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.004",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.005",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.006",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.007",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.008",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.009",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_1"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.010",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.southeast_spruce.regeneration.011",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.000",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.001",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.002",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.003",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.004",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.005",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.006",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.007",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.008",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_2"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.009",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.010",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.east_birch.regeneration.011",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young_variant_1"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.000",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.001",
+      "old_asset_id": "norway_spruce_seedling",
+      "new_asset_id": "norway_spruce_seedling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.002",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.003",
+      "old_asset_id": "norway_spruce_sapling",
+      "new_asset_id": "norway_spruce_sapling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.004",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young_variant_2"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.005",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.006",
+      "old_asset_id": "silver_birch_seedling",
+      "new_asset_id": "silver_birch_seedling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.007",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.008",
+      "old_asset_id": "silver_birch_sapling",
+      "new_asset_id": "silver_birch_sapling"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.009",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.010",
+      "old_asset_id": "norway_spruce_young",
+      "new_asset_id": "norway_spruce_young"
+    },
+    {
+      "instance_id": "tree.northeast_mixed.regeneration.011",
+      "old_asset_id": "silver_birch_young",
+      "new_asset_id": "silver_birch_young"
+    }
+  ]
+}

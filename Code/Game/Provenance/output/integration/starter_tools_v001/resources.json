@@ -1,0 +1,125 @@
+{
+  "resources": [
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_1_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_0_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_0_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_0.material",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_3_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_1_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_2_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_1.material",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_5_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_2_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_4_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_2.material",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_7_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_3_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_image_6_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_shovel_mat_3.material",
+    "data://provenance/tools/starterstone/v001/stone_shovel.mesh",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_1_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_0_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_0_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_0.material",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_3_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_1_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_2_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_1.material",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_5_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_2_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_4_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_2.material",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_7_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_3_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_6_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_3.material",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_9_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_4_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_image_8_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_axe_mat_4.material",
+    "data://provenance/tools/starterstone/v001/stone_axe.mesh",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_1_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_0_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0.material",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_3_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_2_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1.material",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_5_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_4_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2.material",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_7_albedotexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3_pbr.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_image_6_normaltexture.texture",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3.material",
+    "data://provenance/tools/starterstone/v001/stone_pickaxe.mesh",
+    "data://provenance/provenancesandbox.map"
+  ],
+  "placement": [
+    {
+      "id": "stone_shovel",
+      "support_world": [
+        -0.925,
+        35.67,
+        0.636326921
+      ],
+      "support_height_range_m": 0.034503404,
+      "support": "granite ledge",
+      "world_position": [
+        -0.925,
+        35.67,
+        0.636326921
+      ],
+      "rotation_degrees": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1
+    },
+    {
+      "id": "stone_axe",
+      "support_world": [
+        0.03,
+        35.92,
+        1.0635032091157228
+      ],
+      "support_height_range_m": 0.005348279,
+      "support": "granite ledge",
+      "world_position": [
+        0.03,
+        35.92,
+        1.0635032091157228
+      ],
+      "rotation_degrees": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1
+    },
+    {
+      "id": "stone_pickaxe",
+      "support_world": [
+        1.75,
+        36.32,
+        1.0913043986436892
+      ],
+      "support_height_range_m": 0.030063217,
+      "support": "granite ledge",
+      "world_position": [
+        1.75,
+        36.32,
+        1.0913043986436892
+      ],
+      "rotation_degrees": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1
+    }
+  ]
+}

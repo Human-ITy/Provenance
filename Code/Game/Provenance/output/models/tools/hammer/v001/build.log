@@ -1,0 +1,37 @@
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\hammer\v001\build_hammer.py:8: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  m=bpy.data.materials.new(name);m.use_nodes=True;bs=m.node_tree.nodes['Principled BSDF'];bs.inputs['Metallic'].default_value=metal;bs.inputs['Roughness'].default_value=rough
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+Warning: No mesh data to join
+INFO Draco is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_draco_bridge.dll
+INFO MeshOptimizer is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_meshopt_bridge.dll
+16:37:54 | INFO: Starting glTF 2.0 export
+16:37:54 | INFO: Extracting primitive: Cone.006
+16:37:54 | INFO: Primitives created: 1
+16:37:54 | INFO: Extracting primitive: Cube
+16:37:54 | INFO: Primitives created: 1
+16:37:54 | INFO: Extracting primitive: Cone.005
+16:37:54 | INFO: Primitives created: 1
+16:37:54 | INFO: Extracting primitive: Cube.002
+16:37:54 | INFO: Primitives created: 1
+16:37:54 | INFO: Finished glTF 2.0 export in 0.12282133102416992 s
+
+16:37:55 | INFO: Starting glTF 2.0 export
+16:37:55 | INFO: Extracting primitive: Cone.012
+16:37:55 | INFO: Primitives created: 1
+16:37:55 | INFO: Extracting primitive: Cube.010
+16:37:55 | INFO: Primitives created: 1
+16:37:55 | INFO: Extracting primitive: Cone.011
+16:37:55 | INFO: Primitives created: 1
+16:37:55 | INFO: Extracting primitive: Cube.011
+16:37:55 | INFO: Primitives created: 1
+16:37:55 | INFO: Finished glTF 2.0 export in 0.03521394729614258 s
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\hammer\v001\build_hammer.py:120: DeprecationWarning: 'World.use_nodes' is expected to be removed in Blender 6.0
+  world=bpy.data.worlds.new('Studio');world.use_nodes=True;world.node_tree.nodes['Background'].inputs[1].default_value=.35;scene.world=world
+00:04.922  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\hammer\v001\hammer_review.png'
+00:05.532  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\hammer\v001\hammer_inventory_icon.png'
+
+Info: Saved as "GuildHammer.blend"
+HAMMER_MODEL_COMPLETE 22520 [[-0.18950000405311584, -0.06069999933242798, 0.0], [0.19900000095367432, 0.06069999933242798, 0.6616499423980713]]
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

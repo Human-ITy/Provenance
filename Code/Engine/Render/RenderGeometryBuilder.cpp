@@ -313,7 +313,7 @@ namespace EE::Render
         return aabb;
     }
 
-    uint32_t GeometryBuilder::BuildAndAppendClusters( Blob& clusterVertices, size_t clusterVertexStride, TAlignedVector<uint32_t>& clusterTriangles, Blob& clusters ) const
+    uint32_t GeometryBuilder::BuildAndAppendClusters( Blob& clusterVertices, size_t clusterVertexStride, TAlignedVector<uint32_t>& clusterTriangles, Blob& clusters, bool fastBuild ) const
     {
         EE_ASSERT( m_vertexStride );
         EE_ASSERT( ( clusterVertices.size() % clusterVertexStride ) == 0 );
@@ -337,7 +337,15 @@ namespace EE::Render
         tempMeshletVertices.resize( meshletUpperBound * Geometry::MaxClusterVertices );
         tempMeshletTriangles.resize( meshletUpperBound * Geometry::MaxClusterTriangles * 3 );
 
-        size_t const numMeshlets = meshopt_buildMeshletsSpatial
+        // Dynamic local meshes use the linear builder after vertex-cache
+        // optimization. It preserves every triangle/attribute; only clustering
+        // differs. Asset/offline geometry retains spatial-quality clustering.
+        size_t const numMeshlets = fastBuild ? meshopt_buildMeshletsScan
+        (
+            tempMeshlets.data(), tempMeshletVertices.data(), tempMeshletTriangles.data(),
+            m_indices.data(), m_indices.size(), m_vertices.size() / m_vertexStride,
+            Geometry::MaxClusterVertices, Geometry::MaxClusterTriangles
+        ) : meshopt_buildMeshletsSpatial
         (
             tempMeshlets.data(),
             tempMeshletVertices.data(),
@@ -527,14 +535,15 @@ namespace EE::Render
         return meshNumClusters;
     }
 
-    void GeometryBuilder::BuildAndAppendGeometry( Geometry& geometry ) const
+    void GeometryBuilder::BuildAndAppendGeometry( Geometry& geometry, bool fastBuild ) const
     {
         uint32_t meshNumClusters = BuildAndAppendClusters
         (
             geometry.GetClusterVertices(),
             geometry.GetClusterVertexStride(),
             geometry.GetClusterTriangles(),
-            geometry.GetClusters()
+            geometry.GetClusters(),
+            fastBuild
         );
 
         EE_ASSERT( geometry.GetNumClusters() == meshNumClusters );

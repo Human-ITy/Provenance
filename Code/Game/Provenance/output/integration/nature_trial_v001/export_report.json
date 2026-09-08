@@ -1,0 +1,162 @@
+[
+  {
+    "id": "healing_bush",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\berry_bushes\\v001\\healing_red_bush_ripe.glb",
+    "source_sha256": "e8ce7ba5f869bb73ad66564da94ba3a3fd2d1dfc9db38a4e1a2a0699c4597b43",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\healing_bush.glb",
+    "meshes": 25,
+    "bounds_z_up": [
+      [
+        -0.3996414840221405,
+        -0.4101894199848175,
+        -0.001684766262769699
+      ],
+      [
+        0.42114490270614624,
+        0.39420777559280396,
+        0.7921566963195801
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "stamina_bush",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\berry_bushes\\v001\\stamina_blue_bush_ripe.glb",
+    "source_sha256": "883ee2357bc4dc869c9c86bc189807f4db0570f2d10a7d326efe88c1207668d0",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\stamina_bush.glb",
+    "meshes": 31,
+    "bounds_z_up": [
+      [
+        -0.354920893907547,
+        -0.36209994554519653,
+        -0.002350148279219866
+      ],
+      [
+        0.3583614230155945,
+        0.34789907932281494,
+        0.5460792183876038
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "chestnut",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\mushrooms\\v001\\raised_mushrooms.glb",
+    "source_sha256": "aa96b2a541c68422022a977630ab37d0f3f53ba2c5f3fb7325e96073d1abc932",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\chestnut.glb",
+    "meshes": 3,
+    "bounds_z_up": [
+      [
+        -0.09493537247180939,
+        -0.05038751661777496,
+        0.0
+      ],
+      [
+        0.08164223283529282,
+        0.058725133538246155,
+        0.1550000011920929
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "bell",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\mushrooms\\v001\\raised_mushrooms.glb",
+    "source_sha256": "aa96b2a541c68422022a977630ab37d0f3f53ba2c5f3fb7325e96073d1abc932",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\bell.glb",
+    "meshes": 5,
+    "bounds_z_up": [
+      [
+        -0.07362759113311768,
+        -0.055213481187820435,
+        0.0
+      ],
+      [
+        0.09010888636112213,
+        0.03737656772136688,
+        0.12999999523162842
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "ivory",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\mushrooms\\v001\\raised_mushrooms.glb",
+    "source_sha256": "aa96b2a541c68422022a977630ab37d0f3f53ba2c5f3fb7325e96073d1abc932",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\ivory.glb",
+    "meshes": 2,
+    "bounds_z_up": [
+      [
+        -0.09885719418525696,
+        -0.06002339720726013,
+        0.0
+      ],
+      [
+        0.1100909560918808,
+        0.05485983192920685,
+        0.12937553226947784
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "ochre",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\mushrooms\\v001\\raised_mushrooms.glb",
+    "source_sha256": "aa96b2a541c68422022a977630ab37d0f3f53ba2c5f3fb7325e96073d1abc932",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\ochre.glb",
+    "meshes": 4,
+    "bounds_z_up": [
+      [
+        -0.0903768390417099,
+        -0.066491037607193,
+        0.0
+      ],
+      [
+        0.0965127944946289,
+        0.07091708481311798,
+        0.09000000357627869
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "cyan_pair",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\magical_mushrooms\\v001\\cyan_pair.glb",
+    "source_sha256": "e258c0a8acb1767d8d7358cf2a2ea2ef5f4bd9b990d2ea946c43a3823ece7bee",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\cyan_pair.glb",
+    "meshes": 2,
+    "bounds_z_up": [
+      [
+        -0.1716311275959015,
+        -0.07304707169532776,
+        0.0
+      ],
+      [
+        0.14785662293434143,
+        0.12283632159233093,
+        0.2934454381465912
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  },
+  {
+    "id": "violet_lantern",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\magical_mushrooms\\v001\\violet_lantern.glb",
+    "source_sha256": "4c939500df69bc29f82b6e8345e47f03cd0e1dce0900764345e64ffb33dd45b9",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\nature_trial_v001\\violet_lantern.glb",
+    "meshes": 1,
+    "bounds_z_up": [
+      [
+        -0.13438482582569122,
+        -0.1449303925037384,
+        0.0
+      ],
+      [
+        0.168089359998703,
+        0.15561725199222565,
+        0.31919237971305847
+      ]
+    ],
+    "notes": "Static visual copy; source sockets/gameplay metadata remain authoritative in original."
+  }
+]

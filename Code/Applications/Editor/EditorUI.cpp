@@ -387,6 +387,11 @@ namespace EE
         UpdateStage const updateStage = context.GetUpdateStage();
         EE_ASSERT( updateStage == UpdateStage::FrameStart );
 
+        // Camera mouse suppression is renewed only by an eligible tool below
+        // (or by the game preview at FrameEnd), never carried by a disabled one.
+        // Reset before any early return or deferred tool destruction.
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+
         //-------------------------------------------------------------------------
         // Resource Systems
         //-------------------------------------------------------------------------

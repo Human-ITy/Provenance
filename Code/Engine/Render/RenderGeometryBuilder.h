@@ -92,9 +92,9 @@ namespace EE::Render
         //-------------------------------------------------------------------------
 
         AABB ComputeAABB() const;
-        uint32_t BuildAndAppendClusters( Blob& clusterVertices, size_t clusterVertexStride, TAlignedVector<uint32_t>& clusterTriangles, Blob& clusters ) const;
+        uint32_t BuildAndAppendClusters( Blob& clusterVertices, size_t clusterVertexStride, TAlignedVector<uint32_t>& clusterTriangles, Blob& clusters, bool fastBuild = false ) const;
 
-        void BuildAndAppendGeometry( Geometry& geometry ) const;
+        void BuildAndAppendGeometry( Geometry& geometry, bool fastBuild = false ) const;
 
         //-------------------------------------------------------------------------
 

@@ -259,11 +259,12 @@ namespace EE::SystemLog
 
     void LogAssert( char const* pFile, int32_t line, char const* pAssertInfo )
     {
-        EE_TRACE_MSG( pAssertInfo );
+        // Assertion text is data, not a printf format (e.g. "size % 32 == 0").
+        EE_TRACE_MSG( "%s", pAssertInfo );
 
         if ( g_pLog != nullptr )
         {
-            AddEntry( Severity::Error, "Assert", "Assert", pFile, line, pAssertInfo );
+            AddEntry( Severity::Error, "Assert", "Assert", pFile, line, "%s", pAssertInfo );
         }
     }
 

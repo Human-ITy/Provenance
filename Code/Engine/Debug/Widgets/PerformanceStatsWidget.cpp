@@ -81,6 +81,7 @@ namespace EE
 
                 ImGui::SameLine( 0, s_individualStatSpacing );
                 ImGui::Text( m_str_RAM.c_str() );
+                ImGuiX::ItemTooltip( "Current engine-managed memory mappings, not lifetime allocation traffic. Excludes system/STL allocations; not total process RAM." );
 
                 ImGui::SameLine( 0, s_individualStatSpacing );
                 ImGui::Text( m_str_VRAM.c_str() );

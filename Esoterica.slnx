@@ -35,6 +35,7 @@
     <Project Path="Code/Applications/Tester/Esoterica.Applications.Tester.vcxproj" Id="15e4867a-f174-4f2a-a7c1-99cc6376d8d2">
       <Build Solution="Shipping|*" Project="false" />
     </Project>
+    <Project Path="Code/Applications/ProvenanceVerifier/Esoterica.Applications.ProvenanceVerifier.vcxproj" Id="6d7d5554-8b1d-49d1-86f5-33d8931e9080" />
   </Folder>
   <Folder Name="/2. Game/">
     <Project Path="Code/Game/Esoterica.Game.Runtime.vcxproj" Id="20c5d09a-3da8-4cea-9269-65dc6e6cd460" />

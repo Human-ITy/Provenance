@@ -1,0 +1,22 @@
+{
+  "cyan": {
+    "size": [
+      1268,
+      1241
+    ],
+    "mode": "RGBA",
+    "transparent": 1183664,
+    "partial": 6934,
+    "opaque": 382990
+  },
+  "violet": {
+    "size": [
+      1254,
+      1254
+    ],
+    "mode": "RGBA",
+    "transparent": 1075241,
+    "partial": 5401,
+    "opaque": 491874
+  }
+}

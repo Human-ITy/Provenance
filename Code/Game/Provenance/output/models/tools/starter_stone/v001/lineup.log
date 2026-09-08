@@ -1,0 +1,26 @@
+Extensions: writing cache failed ([WinError 5] Access is denied: 'C:\\Users\\D-Day\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions').
+17:15:50 | INFO: Data are loaded, start creating Blender stuff
+17:15:50 | INFO: Blender create Mesh node Stone socket diagonal tie
+17:15:50 | INFO: Blender create Mesh node Upper shaft rawhide
+17:15:50 | INFO: Blender create Mesh node Broad chipped stone spade
+17:15:50 | INFO: Blender create Mesh node Timber shaft and blade socket
+17:15:50 | INFO: glTF import finished in 0.02s
+17:15:50 | INFO: Data are loaded, start creating Blender stuff
+17:15:50 | INFO: Blender create Mesh node Sphere
+17:15:50 | INFO: Blender create Mesh node Crossed rawhide head lashing
+17:15:50 | INFO: Blender create Mesh node Hide grip underlay
+17:15:50 | INFO: Blender create Mesh node Knapped axe head
+17:15:50 | INFO: Blender create Mesh node Crooked timber haft
+17:15:50 | INFO: glTF import finished in 0.02s
+17:15:50 | INFO: Data are loaded, start creating Blender stuff
+17:15:50 | INFO: Blender create Mesh node Crossed rawhide head lashing
+17:15:50 | INFO: Blender create Mesh node Hide grip underlay
+17:15:50 | INFO: Blender create Mesh node Point and adze stone head
+17:15:50 | INFO: Blender create Mesh node Crooked timber haft
+17:15:50 | INFO: glTF import finished in 0.02s
+C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\render_lineup.py:16: DeprecationWarning: 'World.use_nodes' is expected to be removed in Blender 6.0
+  w=bpy.data.worlds.new('Studio');w.use_nodes=True;w.node_tree.nodes['Background'].inputs[1].default_value=.20;scene.world=w
+00:06.359  render           | Saved: 'C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Code\Game\Provenance\output\models\tools\starter_stone\v001\starter_tools_lineup.png'
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+
+Blender quit

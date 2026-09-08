@@ -1,0 +1,83 @@
+{
+  "magical_mushrooms.glb": {
+    "meshes": 3,
+    "embedded_images": true,
+    "emissive_materials": 7,
+    "lights": [
+      {
+        "color": [
+          0.019999999552965164,
+          0.550000011920929,
+          1
+        ],
+        "intensity": 0.6522169624598813,
+        "type": "point",
+        "name": "Point"
+      },
+      {
+        "color": [
+          0.019999999552965164,
+          0.550000011920929,
+          1
+        ],
+        "intensity": 0.6522169624598813,
+        "type": "point",
+        "name": "Point.001"
+      },
+      {
+        "color": [
+          1,
+          0.20000000298023224,
+          0.04500000178813934
+        ],
+        "intensity": 0.9783253930711239,
+        "type": "point",
+        "name": "Point.002"
+      }
+    ]
+  },
+  "cyan_pair.glb": {
+    "meshes": 2,
+    "embedded_images": true,
+    "emissive_materials": 4,
+    "lights": [
+      {
+        "color": [
+          0.019999999552965164,
+          0.550000011920929,
+          1
+        ],
+        "intensity": 0.6522169624598813,
+        "type": "point",
+        "name": "Point"
+      },
+      {
+        "color": [
+          0.019999999552965164,
+          0.550000011920929,
+          1
+        ],
+        "intensity": 0.6522169624598813,
+        "type": "point",
+        "name": "Point.001"
+      }
+    ]
+  },
+  "violet_lantern.glb": {
+    "meshes": 1,
+    "embedded_images": true,
+    "emissive_materials": 3,
+    "lights": [
+      {
+        "color": [
+          1,
+          0.20000000298023224,
+          0.04500000178813934
+        ],
+        "intensity": 0.9783253930711239,
+        "type": "point",
+        "name": "Point.002"
+      }
+    ]
+  }
+}

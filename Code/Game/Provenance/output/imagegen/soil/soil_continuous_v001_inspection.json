@@ -1,0 +1,13 @@
+{
+  "width": 1254,
+  "height": 1254,
+  "mode": "RGB",
+  "requested_resolution": [
+    2048,
+    2048
+  ],
+  "horizontal_wrap_mean_difference": 18.115895800106326,
+  "horizontal_neighbor_mean_difference": 14.824739604216228,
+  "vertical_wrap_mean_difference": 18.59968102073365,
+  "vertical_neighbor_mean_difference": 14.492977831407705
+}

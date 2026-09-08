@@ -22,6 +22,7 @@ namespace EE
 
     void ToolsCameraComponent::Update( EntityWorldUpdateContext const& ctx )
     {
+        m_bIsManipulatingView = false;
         if ( !m_isUpdateEnabled )
         {
             return;
@@ -61,8 +62,6 @@ namespace EE
         }
 
         //-------------------------------------------------------------------------
-
-        m_bIsManipulatingView = false;
 
         if ( m_mode == Mode::FreeLook )
         {

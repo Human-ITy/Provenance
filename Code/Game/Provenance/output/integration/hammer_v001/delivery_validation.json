@@ -1,0 +1,30 @@
+{
+  "pass": true,
+  "installed_binary_hashes_verified": 13,
+  "installed_descriptors_verified": 17,
+  "existing_map_entities_preserved": 11,
+  "hammer_entities": 1,
+  "transform_matches_placement": true,
+  "built_dll_contains_pickup_prompts": true,
+  "built_dll_newer_than_pickup_source": true,
+  "native_compiles_passed": 18,
+  "images": [
+    {
+      "file": "hammer_review.png",
+      "size": [
+        1000,
+        1200
+      ],
+      "genuine_alpha": true
+    },
+    {
+      "file": "hammer_inventory_icon.png",
+      "size": [
+        512,
+        512
+      ],
+      "genuine_alpha": true
+    }
+  ],
+  "interactive_editor_pickup_test": "not performed"
+}

@@ -1,0 +1,38 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/naturetrial/v001/cyan_pair.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Tall/Cyan_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Tall/Cyan_Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Tall/Cyan_Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Tall/Cyan_Luminous_Filaments/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_3.material" />
+    </Type>
+    <Type Index="4" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Young/Cyan_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_0.material" />
+    </Type>
+    <Type Index="5" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Young/Cyan_Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_1.material" />
+    </Type>
+    <Type Index="6" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Young/Cyan_Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_2.material" />
+    </Type>
+    <Type Index="7" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Cyan_Young/Cyan_Luminous_Filaments/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/cyan_pair_mat_3.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

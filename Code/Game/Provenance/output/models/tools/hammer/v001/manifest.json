@@ -1,0 +1,47 @@
+{
+  "asset_id": "guild_hammer",
+  "units": "metres",
+  "blender_up": "Z",
+  "gltf_up": "Y",
+  "bounds_z_up": [
+    [
+      -0.18950000405311584,
+      -0.06069999933242798,
+      0.0
+    ],
+    [
+      0.19900000095367432,
+      0.06069999933242798,
+      0.6616499423980713
+    ]
+  ],
+  "anchors_z_up": {
+    "grip": [
+      0,
+      0,
+      0.143
+    ],
+    "primary_strike": [
+      -0.191,
+      0,
+      0.577
+    ],
+    "peen_strike": [
+      0.2,
+      0,
+      0.591
+    ],
+    "pickup_center": [
+      0,
+      0,
+      0.36
+    ]
+  },
+  "visual_lods": [
+    "guild_hammer_lod0.glb",
+    "guild_hammer_lod1.glb"
+  ],
+  "lod0_triangles": 22520,
+  "reference_interpretation": "Original supplied hammer silhouette and decorative details; back/hidden construction inferred. One-handed authored scale, not calibrated from photo.",
+  "pickup": "E when aimed within 2m, one item in the current Play session; see runtime handoff."
+}

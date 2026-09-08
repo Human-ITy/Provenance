@@ -1,0 +1,352 @@
+[
+  {
+    "id": "tree_east_birch_overstory_002",
+    "instance_id": "tree.east_birch.overstory.002",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_east_birch_overstory_002.glb",
+    "bounds_z_up": [
+      [
+        27.529041290283203,
+        1.3383352756500244,
+        0.9144359827041626
+      ],
+      [
+        32.5419807434082,
+        6.120863914489746,
+        10.705384254455566
+      ]
+    ],
+    "placement": [
+      29.788000106811523,
+      3.7565174102783203,
+      1.5605219602584839
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_east_birch_regeneration_009",
+    "instance_id": "tree.east_birch.regeneration.009",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_east_birch_regeneration_009.glb",
+    "bounds_z_up": [
+      [
+        44.89918899536133,
+        4.516180992126465,
+        0.7778454422950745
+      ],
+      [
+        45.40766906738281,
+        5.036168575286865,
+        2.2554080486297607
+      ]
+    ],
+    "placement": [
+      45.143043518066406,
+      4.771631717681885,
+      0.9232731461524963
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_northeast_mixed_overstory_004",
+    "instance_id": "tree.northeast_mixed.overstory.004",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_northeast_mixed_overstory_004.glb",
+    "bounds_z_up": [
+      [
+        21.448230743408203,
+        39.757198333740234,
+        0.16494297981262207
+      ],
+      [
+        24.782480239868164,
+        43.37553024291992,
+        9.327147483825684
+      ]
+    ],
+    "placement": [
+      23.011491775512695,
+      41.63319396972656,
+      0.7777750492095947
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_northeast_mixed_regeneration_003",
+    "instance_id": "tree.northeast_mixed.regeneration.003",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_northeast_mixed_regeneration_003.glb",
+    "bounds_z_up": [
+      [
+        35.98732376098633,
+        24.865421295166016,
+        0.7443233728408813
+      ],
+      [
+        36.642333984375,
+        25.575082778930664,
+        1.9805113077163696
+      ]
+    ],
+    "placement": [
+      36.32497024536133,
+      25.243688583374023,
+      0.875808596611023
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_northwest_spruce_overstory_004",
+    "instance_id": "tree.northwest_spruce.overstory.004",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_northwest_spruce_overstory_004.glb",
+    "bounds_z_up": [
+      [
+        -29.3277645111084,
+        37.60162353515625,
+        -0.133198082447052
+      ],
+      [
+        -25.81260108947754,
+        41.416282653808594,
+        9.526144027709961
+      ]
+    ],
+    "placement": [
+      -27.6796817779541,
+      39.57940673828125,
+      0.5128860473632812
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_northwest_spruce_regeneration_008",
+    "instance_id": "tree.northwest_spruce.regeneration.008",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_northwest_spruce_regeneration_008.glb",
+    "bounds_z_up": [
+      [
+        -23.025602340698242,
+        30.763227462768555,
+        0.2618194818496704
+      ],
+      [
+        -22.415910720825195,
+        31.423789978027344,
+        1.4124780893325806
+      ]
+    ],
+    "placement": [
+      -22.71131706237793,
+      31.115324020385742,
+      0.38420751690864563
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_south_birch_overstory_001",
+    "instance_id": "tree.south_birch.overstory.001",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_south_birch_overstory_001.glb",
+    "bounds_z_up": [
+      [
+        3.3367531299591064,
+        -40.29667663574219,
+        0.1419166922569275
+      ],
+      [
+        8.13111686706543,
+        -35.722679138183594,
+        9.505952835083008
+      ]
+    ],
+    "placement": [
+      5.497215747833252,
+      -37.98393249511719,
+      0.7598316073417664
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_south_birch_regeneration_005",
+    "instance_id": "tree.south_birch.regeneration.005",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_south_birch_regeneration_005.glb",
+    "bounds_z_up": [
+      [
+        -3.9170024394989014,
+        -42.86941909790039,
+        0.3677451014518738
+      ],
+      [
+        -3.374162435531616,
+        -42.314292907714844,
+        1.9451558589935303
+      ]
+    ],
+    "placement": [
+      -3.6566712856292725,
+      -42.59670639038086,
+      0.5230002403259277
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_southeast_spruce_overstory_002",
+    "instance_id": "tree.southeast_spruce.overstory.002",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_southeast_spruce_overstory_002.glb",
+    "bounds_z_up": [
+      [
+        38.55608367919922,
+        -20.46044921875,
+        0.26416724920272827
+      ],
+      [
+        42.063987731933594,
+        -16.653667449951172,
+        9.90356159210205
+      ]
+    ],
+    "placement": [
+      40.20076370239258,
+      -18.48674964904785,
+      0.9089170694351196
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_southeast_spruce_regeneration_005",
+    "instance_id": "tree.southeast_spruce.regeneration.005",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_southeast_spruce_regeneration_005.glb",
+    "bounds_z_up": [
+      [
+        25.988508224487305,
+        -17.049299240112305,
+        1.0030791759490967
+      ],
+      [
+        26.64443588256836,
+        -16.338642120361328,
+        2.2409989833831787
+      ]
+    ],
+    "placement": [
+      26.326627731323242,
+      -16.670501708984375,
+      1.1347485780715942
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_southwest_mixed_overstory_004",
+    "instance_id": "tree.southwest_mixed.overstory.004",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_southwest_mixed_overstory_004.glb",
+    "bounds_z_up": [
+      [
+        -37.050758361816406,
+        -35.85957336425781,
+        0.4577893614768982
+      ],
+      [
+        -33.6695671081543,
+        -32.19029998779297,
+        9.748990058898926
+      ]
+    ],
+    "placement": [
+      -35.46548843383789,
+      -33.95716857910156,
+      1.079249620437622
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_southwest_mixed_regeneration_006",
+    "instance_id": "tree.southwest_mixed.regeneration.006",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_southwest_mixed_regeneration_006.glb",
+    "bounds_z_up": [
+      [
+        -27.215787887573242,
+        -41.351097106933594,
+        0.7590707540512085
+      ],
+      [
+        -26.592544555664062,
+        -40.67584991455078,
+        1.9353060722351074
+      ]
+    ],
+    "placement": [
+      -26.89451789855957,
+      -40.991172790527344,
+      0.8841791749000549
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_west_birch_margin_overstory_002",
+    "instance_id": "tree.west_birch_margin.overstory.002",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_west_birch_margin_overstory_002.glb",
+    "bounds_z_up": [
+      [
+        -35.33539581298828,
+        -10.630745887756348,
+        0.3796278238296509
+      ],
+      [
+        -29.22097396850586,
+        -4.797364234924316,
+        12.321917533874512
+      ]
+    ],
+    "placement": [
+      -32.580081939697266,
+      -7.681222438812256,
+      1.1676766872406006
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  },
+  {
+    "id": "tree_west_birch_margin_regeneration_010",
+    "instance_id": "tree.west_birch_margin.regeneration.010",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\placement\\world_trees_v002\\WorldTreePlacement.blend",
+    "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\integration\\tree_trial_v002\\tree_west_birch_margin_regeneration_010.glb",
+    "bounds_z_up": [
+      [
+        -34.62579345703125,
+        -6.462045669555664,
+        1.0697919130325317
+      ],
+      [
+        -34.12458801269531,
+        -5.9494948387146,
+        2.5262222290039062
+      ]
+    ],
+    "placement": [
+      -34.38542938232422,
+      -6.2102484703063965,
+      1.2131396532058716
+    ],
+    "notes": "World-baked grounded LOD1 visual. Map transform identity. No chopping/collision."
+  }
+]

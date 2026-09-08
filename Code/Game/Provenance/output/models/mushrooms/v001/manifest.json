@@ -1,0 +1,94 @@
+{
+  "blender_version": "5.2.1 LTS",
+  "units": "meters",
+  "mesh_count": 14,
+  "groups": {
+    "Chestnut_Group": [
+      {
+        "name": "Chestnut_01",
+        "triangles": 3824,
+        "height_m": 0.155
+      },
+      {
+        "name": "Chestnut_02",
+        "triangles": 3824,
+        "height_m": 0.115
+      },
+      {
+        "name": "Chestnut_03",
+        "triangles": 3824,
+        "height_m": 0.06
+      }
+    ],
+    "Bell_Group": [
+      {
+        "name": "Bell_01",
+        "triangles": 3824,
+        "height_m": 0.13
+      },
+      {
+        "name": "Bell_02",
+        "triangles": 3824,
+        "height_m": 0.1
+      },
+      {
+        "name": "Bell_03",
+        "triangles": 3824,
+        "height_m": 0.085
+      },
+      {
+        "name": "Bell_04",
+        "triangles": 3824,
+        "height_m": 0.067
+      },
+      {
+        "name": "Bell_05",
+        "triangles": 3824,
+        "height_m": 0.093
+      }
+    ],
+    "Ivory_Group": [
+      {
+        "name": "Ivory_01",
+        "triangles": 3824,
+        "height_m": 0.13
+      },
+      {
+        "name": "Ivory_02",
+        "triangles": 3824,
+        "height_m": 0.095
+      }
+    ],
+    "Ochre_Group": [
+      {
+        "name": "Ochre_01",
+        "triangles": 3824,
+        "height_m": 0.09
+      },
+      {
+        "name": "Ochre_02",
+        "triangles": 3824,
+        "height_m": 0.078
+      },
+      {
+        "name": "Ochre_03",
+        "triangles": 3824,
+        "height_m": 0.056
+      },
+      {
+        "name": "Ochre_04",
+        "triangles": 3824,
+        "height_m": 0.042
+      }
+    ]
+  },
+  "total_triangles": 53536,
+  "texture_size": 512,
+  "reference_atlas": "../../../imagegen/mushrooms/raised_mushrooms_v003_clean_alpha.png",
+  "notes": [
+    "Original modeled interpretation of atlas; not photogrammetry.",
+    "Caps and stems are separate intersecting closed shells within each mushroom mesh.",
+    "UVs and six shared base-color texture images included.",
+    "No collision, LODs or runtime integration."
+  ]
+}

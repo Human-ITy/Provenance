@@ -1,0 +1,58 @@
+<Type TypeID="EE::EntityModel::EntityMapResourceDescriptor" Version="0">
+  <Property ID="m_editorCameraTransform" Value="6.25001,2.13443e-07,113.25,-66.9054,-31.5799,21.0594,1" />
+</Type>
+<CustomData>
+  <Entities>
+    <Entity Name="SkyDome">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Static Mesh Component" />
+          <Property Path="m_transform" Value="0,-0,0,0,0,0,300" />
+          <Property Path="m_submeshesHidden" Value="1" />
+          <Property Path="m_submeshesHidden/0" Value="False" />
+          <Property Path="m_materialOverrides" Value="1" />
+          <Property Path="m_materialOverrides/0" Value="" />
+          <Property Path="m_viewLayers" Value="ForwardShading|GlobalEnvironmentMap" />
+          <Property Path="m_mesh" Value="data://editor/skydome/skydome.mesh" />
+        </Type>
+        <Type TypeID="EE::Render::DirectionalLightComponent" SpatialParent="Static Mesh Component">
+          <Property Path="m_name" Value="Directional Light Component" />
+          <Property Path="m_transform" Value="135,-0,0,0,0,0,1" />
+          <Property Path="m_shadowed" Value="True" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://editor/skydome/skydome.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="TestFLoor">
+      <Components>
+        <Type TypeID="EE::Render::StaticMeshComponent">
+          <Property Path="m_name" Value="Static Mesh Component" />
+          <Property Path="m_submeshesHidden" Value="1" />
+          <Property Path="m_submeshesHidden/0" Value="False" />
+          <Property Path="m_materialOverrides" Value="1" />
+          <Property Path="m_materialOverrides/0" Value="" />
+          <Property Path="m_mesh" Value="data://editor/floor/floor.mesh" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://editor/floor/floor.mesh" />
+      </ReferencedResources>
+    </Entity>
+    <Entity Name="WorldSettings">
+      <Components>
+        <Type TypeID="EE::ProvenanceWorldSettingsComponent">
+          <Property Path="m_name" Value="Provenance World Settings Component" />
+          <Property Path="m_seed" Value="8675309" />
+          <Property Path="m_graniteMaterial" Value="data://provenance/materials/granite/granite.material" />
+          <Property Path="m_soilMaterial" Value="data://provenance/materials/soil/soil.material" />
+        </Type>
+      </Components>
+      <ReferencedResources>
+        <Resource ID="data://provenance/materials/granite/granite.material" />
+        <Resource ID="data://provenance/materials/soil/soil.material" />
+      </ReferencedResources>
+    </Entity>
+  </Entities>
+</CustomData>

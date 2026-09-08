@@ -1,0 +1,2438 @@
+{
+  "schema_version": 1,
+  "units": "metres",
+  "blender_up": "Z",
+  "gltf_up": "Y",
+  "anchor": "root collar at local origin; roots extend into negative Blender Z / glTF Y",
+  "stage_range_authority": "Authored ranges carried forward from the tree reference manifest, not universal biological age-height laws",
+  "status": "Static placement assets. C++ importer/material/collision/LOD registration remains a separate integration step.",
+  "variation": "Select species and stage first. Sample target height from its allowed range using stable tree ID and site vigor. Apply uniform scale target_height/nominal_height to the complete asset and collider. Common samples may use the narrower recommended range; rare outliers may use the full authored range. Preserve sampled transform across streaming.",
+  "slope_placement": "Keep the trunk near gravity-up. Sample actual terrain under collar and root footprint. Roots are a separate mesh with below-ground reach; static roots cannot fit every hillside automatically. Bury collar modestly, deform roots against terrain where supported, or reject unsupported placements. Preserve a small exposed surface-root allowance. Never rotate the complete tall tree to the full ground normal.",
+  "lod_policy": "Files are alternatives; display only one LOD at a time. Stage and LOD are independent. Use projected screen size and measured budgets; no distances are hardcoded in runtime.",
+  "assets": [
+    {
+      "asset_id": "norway_spruce_adolescent",
+      "species": "norway_spruce",
+      "stage": "adolescent",
+      "stage_index": 3,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_adolescent_alpha.png",
+      "nominal_height_m": 10,
+      "allowed_height_range_m": [
+        6,
+        15
+      ],
+      "uniform_scale_range": [
+        0.6,
+        1.5
+      ],
+      "recommended_common_height_range_m": [
+        8.5,
+        11.5
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_adolescent_lod0.glb",
+          "triangles": 45568,
+          "bounds_blender_m": [
+            [
+              -1.8285083770751953,
+              -2.1943061351776123,
+              -0.7175112962722778
+            ],
+            [
+              2.0714828968048096,
+              2.0379698276519775,
+              9.999999046325684
+            ]
+          ],
+          "above_ground_height_m": 9.999999046325684,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_adolescent_lod1.glb",
+          "triangles": 25272,
+          "bounds_blender_m": [
+            [
+              -1.8285083770751953,
+              -2.1943061351776123,
+              -0.7168152332305908
+            ],
+            [
+              2.0714828968048096,
+              2.0379698276519775,
+              9.999999046325684
+            ]
+          ],
+          "above_ground_height_m": 9.999999046325684,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_adolescent_lod2.glb",
+          "triangles": 17761,
+          "bounds_blender_m": [
+            [
+              -1.8285083770751953,
+              -2.1943061351776123,
+              -0.7172829508781433
+            ],
+            [
+              2.0714828968048096,
+              2.0379698276519775,
+              9.999999046325684
+            ]
+          ],
+          "above_ground_height_m": 9.999999046325684,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_adolescent.blend",
+      "collision_file": "norway_spruce/norway_spruce_adolescent_collision.glb",
+      "root_depth_m": 0.7175112962722778,
+      "root_radius_m": 1.5268568501473925,
+      "crown_radius_m": 2.143709691347679,
+      "root_part": "norway_spruce_adolescent_roots",
+      "seed": 1628,
+      "base_asset_id": "norway_spruce_adolescent",
+      "structural_variant": 0,
+      "foliage_spray_count": 5151,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_ancient",
+      "species": "norway_spruce",
+      "stage": "ancient",
+      "stage_index": 7,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_ancient_alpha.png",
+      "nominal_height_m": 30,
+      "allowed_height_range_m": [
+        18,
+        40
+      ],
+      "uniform_scale_range": [
+        0.6,
+        1.3333333333333333
+      ],
+      "recommended_common_height_range_m": [
+        25.5,
+        34.5
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_ancient_lod0.glb",
+          "triangles": 36642,
+          "bounds_blender_m": [
+            [
+              -6.052647113800049,
+              -5.878166675567627,
+              -2.2976303100585938
+            ],
+            [
+              5.218148231506348,
+              5.23571252822876,
+              30.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 30.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_ancient_lod1.glb",
+          "triangles": 20686,
+          "bounds_blender_m": [
+            [
+              -6.052647113800049,
+              -5.878039360046387,
+              -2.293893575668335
+            ],
+            [
+              5.218074321746826,
+              5.23571252822876,
+              30.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 30.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_ancient_lod2.glb",
+          "triangles": 13547,
+          "bounds_blender_m": [
+            [
+              -6.052647113800049,
+              -5.878039360046387,
+              -2.297903299331665
+            ],
+            [
+              5.218074321746826,
+              5.23571252822876,
+              30.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 30.000001907348633,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_ancient.blend",
+      "collision_file": "norway_spruce/norway_spruce_ancient_collision.glb",
+      "root_depth_m": 2.2976303100585938,
+      "root_radius_m": 5.254589451698527,
+      "crown_radius_m": 5.824768355189145,
+      "root_part": "norway_spruce_ancient_roots",
+      "seed": 1864,
+      "base_asset_id": "norway_spruce_ancient",
+      "structural_variant": 0,
+      "foliage_spray_count": 3241,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_elder",
+      "species": "norway_spruce",
+      "stage": "elder",
+      "stage_index": 6,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_elder_alpha.png",
+      "nominal_height_m": 38,
+      "allowed_height_range_m": [
+        25,
+        45
+      ],
+      "uniform_scale_range": [
+        0.6578947368421053,
+        1.1842105263157894
+      ],
+      "recommended_common_height_range_m": [
+        32.3,
+        43.699999999999996
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_elder_lod0.glb",
+          "triangles": 86076,
+          "bounds_blender_m": [
+            [
+              -8.265336036682129,
+              -8.300124168395996,
+              -2.1278796195983887
+            ],
+            [
+              7.918187141418457,
+              7.539996147155762,
+              38.0
+            ]
+          ],
+          "above_ground_height_m": 38.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_elder_lod1.glb",
+          "triangles": 47654,
+          "bounds_blender_m": [
+            [
+              -8.265168190002441,
+              -8.300034523010254,
+              -2.1226441860198975
+            ],
+            [
+              7.917958736419678,
+              7.53976583480835,
+              37.99997329711914
+            ]
+          ],
+          "above_ground_height_m": 37.99997329711914,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_elder_lod2.glb",
+          "triangles": 33766,
+          "bounds_blender_m": [
+            [
+              -8.265168190002441,
+              -8.300034523010254,
+              -2.1346325874328613
+            ],
+            [
+              7.917958736419678,
+              7.53976583480835,
+              38.00017547607422
+            ]
+          ],
+          "above_ground_height_m": 38.00017547607422,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_elder.blend",
+      "collision_file": "norway_spruce/norway_spruce_elder_collision.glb",
+      "root_depth_m": 2.1278796195983887,
+      "root_radius_m": 6.528249520968503,
+      "crown_radius_m": 7.864169294114669,
+      "root_part": "norway_spruce_elder_roots",
+      "seed": 1805,
+      "base_asset_id": "norway_spruce_elder",
+      "structural_variant": 0,
+      "foliage_spray_count": 9971,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_grown",
+      "species": "norway_spruce",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_grown_alpha.png",
+      "nominal_height_m": 20,
+      "allowed_height_range_m": [
+        15,
+        25
+      ],
+      "uniform_scale_range": [
+        0.75,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        17.0,
+        23.0
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_grown_lod0.glb",
+          "triangles": 68156,
+          "bounds_blender_m": [
+            [
+              -3.731888771057129,
+              -4.076267719268799,
+              -0.9126865863800049
+            ],
+            [
+              4.606769561767578,
+              4.123611927032471,
+              20.0
+            ]
+          ],
+          "above_ground_height_m": 20.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_grown_lod1.glb",
+          "triangles": 37695,
+          "bounds_blender_m": [
+            [
+              -3.731888771057129,
+              -4.076267719268799,
+              -0.9108007550239563
+            ],
+            [
+              4.606769561767578,
+              4.123611927032471,
+              20.00001335144043
+            ]
+          ],
+          "above_ground_height_m": 20.00001335144043,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_grown_lod2.glb",
+          "triangles": 26802,
+          "bounds_blender_m": [
+            [
+              -3.731888771057129,
+              -4.076267719268799,
+              -0.9130046367645264
+            ],
+            [
+              4.606769561767578,
+              4.123611927032471,
+              19.999893188476562
+            ]
+          ],
+          "above_ground_height_m": 19.999893188476562,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_grown.blend",
+      "collision_file": "norway_spruce/norway_spruce_grown_collision.glb",
+      "root_depth_m": 0.9126865863800049,
+      "root_radius_m": 2.792182612189303,
+      "crown_radius_m": 4.3734221334908545,
+      "root_part": "norway_spruce_grown_roots",
+      "seed": 1687,
+      "base_asset_id": "norway_spruce_grown",
+      "structural_variant": 0,
+      "foliage_spray_count": 7984,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_grown_variant_1",
+      "species": "norway_spruce",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_grown_alpha.png",
+      "nominal_height_m": 20,
+      "allowed_height_range_m": [
+        15,
+        25
+      ],
+      "uniform_scale_range": [
+        0.75,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        17.0,
+        23.0
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_grown_variant_1_lod0.glb",
+          "triangles": 68156,
+          "bounds_blender_m": [
+            [
+              -3.454921007156372,
+              -3.630624771118164,
+              -0.8950495719909668
+            ],
+            [
+              3.5577571392059326,
+              3.536267042160034,
+              20.0
+            ]
+          ],
+          "above_ground_height_m": 20.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_grown_variant_1_lod1.glb",
+          "triangles": 37695,
+          "bounds_blender_m": [
+            [
+              -3.454921007156372,
+              -3.630624771118164,
+              -0.8933163285255432
+            ],
+            [
+              3.5577571392059326,
+              3.536267042160034,
+              20.00001335144043
+            ]
+          ],
+          "above_ground_height_m": 20.00001335144043,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_grown_variant_1_lod2.glb",
+          "triangles": 26802,
+          "bounds_blender_m": [
+            [
+              -3.454921007156372,
+              -3.630624771118164,
+              -0.8955956101417542
+            ],
+            [
+              3.5577571392059326,
+              3.536267042160034,
+              19.999893188476562
+            ]
+          ],
+          "above_ground_height_m": 19.999893188476562,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_grown_variant_1.blend",
+      "collision_file": "norway_spruce/norway_spruce_grown_variant_1_collision.glb",
+      "root_depth_m": 0.8950495719909668,
+      "root_radius_m": 2.6199897446170697,
+      "crown_radius_m": 4.008240313032636,
+      "root_part": "norway_spruce_grown_variant_1_roots",
+      "seed": 21624,
+      "base_asset_id": "norway_spruce_grown",
+      "structural_variant": 1,
+      "foliage_spray_count": 7984,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_grown_variant_2",
+      "species": "norway_spruce",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_grown_alpha.png",
+      "nominal_height_m": 20,
+      "allowed_height_range_m": [
+        15,
+        25
+      ],
+      "uniform_scale_range": [
+        0.75,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        17.0,
+        23.0
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_grown_variant_2_lod0.glb",
+          "triangles": 68156,
+          "bounds_blender_m": [
+            [
+              -4.5085296630859375,
+              -4.809966564178467,
+              -1.0717546939849854
+            ],
+            [
+              4.580564975738525,
+              4.969017505645752,
+              20.0
+            ]
+          ],
+          "above_ground_height_m": 20.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_grown_variant_2_lod1.glb",
+          "triangles": 37695,
+          "bounds_blender_m": [
+            [
+              -4.5085296630859375,
+              -4.8098626136779785,
+              -1.0712891817092896
+            ],
+            [
+              4.580564975738525,
+              4.968912124633789,
+              20.00001335144043
+            ]
+          ],
+          "above_ground_height_m": 20.00001335144043,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_grown_variant_2_lod2.glb",
+          "triangles": 26802,
+          "bounds_blender_m": [
+            [
+              -4.5085296630859375,
+              -4.8098626136779785,
+              -1.070544719696045
+            ],
+            [
+              4.580564975738525,
+              4.968912124633789,
+              19.999893188476562
+            ]
+          ],
+          "above_ground_height_m": 19.999893188476562,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_grown_variant_2.blend",
+      "collision_file": "norway_spruce/norway_spruce_grown_variant_2_collision.glb",
+      "root_depth_m": 1.0717546939849854,
+      "root_radius_m": 3.003145097182931,
+      "crown_radius_m": 5.013896943056394,
+      "root_part": "norway_spruce_grown_variant_2_roots",
+      "seed": 41561,
+      "base_asset_id": "norway_spruce_grown",
+      "structural_variant": 2,
+      "foliage_spray_count": 7984,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_mature",
+      "species": "norway_spruce",
+      "stage": "mature",
+      "stage_index": 5,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_mature_alpha.png",
+      "nominal_height_m": 32,
+      "allowed_height_range_m": [
+        25,
+        40
+      ],
+      "uniform_scale_range": [
+        0.78125,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        27.2,
+        36.8
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_mature_lod0.glb",
+          "triangles": 102152,
+          "bounds_blender_m": [
+            [
+              -6.321253776550293,
+              -6.76280403137207,
+              -1.462388515472412
+            ],
+            [
+              6.780648231506348,
+              7.275369167327881,
+              32.0
+            ]
+          ],
+          "above_ground_height_m": 32.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_mature_lod1.glb",
+          "triangles": 55674,
+          "bounds_blender_m": [
+            [
+              -6.320976734161377,
+              -6.762669563293457,
+              -1.4610141515731812
+            ],
+            [
+              6.780463218688965,
+              7.275204658508301,
+              32.000022888183594
+            ]
+          ],
+          "above_ground_height_m": 32.000022888183594,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_mature_lod2.glb",
+          "triangles": 41846,
+          "bounds_blender_m": [
+            [
+              -6.320976734161377,
+              -6.762669563293457,
+              -1.4613093137741089
+            ],
+            [
+              6.780463218688965,
+              7.275204658508301,
+              32.00005340576172
+            ]
+          ],
+          "above_ground_height_m": 32.00005340576172,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_mature.blend",
+      "collision_file": "norway_spruce/norway_spruce_mature_collision.glb",
+      "root_depth_m": 1.462388515472412,
+      "root_radius_m": 5.107567337279048,
+      "crown_radius_m": 7.107981527564835,
+      "root_part": "norway_spruce_mature_roots",
+      "seed": 1746,
+      "base_asset_id": "norway_spruce_mature",
+      "structural_variant": 0,
+      "foliage_spray_count": 14039,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_sapling",
+      "species": "norway_spruce",
+      "stage": "sapling",
+      "stage_index": 1,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_sapling_alpha.png",
+      "nominal_height_m": 1.2,
+      "allowed_height_range_m": [
+        0.3,
+        2
+      ],
+      "uniform_scale_range": [
+        0.25,
+        1.6666666666666667
+      ],
+      "recommended_common_height_range_m": [
+        1.02,
+        1.38
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_sapling_lod0.glb",
+          "triangles": 12288,
+          "bounds_blender_m": [
+            [
+              -0.3667730391025543,
+              -0.41089940071105957,
+              -0.1428278237581253
+            ],
+            [
+              0.3447414040565491,
+              0.35998234152793884,
+              1.2000001668930054
+            ]
+          ],
+          "above_ground_height_m": 1.2000001668930054,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_sapling_lod1.glb",
+          "triangles": 7044,
+          "bounds_blender_m": [
+            [
+              -0.3667730391025543,
+              -0.41089940071105957,
+              -0.1428278237581253
+            ],
+            [
+              0.3447414040565491,
+              0.35998234152793884,
+              1.2000001668930054
+            ]
+          ],
+          "above_ground_height_m": 1.2000001668930054,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_sapling_lod2.glb",
+          "triangles": 4273,
+          "bounds_blender_m": [
+            [
+              -0.3667730391025543,
+              -0.41089940071105957,
+              -0.1428278237581253
+            ],
+            [
+              0.3447414040565491,
+              0.35998234152793884,
+              1.2000001668930054
+            ]
+          ],
+          "above_ground_height_m": 1.2000001668930054,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_sapling.blend",
+      "collision_file": "norway_spruce/norway_spruce_sapling_collision.glb",
+      "root_depth_m": 0.13240370154380798,
+      "root_radius_m": 0.206222821632439,
+      "crown_radius_m": 0.41406160651737844,
+      "root_part": "norway_spruce_sapling_roots",
+      "seed": 1510,
+      "base_asset_id": "norway_spruce_sapling",
+      "structural_variant": 0,
+      "foliage_spray_count": 768,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_seedling",
+      "species": "norway_spruce",
+      "stage": "seedling",
+      "stage_index": 0,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_seedling_alpha.png",
+      "nominal_height_m": 0.15,
+      "allowed_height_range_m": [
+        0.05,
+        0.3
+      ],
+      "uniform_scale_range": [
+        0.33333333333333337,
+        2.0
+      ],
+      "recommended_common_height_range_m": [
+        0.1275,
+        0.1725
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_seedling_lod0.glb",
+          "triangles": 1522,
+          "bounds_blender_m": [
+            [
+              -0.03533844277262688,
+              -0.03723800927400589,
+              -0.05038038641214371
+            ],
+            [
+              0.03669482469558716,
+              0.026651674881577492,
+              0.14999999105930328
+            ]
+          ],
+          "above_ground_height_m": 0.14999999105930328,
+          "mesh_count": 2
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_seedling_lod1.glb",
+          "triangles": 912,
+          "bounds_blender_m": [
+            [
+              -0.03533844277262688,
+              -0.03722526505589485,
+              -0.050387389957904816
+            ],
+            [
+              0.03669482469558716,
+              0.026651674881577492,
+              0.14999932050704956
+            ]
+          ],
+          "above_ground_height_m": 0.14999932050704956,
+          "mesh_count": 2
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_seedling_lod2.glb",
+          "triangles": 452,
+          "bounds_blender_m": [
+            [
+              -0.03533844277262688,
+              -0.03715596720576286,
+              -0.050387389957904816
+            ],
+            [
+              0.03669482469558716,
+              0.02656104601919651,
+              0.14998647570610046
+            ]
+          ],
+          "above_ground_height_m": 0.14998647570610046,
+          "mesh_count": 2
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_seedling.blend",
+      "collision_file": "norway_spruce/norway_spruce_seedling_collision.glb",
+      "root_depth_m": 0.05038038641214371,
+      "root_radius_m": 0.038960957756602604,
+      "crown_radius_m": 0.037702677206766635,
+      "root_part": "norway_spruce_seedling_roots",
+      "seed": 1451,
+      "base_asset_id": "norway_spruce_seedling",
+      "structural_variant": 0,
+      "foliage_spray_count": 0,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_young",
+      "species": "norway_spruce",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_young_alpha.png",
+      "nominal_height_m": 4,
+      "allowed_height_range_m": [
+        2,
+        6
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.5
+      ],
+      "recommended_common_height_range_m": [
+        3.4,
+        4.6
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_young_lod0.glb",
+          "triangles": 27276,
+          "bounds_blender_m": [
+            [
+              -1.0956144332885742,
+              -1.0333232879638672,
+              -0.48207545280456543
+            ],
+            [
+              1.0372284650802612,
+              1.0760387182235718,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_young_lod1.glb",
+          "triangles": 15290,
+          "bounds_blender_m": [
+            [
+              -1.0956144332885742,
+              -1.0333232879638672,
+              -0.4819297790527344
+            ],
+            [
+              1.0372284650802612,
+              1.0760387182235718,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_young_lod2.glb",
+          "triangles": 10273,
+          "bounds_blender_m": [
+            [
+              -1.0956144332885742,
+              -1.0333232879638672,
+              -0.48204776644706726
+            ],
+            [
+              1.0372284650802612,
+              1.0760387182235718,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_young.blend",
+      "collision_file": "norway_spruce/norway_spruce_young_collision.glb",
+      "root_depth_m": 0.48207545280456543,
+      "root_radius_m": 0.609978353393102,
+      "crown_radius_m": 1.208724808285957,
+      "root_part": "norway_spruce_young_roots",
+      "seed": 1569,
+      "base_asset_id": "norway_spruce_young",
+      "structural_variant": 0,
+      "foliage_spray_count": 2651,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_young_variant_1",
+      "species": "norway_spruce",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_young_alpha.png",
+      "nominal_height_m": 4,
+      "allowed_height_range_m": [
+        2,
+        6
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.5
+      ],
+      "recommended_common_height_range_m": [
+        3.4,
+        4.6
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_young_variant_1_lod0.glb",
+          "triangles": 27276,
+          "bounds_blender_m": [
+            [
+              -0.9543650150299072,
+              -0.9729337692260742,
+              -0.4506674110889435
+            ],
+            [
+              0.9164204001426697,
+              1.0213490724563599,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_young_variant_1_lod1.glb",
+          "triangles": 15292,
+          "bounds_blender_m": [
+            [
+              -0.9543650150299072,
+              -0.9729337692260742,
+              -0.4504586458206177
+            ],
+            [
+              0.9164204001426697,
+              1.0213490724563599,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_young_variant_1_lod2.glb",
+          "triangles": 10273,
+          "bounds_blender_m": [
+            [
+              -0.9543650150299072,
+              -0.9729337692260742,
+              -0.45084235072135925
+            ],
+            [
+              0.9164204001426697,
+              1.0213490724563599,
+              4.0
+            ]
+          ],
+          "above_ground_height_m": 4.0,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_young_variant_1.blend",
+      "collision_file": "norway_spruce/norway_spruce_young_variant_1_collision.glb",
+      "root_depth_m": 0.4506674110889435,
+      "root_radius_m": 0.5489774484331202,
+      "crown_radius_m": 0.9681688714513271,
+      "root_part": "norway_spruce_young_variant_1_roots",
+      "seed": 21506,
+      "base_asset_id": "norway_spruce_young",
+      "structural_variant": 1,
+      "foliage_spray_count": 2651,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "norway_spruce_young_variant_2",
+      "species": "norway_spruce",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/norway_spruce/norway_spruce_young_alpha.png",
+      "nominal_height_m": 4,
+      "allowed_height_range_m": [
+        2,
+        6
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.5
+      ],
+      "recommended_common_height_range_m": [
+        3.4,
+        4.6
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "norway_spruce/norway_spruce_young_variant_2_lod0.glb",
+          "triangles": 27276,
+          "bounds_blender_m": [
+            [
+              -1.2401573657989502,
+              -1.1525706052780151,
+              -0.48756125569343567
+            ],
+            [
+              1.2281204462051392,
+              1.264615535736084,
+              4.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 4.000000476837158,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "norway_spruce/norway_spruce_young_variant_2_lod1.glb",
+          "triangles": 15292,
+          "bounds_blender_m": [
+            [
+              -1.2401573657989502,
+              -1.1525706052780151,
+              -0.4873684346675873
+            ],
+            [
+              1.2281204462051392,
+              1.264615535736084,
+              4.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 4.000000476837158,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "norway_spruce/norway_spruce_young_variant_2_lod2.glb",
+          "triangles": 10273,
+          "bounds_blender_m": [
+            [
+              -1.2401573657989502,
+              -1.1525706052780151,
+              -0.48753365874290466
+            ],
+            [
+              1.2281204462051392,
+              1.264615535736084,
+              4.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 4.000000476837158,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "norway_spruce/norway_spruce_young_variant_2.blend",
+      "collision_file": "norway_spruce/norway_spruce_young_variant_2_collision.glb",
+      "root_depth_m": 0.48756125569343567,
+      "root_radius_m": 0.5682704173170494,
+      "crown_radius_m": 1.1785418927518851,
+      "root_part": "norway_spruce_young_variant_2_roots",
+      "seed": 41443,
+      "base_asset_id": "norway_spruce_young",
+      "structural_variant": 2,
+      "foliage_spray_count": 2651,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_adolescent",
+      "species": "silver_birch",
+      "stage": "adolescent",
+      "stage_index": 3,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_adolescent_alpha.png",
+      "nominal_height_m": 10,
+      "allowed_height_range_m": [
+        7,
+        14
+      ],
+      "uniform_scale_range": [
+        0.7,
+        1.4
+      ],
+      "recommended_common_height_range_m": [
+        8.5,
+        11.5
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_adolescent_lod0.glb",
+          "triangles": 46648,
+          "bounds_blender_m": [
+            [
+              -2.4701950550079346,
+              -2.6443068981170654,
+              -0.7072151303291321
+            ],
+            [
+              3.011507272720337,
+              2.5854365825653076,
+              10.0
+            ]
+          ],
+          "above_ground_height_m": 10.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_adolescent_lod1.glb",
+          "triangles": 25836,
+          "bounds_blender_m": [
+            [
+              -2.4701950550079346,
+              -2.6443068981170654,
+              -0.7065016031265259
+            ],
+            [
+              3.011507272720337,
+              2.5854365825653076,
+              10.0
+            ]
+          ],
+          "above_ground_height_m": 10.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_adolescent_lod2.glb",
+          "triangles": 18185,
+          "bounds_blender_m": [
+            [
+              -2.4701950550079346,
+              -2.6443068981170654,
+              -0.7075910568237305
+            ],
+            [
+              3.011507272720337,
+              2.5854365825653076,
+              10.0
+            ]
+          ],
+          "above_ground_height_m": 10.0,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_adolescent.blend",
+      "collision_file": "silver_birch/silver_birch_adolescent_collision.glb",
+      "root_depth_m": 0.7072151303291321,
+      "root_radius_m": 1.52840140022704,
+      "crown_radius_m": 3.0808217764599912,
+      "root_part": "silver_birch_adolescent_roots",
+      "seed": 8628,
+      "base_asset_id": "silver_birch_adolescent",
+      "structural_variant": 0,
+      "foliage_spray_count": 5376,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_ancient",
+      "species": "silver_birch",
+      "stage": "ancient",
+      "stage_index": 7,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_ancient_alpha.png",
+      "nominal_height_m": 18,
+      "allowed_height_range_m": [
+        12,
+        25
+      ],
+      "uniform_scale_range": [
+        0.6666666666666666,
+        1.3888888888888888
+      ],
+      "recommended_common_height_range_m": [
+        15.299999999999999,
+        20.7
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_ancient_lod0.glb",
+          "triangles": 78434,
+          "bounds_blender_m": [
+            [
+              -4.7270827293396,
+              -4.85192346572876,
+              -2.1291606426239014
+            ],
+            [
+              5.162474155426025,
+              5.037189960479736,
+              18.0
+            ]
+          ],
+          "above_ground_height_m": 18.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_ancient_lod1.glb",
+          "triangles": 42912,
+          "bounds_blender_m": [
+            [
+              -4.7270827293396,
+              -4.85192346572876,
+              -2.131859064102173
+            ],
+            [
+              5.162474155426025,
+              5.037189960479736,
+              18.000009536743164
+            ]
+          ],
+          "above_ground_height_m": 18.000009536743164,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_ancient_lod2.glb",
+          "triangles": 31526,
+          "bounds_blender_m": [
+            [
+              -4.7270827293396,
+              -4.85192346572876,
+              -2.127406358718872
+            ],
+            [
+              5.162474155426025,
+              5.037189960479736,
+              17.99986457824707
+            ]
+          ],
+          "above_ground_height_m": 17.99986457824707,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_ancient.blend",
+      "collision_file": "silver_birch/silver_birch_ancient_collision.glb",
+      "root_depth_m": 2.1291606426239014,
+      "root_radius_m": 3.857820007381263,
+      "crown_radius_m": 5.4940133148080035,
+      "root_part": "silver_birch_ancient_roots",
+      "seed": 8864,
+      "base_asset_id": "silver_birch_ancient",
+      "structural_variant": 0,
+      "foliage_spray_count": 10368,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_elder",
+      "species": "silver_birch",
+      "stage": "elder",
+      "stage_index": 6,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_elder_alpha.png",
+      "nominal_height_m": 24,
+      "allowed_height_range_m": [
+        18,
+        30
+      ],
+      "uniform_scale_range": [
+        0.75,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        20.4,
+        27.599999999999998
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_elder_lod0.glb",
+          "triangles": 108942,
+          "bounds_blender_m": [
+            [
+              -6.48946475982666,
+              -5.825484752655029,
+              -1.3861711025238037
+            ],
+            [
+              6.24389123916626,
+              6.450679302215576,
+              24.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 24.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_elder_lod1.glb",
+          "triangles": 59454,
+          "bounds_blender_m": [
+            [
+              -6.48946475982666,
+              -5.825157165527344,
+              -1.387586236000061
+            ],
+            [
+              6.24389123916626,
+              6.450679302215576,
+              24.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 24.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_elder_lod2.glb",
+          "triangles": 44487,
+          "bounds_blender_m": [
+            [
+              -6.48946475982666,
+              -5.825129508972168,
+              -1.3855571746826172
+            ],
+            [
+              6.24389123916626,
+              6.450679302215576,
+              24.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 24.000001907348633,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_elder.blend",
+      "collision_file": "silver_birch/silver_birch_elder_collision.glb",
+      "root_depth_m": 1.3861711025238037,
+      "root_radius_m": 4.443748459210927,
+      "crown_radius_m": 6.821299118732121,
+      "root_part": "silver_birch_elder_roots",
+      "seed": 8805,
+      "base_asset_id": "silver_birch_elder",
+      "structural_variant": 0,
+      "foliage_spray_count": 14772,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_grown",
+      "species": "silver_birch",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_grown_alpha.png",
+      "nominal_height_m": 16,
+      "allowed_height_range_m": [
+        14,
+        20
+      ],
+      "uniform_scale_range": [
+        0.875,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        14,
+        18.4
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_grown_lod0.glb",
+          "triangles": 76224,
+          "bounds_blender_m": [
+            [
+              -4.19520378112793,
+              -3.317789077758789,
+              -0.8957549333572388
+            ],
+            [
+              4.006784915924072,
+              4.012482166290283,
+              16.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 16.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_grown_lod1.glb",
+          "triangles": 41422,
+          "bounds_blender_m": [
+            [
+              -4.19520378112793,
+              -3.317789077758789,
+              -0.8945810794830322
+            ],
+            [
+              4.006784915924072,
+              4.012482166290283,
+              16.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 16.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_grown_lod2.glb",
+          "triangles": 31486,
+          "bounds_blender_m": [
+            [
+              -4.19520378112793,
+              -3.317789077758789,
+              -0.8961425423622131
+            ],
+            [
+              4.006784915924072,
+              4.012482166290283,
+              16.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 16.000001907348633,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_grown.blend",
+      "collision_file": "silver_birch/silver_birch_grown_collision.glb",
+      "root_depth_m": 0.8957549333572388,
+      "root_radius_m": 2.1382626169393806,
+      "crown_radius_m": 4.336731155620853,
+      "root_part": "silver_birch_grown_roots",
+      "seed": 8687,
+      "base_asset_id": "silver_birch_grown",
+      "structural_variant": 0,
+      "foliage_spray_count": 10776,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_grown_variant_1",
+      "species": "silver_birch",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_grown_alpha.png",
+      "nominal_height_m": 16,
+      "allowed_height_range_m": [
+        14,
+        20
+      ],
+      "uniform_scale_range": [
+        0.875,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        14,
+        18.4
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_grown_variant_1_lod0.glb",
+          "triangles": 76224,
+          "bounds_blender_m": [
+            [
+              -3.37589955329895,
+              -3.5617079734802246,
+              -0.8807523846626282
+            ],
+            [
+              4.207535266876221,
+              4.009579658508301,
+              15.999998092651367
+            ]
+          ],
+          "above_ground_height_m": 15.999998092651367,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_grown_variant_1_lod1.glb",
+          "triangles": 41422,
+          "bounds_blender_m": [
+            [
+              -3.37589955329895,
+              -3.5617079734802246,
+              -0.8798776865005493
+            ],
+            [
+              4.207535266876221,
+              4.009579658508301,
+              15.999998092651367
+            ]
+          ],
+          "above_ground_height_m": 15.999998092651367,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_grown_variant_1_lod2.glb",
+          "triangles": 31486,
+          "bounds_blender_m": [
+            [
+              -3.37589955329895,
+              -3.5617079734802246,
+              -0.8805100321769714
+            ],
+            [
+              4.207535266876221,
+              4.009579658508301,
+              15.999998092651367
+            ]
+          ],
+          "above_ground_height_m": 15.999998092651367,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_grown_variant_1.blend",
+      "collision_file": "silver_birch/silver_birch_grown_variant_1_collision.glb",
+      "root_depth_m": 0.8807523846626282,
+      "root_radius_m": 2.218085515631992,
+      "crown_radius_m": 4.358106524703854,
+      "root_part": "silver_birch_grown_variant_1_roots",
+      "seed": 28624,
+      "base_asset_id": "silver_birch_grown",
+      "structural_variant": 1,
+      "foliage_spray_count": 10776,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_grown_variant_2",
+      "species": "silver_birch",
+      "stage": "grown",
+      "stage_index": 4,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_grown_alpha.png",
+      "nominal_height_m": 16,
+      "allowed_height_range_m": [
+        14,
+        20
+      ],
+      "uniform_scale_range": [
+        0.875,
+        1.25
+      ],
+      "recommended_common_height_range_m": [
+        14,
+        18.4
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_grown_variant_2_lod0.glb",
+          "triangles": 76224,
+          "bounds_blender_m": [
+            [
+              -3.9541425704956055,
+              -3.9272139072418213,
+              -0.7778997421264648
+            ],
+            [
+              4.3211846351623535,
+              4.296694755554199,
+              16.0
+            ]
+          ],
+          "above_ground_height_m": 16.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_grown_variant_2_lod1.glb",
+          "triangles": 41422,
+          "bounds_blender_m": [
+            [
+              -3.9541425704956055,
+              -3.9272139072418213,
+              -0.7762247920036316
+            ],
+            [
+              4.3211846351623535,
+              4.296694755554199,
+              16.0
+            ]
+          ],
+          "above_ground_height_m": 16.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_grown_variant_2_lod2.glb",
+          "triangles": 31486,
+          "bounds_blender_m": [
+            [
+              -3.9541425704956055,
+              -3.9272139072418213,
+              -0.7762247920036316
+            ],
+            [
+              4.3211846351623535,
+              4.296694755554199,
+              16.0
+            ]
+          ],
+          "above_ground_height_m": 16.0,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_grown_variant_2.blend",
+      "collision_file": "silver_birch/silver_birch_grown_variant_2_collision.glb",
+      "root_depth_m": 0.7778997421264648,
+      "root_radius_m": 2.2868180589950224,
+      "crown_radius_m": 4.7985124405755295,
+      "root_part": "silver_birch_grown_variant_2_roots",
+      "seed": 48561,
+      "base_asset_id": "silver_birch_grown",
+      "structural_variant": 2,
+      "foliage_spray_count": 10776,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_mature",
+      "species": "silver_birch",
+      "stage": "mature",
+      "stage_index": 5,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_mature_alpha.png",
+      "nominal_height_m": 22,
+      "allowed_height_range_m": [
+        18,
+        26
+      ],
+      "uniform_scale_range": [
+        0.8181818181818182,
+        1.1818181818181819
+      ],
+      "recommended_common_height_range_m": [
+        18.7,
+        25.299999999999997
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_mature_lod0.glb",
+          "triangles": 98328,
+          "bounds_blender_m": [
+            [
+              -5.220592021942139,
+              -5.731084823608398,
+              -1.1785852909088135
+            ],
+            [
+              5.9170989990234375,
+              5.886441707611084,
+              22.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 22.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_mature_lod1.glb",
+          "triangles": 53390,
+          "bounds_blender_m": [
+            [
+              -5.220592021942139,
+              -5.731084823608398,
+              -1.1767578125
+            ],
+            [
+              5.9170989990234375,
+              5.886441707611084,
+              22.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 22.000001907348633,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_mature_lod2.glb",
+          "triangles": 40706,
+          "bounds_blender_m": [
+            [
+              -5.220592021942139,
+              -5.731084823608398,
+              -1.177687168121338
+            ],
+            [
+              5.9170989990234375,
+              5.886441707611084,
+              22.000001907348633
+            ]
+          ],
+          "above_ground_height_m": 22.000001907348633,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_mature.blend",
+      "collision_file": "silver_birch/silver_birch_mature_collision.glb",
+      "root_depth_m": 1.1785852909088135,
+      "root_radius_m": 3.447619008342674,
+      "crown_radius_m": 6.124651532833088,
+      "root_part": "silver_birch_mature_roots",
+      "seed": 8746,
+      "base_asset_id": "silver_birch_mature",
+      "structural_variant": 0,
+      "foliage_spray_count": 14016,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_sapling",
+      "species": "silver_birch",
+      "stage": "sapling",
+      "stage_index": 1,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_sapling_alpha.png",
+      "nominal_height_m": 1.5,
+      "allowed_height_range_m": [
+        0.4,
+        2.5
+      ],
+      "uniform_scale_range": [
+        0.26666666666666666,
+        1.6666666666666667
+      ],
+      "recommended_common_height_range_m": [
+        1.275,
+        1.7249999999999999
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_sapling_lod0.glb",
+          "triangles": 2520,
+          "bounds_blender_m": [
+            [
+              -0.2745809853076935,
+              -0.2876405417919159,
+              -0.1638176143169403
+            ],
+            [
+              0.29797250032424927,
+              0.29787176847457886,
+              1.5
+            ]
+          ],
+          "above_ground_height_m": 1.5,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_sapling_lod1.glb",
+          "triangles": 1442,
+          "bounds_blender_m": [
+            [
+              -0.2745809853076935,
+              -0.2876405417919159,
+              -0.16375336050987244
+            ],
+            [
+              0.29797250032424927,
+              0.29787176847457886,
+              1.5
+            ]
+          ],
+          "above_ground_height_m": 1.5,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_sapling_lod2.glb",
+          "triangles": 888,
+          "bounds_blender_m": [
+            [
+              -0.2745809853076935,
+              -0.2876405417919159,
+              -0.16374990344047546
+            ],
+            [
+              0.29797250032424927,
+              0.29787176847457886,
+              1.4999961853027344
+            ]
+          ],
+          "above_ground_height_m": 1.4999961853027344,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_sapling.blend",
+      "collision_file": "silver_birch/silver_birch_sapling_collision.glb",
+      "root_depth_m": 0.1638176143169403,
+      "root_radius_m": 0.22837608641871296,
+      "crown_radius_m": 0.3108376480511764,
+      "root_part": "silver_birch_sapling_roots",
+      "seed": 8510,
+      "base_asset_id": "silver_birch_sapling",
+      "structural_variant": 0,
+      "foliage_spray_count": 168,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_seedling",
+      "species": "silver_birch",
+      "stage": "seedling",
+      "stage_index": 0,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_seedling_alpha.png",
+      "nominal_height_m": 0.2,
+      "allowed_height_range_m": [
+        0.05,
+        0.4
+      ],
+      "uniform_scale_range": [
+        0.25,
+        2.0
+      ],
+      "recommended_common_height_range_m": [
+        0.17,
+        0.22999999999999998
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_seedling_lod0.glb",
+          "triangles": 1328,
+          "bounds_blender_m": [
+            [
+              -0.07459554821252823,
+              -0.07512296736240387,
+              -0.03881008177995682
+            ],
+            [
+              0.07388228923082352,
+              0.07448004931211472,
+              0.20000000298023224
+            ]
+          ],
+          "above_ground_height_m": 0.20000000298023224,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_seedling_lod1.glb",
+          "triangles": 792,
+          "bounds_blender_m": [
+            [
+              -0.07459554821252823,
+              -0.07512296736240387,
+              -0.03881008177995682
+            ],
+            [
+              0.07388228923082352,
+              0.07448004931211472,
+              0.20000000298023224
+            ]
+          ],
+          "above_ground_height_m": 0.20000000298023224,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_seedling_lod2.glb",
+          "triangles": 404,
+          "bounds_blender_m": [
+            [
+              -0.07459554821252823,
+              -0.07512296736240387,
+              -0.038798004388809204
+            ],
+            [
+              0.07388228923082352,
+              0.07448004931211472,
+              0.20000000298023224
+            ]
+          ],
+          "above_ground_height_m": 0.20000000298023224,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_seedling.blend",
+      "collision_file": "silver_birch/silver_birch_seedling_collision.glb",
+      "root_depth_m": 0.03881008177995682,
+      "root_radius_m": 0.034507458431044476,
+      "crown_radius_m": 0.08011404811586836,
+      "root_part": "silver_birch_seedling_roots",
+      "seed": 8451,
+      "base_asset_id": "silver_birch_seedling",
+      "structural_variant": 0,
+      "foliage_spray_count": 10,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_young",
+      "species": "silver_birch",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_young_alpha.png",
+      "nominal_height_m": 5,
+      "allowed_height_range_m": [
+        2.5,
+        7
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.4
+      ],
+      "recommended_common_height_range_m": [
+        4.25,
+        5.75
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_young_lod0.glb",
+          "triangles": 24528,
+          "bounds_blender_m": [
+            [
+              -1.369400978088379,
+              -1.377589225769043,
+              -0.48377081751823425
+            ],
+            [
+              1.5607061386108398,
+              1.5250998735427856,
+              5.0
+            ]
+          ],
+          "above_ground_height_m": 5.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_young_lod1.glb",
+          "triangles": 13678,
+          "bounds_blender_m": [
+            [
+              -1.369400978088379,
+              -1.377589225769043,
+              -0.4835531711578369
+            ],
+            [
+              1.5607061386108398,
+              1.5250998735427856,
+              5.0
+            ]
+          ],
+          "above_ground_height_m": 5.0,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_young_lod2.glb",
+          "triangles": 9347,
+          "bounds_blender_m": [
+            [
+              -1.369400978088379,
+              -1.377589225769043,
+              -0.4838542640209198
+            ],
+            [
+              1.5607061386108398,
+              1.5250998735427856,
+              5.0
+            ]
+          ],
+          "above_ground_height_m": 5.0,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_young.blend",
+      "collision_file": "silver_birch/silver_birch_young_collision.glb",
+      "root_depth_m": 0.48377081751823425,
+      "root_radius_m": 0.6729179454650497,
+      "crown_radius_m": 1.6546068735939437,
+      "root_part": "silver_birch_young_roots",
+      "seed": 8569,
+      "base_asset_id": "silver_birch_young",
+      "structural_variant": 0,
+      "foliage_spray_count": 2592,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_young_variant_1",
+      "species": "silver_birch",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_young_alpha.png",
+      "nominal_height_m": 5,
+      "allowed_height_range_m": [
+        2.5,
+        7
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.4
+      ],
+      "recommended_common_height_range_m": [
+        4.25,
+        5.75
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_young_variant_1_lod0.glb",
+          "triangles": 24528,
+          "bounds_blender_m": [
+            [
+              -1.5865529775619507,
+              -1.3120527267456055,
+              -0.48280155658721924
+            ],
+            [
+              1.4917422533035278,
+              1.644435167312622,
+              5.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 5.000000476837158,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_young_variant_1_lod1.glb",
+          "triangles": 13678,
+          "bounds_blender_m": [
+            [
+              -1.5865529775619507,
+              -1.3120527267456055,
+              -0.4825344681739807
+            ],
+            [
+              1.4917422533035278,
+              1.644435167312622,
+              5.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 5.000000476837158,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_young_variant_1_lod2.glb",
+          "triangles": 9339,
+          "bounds_blender_m": [
+            [
+              -1.5865529775619507,
+              -1.3120527267456055,
+              -0.4827968180179596
+            ],
+            [
+              1.4917422533035278,
+              1.644435167312622,
+              5.000000476837158
+            ]
+          ],
+          "above_ground_height_m": 5.000000476837158,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_young_variant_1.blend",
+      "collision_file": "silver_birch/silver_birch_young_variant_1_collision.glb",
+      "root_depth_m": 0.48280155658721924,
+      "root_radius_m": 0.6079345812312688,
+      "crown_radius_m": 1.6556023613481405,
+      "root_part": "silver_birch_young_variant_1_roots",
+      "seed": 28506,
+      "base_asset_id": "silver_birch_young",
+      "structural_variant": 1,
+      "foliage_spray_count": 2592,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    },
+    {
+      "asset_id": "silver_birch_young_variant_2",
+      "species": "silver_birch",
+      "stage": "young",
+      "stage_index": 2,
+      "reference": "imagegen/trees/v001/silver_birch/silver_birch_young_alpha.png",
+      "nominal_height_m": 5,
+      "allowed_height_range_m": [
+        2.5,
+        7
+      ],
+      "uniform_scale_range": [
+        0.5,
+        1.4
+      ],
+      "recommended_common_height_range_m": [
+        4.25,
+        5.75
+      ],
+      "origin_blender_m": [
+        0,
+        0,
+        0
+      ],
+      "origin_gltf_m": [
+        0,
+        0,
+        0
+      ],
+      "anchor": "root_collar",
+      "lods": [
+        {
+          "level": 0,
+          "file": "silver_birch/silver_birch_young_variant_2_lod0.glb",
+          "triangles": 24528,
+          "bounds_blender_m": [
+            [
+              -1.3577039241790771,
+              -1.4474772214889526,
+              -0.43965044617652893
+            ],
+            [
+              1.5145056247711182,
+              1.483682632446289,
+              4.999999523162842
+            ]
+          ],
+          "above_ground_height_m": 4.999999523162842,
+          "mesh_count": 3
+        },
+        {
+          "level": 1,
+          "file": "silver_birch/silver_birch_young_variant_2_lod1.glb",
+          "triangles": 13678,
+          "bounds_blender_m": [
+            [
+              -1.3577039241790771,
+              -1.4474772214889526,
+              -0.4394247829914093
+            ],
+            [
+              1.5145056247711182,
+              1.483682632446289,
+              4.999999523162842
+            ]
+          ],
+          "above_ground_height_m": 4.999999523162842,
+          "mesh_count": 3
+        },
+        {
+          "level": 2,
+          "file": "silver_birch/silver_birch_young_variant_2_lod2.glb",
+          "triangles": 9356,
+          "bounds_blender_m": [
+            [
+              -1.3577039241790771,
+              -1.4474772214889526,
+              -0.4400523900985718
+            ],
+            [
+              1.5145056247711182,
+              1.483682632446289,
+              4.999999523162842
+            ]
+          ],
+          "above_ground_height_m": 4.999999523162842,
+          "mesh_count": 3
+        }
+      ],
+      "blend": "silver_birch/silver_birch_young_variant_2.blend",
+      "collision_file": "silver_birch/silver_birch_young_variant_2_collision.glb",
+      "root_depth_m": 0.43965044617652893,
+      "root_radius_m": 0.6656378126489042,
+      "crown_radius_m": 1.7862221226313948,
+      "root_part": "silver_birch_young_variant_2_roots",
+      "seed": 48443,
+      "base_asset_id": "silver_birch_young",
+      "structural_variant": 2,
+      "foliage_spray_count": 2592,
+      "foliage_lod_policy": "All sprays retained; LOD1/2 reduce card subdivisions and wood geometry. No random leaf deletion."
+    }
+  ]
+}

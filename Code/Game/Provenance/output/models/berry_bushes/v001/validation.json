@@ -1,0 +1,45 @@
+{
+  "berry_bushes_ripe.glb": {
+    "meshes": 56,
+    "harvestable_berry_nodes": 54,
+    "embedded_images": true,
+    "bytes": 3646980
+  },
+  "healing_berry_pickup.glb": {
+    "meshes": 1,
+    "harvestable_berry_nodes": 1,
+    "embedded_images": true,
+    "bytes": 219340
+  },
+  "healing_red_bush_harvested.glb": {
+    "meshes": 1,
+    "harvestable_berry_nodes": 0,
+    "embedded_images": true,
+    "bytes": 1483052
+  },
+  "healing_red_bush_ripe.glb": {
+    "meshes": 25,
+    "harvestable_berry_nodes": 24,
+    "embedded_images": true,
+    "bytes": 1954320
+  },
+  "stamina_berry_pickup.glb": {
+    "meshes": 1,
+    "harvestable_berry_nodes": 1,
+    "embedded_images": true,
+    "bytes": 280320
+  },
+  "stamina_blue_bush_harvested.glb": {
+    "meshes": 1,
+    "harvestable_berry_nodes": 0,
+    "embedded_images": true,
+    "bytes": 1484312
+  },
+  "stamina_blue_bush_ripe.glb": {
+    "meshes": 31,
+    "harvestable_berry_nodes": 30,
+    "embedded_images": true,
+    "bytes": 2082536
+  },
+  "roundtrip_mesh_count": 56
+}

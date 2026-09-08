@@ -1,0 +1,24 @@
+HOTSPOT seed=8675309 crest=1.393005 dt=1/60; approximate regions, not recovered screenshot coordinates
+STOP rear crouch=0 start=1.000,3.000,0.201 dir=0.0000,-1.0000 feet=1.000000,2.120000,0.390398 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.114422 leadRockZ=0.637591 leadNormalZ=0.370763 endpointClearLift=0.060 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP front crouch=0 start=1.400,-0.600,0.180 dir=0.0000,1.0000 feet=1.400000,0.333333,0.451682 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.004825 leadRockZ=0.692654 leadNormalZ=0.410036 endpointClearLift=0.056 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP rear crouch=0 start=1.400,3.000,0.195 dir=0.0000,-1.0000 feet=1.400000,2.146667,0.317904 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.031653 leadRockZ=0.567174 leadNormalZ=0.274364 endpointClearLift=0.051 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP front crouch=0 start=1.800,-0.600,0.191 dir=0.0000,1.0000 feet=1.800000,0.386667,0.521731 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.030848 leadRockZ=0.749323 leadNormalZ=0.459437 endpointClearLift=0.050 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP rear crouch=0 start=1.800,3.000,0.212 dir=0.0000,-1.0000 feet=1.800000,2.120000,0.373078 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=0.221994 leadRockZ=0.592073 leadNormalZ=0.513058 endpointClearLift=0.048 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP front crouch=1 start=1.000,-0.600,0.177 dir=0.0000,1.0000 feet=1.000000,0.933333,1.010124 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.088802 leadRockZ=1.206227 leadNormalZ=0.471180 endpointClearLift=0.024 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP rear crouch=1 start=1.000,3.000,0.201 dir=0.0000,-1.0000 feet=1.000000,2.106667,0.412491 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.136515 leadRockZ=0.637591 leadNormalZ=0.370763 endpointClearLift=0.038 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP front crouch=1 start=1.400,-0.600,0.180 dir=0.0000,1.0000 feet=1.400000,0.333333,0.450174 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.006668 leadRockZ=0.663944 leadNormalZ=0.410036 endpointClearLift=0.029 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP rear crouch=1 start=1.400,3.000,0.195 dir=0.0000,-1.0000 feet=1.400000,2.160000,0.293165 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.008836 leadRockZ=0.496431 leadNormalZ=0.460596 endpointClearLift=0.024 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP front crouch=1 start=1.800,-0.600,0.191 dir=0.0000,1.0000 feet=1.800000,0.373333,0.497072 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.014344 leadRockZ=0.697943 leadNormalZ=0.459437 endpointClearLift=0.024 fartherTreadOffset=-1.00 fartherRise=-999.000000
+STOP rear crouch=1 start=3.000,3.000,0.203 dir=0.0000,-1.0000 feet=3.000000,1.760000,0.563706 grounded=1
+  axis=1 nextRock=1 nextSoil=0 offeredRise=-0.018054 leadRockZ=0.762387 leadNormalZ=0.458449 endpointClearLift=0.025 fartherTreadOffset=-1.00 fartherRise=-999.000000
+HOTSPOT routes=180 sustainedStops=11 invalidStarts=0 overlapFrames=0; stops require classification

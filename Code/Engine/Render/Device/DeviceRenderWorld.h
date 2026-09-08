@@ -18,6 +18,7 @@ namespace EE::Render
     class SkeletalMesh;
     class RenderSystem;
     class Material;
+    struct Geometry;
 
     // World representation in device memory for rendering purposes
     //-------------------------------------------------------------------------
@@ -54,6 +55,17 @@ namespace EE::Render
         void DeallocateSpotLight( LightInstanceProxy&& lightInstanceProxy );
 
         void QueueMeshInstanceInitialize( uint32_t instanceID, uint32_t rootInstanceID, Mesh const* pMesh, TArrayView<TResourcePtr<Material>> materialOverrides );
+
+        // Runtime-generated geometry follows the same clustered forward-render
+        // path as resource-backed meshes, but has no Mesh resource wrapper.
+        void QueueProceduralMeshInstanceInitialize(
+            uint32_t          instanceID,
+            uint32_t          rootInstanceID,
+            MeshHandle const& meshHandle,
+            Geometry const&   geometry,
+            RHI::Buffer*      pClusterVertexBuffer,
+            RHI::Buffer*      pClusterTriangleBuffer,
+            Material const*   pMaterial );
 
         // TODO: This is 2 functions for stupid reasons, need to refactor.
         // WorldSystem_Render has a dumb circular dependency when queueing instance initialize commands

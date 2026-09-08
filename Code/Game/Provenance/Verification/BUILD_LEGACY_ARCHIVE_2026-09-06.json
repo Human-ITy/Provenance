@@ -1,0 +1,203 @@
+{
+  "status": "archived_and_hash_verified",
+  "sourceDirectory": "C:/Users/D-Day/ProvenanceWorkspace/Client/ProvenanceClient/Build/x64_Debug",
+  "archiveDirectory": "C:/Users/D-Day/ProvenanceWorkspace/Client/ProvenanceClient/Build/Archive/LegacyTests-2026-09-06",
+  "reason": "Recoverable consolidation of historical-named test executables and compiler objects; no exact filename references found in scanned client scripts/projects/configs. Current application/test products and editable inputs are excluded.",
+  "entries": [
+    {
+      "Name": "GraniteContactCastTest_new.exe",
+      "Bytes": 515584,
+      "SHA256": "C5A026220D96DF4B74521193F4E564EFA227FC5C7E5127A23C41B8ABCAFA2130"
+    },
+    {
+      "Name": "GraniteContactCastTest_v35.exe",
+      "Bytes": 521216,
+      "SHA256": "C715E1B14F1A1FB92EF95483A3E65DDF52BCA1EB43ADD3510F9B37922A5BD6F7"
+    },
+    {
+      "Name": "GraniteContactCastTest_v36.exe",
+      "Bytes": 523264,
+      "SHA256": "32E88BC2383BB2ADC50F36D1261342BC980255806E4BAE30CB73A27F7873FAE8"
+    },
+    {
+      "Name": "GraniteContactCastTestDebug_new.exe",
+      "Bytes": 686080,
+      "SHA256": "DF46F03834DB5940038A2AAAD17B7233FF0930EECAEA2C1D1E3CA0E409BF5C0F"
+    },
+    {
+      "Name": "GraniteDebrisPerformanceTest_new.exe",
+      "Bytes": 342016,
+      "SHA256": "20FC19EF28937C7E77F0C9BCEF83AA797E4FA93A8C849E1861F41B734C552157"
+    },
+    {
+      "Name": "GraniteDebrisPerformanceTest_v36.exe",
+      "Bytes": 378368,
+      "SHA256": "41636F15B2923574187DF3B8917125CC7BE6CCD74077B9E07E351617F24F3E76"
+    },
+    {
+      "Name": "GraniteDebrisPerformanceTestDebug_new.exe",
+      "Bytes": 457216,
+      "SHA256": "B5ACF76E83BF8B085F5E1BFCDA7AD2D8C3184B29F8E6EE8159500C5D57358B9B"
+    },
+    {
+      "Name": "GraniteLabContactTest_new.exe",
+      "Bytes": 339456,
+      "SHA256": "C55D5CA502DBA4BEB788FBB1F1EBE122257032268A5D70C7718214E60E23D7CC"
+    },
+    {
+      "Name": "GraniteLabContactTestDebug_new.exe",
+      "Bytes": 446464,
+      "SHA256": "B014114F01CD05D05BDBF36CBCFB14F2DB626CE23D9EBCDE3382D6C2BFB17FDE"
+    },
+    {
+      "Name": "GraniteLabMovementTest_new.exe",
+      "Bytes": 317440,
+      "SHA256": "F7AD67177C30CA34AC3E15C5CC95F152505F5C65B736702671D945A242327B68"
+    },
+    {
+      "Name": "GraniteLabMovementTestDebug_new.exe",
+      "Bytes": 439808,
+      "SHA256": "5CBF9093BEF259E0F7FECC8E8819D8F9392A12AA2C7ED2326A38BFF875463BB2"
+    },
+    {
+      "Name": "GraniteLocalUpdateTest_v35.exe",
+      "Bytes": 356352,
+      "SHA256": "016F275DF8B92E16097950C57CC0717ADB15D15C06DC5C22F0711F48A7F2AAFC"
+    },
+    {
+      "Name": "GraniteLocalUpdateTest_v36.exe",
+      "Bytes": 357888,
+      "SHA256": "0D30FB80A5E3E6CCE6E0EEB06BD346608212CA84B8DB869D01C723BC6F211491"
+    },
+    {
+      "Name": "GrassCoverTest_new.exe",
+      "Bytes": 349696,
+      "SHA256": "27AD60B7AD2B59EFFACEA3E7182A5E129B0BC622B80E103F29A414EE3712F8FB"
+    },
+    {
+      "Name": "GrassCoverTest_v35.exe",
+      "Bytes": 356352,
+      "SHA256": "147C41720277A6DC9EFDA418782FB71AD6D186B848CBDBEB732C433533535EB4"
+    },
+    {
+      "Name": "GrassCoverTestDebug_new.exe",
+      "Bytes": 473088,
+      "SHA256": "200856EA21335EAC6DA377CECCB3D7D324CC8D751CA886B78F495DC9195DC8CE"
+    },
+    {
+      "Name": "SoilScoopTest_new.exe",
+      "Bytes": 522240,
+      "SHA256": "AACC2E840AB6DD6F38696D7B8010CBCB0CC069867112ECAC55B2D8C8518A6B39"
+    },
+    {
+      "Name": "SoilScoopTest_v36.exe",
+      "Bytes": 514048,
+      "SHA256": "CAC7407615FF1148D23FBA7FE2F343F4D029299A54BA1C1EA5D08DF733EFF57B"
+    },
+    {
+      "Name": "SoilScoopTestDebug_new.exe",
+      "Bytes": 704512,
+      "SHA256": "56D43E1AE41BDBBBF45460402A1AFAC72E1BCB86965AA5AA7EF27ED1B0D3920B"
+    },
+    {
+      "Name": "V410Contact.exe",
+      "Bytes": 326144,
+      "SHA256": "D8C4E9DF6C911AE6DAE5DF5862D7515F68E7D849D3051D5CD28D3A1E763D0468"
+    },
+    {
+      "Name": "V410Contact.obj",
+      "Bytes": 2604242,
+      "SHA256": "651649984E93E75F49D35FE1934802C6C3E140F031FD48A484C6811DE4EF0E9D"
+    },
+    {
+      "Name": "V410Debris.exe",
+      "Bytes": 423424,
+      "SHA256": "54DD8F7644E1E4BEA24C38A1C5F98AB1569ACBAFB029005189F0EBE8721A3943"
+    },
+    {
+      "Name": "V410Debris.obj",
+      "Bytes": 3884470,
+      "SHA256": "3018493F8144DB8C24435C1F85B798B7C2D8D7F2FF7F05DF2D332EB468B61869"
+    },
+    {
+      "Name": "V410Movement.exe",
+      "Bytes": 542720,
+      "SHA256": "8B5EDECAB43972A8ED1DAB31562B9923C046B624C3C58707CD548F6B1F06B591"
+    },
+    {
+      "Name": "V410Movement.obj",
+      "Bytes": 3015196,
+      "SHA256": "4430AFD302226D5CB476251635A647F90CCB1F6B1B4CA9346C7FE8D73ECA5184"
+    },
+    {
+      "Name": "V49Contact.exe",
+      "Bytes": 322048,
+      "SHA256": "4C5F975E4F7C39FA0D97BDC2C6AFE2BFF3EB13C59B166811FB0D85F4ECC4F564"
+    },
+    {
+      "Name": "V49Contact.obj",
+      "Bytes": 2592886,
+      "SHA256": "A107820A819FB0426B01F8240CB6F9FADF728DAD01265B4E7E6C38B7B1D65493"
+    },
+    {
+      "Name": "V49Debris.exe",
+      "Bytes": 419840,
+      "SHA256": "930D6537DCE2FB2353AE10D81FB50FE982585B5E8ACF5D5DDEB4D81D799BF914"
+    },
+    {
+      "Name": "V49Debris.obj",
+      "Bytes": 3879392,
+      "SHA256": "2281E6066AE8AF7315648A68B234362E3DA055D9D4D04CD32341577C0439378F"
+    },
+    {
+      "Name": "V49Local.exe",
+      "Bytes": 359936,
+      "SHA256": "F30C93DFEEDBE0CBB183B69A439011E491E82DED861FDBA136344B6177750FE8"
+    },
+    {
+      "Name": "V49Local.obj",
+      "Bytes": 2864562,
+      "SHA256": "1532A6F95F03CA834412B1FA408FE271231141A11F68BADBA2D7DD3588C12ABF"
+    },
+    {
+      "Name": "V49Movement.exe",
+      "Bytes": 542720,
+      "SHA256": "8D5E9E740BBCBEDECC47018E60A3959BFEA002556F43D70641AF5F7E1BA3BA86"
+    },
+    {
+      "Name": "V49Movement.obj",
+      "Bytes": 3015196,
+      "SHA256": "748268A2A530FC38D3E77B8A5507BC6DD50068DAF06974F0136C38ED8CEF0CE4"
+    },
+    {
+      "Name": "V49Support.exe",
+      "Bytes": 517120,
+      "SHA256": "B5E0BF0C8639DA77B5ABFFCC4054EF8513634AD6BD3F7654F20B8583FDA6A6F6"
+    },
+    {
+      "Name": "V49Support.obj",
+      "Bytes": 5355954,
+      "SHA256": "456C6A3551E9615840B7D6BC4B6FDE5825101EDD38F0CBC05FCBF38787CD5B91"
+    },
+    {
+      "Name": "V49SupportO2.exe",
+      "Bytes": 296960,
+      "SHA256": "66501A8ECB4E097375A11D272F30794982593E090E91B44C2E45A5FEDF56C178"
+    },
+    {
+      "Name": "V49SupportO2.obj",
+      "Bytes": 3631702,
+      "SHA256": "9D29A2F5B65DAF2C7CD89CA2DC1D66CD5658E7A63BECE4D2F130C9E3671345E5"
+    },
+    {
+      "Name": "V49SupportO2D.exe",
+      "Bytes": 648192,
+      "SHA256": "1852AF7FF2489526A49371C4EB27DABFB59D31859A5024D85BF2329DF0F48D94"
+    },
+    {
+      "Name": "V49SupportO2D.obj",
+      "Bytes": 5674679,
+      "SHA256": "D00E467799FE71CFEBE8FED112D6E3098CA4AA8838D61FB23FFF879E4B482B00"
+    }
+  ]
+}

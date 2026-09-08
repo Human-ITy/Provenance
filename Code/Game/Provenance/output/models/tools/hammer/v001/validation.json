@@ -1,0 +1,47 @@
+{
+  "pass": true,
+  "reimported_lods": [
+    {
+      "file": "guild_hammer_lod0.glb",
+      "mesh_parts": 4,
+      "triangles": 22520,
+      "bounds_z_up": [
+        [
+          -0.18950000405311584,
+          -0.06069999933242798,
+          0.0
+        ],
+        [
+          0.19900000095367432,
+          0.06069999933242798,
+          0.6616499423980713
+        ]
+      ],
+      "embedded_textures": 8,
+      "uvs": true,
+      "finite_vertices": true,
+      "nonzero_triangles": true
+    },
+    {
+      "file": "guild_hammer_lod1.glb",
+      "mesh_parts": 4,
+      "triangles": 12380,
+      "bounds_z_up": [
+        [
+          -0.18950000405311584,
+          -0.06069999933242798,
+          6.297684012679383e-05
+        ],
+        [
+          0.19900000095367432,
+          0.06069999933242798,
+          0.6616499423980713
+        ]
+      ],
+      "embedded_textures": 8,
+      "uvs": true,
+      "finite_vertices": true,
+      "nonzero_triangles": true
+    }
+  ]
+}

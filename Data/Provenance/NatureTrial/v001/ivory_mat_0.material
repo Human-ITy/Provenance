@@ -1,0 +1,8 @@
+<Type TypeID="EE::Render::MaterialResourceDescriptor" Version="0">
+  <Property ID="m_shader" Value="ComplexSurfacePBR" />
+  <Type ID="m_shaderParameters" TypeID="EE::Render::Shaders::ComplexSurfacePBRParameters">
+    <Property ID="m_shaderFlags" Value="TwoSided" />
+    <Property ID="m_albedoTexture" Value="data://provenance/naturetrial/v001/ivory_image_0_albedotexture.texture" />
+    <Property ID="m_pbrTexture" Value="data://provenance/naturetrial/v001/ivory_mat_0_pbr.texture" />
+  </Type>
+</Type>

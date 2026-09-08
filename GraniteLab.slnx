@@ -1,0 +1,29 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/0. Granite Lab/">
+    <Project Path="Code/Applications/GraniteLab/GraniteLab.vcxproj" Id="10f56ea1-6f2c-485c-a44a-cc6c7d0a93de" />
+    <File Path="RunGraniteLab.cmd" />
+    <File Path="Code/Game/Provenance/Verification/GRANITE_LAB_WORKSPACE.md" />
+    <File Path="Code/Game/Provenance/Verification/Scripts/BuildGraniteLab.ps1" />
+  </Folder>
+  <!-- These are the same production projects, loaded for navigation/debugging.
+       The launcher builds their dependency closure with safe global properties. -->
+  <Folder Name="/1. Applications/">
+    <Project Path="Code/Applications/Editor/Esoterica.Applications.Editor.vcxproj" Id="d6bdd49c-ef46-4637-844a-4ffdd6a25dc5"><Build Project="false" /></Project>
+    <Project Path="Code/Applications/ProvenanceVerifier/Esoterica.Applications.ProvenanceVerifier.vcxproj" Id="6d7d5554-8b1d-49d1-86f5-33d8931e9080"><Build Project="false" /></Project>
+    <Project Path="Code/Applications/ResourceCompiler/Esoterica.Applications.ResourceCompiler.vcxproj" Id="bbcf3423-e4b4-4cdd-8a97-c6c390bacc23"><Build Project="false" /></Project>
+    <Project Path="Code/Applications/ResourceServer/Esoterica.Applications.ResourceServer.vcxproj" Id="92f52a23-7513-43a0-8299-8fc752d2b401"><Build Project="false" /></Project>
+  </Folder>
+  <Folder Name="/2. Game/">
+    <Project Path="Code/Game/Esoterica.Game.Runtime.vcxproj" Id="20c5d09a-3da8-4cea-9269-65dc6e6cd460"><Build Project="false" /></Project>
+    <Project Path="Code/GameTools/Esoterica.Game.Tools.vcxproj" Id="a9123702-50a2-42a7-be0b-6468c298b509"><Build Project="false" /></Project>
+  </Folder>
+  <Folder Name="/3. Engine/">
+    <Project Path="Code/Engine/Esoterica.Engine.Runtime.vcxproj" Id="2cfadbdc-ee40-4484-94d0-62a90206209e"><Build Project="false" /></Project>
+    <Project Path="Code/EngineTools/Esoterica.Engine.Tools.vcxproj" Id="821afa79-df18-4414-9775-e0c0f45bad78"><Build Project="false" /></Project>
+    <Project Path="Code/Base/Esoterica.Base.vcxproj" Id="07414ba8-87a7-449b-8ab7-551254b57fb3"><Build Project="false" /></Project>
+  </Folder>
+</Solution>

@@ -1,0 +1,342 @@
+{
+  "resources": [
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_0_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_0_pbr.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_0.material",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_2_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_1_pbr.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_1_normaltexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_1.material",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_4_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_3_normaltexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_2.material",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_6_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_5_normaltexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_3.material",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_8_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_image_7_normaltexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002_mat_4.material",
+    "data://provenance/treetrial/v002/tree_east_birch_overstory_002.mesh",
+    "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_image_0_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_mat_0.material",
+    "data://provenance/treetrial/v002/tree_east_birch_regeneration_009_mat_1.material",
+    "data://provenance/treetrial/v002/tree_east_birch_regeneration_009.mesh",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_0_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_mat_0.material",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_2_albedotexture.texture",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_image_1_normaltexture.texture",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004_mat_1.material",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_overstory_004.mesh",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_0.material",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_1.material",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003_mat_2.material",
+    "data://provenance/treetrial/v002/tree_northeast_mixed_regeneration_003.mesh",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004_mat_0.material",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004_mat_1.material",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_overstory_004.mesh",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_0.material",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_1.material",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008_mat_2.material",
+    "data://provenance/treetrial/v002/tree_northwest_spruce_regeneration_008.mesh",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_0.material",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_1.material",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_2.material",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_3.material",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001_mat_4.material",
+    "data://provenance/treetrial/v002/tree_south_birch_overstory_001.mesh",
+    "data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_0.material",
+    "data://provenance/treetrial/v002/tree_south_birch_regeneration_005_mat_1.material",
+    "data://provenance/treetrial/v002/tree_south_birch_regeneration_005.mesh",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_0.material",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002_mat_1.material",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_overstory_002.mesh",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_0.material",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_1.material",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005_mat_2.material",
+    "data://provenance/treetrial/v002/tree_southeast_spruce_regeneration_005.mesh",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004_mat_0.material",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004_mat_1.material",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_overstory_004.mesh",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_0.material",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_1.material",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006_mat_2.material",
+    "data://provenance/treetrial/v002/tree_southwest_mixed_regeneration_006.mesh",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_0.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_1.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_2.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_3.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002_mat_4.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_overstory_002.mesh",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010_mat_0.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010_mat_1.material",
+    "data://provenance/treetrial/v002/tree_west_birch_margin_regeneration_010.mesh"
+  ],
+  "summary": [
+    {
+      "id": "tree_east_birch_overstory_002",
+      "triangles": 25836,
+      "submeshes": 5,
+      "materials": 5,
+      "bounds": [
+        [
+          27.529041290283203,
+          1.3383352756500244,
+          0.9144359827041626
+        ],
+        [
+          32.5419807434082,
+          6.120863914489746,
+          10.705384254455566
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_east_birch_regeneration_009",
+      "triangles": 1442,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          44.89918899536133,
+          4.516180992126465,
+          0.7778454422950745
+        ],
+        [
+          45.40766906738281,
+          5.036168575286865,
+          2.2554080486297607
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_northeast_mixed_overstory_004",
+      "triangles": 25272,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          21.448230743408203,
+          39.757198333740234,
+          0.16494297981262207
+        ],
+        [
+          24.782480239868164,
+          43.37553024291992,
+          9.327147483825684
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_northeast_mixed_regeneration_003",
+      "triangles": 7044,
+      "submeshes": 3,
+      "materials": 3,
+      "bounds": [
+        [
+          35.98732376098633,
+          24.865421295166016,
+          0.7443233728408813
+        ],
+        [
+          36.642333984375,
+          25.575082778930664,
+          1.9805113077163696
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_northwest_spruce_overstory_004",
+      "triangles": 25272,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          -29.3277645111084,
+          37.60162353515625,
+          -0.133198082447052
+        ],
+        [
+          -25.81260108947754,
+          41.416282653808594,
+          9.526144027709961
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_northwest_spruce_regeneration_008",
+      "triangles": 7044,
+      "submeshes": 3,
+      "materials": 3,
+      "bounds": [
+        [
+          -23.025602340698242,
+          30.763227462768555,
+          0.2618194818496704
+        ],
+        [
+          -22.415910720825195,
+          31.423789978027344,
+          1.4124780893325806
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_south_birch_overstory_001",
+      "triangles": 25836,
+      "submeshes": 5,
+      "materials": 5,
+      "bounds": [
+        [
+          3.3367531299591064,
+          -40.29667663574219,
+          0.1419166922569275
+        ],
+        [
+          8.13111686706543,
+          -35.722679138183594,
+          9.505952835083008
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_south_birch_regeneration_005",
+      "triangles": 1442,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          -3.9170024394989014,
+          -42.86941909790039,
+          0.3677451014518738
+        ],
+        [
+          -3.374162435531616,
+          -42.314292907714844,
+          1.9451558589935303
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_southeast_spruce_overstory_002",
+      "triangles": 25272,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          38.55608367919922,
+          -20.46044921875,
+          0.26416724920272827
+        ],
+        [
+          42.063987731933594,
+          -16.653667449951172,
+          9.90356159210205
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_southeast_spruce_regeneration_005",
+      "triangles": 7044,
+      "submeshes": 3,
+      "materials": 3,
+      "bounds": [
+        [
+          25.988508224487305,
+          -17.049299240112305,
+          1.0030791759490967
+        ],
+        [
+          26.64443588256836,
+          -16.338642120361328,
+          2.2409989833831787
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_southwest_mixed_overstory_004",
+      "triangles": 25272,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          -37.050758361816406,
+          -35.85957336425781,
+          0.4577893614768982
+        ],
+        [
+          -33.6695671081543,
+          -32.19029998779297,
+          9.748990058898926
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_southwest_mixed_regeneration_006",
+      "triangles": 7044,
+      "submeshes": 3,
+      "materials": 3,
+      "bounds": [
+        [
+          -27.215787887573242,
+          -41.351097106933594,
+          0.7590707540512085
+        ],
+        [
+          -26.592544555664062,
+          -40.67584991455078,
+          1.9353060722351074
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_west_birch_margin_overstory_002",
+      "triangles": 25836,
+      "submeshes": 5,
+      "materials": 5,
+      "bounds": [
+        [
+          -35.33539581298828,
+          -10.630745887756348,
+          0.3796278238296509
+        ],
+        [
+          -29.22097396850586,
+          -4.797364234924316,
+          12.321917533874512
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    },
+    {
+      "id": "tree_west_birch_margin_regeneration_010",
+      "triangles": 1442,
+      "submeshes": 3,
+      "materials": 2,
+      "bounds": [
+        [
+          -34.62579345703125,
+          -6.462045669555664,
+          1.0697919130325317
+        ],
+        [
+          -34.12458801269531,
+          -5.9494948387146,
+          2.5262222290039062
+        ]
+      ],
+      "source_sha256": "813afb7af8cb9301a806900753c371146375f9cb389d05a3e5958360d141f506"
+    }
+  ]
+}

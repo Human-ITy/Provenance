@@ -1,0 +1,10 @@
+<Type TypeID="EE::Render::MaterialResourceDescriptor" Version="0">
+  <Property ID="m_shader" Value="ProvenanceSoilTriplanarPBR" />
+  <Type ID="m_shaderParameters" TypeID="EE::Render::Shaders::ProvenanceSoilTriplanarPBRParameters">
+    <Property ID="m_albedoTexture" Value="data://provenance/materials/soil/soilalbedo.texture" />
+    <Property ID="m_normalTexture" Value="data://provenance/materials/soil/soilnormal.texture" />
+    <Property ID="m_tileScaleMeters" Value="1.0" />
+    <Property ID="m_normalStrength" Value="0.35" />
+    <Property ID="m_roughness" Value="0.95" />
+  </Type>
+</Type>

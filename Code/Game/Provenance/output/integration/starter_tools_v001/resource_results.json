@@ -1,0 +1,282 @@
+[
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_1_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_0_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_0_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_3_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_1_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_2_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_5_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_2_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_4_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_7_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_3_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_image_6_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_shovel.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_1_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_0_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_0_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_3_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_1_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_2_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_5_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_2_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_4_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_7_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_3_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_6_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_9_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_4_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_image_8_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe_mat_4.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_axe.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_1_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_0_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_0.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_3_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_2_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_1.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_5_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_4_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_2.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_7_albedotexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3_pbr.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_image_6_normaltexture.texture",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe_mat_3.material",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/tools/starterstone/v001/stone_pickaxe.mesh",
+    "exitCode": 1,
+    "pass": true
+  },
+  {
+    "resource": "data://provenance/provenancesandbox.map",
+    "exitCode": 1,
+    "pass": true
+  }
+]

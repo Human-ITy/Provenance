@@ -1,0 +1,174 @@
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:24][Message][Resource][TextureCompiler] Dependency tree creation took: 2.00ms
+[16:50:24][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][TextureCompiler] Compression Time: 237.0ms
+[16:50:25][Message][Resource][TextureCompiler] Compilation took: 302.96ms
+[16:50:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_1_albedotexture.texture
+[16:50:25][Message][Resource][TextureCompiler] Total time: 302.96ms
+[16:50:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_1_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:25][Message][Resource][TextureCompiler] Dependency tree creation took: 1.56ms
+[16:50:25][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[16:50:25][Message][Resource][TextureCompiler] Compilation took: 11.07ms
+[16:50:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_0_pbr.texture
+[16:50:25][Message][Resource][TextureCompiler] Total time: 11.07ms
+[16:50:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_0_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:25][Message][Resource][TextureCompiler] Dependency tree creation took: 2.72ms
+[16:50:25][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][TextureCompiler] Compression Time: 13.8ms
+[16:50:25][Message][Resource][TextureCompiler] Compilation took: 97.34ms
+[16:50:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_0_normaltexture.texture
+[16:50:25][Message][Resource][TextureCompiler] Total time: 97.34ms
+[16:50:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_0_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:25][Message][Resource][MaterialCompiler] Dependency tree creation took: 6.01ms
+[16:50:25][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][MaterialCompiler] Compilation took: 10.54ms
+[16:50:25][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_0.material
+[16:50:25][Message][Resource][MaterialCompiler] Total time: 10.54ms
+[16:50:25][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_0.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:25][Message][Resource][TextureCompiler] Dependency tree creation took: 1.80ms
+[16:50:25][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][TextureCompiler] Compression Time: 287.0ms
+[16:50:25][Message][Resource][TextureCompiler] Compilation took: 356.06ms
+[16:50:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_3_albedotexture.texture
+[16:50:25][Message][Resource][TextureCompiler] Total time: 356.06ms
+[16:50:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_3_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:25][Message][Resource][TextureCompiler] Dependency tree creation took: 1.44ms
+[16:50:25][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:25][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[16:50:25][Message][Resource][TextureCompiler] Compilation took: 11.11ms
+[16:50:25][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_1_pbr.texture
+[16:50:25][Message][Resource][TextureCompiler] Total time: 11.11ms
+[16:50:25][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_1_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][TextureCompiler] Dependency tree creation took: 2.26ms
+[16:50:26][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][TextureCompiler] Compression Time: 14.7ms
+[16:50:26][Message][Resource][TextureCompiler] Compilation took: 85.97ms
+[16:50:26][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_2_normaltexture.texture
+[16:50:26][Message][Resource][TextureCompiler] Total time: 85.97ms
+[16:50:26][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_2_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][MaterialCompiler] Dependency tree creation took: 6.61ms
+[16:50:26][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][MaterialCompiler] Compilation took: 10.57ms
+[16:50:26][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_1.material
+[16:50:26][Message][Resource][MaterialCompiler] Total time: 10.57ms
+[16:50:26][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_1.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][TextureCompiler] Dependency tree creation took: 2.60ms
+[16:50:26][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][TextureCompiler] Compression Time: 236.9ms
+[16:50:26][Message][Resource][TextureCompiler] Compilation took: 303.77ms
+[16:50:26][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_5_albedotexture.texture
+[16:50:26][Message][Resource][TextureCompiler] Total time: 303.77ms
+[16:50:26][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_5_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][TextureCompiler] Dependency tree creation took: 1.59ms
+[16:50:26][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[16:50:26][Message][Resource][TextureCompiler] Compilation took: 10.44ms
+[16:50:26][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_2_pbr.texture
+[16:50:26][Message][Resource][TextureCompiler] Total time: 10.44ms
+[16:50:26][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_2_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][TextureCompiler] Dependency tree creation took: 1.91ms
+[16:50:26][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][TextureCompiler] Compression Time: 12.4ms
+[16:50:26][Message][Resource][TextureCompiler] Compilation took: 76.78ms
+[16:50:26][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_4_normaltexture.texture
+[16:50:26][Message][Resource][TextureCompiler] Total time: 76.78ms
+[16:50:26][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_4_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.73ms
+[16:50:26][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[16:50:26][Message][Resource][MaterialCompiler] Compilation took: 10.04ms
+[16:50:26][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_2.material
+[16:50:26][Message][Resource][MaterialCompiler] Total time: 10.04ms
+[16:50:26][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_2.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:26][Message][Resource][TextureCompiler] Dependency tree creation took: 2.25ms
+[16:50:26][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][TextureCompiler] Compression Time: 226.2ms
+[16:50:27][Message][Resource][TextureCompiler] Compilation took: 294.61ms
+[16:50:27][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_7_albedotexture.texture
+[16:50:27][Message][Resource][TextureCompiler] Total time: 294.61ms
+[16:50:27][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_7_albedotexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:27][Message][Resource][TextureCompiler] Dependency tree creation took: 1.63ms
+[16:50:27][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][TextureCompiler] Compression Time: 0.0ms
+[16:50:27][Message][Resource][TextureCompiler] Compilation took: 11.46ms
+[16:50:27][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_3_pbr.texture
+[16:50:27][Message][Resource][TextureCompiler] Total time: 11.46ms
+[16:50:27][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_3_pbr.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:27][Message][Resource][TextureCompiler] Dependency tree creation took: 1.99ms
+[16:50:27][Message][Resource][TextureCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][TextureCompiler] Compression Time: 12.3ms
+[16:50:27][Message][Resource][TextureCompiler] Compilation took: 79.64ms
+[16:50:27][Message][Resource][TextureCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_image_6_normaltexture.texture
+[16:50:27][Message][Resource][TextureCompiler] Total time: 79.64ms
+[16:50:27][Message][Resource][TextureCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_image_6_normaltexture.texture
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:27][Message][Resource][MaterialCompiler] Dependency tree creation took: 5.81ms
+[16:50:27][Message][Resource][MaterialCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][MaterialCompiler] Compilation took: 10.70ms
+[16:50:27][Message][Resource][MaterialCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer_mat_3.material
+[16:50:27][Message][Resource][MaterialCompiler] Total time: 10.70ms
+[16:50:27][Message][Resource][MaterialCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer_mat_3.material
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:27][Message][Resource][StaticMeshCompiler] Dependency tree creation took: 6.28ms
+[16:50:27][Message][Resource][StaticMeshCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][StaticMeshCompiler] Compilation took: 48.60ms
+[16:50:27][Message][Resource][StaticMeshCompiler] Compiled successfully: data://provenance/tools/hammer/v001/guild_hammer.mesh
+[16:50:27][Message][Resource][StaticMeshCompiler] Total time: 48.60ms
+[16:50:27][Message][Resource][StaticMeshCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\tools\hammer\v001\guild_hammer.mesh
+Esoterica Resource Compiler
+-------------------------------------------------------------------------
+
+[16:50:27][Message][Resource][EntityMapCompiler] Dependency tree creation took: 1.16ms
+[16:50:27][Message][Resource][EntityMapCompiler] Up to Date Check took: 0.00ms
+[16:50:27][Message][Resource][EntityMapCompiler] Compilation took: 4.38ms
+[16:50:27][Message][Resource][EntityMapCompiler] Compiled successfully: data://provenance/provenancesandbox.map
+[16:50:27][Message][Resource][EntityMapCompiler] Total time: 4.38ms
+[16:50:27][Message][Resource][EntityMapCompiler] Output File: C:\Users\D-Day\ProvenanceWorkspace\Client\ProvenanceClient\Build\x64_Debug\CompiledData\provenance\provenancesandbox.map

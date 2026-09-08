@@ -1,0 +1,10 @@
+<Type TypeID="EE::Render::MaterialResourceDescriptor" Version="0">
+  <Property ID="m_shader" Value="ProvenanceGraniteTriplanarPBR" />
+  <Type ID="m_shaderParameters" TypeID="EE::Render::Shaders::ProvenanceGraniteTriplanarPBRParameters">
+    <Property ID="m_albedoTexture" Value="data://provenance/materials/granite/granitealbedo.texture" />
+    <Property ID="m_normalTexture" Value="data://provenance/materials/granite/granitenormal.texture" />
+    <Property ID="m_tileScaleMeters" Value="1.25" />
+    <Property ID="m_normalStrength" Value="0.45" />
+    <Property ID="m_roughness" Value="0.75" />
+  </Type>
+</Type>

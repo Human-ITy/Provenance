@@ -1,0 +1,13 @@
+{
+  "mesh_count": 3,
+  "materials": 10,
+  "embedded_images": 14,
+  "emissive_materials": 7,
+  "punctual_lights": 3,
+  "extensions_used": [
+    "KHR_lights_punctual",
+    "KHR_materials_emissive_strength"
+  ],
+  "bytes": 5180696,
+  "roundtrip_meshes": 3
+}

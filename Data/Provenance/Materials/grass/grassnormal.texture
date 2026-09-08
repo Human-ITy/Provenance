@@ -1,0 +1,6 @@
+<Type TypeID="EE::Render::TextureResourceDescriptor" Version="0">
+  <Property ID="m_sourcePaths"><Property Index="0" Value="data://provenance/materials/grass/t_grass_n_2k_v006.png" /></Property>
+  <Property ID="m_textureGroup" Value="data://render/texturegroups/normaltexture.txtg" />
+  <Property ID="m_invertNormalMap" Value="False" />
+  <Property ID="m_name" Value="Provenance Grass Normal 2K v006" />
+</Type>

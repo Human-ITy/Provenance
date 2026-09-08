@@ -1,0 +1,34 @@
+{
+  "source_size": [
+    1254,
+    1254
+  ],
+  "final_size": [
+    1024,
+    1024
+  ],
+  "opaque": true,
+  "upscaled": false,
+  "method": "Image-gen source followed by periodic minimum-error overlap quilting; 3px seam feather; closed second-axis cut.",
+  "source": {
+    "wrap_x_mean": 12.390483785220635,
+    "wrap_y_mean": 13.081073896863384,
+    "internal_x_mean": 8.704675392561507,
+    "internal_y_mean": 9.63563661990536
+  },
+  "final": {
+    "wrap_x_mean": 9.456705729166679,
+    "wrap_y_mean": 9.861002604166675,
+    "internal_x_mean": 8.712273630966598,
+    "internal_y_mean": 9.64488731824341
+  },
+  "seam_x_range": [
+    155,
+    197
+  ],
+  "seam_y_range": [
+    65,
+    131
+  ],
+  "closed_second_axis_seam": true
+}

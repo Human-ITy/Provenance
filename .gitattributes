@@ -3,3 +3,8 @@
 Data/Worldgen/** -text
 *.mcp -text
 *.mcm -text
+
+# Initial playable snapshot: preserve native inputs and recorded asset hashes.
+Data/Provenance/** -text
+Code/Game/Provenance/output/** -text
+Code/Game/Provenance/Verification/Fixtures/** -text

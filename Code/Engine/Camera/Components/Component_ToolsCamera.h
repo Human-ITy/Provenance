@@ -31,7 +31,15 @@ namespace EE
         ToolsCameraComponent() = default;
         ToolsCameraComponent( StringID nameID ) : CameraComponent( nameID ) {}
 
-        inline void SetUpdateEnabled( bool enabled ) { m_isUpdateEnabled = enabled; }
+        inline void SetUpdateEnabled( bool enabled )
+        {
+            m_isUpdateEnabled = enabled;
+            if ( !enabled )
+            {
+                // A disabled camera will not tick to observe the mouse release.
+                m_bIsManipulatingView = false;
+            }
+        }
 
         void Update( EntityWorldUpdateContext const& ctx );
 

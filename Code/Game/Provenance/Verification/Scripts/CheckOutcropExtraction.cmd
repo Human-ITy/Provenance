@@ -1,0 +1,12 @@
+@echo off
+setlocal
+for %%I in ("%~dp0..\..\..\..\..") do set "EXTRACTION_ROOT=%%~fI"
+set "EXTRACTION_OUTPUT=%EXTRACTION_ROOT%\Build\Verification\OutcropExtraction"
+if not exist "%EXTRACTION_OUTPUT%" mkdir "%EXTRACTION_OUTPUT%"
+if errorlevel 1 exit /b 1
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+if errorlevel 1 exit /b %errorlevel%
+cl /c /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\CODE" /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\EXTERNAL\OPTICK\INCLUDE" /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\CODE\BASE\THIRDPARTY\IMGUI\\" /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\CODE\BASE\THIRDPARTY\EA\\" /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\CODE\BASE\THIRDPARTY\EA\EASTL\INCLUDE\\" /I"C:\USERS\D-DAY\PROVENANCEWORKSPACE\CLIENT\PROVENANCECLIENT\CODE\BASE\THIRDPARTY\EA\EABASE\INCLUDE\COMMON\\" /Zi /JMC /nologo /Wall /WX /diagnostics:column /Od /Ob1 /Oi /D EE_DEBUG=1 /D EE_DLL /D NDEBUG /D NOMINMAX /D WIN32_LEAN_AND_MEAN /D _CRT_SECURE_NO_WARNINGS /D ESOTERICA_GAME_RUNTIME /D _HAS_EXCEPTIONS=0 /D EASTL_DLL /D "EASTL_USER_CONFIG_HEADER=<eastl_Esoterica.h>" /D _WINDLL /Gm- /RTC1 /MD /GS /Gy /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /std:c++20 /Fo"%EXTRACTION_OUTPUT%\\" /Fd"%EXTRACTION_OUTPUT%\vc145.pdb" /external:W4 /Gd /TP /wd4865 /wd4189 /wd4946 /wd4191 /wd5220 /wd4255 /wd4266 /wd4623 /wd4711 /wd4388 /wd4355 /wd5031 /wd4774 /wd4582 /wd4365 /wd5246 /wd4061 /wd5219 /wd4514 /wd4505 /wd4251 /wd4100 /wd4127 /wd4201 /wd4577 /wd4464 /wd4668 /wd4710 /wd4820 /wd5052 /wd4619 /wd4625 /wd4626 /wd5026 /wd5027 /wd5045 /wd26495 /wd5262 /wd5264 /wd5267 /FC /bigobj /Zo /Zc:inline "%EXTRACTION_ROOT%\Code\Game\Provenance\Systems\GraniteOutcropLab.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Systems\WorldSystem_Provenance_Debug.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Systems\WorldSystem_Provenance_DebugWorkbench.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteGeometry.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteSpallResolution.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteFormation.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteRootedDetachment.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteRootedPartition.cpp" "%EXTRACTION_ROOT%\Code\Game\Provenance\Geometry\GraniteFracture.cpp"
+if errorlevel 1 exit /b %errorlevel%
+link @"%~dp0OutcropExtractionLink.rsp"
+exit /b %errorlevel%

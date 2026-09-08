@@ -33,7 +33,9 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
     typedef uint RendererGlobalFlags;           // 6 bits required
     static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_NONE                                                   = 0U;
     static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_DISABLE_LIGHTING                                       = 1U << 0U;
-    static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_RESERVED_0                                             = 1U << 1U;
+    // Thin alpha-tested surfaces can retain PBR lighting without receiving
+    // the opaque terrain shadow directly behind them.
+    static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_DISABLE_CAST_SHADOWS                                  = 1U << 1U;
     static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_RESERVED_1                                             = 1U << 2U;
     static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_RESERVED_2                                             = 1U << 3U;
     static const RendererGlobalFlags            RENDERER_GLOBAL_FLAG_RESERVED_3                                             = 1U << 4U;

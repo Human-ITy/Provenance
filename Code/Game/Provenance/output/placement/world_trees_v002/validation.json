@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "deterministic": true,
+  "unique_ids": true,
+  "exact_cpp_ground_check": "PASS 117 placements: exact rendered terrain collar error 6.43929354283e-15 m; 24 root-footprint samples per tree clear of creek, floor edge and protected lab.",
+  "instances": 117,
+  "all_lod_triangles": {
+    "0": 3254178,
+    "1": 1804650,
+    "2": 1266201
+  },
+  "source_files_exist": true,
+  "height_ranges_valid": true,
+  "runtime_validated": false,
+  "collision_registered": false,
+  "original_positions_heights_yaws_ids_preserved": true,
+  "saved_blend_reopened": true,
+  "saved_instance_transforms_match": true,
+  "packed_images": true,
+  "actual_lod1_tree_triangles": 1804650,
+  "finite_mesh_coordinates": true,
+  "source_files_hashed": 92
+}

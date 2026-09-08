@@ -1,0 +1,44 @@
+{
+  "date": "2026-09-07",
+  "scope": "Grass sway startup allocation/logging correction",
+  "supersedes": "GrassSwayV1Build.json for Base/Engine publication; not a visual certificate",
+  "checks": {
+    "allocation": 4108,
+    "sourceLogging": 16,
+    "publishedBaseDllLogging": 4,
+    "failures": 0
+  },
+  "livePreview": "Pending user validation",
+  "files": [
+    {
+      "path": "Code/Engine/Render/RenderShaderParameterLayout.h",
+      "bytes": 760,
+      "sha256": "61944453F8D66C6E3C1B10CA8A1027E8817FF91C181FD1C85D49D76A2BD770B1"
+    },
+    {
+      "path": "Code/Engine/Render/RenderSystem.cpp",
+      "bytes": 62711,
+      "sha256": "AE35AA176CB859B05B298D83392A5BE4A907D99A560AFCADE9E10BA11BD0B8AA"
+    },
+    {
+      "path": "Code/Base/Logging/SystemLog.cpp",
+      "bytes": 10016,
+      "sha256": "9F67E5D40B10D73D9AFA52A4316CAFA7AEDC180F62C1B21230CC32E0AEF00C3B"
+    },
+    {
+      "path": "Build/x64_Debug/Esoterica.Base.dll",
+      "bytes": 19659264,
+      "sha256": "1D8FD207D57496B4E5B119789988F904D77DCE87E1F0D194F1326D66E3C4199A"
+    },
+    {
+      "path": "Build/x64_Debug/Esoterica.Engine.Runtime.dll",
+      "bytes": 27943424,
+      "sha256": "8949B959FF88EA3C600DA06BFCD24A5A493B9669073A33D198F9B0E443151A2F"
+    },
+    {
+      "path": "Build/x64_Debug/Esoterica.Game.Runtime.dll",
+      "bytes": 7108608,
+      "sha256": "02C9F4F5BC74BFE6F0729DB034EB12543EBB645ED78B25431D2D6A2D74643CB0"
+    }
+  ]
+}

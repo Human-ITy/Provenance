@@ -1,0 +1,162 @@
+GraniteTreadSurfaceTest.cpp
+authored tread ceiling 0.900 top 0.779204190
+authored tread ceiling 0.920 top 0.779204190
+authored tread ceiling 0.940 top 0.779204190
+authored tread ceiling 0.960 top 0.779204190
+authored tread ceiling 0.980 top 0.779204190
+small-clearance route 11 at 30 Hz progress 1.226667 longest catch 0
+small-clearance route 16 at 30 Hz progress 1.933128 longest catch 0
+small-clearance route 11 at 60 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 60 Hz progress 1.946667 longest catch 0
+small-clearance route 11 at 120 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 120 Hz progress 1.946667 longest catch 0
+small-clearance route 11 at 240 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 240 Hz progress 1.940000 longest catch 0
+upper slope route 6 at 30 Hz progress 2.106667 longest catch 0
+upper slope route 7 at 30 Hz progress 1.226667 longest catch 0
+upper slope route 12 at 30 Hz progress 1.226667 longest catch 0
+upper slope route 6 at 60 Hz progress 2.106667 longest catch 0
+upper slope route 7 at 60 Hz progress 1.200000 longest catch 0
+upper slope route 12 at 60 Hz progress 1.200000 longest catch 0
+upper slope route 6 at 120 Hz progress 2.093333 longest catch 1
+upper slope route 7 at 120 Hz progress 1.173333 longest catch 1
+upper slope route 12 at 120 Hz progress 1.186667 longest catch 1
+upper slope route 6 at 240 Hz progress 2.066667 longest catch 2
+upper slope route 7 at 240 Hz progress 1.173333 longest catch 2
+upper slope route 12 at 240 Hz progress 1.140000 longest catch 3
+hotspot 0 crouch 0 hz 30 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 2 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 3 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 4 crouch 0 hz 30 progress 0.560000 catch 0
+hotspot 5 crouch 0 hz 30 progress 0.800000 catch 0
+hotspot 0 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 2 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 3 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 4 crouch 0 hz 60 progress 0.533333 catch 0
+hotspot 5 crouch 0 hz 60 progress 0.773333 catch 0
+hotspot 0 crouch 0 hz 120 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 120 progress 0.546667 catch 1
+hotspot 2 crouch 0 hz 120 progress 0.560000 catch 0
+hotspot 3 crouch 0 hz 120 progress 0.546667 catch 1
+hotspot 4 crouch 0 hz 120 progress 0.533333 catch 0
+hotspot 5 crouch 0 hz 120 progress 0.760000 catch 0
+hotspot 0 crouch 0 hz 240 progress 0.553333 catch 0
+hotspot 1 crouch 0 hz 240 progress 0.533333 catch 2
+hotspot 2 crouch 0 hz 240 progress 0.553333 catch 0
+hotspot 3 crouch 0 hz 240 progress 0.533333 catch 3
+hotspot 4 crouch 0 hz 240 progress 0.526667 catch 0
+hotspot 5 crouch 0 hz 240 progress 0.753333 catch 0
+hotspot 0 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 1 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 2 crouch 1 hz 30 progress 0.533333 catch 1
+hotspot 3 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 4 crouch 1 hz 30 progress 0.533333 catch 0
+hotspot 5 crouch 1 hz 30 progress 0.773333 catch 0
+hotspot 0 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 1 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 2 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 3 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 4 crouch 1 hz 60 progress 0.533333 catch 0
+hotspot 5 crouch 1 hz 60 progress 0.760000 catch 0
+hotspot 0 crouch 1 hz 120 progress 0.553333 catch 0
+hotspot 1 crouch 1 hz 120 progress 0.546667 catch 1
+hotspot 2 crouch 1 hz 120 progress 0.553333 catch 0
+hotspot 3 crouch 1 hz 120 progress 0.546667 catch 1
+hotspot 4 crouch 1 hz 120 progress 0.526667 catch 0
+hotspot 5 crouch 1 hz 120 progress 0.753333 catch 0
+hotspot 0 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 1 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 2 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 3 crouch 1 hz 240 progress 0.546667 catch 1
+hotspot 4 crouch 1 hz 240 progress 0.521667 catch 0
+hotspot 5 crouch 1 hz 240 progress 0.750000 catch 0
+ramp 55 crouch 0 feet 52.800000 2.058769
+ramp 70 crouch 0 feet 49.813333 0.003000
+ramp 85 crouch 0 feet 49.783094 0.003000
+ramp 55 crouch 1 feet 51.200000 1.940025
+ramp 70 crouch 1 feet 49.820000 0.003000
+ramp 85 crouch 1 feet 49.784880 0.003000
+Tread surface: 99 checks, 0 failures
+GraniteTreadSurfaceTest.cpp
+authored tread ceiling 0.900 top 0.779204190
+authored tread ceiling 0.920 top 0.779204190
+authored tread ceiling 0.940 top 0.779204190
+authored tread ceiling 0.960 top 0.779204190
+authored tread ceiling 0.980 top 0.779204190
+small-clearance route 11 at 30 Hz progress 1.226667 longest catch 0
+small-clearance route 16 at 30 Hz progress 1.933128 longest catch 0
+small-clearance route 11 at 60 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 60 Hz progress 1.946667 longest catch 0
+small-clearance route 11 at 120 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 120 Hz progress 1.946667 longest catch 0
+small-clearance route 11 at 240 Hz progress 1.200000 longest catch 0
+small-clearance route 16 at 240 Hz progress 1.940000 longest catch 0
+upper slope route 6 at 30 Hz progress 2.106667 longest catch 0
+upper slope route 7 at 30 Hz progress 1.226667 longest catch 0
+upper slope route 12 at 30 Hz progress 1.226667 longest catch 0
+upper slope route 6 at 60 Hz progress 2.106667 longest catch 0
+upper slope route 7 at 60 Hz progress 1.200000 longest catch 0
+upper slope route 12 at 60 Hz progress 1.200000 longest catch 0
+upper slope route 6 at 120 Hz progress 2.093333 longest catch 1
+upper slope route 7 at 120 Hz progress 1.173333 longest catch 1
+upper slope route 12 at 120 Hz progress 1.186667 longest catch 1
+upper slope route 6 at 240 Hz progress 2.066667 longest catch 2
+upper slope route 7 at 240 Hz progress 1.173333 longest catch 2
+upper slope route 12 at 240 Hz progress 1.140000 longest catch 3
+hotspot 0 crouch 0 hz 30 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 2 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 3 crouch 0 hz 30 progress 0.586667 catch 0
+hotspot 4 crouch 0 hz 30 progress 0.560000 catch 0
+hotspot 5 crouch 0 hz 30 progress 0.800000 catch 0
+hotspot 0 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 2 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 3 crouch 0 hz 60 progress 0.560000 catch 0
+hotspot 4 crouch 0 hz 60 progress 0.533333 catch 0
+hotspot 5 crouch 0 hz 60 progress 0.773333 catch 0
+hotspot 0 crouch 0 hz 120 progress 0.560000 catch 0
+hotspot 1 crouch 0 hz 120 progress 0.546667 catch 1
+hotspot 2 crouch 0 hz 120 progress 0.560000 catch 0
+hotspot 3 crouch 0 hz 120 progress 0.546667 catch 1
+hotspot 4 crouch 0 hz 120 progress 0.533333 catch 0
+hotspot 5 crouch 0 hz 120 progress 0.760000 catch 0
+hotspot 0 crouch 0 hz 240 progress 0.553333 catch 0
+hotspot 1 crouch 0 hz 240 progress 0.533333 catch 2
+hotspot 2 crouch 0 hz 240 progress 0.553333 catch 0
+hotspot 3 crouch 0 hz 240 progress 0.533333 catch 3
+hotspot 4 crouch 0 hz 240 progress 0.526667 catch 0
+hotspot 5 crouch 0 hz 240 progress 0.753333 catch 0
+hotspot 0 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 1 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 2 crouch 1 hz 30 progress 0.533333 catch 1
+hotspot 3 crouch 1 hz 30 progress 0.560000 catch 0
+hotspot 4 crouch 1 hz 30 progress 0.533333 catch 0
+hotspot 5 crouch 1 hz 30 progress 0.773333 catch 0
+hotspot 0 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 1 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 2 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 3 crouch 1 hz 60 progress 0.560000 catch 0
+hotspot 4 crouch 1 hz 60 progress 0.533333 catch 0
+hotspot 5 crouch 1 hz 60 progress 0.760000 catch 0
+hotspot 0 crouch 1 hz 120 progress 0.553333 catch 0
+hotspot 1 crouch 1 hz 120 progress 0.546667 catch 1
+hotspot 2 crouch 1 hz 120 progress 0.553333 catch 0
+hotspot 3 crouch 1 hz 120 progress 0.546667 catch 1
+hotspot 4 crouch 1 hz 120 progress 0.526667 catch 0
+hotspot 5 crouch 1 hz 120 progress 0.753333 catch 0
+hotspot 0 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 1 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 2 crouch 1 hz 240 progress 0.550000 catch 0
+hotspot 3 crouch 1 hz 240 progress 0.546667 catch 1
+hotspot 4 crouch 1 hz 240 progress 0.521667 catch 0
+hotspot 5 crouch 1 hz 240 progress 0.750000 catch 0
+ramp 55 crouch 0 feet 52.800000 2.058769
+ramp 70 crouch 0 feet 49.813333 0.003000
+ramp 85 crouch 0 feet 49.783094 0.003000
+ramp 55 crouch 1 feet 51.200000 1.940025
+ramp 70 crouch 1 feet 49.820000 0.003000
+ramp 85 crouch 1 feet 49.784880 0.003000
+Tread surface: 99 checks, 0 failures

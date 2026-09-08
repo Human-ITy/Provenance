@@ -22,6 +22,9 @@ namespace EE
         RegisterInput( m_reload );
         RegisterInput( m_interact );
         RegisterInput( m_meleeAttack );
+        RegisterInput( m_graniteToolStrike );
+        RegisterInput( m_graniteToolStrikeReset );
+        RegisterInput( m_graniteToolStrikeNextSeed );
 
         m_moveUpdater.m_useLeftStick = true;
         m_lookUpdater.m_useLeftStick = false;
@@ -42,6 +45,9 @@ namespace EE
         m_reloadUpdater.m_ID = Input::InputID::Controller_FaceButtonLeft;
         m_interactUpdater.m_ID = Input::InputID::Controller_FaceButtonUp;
         m_meleeAttackUpdater.m_ID = Input::InputID::Controller_RightShoulder;
+        m_graniteToolStrikeUpdater.m_ID = Input::InputID::Mouse_Left;
+        m_graniteToolStrikeResetUpdater.m_ID = Input::InputID::Keyboard_R;
+        m_graniteToolStrikeNextSeedUpdater.m_ID = Input::InputID::Keyboard_N;
     }
 
     void PlayerInputState::Update( Input::InputSystem const* pInputSystem, Seconds timeDelta, Seconds scaledTimeDelta )
@@ -106,5 +112,8 @@ namespace EE
         UpdateSignal( m_reload, m_reloadUpdater );
         UpdateSignal( m_interact, m_interactUpdater );
         UpdateSignal( m_meleeAttack, m_meleeAttackUpdater );
+        UpdateSignal( m_graniteToolStrike, m_graniteToolStrikeUpdater );
+        UpdateSignal( m_graniteToolStrikeReset, m_graniteToolStrikeResetUpdater );
+        UpdateSignal( m_graniteToolStrikeNextSeed, m_graniteToolStrikeNextSeedUpdater );
     }
 }

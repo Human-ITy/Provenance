@@ -346,6 +346,42 @@ namespace EE::Render
         }
     }
 
+    void DeviceRenderWorld::QueueProceduralMeshInstanceInitialize
+    (
+        uint32_t          instanceID,
+        uint32_t          rootInstanceID,
+        MeshHandle const& meshHandle,
+        Geometry const&   geometry,
+        RHI::Buffer*      pClusterVertexBuffer,
+        RHI::Buffer*      pClusterTriangleBuffer,
+        Material const*   pMaterial
+    )
+    {
+        EE_ASSERT( rootInstanceID != ~0U );
+        EE_ASSERT( meshHandle.m_handle.IsValid() );
+        EE_ASSERT( pClusterVertexBuffer != nullptr );
+        EE_ASSERT( pClusterTriangleBuffer != nullptr );
+
+        if ( pMaterial == nullptr )
+        {
+            pMaterial = m_pPlaceholderMaterial;
+        }
+
+        EE_ASSERT( pMaterial != nullptr );
+
+        ShaderTypes::MeshInstanceInitializeCommand instanceInitializeCommand = {};
+        instanceInitializeCommand.m_instanceID = instanceID;
+        instanceInitializeCommand.m_meshIndex = uint16_t( meshHandle.m_handle.m_offset );
+        instanceInitializeCommand.m_clusterVertexBuffer = RHI::GetBufferHandle( pClusterVertexBuffer, RHI::DescriptorTypeFlags::Buffer );
+        instanceInitializeCommand.m_clusterTriangleBuffer = RHI::GetBufferHandle( pClusterTriangleBuffer, RHI::DescriptorTypeFlags::Buffer );
+        instanceInitializeCommand.m_lodMask = 1;
+        instanceInitializeCommand.m_rootIndex = rootInstanceID;
+        instanceInitializeCommand.m_meshVertexStride = geometry.GetClusterVertexStride();
+        instanceInitializeCommand.m_shaderParametersOffsetIn32ByteBlocks = pMaterial->GetShaderParametersOffsetIn32ByteBlocks();
+
+        m_initializeCommands_MeshInstance.emplace_back( eastl::move( instanceInitializeCommand ) );
+    }
+
     void DeviceRenderWorld::UpdateDeviceResources_BeforeInstanceInitialize( RenderSystem* pRenderSystem )
     {
         EE_PROFILE_FUNCTION_RENDER();

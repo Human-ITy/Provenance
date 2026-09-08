@@ -74,6 +74,21 @@
     <ClCompile Include="NPC\Debug\DebugView_NPC.cpp" />
     <ClCompile Include="Player\Debug\DebugView_PlayerHUD.cpp" />
     <ClCompile Include="Base\Debug\DebugView_Character.cpp" />
+    <ClCompile Include="Provenance\Systems\WorldSystem_Provenance.cpp" />
+    <ClCompile Include="Provenance\Geometry\MaterialGeometry.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteGeometry.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteSpallResolution.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteFormation.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteRootedDetachment.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteRootedPartition.cpp" />
+    <ClCompile Include="Provenance\Geometry\GraniteFracture.cpp" />
+    <ClCompile Include="Provenance\Geometry\SoilGeometry.cpp" />
+    <ClCompile Include="Provenance\Systems\ProvenanceSurfaceEvaluation.cpp" />
+    <ClCompile Include="Provenance\Verification\GraniteAuthorityVerifier.cpp" />
+    <ClCompile Include="Provenance\Systems\WorldSystem_Provenance_Workbench.cpp" />
+    <ClCompile Include="Provenance\Systems\WorldSystem_Provenance_Debug.cpp" />
+    <ClCompile Include="Provenance\Systems\WorldSystem_Provenance_DebugWorkbench.cpp" />
+    <ClCompile Include="Provenance\Systems\GraniteOutcropLab.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Animation\Tasks\Animation_Task_AimIK.h">
@@ -142,6 +157,17 @@
     <ClInclude Include="NPC\Debug\DebugView_NPC.h" />
     <ClInclude Include="Player\Debug\DebugView_PlayerHUD.h" />
     <ClInclude Include="Base\Debug\DebugView_Character.h" />
+    <ClInclude Include="Provenance\Components\Component_ProvenanceWorldSettings.h" />
+    <ClInclude Include="Provenance\Systems\WorldSystem_Provenance.h" />
+    <ClInclude Include="Provenance\Systems\GraniteOutcropLab.h" />
+    <ClInclude Include="Provenance\Geometry\MaterialGeometry.h" />
+    <ClInclude Include="Provenance\Geometry\GraniteGeometry.h" />
+    <ClInclude Include="Provenance\Geometry\GraniteGeometryInternal.h" />
+    <ClInclude Include="Provenance\Geometry\GraniteFormationInternal.h" />
+    <ClInclude Include="Provenance\Geometry\GraniteMeshInternal.h" />
+    <ClInclude Include="Provenance\Geometry\SoilGeometry.h" />
+    <ClInclude Include="Provenance\Systems\ProvenanceSurfaceEvaluation.h" />
+    <ClInclude Include="Provenance\Verification\GraniteAuthorityVerifier.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="NPC">

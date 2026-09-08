@@ -1,0 +1,206 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/naturetrial/v001/healing_bush.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Healing_Red_Branches_And_Leaves/Woody_Branches/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Healing_Red_Branches_And_Leaves/Healing_Bush_Leaf/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_001/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_001/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="4" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_002/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="5" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_002/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="6" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_003/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="7" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_003/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="8" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_004/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="9" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_004/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="10" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_005/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="11" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_005/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="12" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_006/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="13" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_006/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="14" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_007/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="15" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_007/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="16" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_008/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="17" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_008/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="18" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_009/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="19" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_009/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="20" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_010/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="21" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_010/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="22" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_011/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="23" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_011/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="24" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_012/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="25" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_012/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="26" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_013/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="27" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_013/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="28" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_014/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="29" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_014/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="30" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_015/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="31" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_015/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="32" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_016/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="33" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_016/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="34" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_017/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="35" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_017/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="36" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_018/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="37" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_018/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="38" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_019/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="39" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_019/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="40" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_020/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="41" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_020/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="42" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_021/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="43" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_021/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="44" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_022/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="45" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_022/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="46" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_023/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="47" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_023/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+    <Type Index="48" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_024/Healing_Red_Berry/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_2.material" />
+    </Type>
+    <Type Index="49" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="healing_red_fruit_024/Red_Berry_Calyx/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/healing_bush_mat_3.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

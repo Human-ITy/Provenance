@@ -1,0 +1,20 @@
+[
+  {
+    "id": "guild_hammer",
+    "source": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\hammer\\v001\\guild_hammer_lod0.glb",
+    "export": "C:\\Users\\D-Day\\ProvenanceWorkspace\\Client\\ProvenanceClient\\Code\\Game\\Provenance\\output\\models\\tools\\hammer\\v001\\guild_hammer_lod0.glb",
+    "source_sha256": "a60431244db83dff7919497680faf2f56daf69f24ffafd63c55ef404e2c40c5e",
+    "bounds_z_up": [
+      [
+        -0.18950000405311584,
+        -0.06069999933242798,
+        0.0
+      ],
+      [
+        0.19900000095367432,
+        0.06069999933242798,
+        0.6616499423980713
+      ]
+    ]
+  }
+]

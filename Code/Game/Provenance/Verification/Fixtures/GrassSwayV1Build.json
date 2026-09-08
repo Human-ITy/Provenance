@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-07",
+  "scope": "Grass sway V1; source/build identity, not file authorship",
+  "graphicsValidation": "Pending live preview",
+  "checks": {
+    "sharedWindScalarChecks": 1420038,
+    "sharedWindFailures": 0,
+    "grassOptimized": 32839,
+    "grassDebug": 32839
+  },
+  "files": [
+    {
+      "path": "Code/Engine/Render/Systems/WorldSystem_Render.h",
+      "bytes": 8016,
+      "sha256": "B2B3DFC3D588AB589C0B440591535B5CBD12EB66B1B6179D64DB2149C491FBF6"
+    },
+    {
+      "path": "Code/Engine/Render/Systems/WorldSystem_Render.cpp",
+      "bytes": 44506,
+      "sha256": "B94CAFFE8098E014128D7B037DAF36F0A945215F771365C883B16FD0A24C8725"
+    },
+    {
+      "path": "Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh",
+      "bytes": 9717,
+      "sha256": "76864CFD26269FF02BC89A620DB282C802E40A6DBC512F0B95E9ABBA9B3B59CF"
+    },
+    {
+      "path": "Code/Engine/Render/Shaders/Materials/ProvenanceGrassSoilPBR.esf",
+      "bytes": 17820,
+      "sha256": "975E48ABC131D78BE81EA791831F02AC5572E882C9812B8C57DD17378BA313AB"
+    },
+    {
+      "path": "Code/Engine/Render/Shaders/Materials/ProvenanceGrassWind.esh",
+      "bytes": 623,
+      "sha256": "5E778B77BBF3EDE69A294B7C2C9566EA13C3F02DE42BE99D79A9EBA71EAB45F1"
+    },
+    {
+      "path": "Code/Game/Provenance/Systems/GraniteOutcropLab.cpp",
+      "bytes": 47639,
+      "sha256": "C1C3D6C57DB15B56946DF37DF229A8645D52B0826B4F40691BF8C26224D2C803"
+    },
+    {
+      "path": "Data/Provenance/Materials/grass/grasscover.material",
+      "bytes": 1281,
+      "sha256": "F183FC8BA767557E64839A26B2A17B3DD5761BDF0F514D089DA0441903FAC2F9"
+    },
+    {
+      "path": "Build/x64_Debug/Esoterica.Engine.Runtime.dll",
+      "bytes": 27943424,
+      "sha256": "A366588E15499F8396BEB46909F1D6705E8153B35385814831F96347B149409A"
+    },
+    {
+      "path": "Build/x64_Debug/Esoterica.Game.Runtime.dll",
+      "bytes": 7108608,
+      "sha256": "6C6C1B7A6F81878500B923945A5AD1E780309E10CAFC9EE6C759FE67FF002EE3"
+    },
+    {
+      "path": "Build/x64_Debug/CompiledData/provenance/materials/grass/grasscover.material",
+      "bytes": 1134,
+      "sha256": "AC5363ABB725014EBB69EA073EBB89EFB9394FE8C8A14869032155832423EAE2"
+    }
+  ]
+}

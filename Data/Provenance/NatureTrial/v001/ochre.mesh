@@ -1,0 +1,54 @@
+<Type TypeID="EE::Render::StaticMeshResourceDescriptor" Version="2">
+  <Property ID="m_meshPath" Value="data://provenance/naturetrial/v001/ochre.glb" />
+  <Property ID="m_materialMappings">
+    <Type Index="0" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_01/Ochre_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_0.material" />
+    </Type>
+    <Type Index="1" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_01/Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_1.material" />
+    </Type>
+    <Type Index="2" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_01/Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_2.material" />
+    </Type>
+    <Type Index="3" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_02/Ochre_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_0.material" />
+    </Type>
+    <Type Index="4" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_02/Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_1.material" />
+    </Type>
+    <Type Index="5" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_02/Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_2.material" />
+    </Type>
+    <Type Index="6" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_03/Ochre_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_0.material" />
+    </Type>
+    <Type Index="7" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_03/Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_1.material" />
+    </Type>
+    <Type Index="8" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_03/Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_2.material" />
+    </Type>
+    <Type Index="9" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_04/Ochre_Cap/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_0.material" />
+    </Type>
+    <Type Index="10" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_04/Stem/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_1.material" />
+    </Type>
+    <Type Index="11" TypeID="EE::Render::MeshMaterialMapping">
+    <Property ID="m_mappingID" Value="Ochre_04/Gills/1" />
+    <Property ID="m_material" Value="data://provenance/naturetrial/v001/ochre_mat_2.material" />
+    </Type>
+  </Property>
+  <Property ID="m_meshGroup" Value="data://render/meshgroups/editormesh.meshgrp" />
+</Type>

@@ -19,6 +19,7 @@
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "Base/Resource/ResourceSystem.h"
 #include "Base/Serialization/TypeSerialization.h"
+#include "Base/Input/InputSystem.h"
 #include <EASTL/sort.h>
 
 //-------------------------------------------------------------------------
@@ -281,17 +282,23 @@ namespace EE
         {
             EE_ASSERT( m_pCamera != nullptr );
 
-            ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+            auto const pKeyboardMouse = context.GetSystem<Input::InputSystem>()->GetKeyboardMouse();
+            bool const cameraButtonHeld = pKeyboardMouse->IsHeldDown( Input::InputID::Mouse_Right )
+                || pKeyboardMouse->IsHeldDown( Input::InputID::Mouse_Middle );
+            bool const cancelCamera = pKeyboardMouse->IsHeldDown( Input::InputID::Keyboard_Escape )
+                || ImGui::GetIO().AppFocusLost;
+            bool const canUpdate = isVisible && isFocused && !cancelCamera;
+            bool const manipulating = canUpdate && cameraButtonHeld && m_pCamera->IsManipulatingView();
 
-            if ( m_pCamera->IsManipulatingView() )
+            // During a drag ImGui intentionally has no hovered window. Focus and
+            // the physical button keep that drag alive; neither may be stale.
+            m_pCamera->SetUpdateEnabled( canUpdate && ( m_isViewportHovered || manipulating ) );
+            if ( manipulating )
             {
-                m_pCamera->SetUpdateEnabled( m_isViewportFocused );
                 ImGui::SetMouseCursor( ImGuiMouseCursor_None );
+                // EditorUI clears this shared flag once per frame. Inactive tools
+                // must not clear another focused tool's request.
                 ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
-            }
-            else
-            {
-                m_pCamera->SetUpdateEnabled( m_isViewportFocused && m_isViewportHovered );
             }
         }
     }
